@@ -73,7 +73,6 @@ def test_stage_worker_environment_provisions_client_and_credentials(
         "worker",
         task,
         workspace_id=TEST_WORKSPACE_ID,
-        bearer=TEST_TOKEN,
         docker=str(DOCKER),
     )
 
@@ -90,6 +89,8 @@ def test_stage_worker_environment_provisions_client_and_credentials(
     owner_json_path = root / "home" / "agent" / ".config" / "omp-work" / "capabilities" / "owner.json"
     assert owner_json_path.is_file()
     assert (owner_json_path.stat().st_mode & 0o777) == 0o600
+    # The capability is the provisioned bytes verbatim — no token is invented here.
+    assert owner_json_path.read_bytes() == (cred_dir / "capabilities" / "owner.json").read_bytes()
     owner_cap = json.loads(owner_json_path.read_text(encoding="utf-8"))
     assert owner_cap["token"] == TEST_TOKEN
     assert owner_cap["actor_id"] == TEST_OWNER_ID
@@ -97,6 +98,32 @@ def test_stage_worker_environment_provisions_client_and_credentials(
     work_project_path = root / "workspace" / ".work-project"
     assert work_project_path.is_file()
     assert work_project_path.read_text(encoding="utf-8") == "The Bookends\n"
+
+
+def test_stage_worker_environment_refuses_a_missing_credential_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No provisioned bundle means an error, never a code-written token or capability."""
+    fake_dir = tmp_path / "docker"
+    fake_dir.mkdir()
+    monkeypatch.setenv("FAKE_DOCKER_DIR", str(fake_dir))
+    _write_config(fake_dir)
+    monkeypatch.setenv("OMP_HARBOR_CREDENTIALS_DIR", str(tmp_path / "absent"))
+
+    task = SimpleNamespace(
+        home="/home/agent",
+        working_dir="/workspace",
+        workservice_url="http://127.0.0.1:8080",
+    )
+
+    with pytest.raises(ValueError, match="provisioned credentials missing"):
+        stage_worker_environment(
+            "worker",
+            task,
+            workspace_id=TEST_WORKSPACE_ID,
+            docker=str(DOCKER),
+        )
+    assert not (fake_dir / "calls.jsonl").exists()
 
 
 def test_omp_rpc_registers_execute_command_and_work_tool(tmp_path: Path) -> None:

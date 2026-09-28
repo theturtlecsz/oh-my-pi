@@ -13,7 +13,6 @@ directory under ``OMP_HARBOR_EVIDENCE_ROOT`` before the sidecar stops.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import hashlib
 import json
 import os
@@ -31,7 +30,6 @@ from harbor.models.agent.context import AgentContext
 
 from .adapter import RpcAdapter
 from .docker_ops import (
-    DockerError,
     apply_patch,
     compose_container,
     export_bundle,
@@ -99,54 +97,58 @@ def _omp_args(task_home: str) -> list[str]:
     return ["--mode", "rpc", "--model", "scripted/scripted", "--session-dir", f"{task_home}/{_SESSION_DIR}"]
 
 
+def _credentials_dir() -> Path:
+    """The provisioned credential bundle written by scripts/provision-credentials.sh."""
+
+    value = os.environ.get("OMP_HARBOR_CREDENTIALS_DIR")
+    directory = Path(value) if value else Path.home() / ".local/state/omp/harbor-fixtures"
+    if not directory.is_dir():
+        raise ValueError(
+            f"provisioned credentials missing at {directory}: run evals/harbor/scripts/provision-credentials.sh "
+            "(or set OMP_HARBOR_CREDENTIALS_DIR). No worker credential is written in code."
+        )
+    return directory
+
+
+def _provisioned_owner(cred_dir: Path) -> tuple[str, bytes]:
+    """Read the owner id and capability JSON from the provisioned bundle.
+
+    The worker's bearer is the capability's token, so the credential comes from
+    the same supplied bundle the workservice mounts — never synthesized here.
+    """
+
+    cap_file = cred_dir / "capabilities" / "owner.json"
+    actor_file = cred_dir / "credentials" / "operator-actor-id"
+    if not cap_file.is_file():
+        raise ValueError(f"provisioned owner capability missing: {cap_file}")
+    capability = cap_file.read_bytes()
+    owner_id = actor_file.read_text(encoding="utf-8").strip() if actor_file.is_file() else ""
+    if not owner_id:
+        try:
+            owner_id = str(json.loads(capability.decode("utf-8")).get("actor_id") or "")
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"provisioned owner capability is not JSON: {cap_file}") from exc
+    if not owner_id:
+        raise ValueError(f"provisioned owner actor id missing: {actor_file} or {cap_file}")
+    return owner_id, capability
+
+
 def stage_worker_environment(
     worker: str,
     task: Any,
     *,
     workspace_id: str,
-    bearer: str,
     docker: str,
 ) -> None:
-    """Stage Work Ledger client config, provisioned credentials, marker, and extensions."""
-    cred_dir_val = os.environ.get("OMP_HARBOR_CREDENTIALS_DIR")
-    cred_dir = Path(cred_dir_val) if cred_dir_val else Path.home() / ".local/state/omp/harbor-fixtures"
-    owner_id: str | None = None
-    owner_cap_bytes: bytes | None = None
+    """Stage Work Ledger client config, provisioned credentials, marker, and extensions.
 
-    actor_file = cred_dir / "credentials" / "operator-actor-id"
-    if actor_file.is_file():
-        text = actor_file.read_text(encoding="utf-8").strip()
-        if text:
-            owner_id = text
+    Every secret comes from the provisioned bundle: the owner capability is
+    copied as-is and its bearer_file path is what omp reads. Nothing here
+    invents a token or an owner capability, and a missing bundle is an error.
+    """
 
-    cap_file = cred_dir / "capabilities" / "owner.json"
-    if cap_file.is_file():
-        try:
-            owner_cap_bytes = cap_file.read_bytes()
-            owner_cap_data = json.loads(owner_cap_bytes.decode("utf-8"))
-            if not owner_id and owner_cap_data.get("actor_id"):
-                owner_id = str(owner_cap_data["actor_id"])
-        except Exception:
-            pass
-
-    if not owner_id:
-        owner_id = os.environ.get("OMP_HARBOR_OWNER_ID") or "00000000-0000-4000-8000-000000000002"
-
-    if owner_cap_bytes is None:
-        owner_cap = {
-            "actor_id": owner_id,
-            "actor_kind": "owner",
-            "scopes": [
-                "work.approve",
-                "work.close",
-                "work.execute",
-                "work.mutate",
-                "work.read",
-            ],
-            "token": bearer,
-            "workspaces": [workspace_id],
-        }
-        owner_cap_bytes = json.dumps(owner_cap, indent=2, sort_keys=True).encode("utf-8")
+    cred_dir = _credentials_dir()
+    owner_id, owner_capability = _provisioned_owner(cred_dir)
 
     bearer_file = f"{task.home}/.config/omp-work/capabilities/owner.json"
     client_config = {
@@ -158,7 +160,7 @@ def stage_worker_environment(
     client_json_bytes = json.dumps(client_config, indent=2, sort_keys=True).encode("utf-8")
 
     write_file(worker, f"{task.home}/.config/omp-work/client.json", client_json_bytes, docker=docker, mode=0o600)
-    write_file(worker, bearer_file, owner_cap_bytes, docker=docker, mode=0o600)
+    write_file(worker, bearer_file, owner_capability, docker=docker, mode=0o600)
     write_file(worker, f"{task.working_dir}/.work-project", b"The Bookends\n", docker=docker)
 
     install_script = (
@@ -166,8 +168,7 @@ def stage_worker_environment(
         f"[ ! -f {shlex.quote(task.home)}/.omp/agent/extensions/work-now.ts ]; then "
         f"HOME={shlex.quote(task.home)} bash {shlex.quote(task.working_dir)}/session-system/install.sh --copy; fi"
     )
-    with contextlib.suppress(DockerError):
-        run(docker, ["exec", worker, "sh", "-c", install_script])
+    run(docker, ["exec", worker, "sh", "-c", install_script])
 
 
 class OmpRpcAgent(BaseAgent):
@@ -235,7 +236,6 @@ class OmpRpcAgent(BaseAgent):
                 worker,
                 task,
                 workspace_id=workspace_id,
-                bearer=bearer,
                 docker=self.docker,
             )
             sidecar = start_model_sidecar(

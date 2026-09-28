@@ -85,7 +85,6 @@ def run_interactive_env(
             worker,
             task,
             workspace_id=workspace_id,
-            bearer=bearer,
             docker=docker,
         )
         sidecar = start_model_sidecar(
