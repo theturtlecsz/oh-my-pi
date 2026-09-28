@@ -420,6 +420,7 @@ def create_app(
 
     async def command(request: Request) -> JSONResponse:
         envelope: CommandEnvelope | None = None
+        executing = False
         try:
             # OMP-143: the handshake runs BEFORE the body is parsed — a retired
             # stale host never reaches discriminator validation.
@@ -446,6 +447,7 @@ def create_app(
                             "apply pending migrations, then restart the work service (python -m omp_work serve) — no command was executed and no budget was spent",
                         ),
                     )
+            executing = True
             receipt, result = service.execute(principal, envelope)
             response = CommandResponse.model_validate(
                 {"receipt": receipt, "result": result}
@@ -478,6 +480,20 @@ def create_app(
                 status_code=error.status_code,
             )
         except Exception as ex:
+            if executing:
+                assert envelope is not None
+                return _error(
+                    WorkError(
+                        "unavailable",
+                        status=503,
+                        diagnostics=(
+                            f"{type(ex).__name__}: {ex}",
+                            "outcome unknown, reconcile by operation_id",
+                        ),
+                    ),
+                    envelope.request_id,
+                    envelope.correlation_id,
+                )
             return JSONResponse(
                 {
                     "error": {

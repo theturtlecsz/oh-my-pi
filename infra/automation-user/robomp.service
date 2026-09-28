@@ -1,0 +1,11 @@
+[Unit]
+Description=robomp compose stack
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/sudo -n /usr/local/libexec/@USER@/robomp-ctl up
+ExecStop=/usr/bin/sudo -n /usr/local/libexec/@USER@/robomp-ctl down
+
+[Install]
+WantedBy=default.target
