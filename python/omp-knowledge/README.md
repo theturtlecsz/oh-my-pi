@@ -131,6 +131,19 @@ raises `route_incompatible` (400).
 python -m omp_knowledge.inference health --routes routes.json [--json]
 ```
 
+## Vector projections (FK-3)
+
+`python -m omp_knowledge.vectors build` projects structural snapshot nodes into float32 BLOB vector rows under `vectors.sqlite`.
+
+```
+python -m omp_knowledge.vectors build \
+  --state-dir <dir> --structural-state-dir <dir> \
+  --snapshot <workspace_id>:<repository_id>:<snapshot_id> \
+  --routes <routes.json> [--json]
+```
+
+Resolves the declared `embedding` role from the route file. On success, prints `{namespace, generation_id, vector_count, projection_sha256, vectors_sha256, route}` and exits 0. On error (unpublished snapshot, unresolvable route, embedder failure, invalid options), writes the error to stderr and exits 2.
+
 ## Cleanup processor (FK-7)
 
 `cleanup` drains pending rows from `cleanup_queue` using `NativeCommittedTarget`,

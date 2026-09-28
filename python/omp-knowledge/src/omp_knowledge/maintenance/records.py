@@ -26,6 +26,7 @@ from omp_work.v1.canonical import sha256
 from omp_knowledge.context.store import ContextBundleStore
 from omp_knowledge.learning.store import LearningStore
 from omp_knowledge.publication import PublicationManager
+from omp_knowledge.vectors.store import VectorProjectionStore
 
 FORMAT = "omp-knowledge-backup/1"
 SOURCES_DIR = "sources"
@@ -64,11 +65,16 @@ def _publications_schema(root: Path) -> object:
     return PublicationManager(root)
 
 
+def _vectors_schema(root: Path) -> object:
+    return VectorProjectionStore(root)
+
+
 STORE_SPECS: tuple[StoreSpec, ...] = (
     StoreSpec("learning", "learning.sqlite", _learning_schema),
     StoreSpec("context_bundles", "context-bundles.sqlite", _context_schema),
     StoreSpec("structural_publications", "structural-publications.sqlite", _structural_schema),
     StoreSpec("publications", "publications.sqlite", _publications_schema),
+    StoreSpec("vectors", "vectors.sqlite", _vectors_schema),
 )
 
 
