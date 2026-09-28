@@ -13,6 +13,7 @@
     "decisions/0009-research-campaign-lifecycle-authority.md",
     "decisions/0010-research-component-identity-and-compatibility.md",
     "decisions/0011-research-artifact-custody.md",
+    "decisions/0012-bot-filed-intake-hold.md",
     "examples.json",
     "manifest.json",
     "research-artifact-hash.json",

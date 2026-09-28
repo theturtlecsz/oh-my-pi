@@ -1273,6 +1273,69 @@
       "title": "Anomaly",
       "type": "object"
     },
+    "AnswerIntakeDecisionCommand": {
+      "$defs": {
+        "AnswerIntakeDecisionPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "answer": {
+              "const": "approve",
+              "title": "Answer",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "answer"
+          ],
+          "title": "AnswerIntakeDecisionPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/AnswerIntakeDecisionPayload"
+        },
+        "type": {
+          "const": "answer_intake_decision",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "AnswerIntakeDecisionCommand",
+      "type": "object"
+    },
+    "AnswerIntakeDecisionPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "answer": {
+          "const": "approve",
+          "title": "Answer",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_id",
+        "answer"
+      ],
+      "title": "AnswerIntakeDecisionPayload",
+      "type": "object"
+    },
     "AppendEvidenceCommand": {
       "$defs": {
         "AppendEvidencePayload": {
@@ -5997,6 +6060,46 @@
             "disposition"
           ],
           "title": "Anomaly",
+          "type": "object"
+        },
+        "AnswerIntakeDecisionCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/AnswerIntakeDecisionPayload"
+            },
+            "type": {
+              "const": "answer_intake_decision",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "AnswerIntakeDecisionCommand",
+          "type": "object"
+        },
+        "AnswerIntakeDecisionPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "answer": {
+              "const": "approve",
+              "title": "Answer",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "answer"
+          ],
+          "title": "AnswerIntakeDecisionPayload",
           "type": "object"
         },
         "AppendEvidenceCommand": {
@@ -11113,6 +11216,7 @@
               "activate_cutover": "#/$defs/ActivateCutoverCommand",
               "activate_execution_item": "#/$defs/ActivateExecutionItemCommand",
               "admit_research_campaign": "#/$defs/AdmitResearchCampaignCommand",
+              "answer_intake_decision": "#/$defs/AnswerIntakeDecisionCommand",
               "append_evidence": "#/$defs/AppendEvidenceCommand",
               "assess_bounded_intake": "#/$defs/AssessBoundedIntakeCommand",
               "attest_checkpoint_delivery": "#/$defs/AttestCheckpointDeliveryCommand",
@@ -11269,6 +11373,9 @@
             },
             {
               "$ref": "#/$defs/PublishBoundedIntakeCommand"
+            },
+            {
+              "$ref": "#/$defs/AnswerIntakeDecisionCommand"
             },
             {
               "$ref": "#/$defs/RegisterResearchArtifactCommand"

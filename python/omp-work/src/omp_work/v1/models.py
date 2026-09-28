@@ -1135,6 +1135,16 @@ class PublishBoundedIntakeCommand(StrictModel):
     payload: PublishBoundedIntakePayload
 
 
+class AnswerIntakeDecisionPayload(StrictModel):
+    work_id: UUID
+    answer: Literal["approve"]
+
+
+class AnswerIntakeDecisionCommand(StrictModel):
+    type: Literal["answer_intake_decision"]
+    payload: AnswerIntakeDecisionPayload
+
+
 class ResearchComponentKind(StrEnum):
     WORKER = "worker"
     EVALUATOR = "evaluator"
@@ -1725,6 +1735,7 @@ Command = Annotated[
     | RecordFableAdviceCommand
     | AttestIntakeAdmissionCommand
     | PublishBoundedIntakeCommand
+    | AnswerIntakeDecisionCommand
     | RegisterResearchArtifactCommand
     | CollectResearchArtifactCommand
     | RegisterResearchSourceCommand
