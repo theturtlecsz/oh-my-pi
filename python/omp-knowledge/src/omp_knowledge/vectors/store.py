@@ -19,7 +19,7 @@ from typing import Any
 from uuid import UUID
 
 from omp_work.knowledge_namespace import snapshot_namespace, validate_snapshot_id
-from omp_work.knowledge_publication import SnapshotInvisibleError, StructuralPublicationStore
+from omp_work.knowledge_publication import SnapshotInvisibleError
 from omp_work.v1.models import StrictModel
 
 from omp_knowledge.errors import KnowledgeError, SnapshotNotPublishedError
