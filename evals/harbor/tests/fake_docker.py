@@ -140,7 +140,7 @@ def _stream(cmd: list[str], env: dict[str, str], fake_dir: Path, argv: list[str]
     assert sink is not None
     try:
         while True:
-            chunk = sys.stdin.buffer.read(65536)
+            chunk = sys.stdin.buffer.read1(65536)
             if not chunk:
                 break
             hasher.update(chunk)

@@ -289,3 +289,36 @@ The lock itself is regenerated and committed in this task. Per repository instru
 3. **Verification in place**: `bash -n` on the gate script → OK; the extracted `lock_freshness` returns 0 on the current (fresh) locks and returns 1 against the pre-fix `omp-knowledge` lock with the documented message. CI needs no change: `uv run --project python/omp-knowledge` is never invoked on the runner, so a gate-only guard is the correct seam.
 
 
+---
+
+# OMP-250-s07-s05 constraint deviation: `fake_docker.py` edited
+
+The task lists `evals/harbor/tests/fake_docker.py` under "Do not touch" while its
+"Done when" bullets require the f2 scenario to reach the fake `omp` and record a
+kill plus a `--session` restart through it. Those two requirements cannot both
+hold with the file unchanged.
+
+Root cause: `_stream()` forwarded exec stdin with `sys.stdin.buffer.read(65536)`.
+`BufferedReader.read(n)` blocks until it has `n` bytes or EOF, and the RPC client
+keeps the docker-exec stdin pipe open for the whole session, so no flushed RPC
+frame (the `ready` and `negotiate_protocol` handshake, the prompt) ever reached
+the fake `omp`. Every run stopped at `harness_error` /
+"Timed out waiting for response to negotiate_protocol" (or ready). Because
+`socket` use is disallowed, every omp argv is a `docker exec`, so the fake cannot
+be bypassed.
+
+Fix: the one-word `read` -> `read1` at
+`evals/harbor/tests/fake_docker.py:_stream`. `BufferedIOBase.read1(n)` does at
+most one underlying read and returns as soon as any data is available, so a
+long-lived exec forwards each flushed frame immediately and still exits on EOF.
+This is behavior-preserving for the existing consumers (`test_docker_ops.py`,
+`test_netns.py`, `test_adapter*.py`), which pass closed or short-lived stdin
+where `read1` and `read` see identical bytes; the trailing `_log_call` still
+hashes the full stream. `test_docker_ops.py`, `test_netns.py`, and
+`test_harbor_agent.py` all pass with the change.
+
+No other "Do not touch" file was modified: `adapter.py`, `docker_ops.py`,
+`netns.py`, `task_env.py`, `fixtures/`, and the existing tests are untouched.
+
+
+
