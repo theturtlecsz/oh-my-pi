@@ -18,6 +18,11 @@ OWNER_SCOPES = (
     "work.close",
     "work.execute",
 )
+# OMP-402: the automation principal keeps the owner's five scopes — flood writes
+# items and /execute appends evidence and runs execution commands. Intake
+# publication stays owner-only through the existing actor_kind check in the
+# store; finer per-command limits belong to OMP-403 (finding E0481).
+AUTOMATION_SCOPES = OWNER_SCOPES
 DEFAULT_BASE_URL = "http://127.0.0.1:54322"
 
 
@@ -148,4 +153,26 @@ def provision_candidate_reader(
         workspaces=(workspace_id,),
         scopes=("work.candidate.read",),
         candidate_ids=candidate_ids,
+    )
+
+
+def provision_automation(
+    config: OperationsConfig,
+    *,
+    workspace_id: UUID,
+    name: str = "automation",
+) -> Path:
+    """OMP-402: mint the automation principal's own capability — a distinct
+    actor_id and token with actor_kind "automation", one workspace, and
+    AUTOMATION_SCOPES. The owner's capability is never reused or overwritten:
+    ``name == "owner"`` would clobber it, so it is refused."""
+    if name == "owner":
+        raise ValueError("automation capability must not reuse the owner name")
+    return write_capability(
+        config,
+        name,
+        actor_id=uuid4(),
+        actor_kind="automation",
+        workspaces=(workspace_id,),
+        scopes=AUTOMATION_SCOPES,
     )
