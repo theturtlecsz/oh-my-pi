@@ -26,6 +26,8 @@ from .docker_ops import DockerError
 HARBOR_SRC = Path(__file__).resolve().parents[1]
 RPC_SRC = Path(__file__).resolve().parents[4] / "python" / "omp-rpc" / "src"
 MODEL_SCRIPT_NAME = "model-script.json"
+# In-container path inside the sidecar; not on the host filesystem.
+_MODEL_LOG = "/tmp/model.jsonl"  # nosec B108
 READY_POLL_S = 0.05
 
 # Runs inside the worker container. URL is argv[1], headers are a JSON object
@@ -147,7 +149,7 @@ def start_model_sidecar(
         "--script",
         "/opt/s/model-script.json",
         "--log",
-        "/tmp/model.jsonl",
+        _MODEL_LOG,
         "--host",
         "127.0.0.1",
         "--port",

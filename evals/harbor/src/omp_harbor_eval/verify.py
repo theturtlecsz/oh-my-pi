@@ -18,10 +18,10 @@ import hashlib
 import json
 import os
 import shutil
-import subprocess
+import subprocess  # nosec B404 - argv lists only; no shell, executables from shutil.which
 import sys
 import tempfile
-import xml.etree.ElementTree as ElementTree
+import xml.etree.ElementTree as ElementTree  # nosec B405
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -56,7 +56,8 @@ def _invalid_verdict(reasons: list[str]) -> dict[str, Any]:
 def _junit_counts(path: Path) -> tuple[int, int]:
     """Return ``(total, skipped)`` testcase counts from a JUnit XML report."""
 
-    root = ElementTree.parse(path).getroot()
+    # nosemgrep: python.lang.security.use-defused-xml-parse.use-defused-xml-parse
+    root = ElementTree.parse(path).getroot()  # nosec B314
     cases = root.iter("testcase")
     total = 0
     skipped = 0
@@ -310,6 +311,7 @@ def verify(
         temp_dir = Path(temp)
         repo = temp_dir / "repo"
         tests = fixture.independent_tests
+        git = shutil.which("git")
         if not bundle.is_file():
             records = [
                 {
@@ -321,9 +323,20 @@ def verify(
                 }
                 for test in tests
             ]
+        elif git is None:
+            records = [
+                {
+                    "runner": test.runner,
+                    "target": test.target,
+                    "exit_code": None,
+                    "passed": False,
+                    "reason": "git executable not found",
+                }
+                for test in tests
+            ]
         else:
-            cloned = subprocess.run(
-                ["git", "clone", "-q", str(bundle), str(repo)],
+            cloned = subprocess.run(  # nosec B603
+                [git, "clone", "-q", str(bundle), str(repo)],
                 capture_output=True,
                 text=True,
                 check=False,
