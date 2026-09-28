@@ -11,7 +11,9 @@ It also holds the workservice ruling: the fixture's workservice service must
 start the real WorkService (``omp_work.v1.server.create_app`` via
 ``python -m omp_work serve``), never ``python -m omp_work.service``, and no
 entrypoint under ``evals/harbor`` may define its own HTTP routes in place of
-the WorkService.
+the WorkService. The worker image must stay up for ``docker exec``, the
+workservice must mount the host credential bundle read-only instead of minting
+one, and its database entrypoint must require a password.
 """
 
 from __future__ import annotations
@@ -49,6 +51,12 @@ _ROUTE_TOKENS = (
 )
 
 _IMAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*(?::[A-Za-z0-9._-]+)?$")
+_AGENT_IMAGES = frozenset({"omp-agent:dev", "omp-f1-agent:dev"})
+_WORKSERVICE_IMAGE = "omp-workservice:dev"
+_SUPPLIED_TARGET = "/run/omp/supplied"
+_SUPPLIED_MARKER = "harbor-fixtures"
+_MINT_RE = re.compile(r"credentials\s+init|capabilities\s+init")
+_TRUST_RE = re.compile(r"(^|[\s=])trust(\s|$)")
 
 
 def harbor_dir_of(repo_root: Path) -> Path:
@@ -168,6 +176,112 @@ def _runs_real_serve(command: tuple[str, ...], harbor_dir: Path) -> bool:
     return False
 
 
+def _last_dockerfile_instruction(text: str, name: str) -> str | None:
+    found: str | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        head = line.split(None, 1)[0]
+        if head.upper() == name.upper():
+            found = line
+    return found
+
+
+def _command_stays_up(command: tuple[str, ...]) -> bool:
+    return "sleep" in command and "infinity" in command
+
+
+def _line_stays_up(line: str | None) -> bool:
+    return line is not None and "sleep" in line and "infinity" in line
+
+
+def _shell_runtime_violations(harbor_dir: Path) -> list[str]:
+    """Credential minting and passwordless database access in harbor shell."""
+
+    violations: list[str] = []
+    for path in _entrypoints(harbor_dir):
+        text = path.read_text(encoding="utf-8")
+        relative = path.relative_to(harbor_dir)
+        if _MINT_RE.search(text):
+            violations.append(
+                f"entrypoint {relative} mints credentials; the build script must supply them"
+            )
+        if "initdb" not in text:
+            continue
+        for line in text.splitlines():
+            if _TRUST_RE.search(line):
+                violations.append(
+                    f"entrypoint {relative} allows passwordless database access ({line.strip()!r})"
+                )
+                break
+        if "scram-sha-256" not in text:
+            violations.append(
+                f"entrypoint {relative} does not require scram-sha-256 database authentication"
+            )
+    return violations
+
+
+def _supplied_mount_ok(service: Any) -> bool:
+    raw = service.get("volumes") if isinstance(service, dict) else None
+    for entry in raw or []:
+        if isinstance(entry, str):
+            parts = entry.split(":")
+            if len(parts) < 3:
+                continue
+            source, target, mode = parts[0], parts[1], parts[2]
+            modes = {item.strip() for item in mode.split(",") if item.strip()}
+            if target.rstrip("/") == _SUPPLIED_TARGET and "ro" in modes and _SUPPLIED_MARKER in source:
+                return True
+        elif isinstance(entry, dict):
+            target = str(entry.get("target") or "")
+            source = str(entry.get("source") or "")
+            if (
+                target.rstrip("/") == _SUPPLIED_TARGET
+                and entry.get("read_only") is True
+                and _SUPPLIED_MARKER in source
+            ):
+                return True
+    return False
+
+
+def _image_runtime_violations(compose: dict[str, Any] | None, harbor_dir: Path) -> list[str]:
+    if not isinstance(compose, dict):
+        return []
+    services = compose.get("services")
+    if not isinstance(services, dict):
+        return []
+    violations: list[str] = []
+    worker = services.get("worker")
+    if isinstance(worker, dict) and worker.get("image") in _AGENT_IMAGES:
+        dockerfile = harbor_dir / DOCKER_DIR_REL / "Dockerfile.agent"
+        if not dockerfile.is_file():
+            violations.append(
+                "Dockerfile.agent is missing, so the worker image exits before Harbor can exec into it"
+            )
+        else:
+            text = dockerfile.read_text(encoding="utf-8")
+            if _last_dockerfile_instruction(text, "ENTRYPOINT") != "ENTRYPOINT []" or not _line_stays_up(
+                _last_dockerfile_instruction(text, "CMD")
+            ):
+                violations.append(
+                    "Dockerfile.agent does not stay up for docker exec: "
+                    "clear ENTRYPOINT and set CMD to sleep infinity"
+                )
+        if not _command_stays_up(_command(worker)):
+            violations.append(
+                'worker command does not stay up for docker exec: set command to ["sleep", "infinity"]'
+            )
+    workservice = services.get(WORKSERVICE)
+    if isinstance(workservice, dict) and workservice.get("image") == _WORKSERVICE_IMAGE:
+        if not _supplied_mount_ok(workservice):
+            violations.append(
+                "workservice does not mount the supplied credential directory "
+                "read-only at /run/omp/supplied"
+            )
+    return violations
+
+
 def _entrypoint_route_violations(harbor_dir: Path) -> list[str]:
     violations: list[str] = []
     for path in _entrypoints(harbor_dir):
@@ -227,6 +341,8 @@ def check_fixture(fixture_dir: str | Path, harbor_dir: Path) -> list[str]:
             )
 
     violations.extend(_entrypoint_route_violations(harbor_dir))
+    violations.extend(_shell_runtime_violations(harbor_dir))
+    violations.extend(_image_runtime_violations(compose, harbor_dir))
     return violations
 
 

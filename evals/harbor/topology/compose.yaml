@@ -16,10 +16,11 @@ services:
       OMP_SERVICE_BIND_PORT: "8080"
     volumes:
       - pg_data:/var/lib/postgresql/data
-      - credentials:/run/omp/credentials
+      - ${HOME}/.local/state/omp/harbor-fixtures:/run/omp/supplied:ro
 
   worker:
     image: omp-agent:dev
+    command: ["sleep", "infinity"]
     network_mode: service:workservice
     working_dir: /workspace
     environment:
@@ -43,7 +44,6 @@ services:
 
 volumes:
   pg_data: {}
-  credentials: {}
   evidence: {}
   grader: {}
   worker_workspace: {}

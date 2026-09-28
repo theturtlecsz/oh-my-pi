@@ -57,3 +57,8 @@ RUN printf '%s\n' \
 RUN chown -R agent:agent /workspace /home/agent
 
 USER agent
+
+# oven/bun's entrypoint is `bun`, which prints help and exits. Harbor execs
+# into this container; an empty entrypoint and a staying command keep it up.
+ENTRYPOINT []
+CMD ["sleep", "infinity"]

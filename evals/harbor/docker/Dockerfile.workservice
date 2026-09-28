@@ -1,8 +1,9 @@
 # Real WorkService image for the Harbor fixtures: PostgreSQL 18 plus the
 # unmodified python/omp-work package. The entrypoint under evals/harbor starts
-# the database, provisions credentials, and runs `python -m omp_work serve`,
-# which serves omp_work.v1.server.create_app. Nothing under python/omp-work/src
-# is stubbed or patched.
+# the database with password authentication, installs the credential files the
+# host build mounted in, and runs `python -m omp_work serve`, which serves
+# omp_work.v1.server.create_app. Nothing under python/omp-work/src is stubbed
+# or patched.
 #
 # Build context: the repository root.
 #   docker build -t omp-workservice:dev -f evals/harbor/docker/Dockerfile.workservice .

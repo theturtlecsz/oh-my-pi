@@ -13,6 +13,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 HARBOR_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 REPO_ROOT="$(cd "$HARBOR_DIR/../.." && pwd -P)"
 
+# The token has to exist before `harbor run`: the agent reads it from the
+# host environment, and the workservice only installs this same bundle.
+bash "$SCRIPT_DIR/provision-credentials.sh"
+
 docker build -t omp-verifier:dev \
   -f "$HARBOR_DIR/docker/Dockerfile.verifier" "$HARBOR_DIR/docker"
 
