@@ -5,7 +5,7 @@
 - **Task**: `OMP-314` (Slice: `OMP-314-s01`)
 - **Promised Outcome**: Reproducible source/runtime identity and durable research contracts/jobs
 - **Evaluation Commit**: `8e219f7bc1e97ae3e00a40c5081d2733e8459ca1` (`main`)
-- **Status**: Accepted — all required packages landed on `main` and verified by test suites
+- **Status**: source delivered, not installed-qualified; §3 component tests only (67/74 Python tests skip without OMP_WORK_POSTGRES_INTEGRATION=1); no Work Ledger or installed check. Link [R00](R00-BASELINE-2026-09-25.md).
 
 ---
 
@@ -35,14 +35,14 @@
   - `c12fe6fb9b`: `OMP-321: pin ECC mirror with deterministic engineering and research packs`
   - `ad9e01a01a`: `OMP-321: reconcile derived rows after rebase (flood merge_check_repair)`
 - **What It Delivered**:
-  - Full pinned mirror of upstream ECC assets under `session-system/ecc/mirror/`.
+  - Pinned subset: 18 files under `session-system/ecc/mirror/` ([manifest](../../session-system/ecc/manifest.json)); not the complete mirror WP1 requires.
   - Deterministic OMP adaptation engine (`session-system/ecc/adapter/`).
   - Pack manifests defining engineering and research packs (`session-system/ecc/manifest.json`).
   - Pinned lock file with source and transformed SHA-256 hashes (`session-system/ecc/adapted.lock.json`).
   - Native-preserving overlays and link-rewriting (`session-system/ecc/overlays/`).
   - Pack install, update, remove, and native discovery mechanisms (`session-system/ecc/adapter/apply.ts`, `catalog.ts`).
   - Safe database-reviewer adaptation with dropped execution authority and candidate-execution refusal preservation.
-  - Satisfies ECC WP1 to WP3 prerequisites.
+  - Contributes toward WP1–WP3; [R00](R00-BASELINE-2026-09-25.md) records them partial.
 - **Proving Test Files**:
   - `session-system/tests/ecc-install.test.ts`: proves install, update, remove, non-overwrite of unowned files, modified-file protection, and discovery removal.
   - `session-system/tests/ecc-adaptation.test.ts`: proves source hash pinning, lockfile verification, byte-identical builds, manifest invariants, overlay application, and native discovery.
@@ -177,4 +177,4 @@ OMP_WORK_POSTGRES_INTEGRATION=1 uv run --project python/omp-work --extra dev pyt
 ### Verification Summary
 - **Total Test Files Evaluated**: 12 files (4 TypeScript, 8 Python)
 - **Total Tests Passed**: 119 passed, 0 failed (45 TypeScript tests, 74 Python tests)
-- **Milestone Criteria Status**: Satisfied
+- **Milestone Criteria Status**: source delivered, not installed-qualified; §3 component tests only (67/74 Python tests skip without OMP_WORK_POSTGRES_INTEGRATION=1); no Work Ledger or installed check. Link [R00](R00-BASELINE-2026-09-25.md).

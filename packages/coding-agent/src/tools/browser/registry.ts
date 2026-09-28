@@ -14,6 +14,7 @@ import {
 	removeUserDataDir,
 	type UserAgentOverride,
 } from "./launch";
+import { loadRelayCdpToken } from "./relay/cdp-token";
 import { ensureRelayDaemon, isLoopbackRelayUrl } from "./relay/daemon";
 import type { RelayKind } from "./relay/kind";
 import { ensureSharedBrowser } from "./shared-daemon";
@@ -150,6 +151,17 @@ export async function acquireBrowser(kind: BrowserKind, opts: AcquireBrowserOpti
 	}
 }
 
+/** `ws://<host>/cdp?token=` for a relay HTTP discovery URL. */
+function relayCdpWsEndpoint(cdpUrl: string, token: string): string {
+	const url = new URL(cdpUrl);
+	url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+	url.pathname = "/cdp";
+	url.search = "";
+	url.hash = "";
+	url.searchParams.set("token", token);
+	return url.toString();
+}
+
 export function normalizeConnectedCdpUrl(rawCdpUrl: string): string {
 	const cdpUrl = rawCdpUrl.replace(/\/+$/, "");
 	if (/^wss?:\/\//i.test(cdpUrl)) {
@@ -214,6 +226,7 @@ async function openBrowserHandle(kind: BrowserKind, opts: AcquireBrowserOptions)
 	}
 	if (kind.kind === "relay") {
 		const cdpUrl = normalizeConnectedCdpUrl(kind.cdpUrl);
+		const cdpToken = await loadRelayCdpToken();
 		// Loopback relays are owned by a machine-global broker and auto-started
 		// on demand (the extension dials in on its own). Hosts without a CLI
 		// worker entry (bun test, SDK embedding) never spawn brokers. Remote
@@ -226,7 +239,7 @@ async function openBrowserHandle(kind: BrowserKind, opts: AcquireBrowserOptions)
 		// A freshly revived extension service worker can take up to ~30s (its
 		// keepalive alarm) to reconnect, so give the handshake that long.
 		try {
-			await waitForCdp(cdpUrl, RELAY_EXTENSION_WAIT_MS, opts.signal);
+			await waitForCdp(cdpUrl, RELAY_EXTENSION_WAIT_MS, opts.signal, cdpToken);
 		} catch (err) {
 			if (err instanceof ToolAbortError) throw err;
 			if (err instanceof Error && err.name === "AbortError") throw err;
@@ -237,8 +250,10 @@ async function openBrowserHandle(kind: BrowserKind, opts: AcquireBrowserOptions)
 			);
 		}
 		const puppeteer = await loadPuppeteer();
+		// browserURL drops query strings, so the CDP token has to ride on the
+		// websocket URL puppeteer dials directly.
 		const browser = await puppeteer.connect({
-			browserURL: cdpUrl,
+			browserWSEndpoint: relayCdpWsEndpoint(cdpUrl, cdpToken),
 			defaultViewport: null,
 			protocolTimeout: BROWSER_PROTOCOL_TIMEOUT_MS,
 		});

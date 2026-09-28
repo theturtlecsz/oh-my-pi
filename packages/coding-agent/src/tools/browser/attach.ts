@@ -101,14 +101,27 @@ export async function probeCdpStatus(
 	return promise;
 }
 
-/** Poll `${cdpUrl}/json/version` until it responds with 200, with abort + timeout support. */
-export async function waitForCdp(cdpUrl: string, timeoutMs: number, signal?: AbortSignal): Promise<void> {
+/**
+ * Poll `${cdpUrl}/json/version` until it responds with 200, with abort + timeout support.
+ * When `token` is set it is sent as `?token=` (the relay CDP leg).
+ */
+export async function waitForCdp(
+	cdpUrl: string,
+	timeoutMs: number,
+	signal?: AbortSignal,
+	token?: string,
+): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
-	const probeUrl = `${cdpUrl.replace(/\/+$/, "")}/json/version`;
+	let probeTarget = `${cdpUrl.replace(/\/+$/, "")}/json/version`;
+	if (token) {
+		const probeUrl = new URL(probeTarget);
+		probeUrl.searchParams.set("token", token);
+		probeTarget = probeUrl.toString();
+	}
 	let lastStatus: number | null = null;
 	while (Date.now() < deadline) {
 		throwIfAborted(signal);
-		const status = await probeCdpStatus(probeUrl, { timeoutMs: 2000, signal });
+		const status = await probeCdpStatus(probeTarget, { timeoutMs: 2000, signal });
 		if (status !== null && status >= 200 && status < 300) return;
 		lastStatus = status;
 		await Bun.sleep(150);

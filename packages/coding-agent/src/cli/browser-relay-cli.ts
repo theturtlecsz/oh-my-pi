@@ -5,6 +5,7 @@
  */
 import * as path from "node:path";
 import { getBrowserRelayDir } from "@oh-my-pi/pi-utils";
+import { loadRelayCdpToken } from "../tools/browser/relay/cdp-token";
 import { probeRelayServer } from "../tools/browser/relay/daemon";
 import backgroundJs from "../tools/browser/relay/extension-assets/background.js.txt" with { type: "text" };
 import licenseText from "../tools/browser/relay/extension-assets/LICENSE.txt" with { type: "text" };
@@ -74,7 +75,13 @@ async function runServe(args: BrowserRelayCommandArgs): Promise<void> {
 		: undefined;
 	let relay: RelayServer;
 	try {
-		relay = startRelayServer({ port: args.port, token: args.token, group: args.group !== false, log });
+		relay = startRelayServer({
+			port: args.port,
+			token: args.token,
+			cdpToken: await loadRelayCdpToken(),
+			group: args.group !== false,
+			log,
+		});
 	} catch (err) {
 		// The port is machine-global while relays can be started by any project's
 		// broker (or by hand): losing the bind to a live relay is success.

@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import secrets
+import stat
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -12,7 +13,13 @@ from psycopg import sql
 from omp_work.integration.importer import LinearImporter
 
 from . import backup
-from .capabilities import _write_secret, provision_candidate_reader, provision_owner
+from .capabilities import (
+    _write_secret,
+    provision_automation,
+    provision_candidate_reader,
+    provision_owner,
+    write_client_config,
+)
 from .config import OperationsConfig
 from .database import bootstrap, check, collect_health, migrate
 
@@ -82,6 +89,29 @@ def credentials_rotate(config: OperationsConfig, role: str) -> None:
     os.replace(temporary, config.secret_path(role))
 
 
+def _require_readable_bearer(path: Path) -> None:
+    """OMP-402: client-config must refuse to advertise a bearer file that could
+    not authenticate — not a regular file, group/other readable, or missing the
+    token the service compares. Nothing is written when this raises."""
+    try:
+        metadata = path.stat()
+    except FileNotFoundError as error:
+        raise ValueError(f"bearer file is missing: {path}") from error
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid():
+        raise ValueError(
+            f"bearer file must be a regular file owned by the current user: {path}"
+        )
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise ValueError(f"unsafe bearer file permissions: {path}")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise ValueError(f"bearer file is not JSON: {path}") from error
+    token = data.get("token") if isinstance(data, dict) else None
+    if not isinstance(token, str) or not token:
+        raise ValueError(f"bearer file carries no token: {path}")
+
+
 def add_parser(parser: argparse.ArgumentParser) -> None:
     commands = parser.add_subparsers(dest="ops_command", required=True)
     commands.add_parser("bootstrap")
@@ -109,6 +139,14 @@ def add_parser(parser: argparse.ArgumentParser) -> None:
     reader.add_argument("--workspace-id", required=True)
     reader.add_argument("--candidate-id", action="append", required=True)
     reader.add_argument("--name", default="candidate-reader")
+    automation = capabilities.add_parser("automation")
+    automation.add_argument("--workspace-id", required=True)
+    automation.add_argument("--name", default="automation")
+    client_config = capabilities.add_parser("client-config")
+    client_config.add_argument("--workspace-id", required=True)
+    client_config.add_argument("--owner-id", required=True)
+    client_config.add_argument("--bearer-file", required=True)
+    client_config.add_argument("--base-url", default="http://127.0.0.1:54322")
     backup_parser = commands.add_parser("backup").add_subparsers(
         dest="backup_command", required=True
     )
@@ -173,12 +211,28 @@ def run(args: argparse.Namespace, config: OperationsConfig | None = None) -> Non
                 owner_id=UUID(args.owner_id),
                 base_url=args.base_url,
             )
-        else:
+        elif args.capabilities_command == "candidate-reader":
             path = provision_candidate_reader(
                 config,
                 workspace_id=UUID(args.workspace_id),
                 candidate_ids=tuple(UUID(value) for value in args.candidate_id),
                 name=args.name,
+            )
+        elif args.capabilities_command == "automation":
+            path = provision_automation(
+                config,
+                workspace_id=UUID(args.workspace_id),
+                name=args.name,
+            )
+        else:
+            bearer_file = Path(args.bearer_file)
+            _require_readable_bearer(bearer_file)
+            path = write_client_config(
+                config,
+                workspace_id=UUID(args.workspace_id),
+                owner_id=UUID(args.owner_id),
+                base_url=args.base_url,
+                bearer_file=bearer_file,
             )
         print(path)
     elif command == "backup":
