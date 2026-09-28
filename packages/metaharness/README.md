@@ -10,6 +10,24 @@ their live progress, scores, token usage, costs, and traces.
 bun run serve --port 4700
 ```
 
+## Access control
+
+The server binds **loopback only** (`127.0.0.1`) and every `/api/*` request
+needs a bearer token (a wrong or missing token is a `401` JSON error). The
+token comes from `--token <t>`, else `METAHARNESS_TOKEN`, else a random
+32-byte hex token generated at startup — and is printed with the dashboard URL:
+
+```
+metaharness listening on http://127.0.0.1:4700/?token=<t> (jobs: …)
+```
+
+`GET /` (the static dashboard) stays open so a browser can load the app; the
+page reads `?token=` once, keeps it in `sessionStorage`, strips it from the URL
+via `history.replaceState`, and then sends `Authorization: Bearer <t>` on
+every API call. `GET /api/events` additionally accepts `?token=<t>`, because
+`EventSource` cannot set headers. `scripts/trace-report.ts` takes `--token`
+(default `METAHARNESS_TOKEN`) and sends the same bearer header.
+
 ## How Harbor runs execute
 
 1. **Local omp, not npm.** By default the runner bind-mounts the repo
@@ -123,7 +141,8 @@ bun scripts/trace-report.ts <run> <trace> [--focus "reviewer notes"] [--out repo
 bun scripts/trace-report.ts "sb3-ntg|django__django-12325__ddQroP4"   # run|trace also accepted
 ```
 
-Flags: `--base` (server, default `http://localhost:4700`), `--tiny` / `--synth`
+Flags: `--base` (server, default `http://localhost:4700`), `--token`
+(metaharness API token, default `METAHARNESS_TOKEN`), `--tiny` / `--synth`
 (`<provider>/<model-id>` overrides), `--focus` (extra reviewer context, e.g. the
 known-correct fix for a failed task), `--concurrency` (default 8).
 
