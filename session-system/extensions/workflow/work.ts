@@ -669,11 +669,16 @@ export function createWorkBackend(
 			deliveredOps.push(envelope.operation_id);
 			return response.result as Extract<CommandResult, { type: T }>;
 		} catch (error) {
-			if (error instanceof WorkError && error.status > 0 && NON_APPLYING_CODES.has(error.code)) {
+			if (
+				error instanceof WorkError &&
+				error.status >= 400 &&
+				error.status < 500 &&
+				NON_APPLYING_CODES.has(error.code)
+			) {
 				// Raised inside the store transaction and rolled back — the
 				// command provably did not apply, so a corrected retry may
-				// claim fresh. Everything else keeps the claim: 5xx/unknown
-				// codes may still have committed, and idempotency_conflict
+				// claim fresh. The 4xx bound is deliberate (OMP-395): a 5xx or
+				// unknown code may still have committed, and idempotency_conflict
 				// means this operation id exists under DIFFERENT bytes — that
 				// stored result can never satisfy this call.
 				await dropPendingOp(claim.path);

@@ -429,3 +429,46 @@ Four installed whole-process tests in `python/omp-work/tests/test_installed_exec
 
 **Non-claims:**
 These tests define and retain installed whole-process evidence for their specific fault barriers. They claim no hosted CI pass and no S2.2 completion.
+
+## OMP-395 gap status
+
+OMP-395 closes the gap where a post-commit 5xx could be read as "not applied".
+A 5xx carries an unknown outcome; only a 4xx is a definitive rolled-back
+refusal. Status after this slice:
+
+1. **A post-commit failure returns 503 and reconciles — fixed.**
+   The service's s02 change returns `503`/`unavailable` with the
+   `outcome unknown, reconcile by operation_id` diagnostic when a command
+   committed and the response failed afterwards
+   (`python/omp-work/tests/test_post_commit_unavailable.py`). The host now
+   reconciles every 5xx in `packages/work-client/src/index.ts::request()`
+   (a 5xx with no typed `error.code` becomes `unavailable`) and in
+   `session-system/extensions/workflow/work.ts::run()` (claims are dropped
+   only for `400 <= status < 500`). Executable evidence:
+   `bun test packages/work-client/test/server-error-code.test.ts` and
+   `bun test session-system/tests/omp-395-post-commit-reconcile.test.ts`.
+2. **E0218, stuck intent — unfixed.** A commit that never becomes visible to
+   the operation read leaves the pending claim unresolved forever; recovery
+   refuses rather than guessing. Reproduction: the OMP-262 "404 forever" tests
+   (`run() lost-response reconciliation > 404 forever...` and
+   `pending-claim recovery reconciliation > recovery with 404 forever...`) in
+   `session-system/tests/omp-262-operation-reconciliation.test.ts`, run with
+   `bun test session-system/tests/omp-262-operation-reconciliation.test.ts`.
+   This is test-pinned OMP-262 design: a 404 is not proof of absence, so the
+   claim is retained and the host must stop/cancel or repair it.
+3. **E0079, skipped claims — unfixed.** `begin_execution`,
+   `activate_execution_item` and `complete_execution_item` pending claims are
+   not reconciled at startup because the client omits defaulted keys and cannot
+   verify the canonical request hash. Reproduction: the pending-ops test
+   "leaves unadmitted grant-bound claims untouched and unfetched" in
+   `session-system/tests/pending-ops.test.ts`, run with
+   `bun test session-system/tests/pending-ops.test.ts`. Fixing it needs
+   required-key payload types and producer normalization in
+   `packages/work-client` (outside this child scope).
+4. **E0219, early delivery — already fixed.** A queued continuation delivered
+   before its admission is refused and dropped instead of starting work.
+   Evidence: the "queued intent" cases in
+   `session-system/tests/auditor-runner.test.ts` (`queued intent with %s starts
+   no turn or reservation`, plus the persisted-intent suppression cases), run
+   with `bun test session-system/tests/auditor-runner.test.ts`.
+

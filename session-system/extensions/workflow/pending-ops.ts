@@ -17,8 +17,8 @@
  *   tool result reached the transcript) — an unlink right after execute would
  *   reopen the duplicate window on a crash before delivery.
  * - dropped                              — acked (ackResolvedOps), or released
- *   after a definitive service refusal (status > 0 means the command was seen
- *   and did not apply).
+ *   after a definitive 4xx service refusal — 400 <= status < 500 means the
+ *   command was seen and rolled back; a 5xx is reconcilable, never dropped.
  *
  * The exclusive create arbitrates cross-session races: two concurrent OMP
  *   sessions attempting the same intent produce one winner; the loser reads

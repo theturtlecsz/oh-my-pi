@@ -1249,8 +1249,12 @@ export class WorkClient {
 		}
 		if (status < 200 || status >= 300) {
 			const error = (parsed as Partial<WorkErrorBody>).error;
+			// OMP-395: a 5xx with no typed code is a service fault whose outcome
+			// is unknown — never a 4xx-style "did not apply" refusal. Default it
+			// to `unavailable` so the host reconciles via the operation read
+			// instead of releasing the claim and risking a duplicate.
 			throw new WorkError(
-				error?.code ?? "invalid_request",
+				error?.code ?? (status >= 500 ? "unavailable" : "invalid_request"),
 				status,
 				(error?.diagnostics ?? []).map(redact),
 				error?.request_id ?? null,
