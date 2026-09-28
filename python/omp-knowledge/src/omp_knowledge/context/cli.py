@@ -336,7 +336,8 @@ def _compile(
 
     embedding_route: dict[str, Any] | None = None
     if args.vector_state_dir is not None:
-        assert route_set is not None
+        if route_set is None:
+            raise ValueError("--vector-state-dir requires --routes")
         resolved_embedding = resolve(route_set, "embedding")
         embedding_route = {
             "role": "embedding",
