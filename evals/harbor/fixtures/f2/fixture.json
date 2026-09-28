@@ -1,0 +1,43 @@
+{
+  "id": "f2",
+  "scored_experiment": "repair",
+  "seed_patch": "seed.patch",
+  "solution_patch": "solution.patch",
+  "independent_tests": [
+    {
+      "runner": "bun",
+      "target": "session-system/tests/f2-continuation-ack.test.ts",
+      "files": ["independent/f2-continuation-ack.test.ts"]
+    },
+    {
+      "runner": "pytest",
+      "target": "python/omp-work/tests/test_installed_execution_recovery.py::test_killed_controller_recovers_queued_resume_continuation",
+      "requires": ["OMP_INSTALLED_RELEASE"]
+    }
+  ],
+  "scenario": "scenario.json",
+  "rules": [
+    {
+      "type": "readback_equals",
+      "pointer": "/execution/grant/continuations_scheduled",
+      "value": 0
+    },
+    {
+      "type": "readback_equals",
+      "pointer": "/execution/items/0/close_attempts_started",
+      "value": 1
+    },
+    {
+      "type": "readback_equals",
+      "pointer": "/execution/grant/state",
+      "value": "completed"
+    },
+    {
+      "type": "outcome_is",
+      "outcome": "completed"
+    },
+    {
+      "type": "independent_tests_pass"
+    }
+  ]
+}

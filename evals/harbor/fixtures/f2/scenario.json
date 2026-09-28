@@ -1,0 +1,61 @@
+{
+  "command": "/execute OMP-246",
+  "terminal": {
+    "pointer": "/execution/grant/state",
+    "in": ["completed"]
+  },
+  "model_script": [
+    {
+      "tool_calls": [
+        {
+          "name": "work",
+          "arguments": {
+            "action": "get_execution"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "name": "work",
+          "arguments": {
+            "action": "seal_execution_criteria",
+            "criteria": ["the one-item grant finishes once"]
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "name": "work",
+          "arguments": {
+            "action": "stamp_execution_plan",
+            "plan_file": "local://execute-omp-246-plan.md",
+            "paths": ["result.txt"]
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "name": "work",
+          "arguments": {
+            "action": "begin_execution_review",
+            "body": "the grant completed once"
+          }
+        }
+      ]
+    }
+  ],
+  "ui_script": [],
+  "kill_at": {
+    "match": {
+      "type": "prompt",
+      "message": "/execute OMP-246"
+    }
+  },
+  "timeout_s": 120
+}

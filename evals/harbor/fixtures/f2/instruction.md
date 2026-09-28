@@ -1,0 +1,1 @@
+The one-item grant died right after it lined up the next step. I opened the same session again and that lineup was treated as finished work. The step itself was never saved in the session. A run that stays up finishes the grant once. This one should too: grant completed, same continuation count, same attempt count.
