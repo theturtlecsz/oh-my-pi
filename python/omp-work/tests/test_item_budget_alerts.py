@@ -407,7 +407,7 @@ def test_tokens_exceeded_reports_exhausted(native_jobs) -> None:
 
 
 def test_subagents_50_threshold(native_jobs) -> None:
-    """Two children against max_subagents=4 write one subagents 50 row."""
+    """Two children against max_subagents=4 write one subagents 50 row at enqueue."""
     store = _store(native_jobs)
     work_id = _item_with_budget(
         native_jobs, "budget subagents", {**_GENEROUS, "max_subagents": 4}
@@ -418,7 +418,9 @@ def test_subagents_50_threshold(native_jobs) -> None:
 
     sub_50 = _alert_event_id(native_jobs, work_id, "subagents", 50)
     sub_80 = _alert_event_id(native_jobs, work_id, "subagents", 80)
-    assert _alert_rows(native_jobs, [sub_50, sub_80]) == {}
+    # The enqueue path checks the item budget after inserting a child, so the
+    # second child writes the 50% row before any usage is recorded. s05.
+    assert set(_alert_rows(native_jobs, [sub_50, sub_80])) == {sub_50}
 
     _record(
         native_jobs,

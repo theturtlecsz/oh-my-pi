@@ -7,6 +7,10 @@ two overlapping cancels cannot deadlock. Backlog and admitted jobs become
 worker is cleared, and the open reservation is released as ``cancelled``, so
 the previous holder's renew or settle is ``job_fence_stale``. Sealed and
 failed jobs are left as they are.
+
+``cancel_item_tree`` is the item-scoped counterpart used by the OMP-404 budget
+stopper: it takes the caller's open cursor, locks the work item's jobs and
+their descendants in ``job_id`` order, and cancels them with the same rules.
 """
 
 from __future__ import annotations
@@ -82,6 +86,41 @@ def cancel_job(
     return _public(operation_id, outcome)
 
 
+def cancel_item_tree(
+    store: NativeJobStore,
+    cur: Any,
+    *,
+    workspace_id: UUID,
+    actor_id: UUID,
+    operation_id: str,
+    work_id: UUID,
+    reason: str,
+) -> list[str]:
+    """Cancel every backlog or admitted job of ``work_id`` and its descendants.
+
+    The caller holds the open transaction: the jobs of the work item plus every
+    ``parent_job_id`` descendant whichever work item they belong to are locked
+    in ``job_id`` order, then ``_cancel_rows`` cancels the native backlog and
+    admitted ones and returns their ids in ``job_id`` order. Unlike
+    :func:`cancel_job` this is a sub-operation of a larger transaction, so it
+    does not run through ``run_operation``: there is no separate request to
+    replay, and the enclosing operation's id stamping the events is enough.
+    Sealed, failed, and already cancelled jobs are left as they are.
+    """
+    if not isinstance(reason, str) or reason == "" or len(reason.encode()) > _REASON_LIMIT:
+        raise JobError("invalid_request", ("cancel reason is required",))
+    rows = _lock_item_tree(cur, workspace_id, work_id)
+    return _cancel_rows(
+        store,
+        cur,
+        workspace_id,
+        actor_id,
+        operation_id,
+        reason,
+        rows,
+    )
+
+
 def _require_request(job_id: object, reason: object) -> tuple[str, str]:
     if not isinstance(job_id, str) or job_id == "":
         raise JobError("invalid_request", ("job_id is required",))
@@ -125,6 +164,43 @@ def _lock_tree(
         FOR UPDATE OF j
         """,
         (workspace_id, job_id, workspace_id, workspace_id),
+    )
+    return list(cur.fetchall())
+
+
+def _lock_item_tree(
+    cur: Any, workspace_id: UUID, work_id: UUID
+) -> list[dict[str, Any]]:
+    """Every job of ``work_id`` plus descendants, locked in ``job_id`` order.
+
+    The tree roots are the work item's own jobs and every job whose
+    ``parent_job_id`` chain reaches one of them, whichever work item the
+    descendant belongs to. The path array stops a parent cycle from walking
+    forever. ``FOR UPDATE`` is on the jobs row, after ``ORDER BY``, so the locks
+    are taken in that order.
+    """
+    cur.execute(
+        """
+        WITH RECURSIVE tree AS (
+            SELECT job_id, ARRAY[job_id]::text[] AS path
+            FROM omp_jobs.jobs
+            WHERE workspace_id = %s AND work_id = %s
+            UNION ALL
+            SELECT child.job_id, tree.path || child.job_id
+            FROM omp_jobs.jobs AS child
+            JOIN tree ON child.parent_job_id = tree.job_id
+            WHERE child.workspace_id = %s
+              AND NOT (child.job_id = ANY (tree.path))
+        )
+        SELECT
+            j.job_id, j.status, j.source, j.fence, j.worker_id, j.cancel_reason
+        FROM tree
+        JOIN omp_jobs.jobs AS j
+          ON j.workspace_id = %s AND j.job_id = tree.job_id
+        ORDER BY j.job_id
+        FOR UPDATE OF j
+        """,
+        (workspace_id, work_id, workspace_id, workspace_id),
     )
     return list(cur.fetchall())
 
