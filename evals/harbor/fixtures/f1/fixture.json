@@ -1,0 +1,32 @@
+{
+  "id": "f1",
+  "scored_experiment": "repair",
+  "seed_patch": "seed.patch",
+  "solution_patch": "solution.patch",
+  "independent_tests": [
+    {
+      "runner": "bun",
+      "target": "session-system/tests/workflow-revise.test.ts"
+    }
+  ],
+  "scenario": "scenario.json",
+  "rules": [
+    {
+      "type": "readback_equals",
+      "pointer": "/work_item/revision/acceptance_criteria",
+      "value": ["Amended AC 1", "Amended AC 2"]
+    },
+    {
+      "type": "transcript_count",
+      "count": 1
+    },
+    {
+      "type": "readback_equals",
+      "pointer": "/work_item/current_candidate_id",
+      "value": null
+    },
+    {
+      "type": "independent_tests_pass"
+    }
+  ]
+}

@@ -14,9 +14,10 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import sqlite3
-import subprocess  # nosec B404 - invokes git with a fixed argv and no shell
+import subprocess  # nosec B404
 import sys
 import time
 from collections.abc import Iterable, Mapping
@@ -85,12 +86,16 @@ def _as_uuid(value: UUID | str, name: str) -> UUID:
         ) from exc
 
 
+_COMMIT_HEX_RE = re.compile(r"^[0-9a-fA-F]{40,64}$")
+
+
 def _git(args: list[str], root: Path) -> str:
     git = shutil.which("git")
     if git is None:
         raise KnowledgeSourceError("checkout_invalid")
     try:
-        proc = subprocess.run(  # nosec B603 - absolute git path, no shell, fixed argv
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+        proc = subprocess.run(  # nosec B603
             [git, *args],
             cwd=root,
             timeout=10,
@@ -126,6 +131,8 @@ def _identity_from_checkout(
     if not root_commits:
         raise KnowledgeSourceError("checkout_invalid")
     for sha in root_commits:
+        if not _COMMIT_HEX_RE.fullmatch(sha):
+            raise KnowledgeSourceError("checkout_invalid")
         _git(["cat-file", "-e", f"{sha}^{{commit}}"], root)
     return RepositoryIdentity(
         workspace_id=workspace_id,

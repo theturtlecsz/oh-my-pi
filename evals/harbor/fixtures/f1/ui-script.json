@@ -1,0 +1,7 @@
+[
+	{
+		"method": "confirm",
+		"title": "Run work?",
+		"answer": { "confirmed": true }
+	}
+]

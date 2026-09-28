@@ -1,0 +1,52 @@
+[
+	{
+		"tool_calls": [
+			{
+				"id": "revise-amend-preview",
+				"name": "work",
+				"arguments": {
+					"action": "revise_work",
+					"work": "OMP-1",
+					"scope": "amended/scope",
+					"acceptance_criteria": ["Amended AC 1", "Amended AC 2"],
+					"expected_revision_id": "00000000-0000-7000-8000-000000000010"
+				}
+			}
+		]
+	},
+	{
+		"tool_calls": [
+			{
+				"id": "revise-amend-confirm",
+				"name": "work",
+				"arguments": {
+					"action": "revise_work",
+					"work": "OMP-1",
+					"scope": "amended/scope",
+					"acceptance_criteria": ["Amended AC 1", "Amended AC 2"],
+					"expected_revision_id": "00000000-0000-7000-8000-000000000010",
+					"confirm": true,
+					"confirmation_id": "cf-fixture-amend"
+				}
+			}
+		]
+	},
+	{
+		"tool_calls": [
+			{
+				"id": "revise-stale-retry",
+				"name": "work",
+				"arguments": {
+					"action": "revise_work",
+					"work": "OMP-1",
+					"scope": "stale/scope",
+					"acceptance_criteria": ["Stale AC"],
+					"expected_revision_id": "00000000-0000-7000-8000-000000000010"
+				}
+			}
+		]
+	},
+	{
+		"text": "The amendment landed as revision 2; the stale re-revision was refused."
+	}
+]
