@@ -281,6 +281,36 @@ def check_topology(compose: Any) -> list[str]:
     return violations
 
 
+def check_capabilities(compose: Any) -> list[str]:
+    """Return capability violations across all services in ``compose``.
+
+    Every service must drop all capabilities (cap_drop: [ALL]), declare an explicit
+    cap_add list, and must not be privileged (privileged not truthy).
+    """
+    if not isinstance(compose, Mapping):
+        return ["capabilities: compose document must be a mapping"]
+    services = compose.get("services")
+    if not isinstance(services, Mapping):
+        return ["capabilities: services must be a mapping"]
+
+    violations: list[str] = []
+    for name, svc in services.items():
+        if not isinstance(svc, Mapping):
+            continue
+        if bool(svc.get("privileged")):
+            violations.append(f"service '{name}' is privileged")
+        cap_drop = svc.get("cap_drop")
+        if not isinstance(cap_drop, (list, tuple)):
+            violations.append(f"service '{name}' lacks cap_drop: [ALL]")
+        elif not any(str(c).upper() == "ALL" for c in cap_drop):
+            violations.append(f"service '{name}' cap_drop does not contain 'ALL'")
+        cap_add = svc.get("cap_add")
+        if cap_add is None or not isinstance(cap_add, (list, tuple)):
+            violations.append(f"service '{name}' lacks explicit cap_add list")
+
+    return violations
+
+
 def load_compose(path: str | Path) -> dict[str, Any]:
     """Parse one compose document; the root must be a mapping."""
     document = yaml.safe_load(Path(path).read_text(encoding="utf-8"))

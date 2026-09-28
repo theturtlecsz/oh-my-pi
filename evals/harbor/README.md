@@ -40,6 +40,14 @@ references an image with no recipe, lacks what Harbor needs for its main
 service, or the worker image, credential mount, or database authentication
 does not match this contract.
 
+Trial containers carry an explicit capability list (`cap_drop: [ALL]` plus an
+explicit `cap_add` list) because docker exec fails under Docker's implicit
+default set on LXC hosts like arch-dev. Unprivileged worker, verifier, and main
+services require no added capabilities (`cap_add: []`), while the workservice
+retains only what PostgreSQL initialization needs (`CHOWN`, `DAC_OVERRIDE`,
+`FOWNER`, `SETGID`, `SETUID`). No service uses `privileged: true` and no exec
+call uses `--privileged`.
+
 A Harbor trial uses `--agent-import-path omp_harbor_eval.harbor_agent:OmpRpcAgent`
 and four variables: `OMP_HARBOR_BEARER`, `OMP_HARBOR_WORKSPACE_ID`,
 `OMP_HARBOR_RUN_ID`, and `OMP_HARBOR_NONCE`. The bearer and workspace id
