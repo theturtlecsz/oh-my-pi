@@ -1,11 +1,11 @@
 # ADR 0004: Hard padlock — sole mutator, effort launch-gate, reviewer_required on blast-radius
 
-**Status:** Accepted (Horizon C padlock)  
-**Date:** 2026-09-20  
+**Status:** Accepted (Horizon C padlock). Horizon A/B PASS evidence is source delivered, not installed-qualified.
+**Date:** 2026-09-20
 **Program:** FULL-PROGRAM v1.1
 
 ## Context
-Day-30 and Horizons A+B proved the cockpit path and depth slices. Platform freeze requires a hard padlock so advisors cannot mutate live economy and paid work cannot bypass gates.
+Day-30 and in-process Horizon A/B harnesses demonstrated the cockpit path and depth slices. Platform freeze requires a hard padlock so advisors cannot mutate live economy and paid work cannot bypass gates.
 
 ## Decision
 
@@ -28,11 +28,14 @@ Blast-radius paths (ACTIVE-POLICY, ledger, auth, economy workflows, deploy/relea
 ### 5. Extract default
 `ACTIVE/EXTRACT-POLICY.md`: stay-in-OMP; any extract stops for Chris.
 
-## Evidence cited (A+B)
-- Horizon A: `ACTIVE/PIVOT-HORIZON-A-PASS.md` (A0 synthetic admit; A1 durability; A2 grokbot+ECC; A3 status/budget verbs; E3 close)
-- Horizon B: `ACTIVE/PIVOT-HORIZON-B-PASS.md` (B1 finding reuse×2; B2 one-revision campaign; B3 compile bar; E3 close)
-- Day-30: `ACTIVE/PIVOT-DAY30-PASS.md`
-- Lock: `ACTIVE/FULL-PROGRAM-LOCK.json` (`lock-full-program-v1.1-20260920`)
+## Evidence cited (A+B) — source delivered, not installed-qualified
+
+In-process harnesses in this repository demonstrate the A/B slices; the `ACTIVE/PIVOT-*.md` records cited below are not in this repository.
+- A1 durability: [`durability_a1.py`](../../python/omp-work/src/omp_work/durability_a1.py) (in-memory, fixed zero-loss subset).
+- A2/A3 cockpit verbs: [`cockpit_verbs.py`](../../python/omp-work/src/omp_work/cockpit_verbs.py) (in-memory demo, not a Grok Bot integration).
+- B1 finding reuse ×2: [`knowledge_b1.py`](../../python/omp-work/src/omp_work/knowledge_b1.py).
+- B1 keyword demo: [`cognee_adapter.py`](../../python/omp-work/src/omp_work/cognee_adapter.py).
+- Referenced but absent from this repository: `ACTIVE/PIVOT-HORIZON-A-PASS.md`, `ACTIVE/PIVOT-HORIZON-B-PASS.md`, `ACTIVE/PIVOT-DAY30-PASS.md`, `ACTIVE/FULL-PROGRAM-LOCK.json` (`lock-full-program-v1.1-20260920`).
 
 ## Soft leftovers (explicit — not padlocked yet)
 1. Full 72-hour ADR 0001 durability soak (A1 was §3 subset, not 72h)

@@ -1,7 +1,7 @@
 """Cockpit verbs: submit/status/cancel/resume/approve/evidence (W4).
 
-Grok → Run Owner → WorkService-shaped job store. Not a separate OMP UI.
-Durability is in-process for the day-30 demo harness; authority path is sealed packets.
+An in-memory demonstration façade for the cockpit verbs. Not a Grok Bot integration
+and not a mission interface; authority path is sealed packets.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field, asdict
