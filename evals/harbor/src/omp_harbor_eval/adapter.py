@@ -8,7 +8,10 @@ records the last probe failure on the outcome reason.
 Scripted UI rules answer ``select``, ``confirm``, ``input``, and ``editor``
 requests. A request with no rule is cancelled and the run ends ``blocked``.
 An outbound frame matching ``scenario.kill_at.match`` is SIGKILLed once and
-resumed with ``--session`` and no second prompt. Every frame in both
+resumed with ``--session`` and no second prompt. An ``extension_error``, or
+any error event, before the first ``agent_start`` or ``turn_start`` ends the
+trial at once as ``harness_error`` with that error text, ahead of a crash
+restart. Every frame in both
 directions is logged to ``rpc-transcript.jsonl``; the grader's
 ``transcript.jsonl`` instead holds one semantic record per refused ``work``
 call. Optional ``session_reader``
@@ -113,6 +116,17 @@ class ProbeError(Exception):
     """A loopback WorkService read failed."""
 
 
+_TURN_TYPES = frozenset({"agent_start", "turn_start"})
+
+
+def _inbound_error_text(frame: Mapping[str, Any], kind: str) -> str:
+    for field in ("error", "message", "reason"):
+        value = frame.get(field)
+        if isinstance(value, str) and value.strip() != "":
+            return value
+    return kind
+
+
 class _Transcript:
     """Log every RPC frame, and derive the grader's semantic decision records.
 
@@ -123,13 +137,19 @@ class _Transcript:
     f1's ``transcript_count`` rule counts refusals, not frames.
     """
 
-    def __init__(self, evidence: EvidenceWriter) -> None:
+    def __init__(
+        self,
+        evidence: EvidenceWriter,
+        on_inbound: Callable[[Any], None] | None = None,
+    ) -> None:
         self._evidence = evidence
+        self._on_inbound = on_inbound
         self._lock = threading.Lock()
         self._closed = False
         self._work_actions: dict[str, Any] = {}
 
     def write(self, direction: str, frame: Any) -> None:
+        callback: Callable[[Any], None] | None = None
         with self._lock:
             if self._closed:
                 return
@@ -137,6 +157,9 @@ class _Transcript:
             if direction != "in":
                 return
             self._observe(frame)
+            callback = self._on_inbound
+        if callback is not None:
+            callback(frame)
 
     def _observe(self, frame: Any) -> None:
         if not isinstance(frame, dict):
@@ -370,7 +393,11 @@ def _startup_log_path(reason: str) -> str | None:
 
 
 class RpcAdapter:
-    """One scenario, one ``prompt``, then the authoritative service readback."""
+    """One scenario, one ``prompt``, then the authoritative service readback.
+
+    An error event before the first agent turn is the trial result: outcome
+    ``harness_error`` and the error text as the reason.
+    """
 
     def __init__(
         self,
@@ -412,7 +439,7 @@ class RpcAdapter:
         """Return ``harness_error``, ``timeout``, ``blocked``, or the terminal readback value."""
 
         self._reset_run()
-        transcript = _Transcript(self.evidence)
+        transcript = _Transcript(self.evidence, on_inbound=self._on_inbound)
         self._transcript = transcript
         client: _LoggingClient | None = None
         prompts_sent = 0
@@ -470,6 +497,10 @@ class RpcAdapter:
         self._last: dict[str, Any] | None = None
         self._ui_lock = threading.Lock()
         self._ui_closed = False
+        self._turn_lock = threading.Lock()
+        self._agent_turn_seen = False
+        self._early_error: str | None = None
+        self._early_error_event = threading.Event()
 
     def _open(self, command: Sequence[str]) -> _LoggingClient:
         if self._transcript is None:
@@ -524,7 +555,39 @@ class RpcAdapter:
             if not self._killed.is_set():
                 raise
 
+    def _on_inbound(self, frame: Any) -> None:
+        if not isinstance(frame, dict):
+            return
+        kind = frame.get("type")
+        if not isinstance(kind, str):
+            return
+        text: str | None = None
+        with self._turn_lock:
+            if kind in _TURN_TYPES:
+                self._agent_turn_seen = True
+                return
+            if self._agent_turn_seen or self._early_error is not None:
+                return
+            if kind != "error" and not kind.endswith("_error"):
+                return
+            text = _inbound_error_text(frame, kind)
+            self._early_error = text
+        if text is not None:
+            self._early_error_event.set()
+
+    def _pre_turn_failure(self) -> tuple[str, str, dict[str, Any] | None] | None:
+        if not self._early_error_event.is_set():
+            return None
+        with self._turn_lock:
+            text = self._early_error
+        if text is None:
+            return None
+        return "harness_error", text, self._last
+
     def _after_prompt(self) -> tuple[str, str, dict[str, Any] | None]:
+        early = self._pre_turn_failure()
+        if early is not None:
+            return early
         if self._blocked.is_set():
             return "blocked", self._block_reason, self._last
         if self._killed.is_set() and not self._restarted:
@@ -581,6 +644,9 @@ class RpcAdapter:
 
     def _restart_and_wait(self) -> tuple[str, str, dict[str, Any] | None]:
         # Resume the same session file. Do not send the prompt again.
+        early = self._pre_turn_failure()
+        if early is not None:
+            return early
         self._restarted = True
         self._kill_armed = False
         old = self._client
@@ -602,6 +668,9 @@ class RpcAdapter:
         pointer = self.scenario.terminal.pointer
         accepted = self.scenario.terminal.accepted
         while True:
+            early = self._pre_turn_failure()
+            if early is not None:
+                return early
             if self._blocked.is_set():
                 return "blocked", self._block_reason, self._last
             if self._killed.is_set() and not self._restarted:
@@ -626,7 +695,7 @@ class RpcAdapter:
             remaining = self._deadline - time.monotonic()
             if remaining <= 0:
                 return "timeout", f"timed out after {self._timeout_s}s waiting for {pointer}", self._last
-            time.sleep(min(_POLL_INTERVAL_S, remaining))
+            self._early_error_event.wait(min(_POLL_INTERVAL_S, remaining))
 
     def _seal(
         self,

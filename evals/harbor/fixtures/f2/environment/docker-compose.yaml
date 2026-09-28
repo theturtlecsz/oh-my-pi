@@ -22,6 +22,7 @@ services:
     environment:
       OMP_SERVICE_BIND_HOST: 127.0.0.1
       OMP_SERVICE_BIND_PORT: "8080"
+      OMP_HARBOR_LEDGER_SEED: /opt/harbor/seeds/f2/ledger-seed.json
     volumes:
       - pg_data:/var/lib/postgresql/data
       - ${HOME}/.local/state/omp/harbor-fixtures:/run/omp/supplied:ro

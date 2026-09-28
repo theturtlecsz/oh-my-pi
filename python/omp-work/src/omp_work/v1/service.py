@@ -36,6 +36,7 @@ class WorkService:
         "set_focus": "work.mutate",
         "clear_focus": "work.mutate",
         "record_project_health": "work.mutate",
+        "record_alarm_signal": "work.mutate",
         "append_evidence": "work.approve",
         "finalize_candidate": "work.approve",
         "assess_bounded_intake": "work.approve",

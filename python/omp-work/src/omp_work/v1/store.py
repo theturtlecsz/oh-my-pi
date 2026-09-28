@@ -417,6 +417,7 @@ class PostgresWorkStore(ResearchStoreMixin):
         serializable = command.type in {
             "create_work_batch",
             "publish_bounded_intake",
+            "answer_intake_decision",
             "create_same_session_child",
             "put_relation",
             "remove_relation",
@@ -524,6 +525,8 @@ class PostgresWorkStore(ResearchStoreMixin):
                     result = self._set_focus(cur, envelope, True)
                 elif command.type == "record_project_health":
                     result = self._project_health(cur, envelope)
+                elif command.type == "record_alarm_signal":
+                    result = self._record_alarm_signal(cur, envelope)
                 elif command.type == "append_evidence":
                     result = self._append_evidence(cur, envelope)
                 elif command.type == "finalize_candidate":
@@ -606,6 +609,10 @@ class PostgresWorkStore(ResearchStoreMixin):
                     result = self._publish_bounded_intake(
                         cur, envelope, actor_id, actor_kind
                     )
+                elif command.type == "answer_intake_decision":
+                    result = self._answer_intake_decision(
+                        cur, envelope, actor_id, actor_kind
+                    )
                 else:
                     raise WorkStoreError("unavailable")
                 result_hash = sha256(result)
@@ -651,7 +658,7 @@ class PostgresWorkStore(ResearchStoreMixin):
         event_type: str | None = None,
     ) -> None:
         payload = envelope.command.payload
-        aggregate_id = getattr(payload, "work_id", envelope.workspace_id)
+        aggregate_id = getattr(payload, "work_id", None) or envelope.workspace_id
         if hasattr(payload, "relation"):
             aggregate_id = payload.relation.source_work_id
         elif hasattr(payload, "receipt"):
@@ -3959,6 +3966,25 @@ class PostgresWorkStore(ResearchStoreMixin):
             },
         }
 
+    def _record_alarm_signal(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        payload = envelope.command.payload
+        if payload.work_id is not None:
+            cur.execute(
+                "SELECT 1 FROM omp_work.work_items WHERE workspace_id=%s AND work_id=%s",
+                (envelope.workspace_id, payload.work_id),
+            )
+            if cur.fetchone() is None:
+                raise WorkStoreError("invalid_request", ("work_id:unknown",))
+        return {
+            "type": "record_alarm_signal",
+            "signal": payload.signal,
+            "work_id": str(payload.work_id) if payload.work_id is not None else None,
+            "subject": payload.subject,
+            "detail": payload.detail,
+        }
+
     def _activate_cutover(
         self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
     ) -> dict[str, object]:
@@ -6161,6 +6187,55 @@ class PostgresWorkStore(ResearchStoreMixin):
         )
         return receipt
 
+    def _answer_intake_decision(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        envelope: CommandEnvelope,
+        actor_id: UUID,
+        actor_kind: str,
+    ) -> dict[str, object]:
+        if actor_kind != "owner":
+            raise WorkStoreError("forbidden")
+        payload = envelope.command.payload
+        classifications = self._intake_classifications(
+            cur, envelope.workspace_id, [payload.work_id]
+        )
+        classification = classifications.get(payload.work_id)
+        if classification is None or classification.scope_class != ScopeClass.new_scope:
+            raise WorkStoreError("invalid_request")
+
+        cur.execute(
+            "SELECT answer, answered_by, answered_at, operation_id FROM omp_work.intake_decisions WHERE workspace_id=%s AND work_id=%s",
+            (envelope.workspace_id, payload.work_id),
+        )
+        existing = cur.fetchone()
+        if existing is not None:
+            answered_at = existing["answered_at"]
+        else:
+            cur.execute(
+                "INSERT INTO omp_work.intake_decisions (workspace_id, work_id, answer, answered_by, operation_id) "
+                "VALUES (%s, %s, %s, %s, %s) RETURNING answered_at",
+                (
+                    envelope.workspace_id,
+                    payload.work_id,
+                    payload.answer,
+                    actor_kind,
+                    envelope.operation_id,
+                ),
+            )
+            row = cur.fetchone()
+            assert row is not None
+            answered_at = row["answered_at"]
+
+        return {
+            "type": "answer_intake_decision",
+            "work_id": str(payload.work_id),
+            "answer": payload.answer,
+            "answered_at": answered_at.isoformat()
+            if isinstance(answered_at, datetime)
+            else str(answered_at),
+        }
+
     def _item_view(
         self,
         cur: psycopg.Cursor[dict[str, object]],
@@ -6345,15 +6420,41 @@ class PostgresWorkStore(ResearchStoreMixin):
                 classifications = self._intake_classifications(
                     cur, workspace_id, work_ids
                 )
+                intake_decisions_by_work_id: dict[UUID, datetime] = {}
+                if work_ids:
+                    cur.execute(
+                        "SELECT work_id, answered_at FROM omp_work.intake_decisions WHERE workspace_id=%s AND work_id = ANY(%s)",
+                        (workspace_id, [str(wid) for wid in work_ids]),
+                    )
+                    intake_decisions_by_work_id = {
+                        UUID(str(row["work_id"])): row["answered_at"]
+                        for row in cur.fetchall()
+                    }
                 for item in items:
                     wid = UUID(str(item["work_id"]))
                     classification = classifications.get(wid)
                     if classification is not None:
-                        item["scope_class"] = classification.scope_class.value
+                        scope_class = classification.scope_class
+                        item["scope_class"] = scope_class.value
                         item["intake_hold"] = classification.held
                     else:
-                        item["scope_class"] = ScopeClass.owner_filed.value
+                        scope_class = ScopeClass.owner_filed
+                        item["scope_class"] = scope_class.value
                         item["intake_hold"] = False
+
+                    if scope_class == ScopeClass.new_scope:
+                        decision_answered_at = intake_decisions_by_work_id.get(wid)
+                        is_approved = decision_answered_at is not None
+                        key = item["alias"]["key"]
+                        title = item["revision"]["title"]
+                        item["intake_decision"] = {
+                            "question": f"Approve intake of bot-filed new scope {key}: {title}?",
+                            "options": ["approve"],
+                            "state": "approved" if is_approved else "pending",
+                            "answered_at": decision_answered_at,
+                        }
+                    else:
+                        item["intake_decision"] = None
                 cur.execute(
                     "SELECT workspace_id,source_work_id,target_work_id,kind,active FROM omp_work.work_relations WHERE workspace_id=%s ORDER BY created_at LIMIT 5000",
                     (workspace_id,),

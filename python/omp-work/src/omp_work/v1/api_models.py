@@ -307,6 +307,19 @@ class ProjectHealthResult(StrictModel):
     health: ProjectHealthView
 
 
+class AlarmSignalResult(StrictModel):
+    type: Literal["record_alarm_signal"]
+    signal: Literal[
+        "cost_threshold",
+        "budget_exceeded",
+        "safety_check_failed",
+        "credential_appeared",
+    ]
+    work_id: UUID | None = None
+    subject: str
+    detail: str = ""
+
+
 class ActivateCutoverResult(StrictModel):
     type: Literal["activate_cutover"]
     epoch_id: UUID
@@ -538,7 +551,8 @@ CommandResult = Annotated[
     | RecordResearchObservationResult
     | BindResearchDeliverableResult
     | SetResearchCampaignStateResult
-    | ConcludeResearchCampaignResult,
+    | ConcludeResearchCampaignResult
+    | AlarmSignalResult,
     Field(discriminator="type"),
 ]
 

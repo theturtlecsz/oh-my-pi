@@ -768,6 +768,27 @@ class RecordProjectHealthPayload(StrictModel):
     health: Literal["onTrack", "atRisk", "offTrack"]
 
 
+class RecordAlarmSignalPayload(StrictModel):
+    signal: Literal[
+        "cost_threshold",
+        "budget_exceeded",
+        "safety_check_failed",
+        "credential_appeared",
+    ]
+    work_id: UUID | None = None
+    subject: str = Field(min_length=1, max_length=200)
+    detail: str = Field(default="", max_length=500)
+
+    @field_validator("subject", mode="before")
+    @classmethod
+    def _strip_subject(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                raise ValueError("subject must not be blank")
+        return v
+
+
 class StageImportBatchPayload(StrictModel):
     import_batch_id: UUID
     raw_export_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -1081,6 +1102,11 @@ class AttestCheckpointDeliveryCommand(StrictModel):
 class RecordProjectHealthCommand(StrictModel):
     type: Literal["record_project_health"]
     payload: RecordProjectHealthPayload
+
+
+class RecordAlarmSignalCommand(StrictModel):
+    type: Literal["record_alarm_signal"]
+    payload: RecordAlarmSignalPayload
 
 
 class StageImportBatchCommand(StrictModel):
@@ -1752,7 +1778,8 @@ Command = Annotated[
     | RecordResearchObservationCommand
     | BindResearchDeliverableCommand
     | SetResearchCampaignStateCommand
-    | ConcludeResearchCampaignCommand,
+    | ConcludeResearchCampaignCommand
+    | RecordAlarmSignalCommand,
     Field(discriminator="type"),
 ]
 
@@ -1989,6 +2016,7 @@ class Approval(StrictModel):
         "OMP-323",
         "OMP-404",
         "OMP-407",
+        "OMP-406",
     ]
     attestation: hex64 | None = None
 
@@ -2192,4 +2220,10 @@ class IntakeBlockingQuestion(StrictModel):
     statement: str
     priority: int = Field(ge=0, le=2)
     claim_ids: tuple[str, ...] = ()
+
+
+OWNER_APPROVAL_COMMAND_TYPES = frozenset(
+    {"attest_intake_admission", "publish_bounded_intake"}
+)
+OWNER_APPROVAL_REFUSED_EVENT = "owner_approval_refused"
 
