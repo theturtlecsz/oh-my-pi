@@ -29,10 +29,14 @@ const PROBE_TIMEOUT_MS = 1_500;
 /** probe→describe→start rounds; bounds cross-process races and wedged-relay replacement. */
 const ENSURE_ATTEMPTS = 3;
 
-/** True when the relay HTTP server answers /json/version at all (200 = extension connected, 503 = waiting for it). */
+/**
+ * True when the relay HTTP server answers /json/version at all
+ * (200 = extension connected, 503 = waiting for it, 401 = CDP token required).
+ * 401 is a live relay: probing without the token must not restart it in a loop.
+ */
 export async function probeRelayServer(cdpUrl: string): Promise<boolean> {
 	const status = await probeCdpStatus(`${cdpUrl}/json/version`, { timeoutMs: PROBE_TIMEOUT_MS });
-	return status === 503 || (status !== null && status >= 200 && status < 300);
+	return status === 401 || status === 503 || (status !== null && status >= 200 && status < 300);
 }
 
 /** Auto-start is only safe for endpoints this machine can own. */

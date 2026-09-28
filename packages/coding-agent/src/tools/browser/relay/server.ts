@@ -2,16 +2,19 @@
  * HTTP + WebSocket server for the browser relay.
  *
  * Impersonates Chrome's CDP discovery endpoint so the omp browser tool (and
- * any puppeteer client) can connect with a plain `browserURL`:
+ * any puppeteer client) can connect:
  * - `GET /json/version` → 200 with `webSocketDebuggerUrl` once the extension
  *   is connected, 503 before that (clients like `waitForCdp` keep polling).
+ *   When `cdpToken` is set, the URL carries `?token=` and the request must too.
  * - `GET /json` / `/json/list` → attachable page targets (debugging aid).
- * - `WS /cdp` → downstream CDP clients (puppeteer).
- * - `WS /ext` → the Chrome extension (token-gated when configured).
+ * - `WS /cdp` → downstream CDP clients (puppeteer). When `cdpToken` is set,
+ *   the upgrade must present it as `?token=`.
+ * - `WS /ext` → the Chrome extension (`token`-gated when configured).
  *
- * Binds loopback only: anything that can reach this port can drive the
- * user's logged-in browser.
+ * Binds loopback only. `cdpToken` gates the CDP leg so reaching the port is
+ * not enough to drive the user's logged-in browser.
  */
+import { timingSafeEqual } from "node:crypto";
 import { RelayBridge } from "./bridge";
 
 /** Options for {@link startRelayServer}. */
@@ -19,6 +22,8 @@ export interface RelayServerOptions {
 	port: number;
 	/** Shared secret the extension must present as `?token=`; unset disables the check. */
 	token?: string;
+	/** Shared secret CDP clients must present as `?token=` on `/cdp` and `/json*`; unset disables the check. */
+	cdpToken?: string;
 	/** Group tabs the agent actively drives under one per-window Chrome tab group (default on); `false` disables. */
 	group?: boolean | { title: string; color: string };
 	log?: (message: string, data?: Record<string, unknown>) => void;
@@ -43,6 +48,19 @@ const WS_KEEPALIVE_MS = 30_000;
 const MAX_PAYLOAD_BYTES = 256 * 1024 * 1024;
 /** Default appearance of the omp tab group. */
 const DEFAULT_GROUP = { title: "omp", color: "cyan" } as const;
+/** Constant-time match of a presented `?token=` against the configured CDP token. */
+function cdpTokenMatches(presented: string | null, expected: string): boolean {
+	if (presented === null) return false;
+	const left = Buffer.from(presented);
+	const right = Buffer.from(expected);
+	return left.byteLength === right.byteLength && timingSafeEqual(left, right);
+}
+
+function cdpWebSocketUrl(host: string, cdpToken: string | undefined): string {
+	if (!cdpToken) return `ws://${host}/cdp`;
+	return `ws://${host}/cdp?token=${encodeURIComponent(cdpToken)}`;
+}
+
 /** True when `raw` can serve as the authority of a `ws://` URL: no whitespace,
  *  slashes, userinfo, fragments, or control characters, and URL-parseable. */
 function isWsAuthority(raw: string): boolean {
@@ -75,6 +93,13 @@ export function startRelayServer(opts: RelayServerOptions): RelayServer {
 					: req.url;
 			const url = new URL(requestUrl, `http://${fallback}`);
 			const path = url.pathname.replace(/\/+$/, "") || "/";
+			if (
+				opts.cdpToken &&
+				(path === "/cdp" || path.startsWith("/json")) &&
+				!cdpTokenMatches(url.searchParams.get("token"), opts.cdpToken)
+			) {
+				return new Response("Unauthorized", { status: 401 });
+			}
 			if (path === "/cdp") {
 				// Browsers set Origin on websocket upgrades; native CDP clients
 				// don't. Reject any Origin so a web page can't drive the relay.
@@ -100,7 +125,7 @@ export function startRelayServer(opts: RelayServerOptions): RelayServer {
 				if (!bridge.ready) {
 					return Response.json({ error: "relay extension is not connected" }, { status: 503 });
 				}
-				return Response.json(bridge.versionInfo(`ws://${host}/cdp`));
+				return Response.json(bridge.versionInfo(cdpWebSocketUrl(host, opts.cdpToken)));
 			}
 			if (path === "/json" || path === "/json/list") {
 				return Response.json(bridge.listTargets());
