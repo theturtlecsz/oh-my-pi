@@ -1,0 +1,4 @@
+/usr/local/libexec/@USER@/robomp-ctl up
+/usr/local/libexec/@USER@/robomp-ctl down
+/usr/local/libexec/@USER@/robomp-ctl restart
+/usr/local/libexec/@USER@/robomp-ctl ps
