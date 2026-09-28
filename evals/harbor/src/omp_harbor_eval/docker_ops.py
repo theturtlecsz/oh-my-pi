@@ -11,7 +11,7 @@ that records the omp pid before exec. ``pid_killer`` SIGKILLs that pid.
 from __future__ import annotations
 
 import shlex
-import subprocess  # nosec B404 - docker and git are argv lists; shell is only `sh -c` inside the container
+import subprocess  # nosec B404
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
@@ -19,7 +19,8 @@ from typing import Any
 _GIT_NAME = "omp-harbor"
 _GIT_EMAIL = "omp-harbor@localhost"
 _COMMIT_MESSAGE = "harbor worker tree"
-_BUNDLE_IN_CONTAINER = "/tmp/worker-repo.bundle"
+# In-container path inside isolated worker container; not on the host filesystem.
+_BUNDLE_IN_CONTAINER = "/tmp/worker-repo.bundle"  # nosec B108
 _OMP_PID_SCRIPT = 'echo $$ >/tmp/omp.pid; exec omp "$@"'
 _KILL_SCRIPT = 'kill -KILL "$(cat /tmp/omp.pid)"'
 _BUNDLE_MAGICS = (b"# v2 git bundle", b"# v3 git bundle")
@@ -42,16 +43,19 @@ class DockerError(RuntimeError):
         self.stderr = stderr
 
 
-def run(docker: str, args: Sequence[str], input: bytes | None = None) -> subprocess.CompletedProcess[bytes]:
+def run(
+    docker: str,
+    args: Sequence[str],
+    input: bytes | None = None,  # pylint: disable=redefined-builtin
+) -> subprocess.CompletedProcess[bytes]:
     """Run ``[docker, *args]``. Raise ``DockerError`` when the exit status is non-zero."""
 
     try:
-        completed = subprocess.run(
+        completed = subprocess.run(  # nosec B603
             [docker, *args],
             input=input,
             stdin=None if input is not None else subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             check=False,
         )
     except OSError as exc:

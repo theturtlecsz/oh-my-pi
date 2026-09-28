@@ -278,4 +278,14 @@ Verified in place (no model calls in the self-test):
 - One live refresh (`python3 dashboard_words.py` then `python3 dashboard.py`): the rendered page shows six distinct tags, each naming its unit — QUEUE 15, TESTING 2, MERGING 1, DONE 68, SEATS 4, REVIEWS 36 — every figure a single number, and the generator's secret guard passed (exit 0).
 - The 15-minute refresh is unchanged: `flood-dashboard.timer` still fires `flood-dashboard.service`, whose `ExecStartPre` runs `dashboard_words.py` and whose `ExecStart` runs `dashboard.py`.
 
+## External test gate update: python uv.lock freshness (OMP-392)
+
+`python/omp-knowledge/pyproject.toml` lists `pytest-xdist>=3` in its `dev` extra, but its committed `uv.lock` was pinned before that requirement reached `omp-work` (OMP-335-s02 added `pytest-xdist` to `python/omp-work/pyproject.toml`; the embedded `omp-work` `requires-dist` projection inside `omp-knowledge`'s lock was never regenerated). Every `uv run --project python/omp-knowledge` therefore re-resolves and rewrites the tracked lock, leaving an uncommitted tracked change that dirties the worktree and warning that a fast-forward merge may fail.
+
+The lock itself is regenerated and committed in this task. Per repository instructions ("No changes to GitHub settings, services, deployments or anything outside this worktree. If the task asks for one, write what it would be in NOTES-EXTERNAL.md in the worktree and continue"), the flood pre-batch test gate script `/home/thetu/flood/oh-my-pi-test.sh` is updated so the staleness cannot recur:
+
+1. **Gate check `python lock freshness`**: after the Work Ledger unit-test step, for each of `python/omp-work`, `python/omp-knowledge`, `python/omp-rpc`, `python/robomp` that has a `uv.lock`, it runs `uv lock --check --project <pkg>`. A non-zero result prints `gate: <pkg>/uv.lock is stale; run 'uv lock --project <pkg>' and commit the lock` and fails the gate (via the existing `check` accumulator, so every other check still runs and the log names every failure at once).
+2. **Placement**: the check runs after the existing `uv run --project python/omp-work` step, so it observes the worktree exactly as the suite leaves it — a project whose lock is stale would already have been rewritten by that point, matching the reported failure mode.
+3. **Verification in place**: `bash -n` on the gate script → OK; the extracted `lock_freshness` returns 0 on the current (fresh) locks and returns 1 against the pre-fix `omp-knowledge` lock with the documented message. CI needs no change: `uv run --project python/omp-knowledge` is never invoked on the runner, so a gate-only guard is the correct seam.
+
 
