@@ -31,7 +31,7 @@ _MODEL_LOG = "/tmp/model.jsonl"  # nosec B108
 READY_POLL_S = 0.05
 
 # Runs inside the worker container. URL is argv[1], headers are a JSON object
-# on stdin, and a nonzero exit means the service could not be reached.
+# on stdin. A transport failure writes the reason to stderr and exits nonzero.
 SCRIPT = """\
 import json, sys, urllib.error, urllib.request
 
@@ -43,7 +43,11 @@ try:
         status, payload = response.status, response.read().decode("utf-8")
 except urllib.error.HTTPError as exc:
     status, payload = exc.code, exc.read().decode("utf-8")
-except (urllib.error.URLError, OSError):
+except urllib.error.URLError as exc:
+    sys.stderr.write(f"{exc.reason}\\n")
+    sys.exit(1)
+except OSError as exc:
+    sys.stderr.write(f"{exc}\\n")
     sys.exit(1)
 try:
     body = json.loads(payload)
