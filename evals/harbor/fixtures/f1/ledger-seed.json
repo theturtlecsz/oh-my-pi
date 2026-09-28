@@ -1,0 +1,15 @@
+{
+  "items": [
+    {
+      "key": "OMP-1",
+      "work_id": "00000000-0000-7000-8000-000000000001",
+      "revision_id": "00000000-0000-7000-8000-000000000010",
+      "revision_number": 1,
+      "title": "Initial Item",
+      "description": "Initial description",
+      "scope": "initial/scope",
+      "acceptance_criteria": ["Initial AC 1"],
+      "state": "IN_PROGRESS"
+    }
+  ]
+}

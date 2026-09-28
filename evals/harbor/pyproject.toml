@@ -16,6 +16,7 @@ dependencies = [
     "harbor==0.23.0",
     "pyyaml>=6.0.2",
     "omp-rpc",
+    "omp-work",
 ]
 
 [project.optional-dependencies]
@@ -26,6 +27,7 @@ environments = ["sys_platform == 'linux'"]
 
 [tool.uv.sources]
 omp-rpc = { path = "../../python/omp-rpc", editable = true }
+omp-work = { path = "../../python/omp-work", editable = true }
 
 [tool.setuptools]
 package-dir = { "" = "src" }

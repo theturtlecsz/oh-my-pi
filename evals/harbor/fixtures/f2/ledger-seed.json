@@ -1,0 +1,15 @@
+{
+  "items": [
+    {
+      "key": "OMP-246",
+      "work_id": "00000000-0000-7000-8000-000000000246",
+      "revision_id": "00000000-0000-7000-8000-000000000247",
+      "revision_number": 1,
+      "title": "Durable execution continuation intent and crash recovery",
+      "description": "A one-item grant finishes once.",
+      "scope": "execution/continuation",
+      "acceptance_criteria": ["the one-item grant finishes once"],
+      "state": "IN_PROGRESS"
+    }
+  ]
+}

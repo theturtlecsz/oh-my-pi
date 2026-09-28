@@ -1,9 +1,10 @@
 # Real WorkService image for the Harbor fixtures: PostgreSQL 18 plus the
 # unmodified python/omp-work package. The entrypoint under evals/harbor starts
 # the database with password authentication, installs the credential files the
-# host build mounted in, and runs `python -m omp_work serve`, which serves
+# host build mounted in, applies the fixture ledger seed selected by
+# OMP_HARBOR_LEDGER_SEED, and runs `python -m omp_work serve`, which serves
 # omp_work.v1.server.create_app. Nothing under python/omp-work/src is stubbed
-# or patched.
+# or patched. Both fixture seeds are in the image; compose picks one.
 #
 # Build context: the repository root.
 #   docker build -t omp-workservice:dev -f evals/harbor/docker/Dockerfile.workservice .
@@ -26,6 +27,9 @@ RUN apt-get update \
 COPY python/omp-work /opt/omp-work
 COPY python/omp-rpc /opt/omp-rpc
 COPY evals/harbor/docker/workservice-entrypoint.sh /opt/harbor/workservice-entrypoint.sh
+COPY evals/harbor/src/omp_harbor_eval/ledger_seed.py /opt/harbor/ledger_seed.py
+COPY evals/harbor/fixtures/f1/ledger-seed.json /opt/harbor/seeds/f1/ledger-seed.json
+COPY evals/harbor/fixtures/f2/ledger-seed.json /opt/harbor/seeds/f2/ledger-seed.json
 
 RUN python3 -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip setuptools wheel \

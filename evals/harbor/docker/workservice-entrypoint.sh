@@ -4,9 +4,11 @@
 # Installs the credential files mounted at /run/omp/supplied (written on the
 # host by scripts/build-images.sh before the trial) into the service config
 # directory, starts PostgreSQL 18 with password authentication, bootstraps,
-# and execs `python -m omp_work serve`. This script defines no HTTP route and
-# creates no token, capability, or owner file. If the supplied files,
-# PostgreSQL, or the service cannot start, the container exits non-zero.
+# applies the fixture ledger seed named by OMP_HARBOR_LEDGER_SEED when that
+# variable is set, and execs `python -m omp_work serve`. This script defines
+# no HTTP route and creates no token, capability, or owner file. If the
+# supplied files, the ledger seed, PostgreSQL, or the service cannot start,
+# the container exits non-zero.
 set -euo pipefail
 
 SUPPLIED="${OMP_SUPPLIED_DIR:-/run/omp/supplied}"
@@ -118,5 +120,12 @@ as_pg "pg_ctl -D '$DATA_DIR' -l '$PGLOG' -o '-p $PGPORT -k /tmp -c listen_addres
 
 echo "workservice: serving omp_work.v1.server.create_app on $HOST:$PORT" >&2
 python -m omp_work ops bootstrap
+if [ -n "${OMP_HARBOR_LEDGER_SEED:-}" ]; then
+	if [ ! -s "$OMP_HARBOR_LEDGER_SEED" ]; then
+		echo "workservice: ledger seed is missing or empty: $OMP_HARBOR_LEDGER_SEED" >&2
+		exit 1
+	fi
+	python /opt/harbor/ledger_seed.py "$OMP_HARBOR_LEDGER_SEED"
+fi
 trap - EXIT
 exec python -m omp_work serve --host "$HOST" --port "$PORT" --capabilities-dir "$CAPABILITIES_DIR"
