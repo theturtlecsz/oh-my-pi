@@ -467,8 +467,8 @@
 
       function escapeHtml(text) {
         const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+        div.textContent = text ?? '';
+        return div.innerHTML.replace(/"/g, '&quot;');
       }
 
       function canonicalizeMessage(text) {
@@ -1056,7 +1056,7 @@
               if (images.length > 0) {
                 html += '<div class="message-images">';
                 for (const img of images) {
-                  html += `<img src="data:${img.mimeType};base64,${img.data}" class="message-image" />`;
+                  html += `<img src="data:${escapeHtml(img.mimeType)};base64,${img.data}" class="message-image" />`;
                 }
                 html += '</div>';
               }
@@ -1100,7 +1100,7 @@
                   <div class="thinking-collapsed">Thinking ...</div>
                 </div>`;
               } else if (block.type === 'image') {
-                html += `<div class="message-images"><img src="data:${block.mimeType};base64,${block.data}" class="message-image" /></div>`;
+                html += `<div class="message-images"><img src="data:${escapeHtml(block.mimeType)};base64,${block.data}" class="message-image" /></div>`;
               }
             }
             for (const block of msg.content) {
@@ -1410,6 +1410,10 @@
           // Inline code: escape HTML
           codespan(token) {
             return `<code>${escapeHtml(token.text)}</code>`;
+          },
+          // HTML content: escape raw HTML (both block and inline)
+          html(token) {
+            return escapeHtml(token.text);
           }
         }
       });
