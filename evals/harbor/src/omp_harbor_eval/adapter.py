@@ -14,14 +14,17 @@ directions is logged to ``rpc-transcript.jsonl``; the grader's
 call. Optional ``session_reader``
 and ``before_seal`` hooks read the session log and augment evidence before
 sealing; hook exceptions record ``harness_error`` (or ``session_read_error`` if
-the run already failed with ``harness_error``). The evidence directory is
-sealed before the RPC process stops.
+the run already failed with ``harness_error``). When startup fails and stderr
+names the worker omp log (``logs: <path>``), that file is copied to
+``omp-startup.log`` before seal. The evidence directory is sealed before the
+RPC process stops.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import subprocess  # nosec B404 - types and wraps RpcClient argv Popen (no shell); SIGKILL uses the resulting process
 import threading
@@ -55,6 +58,9 @@ _MISSING = object()
 
 _PREVIEW_PREFIX = "CONFIRM REQUIRED"
 _WORK_TOOL = "work"
+_STARTUP_LOG_NAME = "omp-startup.log"
+# omp's startup watchdog prints `logs: ~/.omp/logs/omp.YYYY-MM-DD.<pid>.log`.
+_STARTUP_LOG_RE = re.compile(r"logs:\s+(\S*omp\.\d{4}-\d{2}-\d{2}\.\d+\.log)")
 
 
 def kill_process_group(process: subprocess.Popen[str]) -> None:
@@ -351,6 +357,18 @@ def _read_host_session(session_file: str) -> bytes:
     return b""
 
 
+def _startup_log_path(reason: str) -> str | None:
+    """Absolute omp log path named by a startup failure, or None."""
+
+    match = _STARTUP_LOG_RE.search(reason)
+    if match is None:
+        return None
+    path = match.group(1)
+    if not path.startswith("/"):
+        return None
+    return path
+
+
 class RpcAdapter:
     """One scenario, one ``prompt``, then the authoritative service readback."""
 
@@ -626,6 +644,7 @@ class RpcAdapter:
             self._ui_closed = True
         transcript.close()
         try:
+            self._capture_startup_log(reason)
             self.evidence.write_json(SERVICE_READBACK, readback if readback is not None else {})
             session_document: dict[str, Any] = {"id": session_id, "file": session_file}
             if self._restarts:
@@ -670,3 +689,21 @@ class RpcAdapter:
             if client is not None:
                 client.stop()
         return outcome
+
+    def _capture_startup_log(self, reason: str) -> None:
+        """Copy the worker omp log named in a startup failure into the evidence directory.
+
+        A missing log or a reader error leaves the startup reason unchanged.
+        ``session_reader`` is the same hook the trial uses to read worker files.
+        """
+
+        path = _startup_log_path(reason)
+        if path is None:
+            return
+        try:
+            payload = self.session_reader(path)
+        except Exception:  # noqa: BLE001 - a reader failure must not replace the startup reason
+            return
+        if not isinstance(payload, bytes) or payload == b"":
+            return
+        self.evidence.add_file(_STARTUP_LOG_NAME, payload)
