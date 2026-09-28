@@ -8,7 +8,8 @@ import getpass
 import json
 import os
 import pwd
-import subprocess
+import shutil
+import subprocess  # nosec B404 - argv lists only; no shell; id and sudo come from shutil.which
 import sys
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,11 @@ SENSITIVE_OWNER_PATHS = (
     ".claude",
     ".docker/config.json",
 )
+
+
+def _executable(name: str) -> str:
+    """Absolute PATH lookup, or the bare name when the command is not installed."""
+    return shutil.which(name) or name
 
 
 def check_not_owner(owner_name: str) -> dict[str, Any]:
@@ -60,7 +66,12 @@ def check_not_owner(owner_name: str) -> dict[str, Any]:
 
 def check_groups() -> dict[str, Any]:
     try:
-        proc = subprocess.run(["id", "-Gn"], capture_output=True, text=True, check=True)
+        proc = subprocess.run(  # nosec B603 - absolute id from shutil.which, fixed argv, no shell
+            [_executable("id"), "-Gn"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
     except Exception as e:
         return {"ok": False, "detail": f"Failed to execute 'id -Gn': {e}"}
 
@@ -124,8 +135,13 @@ def check_owner_credentials(owner_home: Path | None) -> dict[str, Any]:
 
 
 def check_sudo_named_only(admin_commands_file: Path | None) -> dict[str, Any]:
+    sudo = _executable("sudo")
     try:
-        proc_true = subprocess.run(["sudo", "-n", "true"], capture_output=True, text=True)
+        proc_true = subprocess.run(  # nosec B603 - absolute sudo from shutil.which, fixed argv, no shell
+            [sudo, "-n", "true"],
+            capture_output=True,
+            text=True,
+        )
         if proc_true.returncode == 0:
             return {"ok": False, "detail": "'sudo -n true' succeeded (must fail)"}
     except Exception as e:
@@ -144,7 +160,11 @@ def check_sudo_named_only(admin_commands_file: Path | None) -> dict[str, Any]:
         return {"ok": False, "detail": f"Failed to read admin commands file: {e}"}
 
     try:
-        proc_l = subprocess.run(["sudo", "-n", "-l"], capture_output=True, text=True)
+        proc_l = subprocess.run(  # nosec B603 - absolute sudo from shutil.which, fixed argv, no shell
+            [sudo, "-n", "-l"],
+            capture_output=True,
+            text=True,
+        )
         if proc_l.returncode != 0:
             return {"ok": False, "detail": f"'sudo -n -l' failed with exit code {proc_l.returncode}"}
     except Exception as e:

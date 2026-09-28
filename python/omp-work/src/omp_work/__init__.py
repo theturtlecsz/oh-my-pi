@@ -117,6 +117,7 @@ _COMMAND_TYPES = frozenset(
         "record_fable_advice",
         "attest_intake_admission",
         "publish_bounded_intake",
+        "answer_intake_decision",
         "register_research_artifact",
         "collect_research_artifact",
         "register_research_source",

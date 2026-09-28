@@ -25,6 +25,21 @@ TIMEOUT_SECONDS = 15
 # A token that cannot administer is refused on the write endpoints with 403
 # (insufficient permission) or 404 (feature/scope invisible to it).
 WRITE_FAILURE_STATUSES = frozenset({403, 404})
+PERMITTED_SCHEMES = frozenset({"https", "http"})
+
+
+class _NoFileOrData(urllib.request.FileHandler, urllib.request.DataHandler):
+    """Replace urlopen's file: and data: handlers. Only http and https are opened."""
+
+    def file_open(self, request: urllib.request.Request) -> None:
+        raise urllib.error.URLError(f"file URLs are not permitted: {request.full_url}")
+
+    def data_open(self, request: urllib.request.Request) -> None:
+        raise urllib.error.URLError(f"data URLs are not permitted: {request.full_url}")
+
+
+# Same handler set as urlopen, except file: and data: cannot be fetched.
+_HTTP_OPENER = urllib.request.build_opener(_NoFileOrData)
 
 
 class Refused(Exception):
@@ -80,8 +95,11 @@ class Probe:
         request.add_header("User-Agent", USER_AGENT)
         if data is not None:
             request.add_header("Content-Type", "application/json")
+        scheme = urllib.parse.urlsplit(request.full_url).scheme
+        if scheme not in PERMITTED_SCHEMES:
+            raise urllib.error.URLError(f"URL scheme {scheme!r} is not permitted")
         try:
-            with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+            with _HTTP_OPENER.open(request, timeout=TIMEOUT_SECONDS) as response:
                 return response.status, response.read()
         except urllib.error.HTTPError as error:
             return error.code, error.read()

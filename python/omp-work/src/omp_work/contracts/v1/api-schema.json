@@ -1035,6 +1035,39 @@
       "title": "AdmitResearchCampaignResult",
       "type": "object"
     },
+    "AnswerIntakeDecisionResult": {
+      "additionalProperties": false,
+      "properties": {
+        "answer": {
+          "const": "approve",
+          "title": "Answer",
+          "type": "string"
+        },
+        "answered_at": {
+          "format": "date-time",
+          "title": "Answered At",
+          "type": "string"
+        },
+        "type": {
+          "const": "answer_intake_decision",
+          "title": "Type",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "work_id",
+        "answer",
+        "answered_at"
+      ],
+      "title": "AnswerIntakeDecisionResult",
+      "type": "object"
+    },
     "ApiError": {
       "additionalProperties": false,
       "properties": {
@@ -4683,6 +4716,39 @@
             "campaign"
           ],
           "title": "AdmitResearchCampaignResult",
+          "type": "object"
+        },
+        "AnswerIntakeDecisionResult": {
+          "additionalProperties": false,
+          "properties": {
+            "answer": {
+              "const": "approve",
+              "title": "Answer",
+              "type": "string"
+            },
+            "answered_at": {
+              "format": "date-time",
+              "title": "Answered At",
+              "type": "string"
+            },
+            "type": {
+              "const": "answer_intake_decision",
+              "title": "Type",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "work_id",
+            "answer",
+            "answered_at"
+          ],
+          "title": "AnswerIntakeDecisionResult",
           "type": "object"
         },
         "AssessBoundedIntakeResult": {
@@ -9055,6 +9121,7 @@
               "activate_cutover": "#/$defs/ActivateCutoverResult",
               "activate_execution_item": "#/$defs/ActivateExecutionItemResult",
               "admit_research_campaign": "#/$defs/AdmitResearchCampaignResult",
+              "answer_intake_decision": "#/$defs/AnswerIntakeDecisionResult",
               "append_evidence": "#/$defs/EvidenceResult",
               "assess_bounded_intake": "#/$defs/AssessBoundedIntakeResult",
               "attest_checkpoint_delivery": "#/$defs/CloseAttemptResult",
@@ -9182,6 +9249,9 @@
             },
             {
               "$ref": "#/$defs/PublishBoundedIntakeResult"
+            },
+            {
+              "$ref": "#/$defs/AnswerIntakeDecisionResult"
             },
             {
               "$ref": "#/$defs/RegisterResearchArtifactResult"
@@ -21690,6 +21760,39 @@
           "title": "AdmitResearchCampaignResult",
           "type": "object"
         },
+        "AnswerIntakeDecisionResult": {
+          "additionalProperties": false,
+          "properties": {
+            "answer": {
+              "const": "approve",
+              "title": "Answer",
+              "type": "string"
+            },
+            "answered_at": {
+              "format": "date-time",
+              "title": "Answered At",
+              "type": "string"
+            },
+            "type": {
+              "const": "answer_intake_decision",
+              "title": "Type",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "work_id",
+            "answer",
+            "answered_at"
+          ],
+          "title": "AnswerIntakeDecisionResult",
+          "type": "object"
+        },
         "AssessBoundedIntakeResult": {
           "additionalProperties": false,
           "properties": {
@@ -26076,6 +26179,7 @@
                   "activate_cutover": "#/$defs/ActivateCutoverResult",
                   "activate_execution_item": "#/$defs/ActivateExecutionItemResult",
                   "admit_research_campaign": "#/$defs/AdmitResearchCampaignResult",
+                  "answer_intake_decision": "#/$defs/AnswerIntakeDecisionResult",
                   "append_evidence": "#/$defs/EvidenceResult",
                   "assess_bounded_intake": "#/$defs/AssessBoundedIntakeResult",
                   "attest_checkpoint_delivery": "#/$defs/CloseAttemptResult",
@@ -26203,6 +26307,9 @@
                 },
                 {
                   "$ref": "#/$defs/PublishBoundedIntakeResult"
+                },
+                {
+                  "$ref": "#/$defs/AnswerIntakeDecisionResult"
                 },
                 {
                   "$ref": "#/$defs/RegisterResearchArtifactResult"

@@ -480,8 +480,7 @@ def create_app(
                 status_code=error.status_code,
             )
         except Exception as ex:
-            if executing:
-                assert envelope is not None
+            if executing and envelope is not None:
                 return _error(
                     WorkError(
                         "unavailable",

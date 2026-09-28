@@ -78,6 +78,11 @@ export function isUploaderKind(kind: BlobDestinationId): boolean {
 	return !isServeKind(kind);
 }
 
+/** Compute the SHA-256 lowercase hex digest of binary bytes. */
+export function sha256Hex(bytes: Uint8Array): string {
+	return new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+}
+
 /** In-process backend hosting the store, exposure, or uploader directly. */
 export class LocalBlobBackend implements BlobBackend {
 	#config: BlobBrokerWorkerConfig;
@@ -99,6 +104,7 @@ export class LocalBlobBackend implements BlobBackend {
 			: createConfiguredUploader(config.kind, {
 					options: config.options,
 					credentials: config.credentials,
+					fetch: fetchFn,
 				});
 		if (!servesBlobs && !uploader) {
 			throw new DestinationUnavailableError(config.kind, "no built-in uploader or serving adapter is implemented");
@@ -195,10 +201,12 @@ export class LocalBlobBackend implements BlobBackend {
 			}
 			const bytes = getBytes();
 			if (bytes.byteLength === 0) return null;
+			const extension = EXT_BY_MIME[mimeType] ?? "bin";
 			const publication = await this.#upload(key, {
 				bytes,
 				mimeType,
-				extension: EXT_BY_MIME[mimeType] ?? "bin",
+				extension,
+				filename: `${sha256Hex(bytes)}.${extension}`,
 			});
 			if (publication) this.#store.recordPublication(key, mimeType, publication);
 			return publication;

@@ -42,6 +42,7 @@ class WorkService:
         "record_fable_advice": "work.approve",
         "attest_intake_admission": "work.approve",
         "publish_bounded_intake": "work.approve",
+        "answer_intake_decision": "work.approve",
         "create_same_session_child": "work.close",
         "begin_close_attempt": "work.close",
         "seal_audit_manifest": "work.close",

@@ -73,6 +73,7 @@ robomp_ctl="/usr/local/libexec/${USER}/robomp-ctl"
 
 cleanup() {
   local status=$?
+  # shellcheck disable=SC2024 # EVIDENCE_DIR is owned by the automation user; sudo tee is neither permitted nor desired
   sudo -n "$robomp_ctl" down >>"$EVIDENCE_DIR/robomp.log" 2>&1 || true
   exit "$status"
 }
@@ -111,6 +112,7 @@ python3 "$dir/verify-restrictions.py" --owner "$OWNER" --admin-commands "$ADMIN_
 
 GH_TOKEN="$(gh auth token 2>>"$EVIDENCE_DIR/github.log")" python3 "$dir/github-probe.py" --repo "$REPO" --branch main >>"$EVIDENCE_DIR/github.log" 2>&1 || github_rc=$?
 
+# shellcheck disable=SC2024 # EVIDENCE_DIR is owned by the automation user; sudo tee is neither permitted nor desired
 sudo -n "$robomp_ctl" up >"$EVIDENCE_DIR/robomp.log" 2>&1 || robomp_rc=$?
 ps_rc=0
 ps_out="$(sudo -n "$robomp_ctl" ps 2>>"$EVIDENCE_DIR/robomp.log")" || ps_rc=$?

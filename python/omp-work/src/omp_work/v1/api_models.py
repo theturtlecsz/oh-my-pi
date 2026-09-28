@@ -364,6 +364,13 @@ class PublishBoundedIntakeResult(StrictModel):
     receipt: EvidenceReceipt
 
 
+class AnswerIntakeDecisionResult(StrictModel):
+    type: Literal["answer_intake_decision"]
+    work_id: UUID
+    answer: Literal["approve"]
+    answered_at: datetime
+
+
 class CreateResearchCampaignResult(StrictModel):
     type: Literal["create_research_campaign"]
     status: Literal["applied", "replayed"]
@@ -515,6 +522,7 @@ CommandResult = Annotated[
     | RecordFableAdviceResult
     | AttestIntakeAdmissionResult
     | PublishBoundedIntakeResult
+    | AnswerIntakeDecisionResult
     | RegisterResearchArtifactResult
     | CollectResearchArtifactResult
     | RegisterResearchSourceResult

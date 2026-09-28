@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 from uuid import UUID
@@ -1135,6 +1136,16 @@ class PublishBoundedIntakeCommand(StrictModel):
     payload: PublishBoundedIntakePayload
 
 
+class AnswerIntakeDecisionPayload(StrictModel):
+    work_id: UUID
+    answer: Literal["approve"]
+
+
+class AnswerIntakeDecisionCommand(StrictModel):
+    type: Literal["answer_intake_decision"]
+    payload: AnswerIntakeDecisionPayload
+
+
 class ResearchComponentKind(StrEnum):
     WORKER = "worker"
     EVALUATOR = "evaluator"
@@ -1725,6 +1736,7 @@ Command = Annotated[
     | RecordFableAdviceCommand
     | AttestIntakeAdmissionCommand
     | PublishBoundedIntakeCommand
+    | AnswerIntakeDecisionCommand
     | RegisterResearchArtifactCommand
     | CollectResearchArtifactCommand
     | RegisterResearchSourceCommand
@@ -1975,6 +1987,7 @@ class Approval(StrictModel):
         "OMP-295",
         "OMP-322",
         "OMP-323",
+        "OMP-404",
         "OMP-407",
     ]
     attestation: hex64 | None = None
@@ -2077,6 +2090,33 @@ class IntakeAcceptanceCriterion(IntakeClaim):
     ) = None
 
 
+class ItemBudget(StrictModel):
+    usd: str
+    tokens: int = Field(gt=0)
+    wall_clock_seconds: int = Field(gt=0)
+    max_subagents: int = Field(ge=0)
+
+    @field_validator("usd")
+    @classmethod
+    def validate_usd(cls, v: str) -> str:
+        if isinstance(v, bool) or not isinstance(v, str):
+            raise ValueError("usd must be a decimal string")
+        try:
+            val = Decimal(v)
+        except (InvalidOperation, TypeError):
+            raise ValueError("usd must be a valid decimal string")
+        if not val.is_finite() or val <= 0:
+            raise ValueError("usd must be > 0")
+        return v
+
+    @field_validator("tokens", "wall_clock_seconds", "max_subagents", mode="before")
+    @classmethod
+    def validate_int_type(cls, v: Any) -> Any:
+        if isinstance(v, bool) or not isinstance(v, int):
+            raise ValueError("must be an integer, not a boolean or string")
+        return v
+
+
 class BoundedIntakeDraft(StrictModel):
     archetype: Literal["small_code_change"] = "small_code_change"
     source: IntakeSource
@@ -2084,6 +2124,7 @@ class BoundedIntakeDraft(StrictModel):
     constraints: tuple[IntakeConstraint, ...] = ()
     unknowns: tuple[IntakeUnknown, ...] = ()
     acceptance_criteria: tuple[IntakeAcceptanceCriterion, ...] = ()
+    budget: ItemBudget | None = None
 
     @model_validator(mode="after")
     def validate_draft(self) -> BoundedIntakeDraft:

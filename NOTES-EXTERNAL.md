@@ -321,4 +321,60 @@ No other "Do not touch" file was modified: `adapter.py`, `docker_ops.py`,
 `netns.py`, `task_env.py`, `fixtures/`, and the existing tests are untouched.
 
 
+---
+
+# OMP-402 flood port (flood operator)
+
+Status: **NOT APPLIED — flood's source lives outside this repository
+(`/home/thetu/flood`), so its port to the automation user is an owner/operator
+step. This section is the exact change list for that step; no code here was
+touched.**
+
+OMP-402 runs flood, robomp and the agent sessions they launch as the restricted
+automation user `ompbot` (see `docs/automation-user.md`). Before the cutover
+(`OMP-402-s08`) the flood operator applies these changes to the `ompbot` copy of
+flood. They are **not** applied to the owner's copy, which keeps running until
+the cutover moves the units.
+
+1. **ompbot's own flood copy.** Install a separate copy under the automation
+   home (`~ompbot/flood`) with `ompbot`'s own paths, so the owner's `~/flood`
+   (state, logs, tasks, credentials) is untouched and a rollback resumes it
+   exactly. `provision.sh` (OMP-402-s02) creates the user and `OMP-402-s05`'s
+   `parallel-test.sh` rehearses a fixture run from it.
+
+2. **`ledger_admin.py` bearer from `client.json`, not `owner.json`.** The
+   current script hardcodes the owner capability
+   (`Path.home()/".config/omp/work-ledger/capabilities/owner.json"`). In
+   `ompbot`'s copy it must read the bearer file named by its own client config
+   (`$XDG_CONFIG_HOME/omp-work/client.json` → `bearer_file`, i.e.
+   `~ompbot/.config/omp-work/automation.json`) and send it to the loopback
+   WorkService. The owner's copy keeps using `owner.json`. This is what keeps
+   the owner capability unreadable to the automation user (checked by
+   `verify-restrictions.py`'s `ledger_principal`).
+
+3. **`oh-my-pi-test.sh` natives path from `$HOME`.** The gate hard-links the
+   prebuilt addon from a literal owner path:
+   `ln -f /home/thetu/flood-repos/natives/*.node packages/natives/native/`. In
+   `ompbot`'s copy that must come from its own home (e.g. `$HOME/natives/*.node`,
+   installed by the s07 step), so the gate never reads under `/home/thetu` while
+   `ompbot` runs it.
+
+4. **Flood units installed disabled for ompbot.** `ompbot`'s copies of
+   `flood.service`, `flood-dash-http.service`, the `flood-*.timer` units and
+   `flood-home-pkg-watch.path` are installed `disable`d, so nothing runs as
+   `ompbot` until the cutover enables them. `cutover.sh apply` deliberately
+   refuses when one of those units is missing and the post-check requires them
+   active, so an un-provisioned unit cannot be half-cut-over.
+
+5. **`deploy-omp.sh` WorkService restart stays thetu's.** The WorkService, its
+   PostgreSQL and its backups keep running as the owner (`omp-work-*` units under
+   `thetu`); `deploy-omp.sh` still restarts **thetu's** `omp-work-service` from
+   the deploy worktree after a GitHub merge. `ompbot` reaches the service only
+   over loopback HTTP with its own bearer, so the deploy path in `ompbot`'s flood
+   copy must not restart, re-point or otherwise touch the owner's `omp-work-*`
+   units. The service deliberately does not move: the owner capability must stay
+   unreadable to the automation user.
+
+
+
 

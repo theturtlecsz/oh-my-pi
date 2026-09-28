@@ -9,5 +9,6 @@
 
 ### Fixed
 
+- A 5xx Work Ledger response with no typed `error.code` is reported as `unavailable` at its real status, so the host reconciles the operation instead of treating a committed command as "not applied" (OMP-395).
 - Stretch the loopback request abort window with host load so a busy machine no longer cancels a valid Work Ledger command mid-flight (OMP-342).
 - Resend a command whose loopback exchange was interrupted before a complete response arrived (a retired keep-alive socket, or an aborted body read under load), so it no longer surfaces as an unavailable Work Ledger (OMP-342).

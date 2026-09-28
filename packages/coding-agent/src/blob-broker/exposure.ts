@@ -219,6 +219,8 @@ function killTunnelProcess(proc: Bun.Subprocess): void {
 	timer.unref();
 }
 
+let tunnelLogSequence = 0;
+
 /**
  * Spawn a tunnel process with its output redirected to a temp log file and
  * poll the file until `extract` yields the public URL. Kills the child and
@@ -234,12 +236,17 @@ async function spawnUrlTunnel(
 	argv: string[],
 	extract: (line: string) => string | null,
 	readyPattern?: RegExp,
+	onSpawn?: (proc: Bun.Subprocess) => void,
 ): Promise<{ proc: Bun.Subprocess; baseUrl: string }> {
-	const logPath = path.join(os.tmpdir(), `omp-blob-tunnel-${Date.now().toString(36)}-${process.pid}.log`);
+	const logPath = path.join(
+		os.tmpdir(),
+		`omp-blob-tunnel-${Date.now().toString(36)}-${process.pid}-${tunnelLogSequence++}.log`,
+	);
 	const fd = fs.openSync(logPath, "w");
 	let proc: Bun.Subprocess;
 	try {
 		proc = Bun.spawn(argv, { env: process.env, stdin: "ignore", stdout: fd, stderr: fd });
+		onSpawn?.(proc);
 	} finally {
 		fs.closeSync(fd);
 	}
@@ -308,7 +315,10 @@ function restartingPinggyExposure(baseUrl: string, argv: string[], initialProc: 
 			await proc.exited;
 			if (stopping) return;
 			try {
-				const restarted = await spawnUrlTunnel(argv, parsePinggyUrl);
+				const restarted = await spawnUrlTunnel(argv, parsePinggyUrl, undefined, nextProc => {
+					proc = nextProc;
+					if (stopping) killTunnelProcess(nextProc);
+				});
 				if (stopping) {
 					killTunnelProcess(restarted.proc);
 					await restarted.proc.exited;
@@ -317,6 +327,7 @@ function restartingPinggyExposure(baseUrl: string, argv: string[], initialProc: 
 				proc = restarted.proc;
 				proc.unref();
 			} catch {
+				if (stopping) return;
 				logger.warn("blob-broker: authenticated Pinggy tunnel failed to reconnect");
 				return;
 			}

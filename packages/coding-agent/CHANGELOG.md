@@ -24,6 +24,7 @@
 
 ### Fixed
 
+- A post-commit 5xx from the Work Ledger no longer releases the pending claim as a rolled-back refusal; any 5xx reconciles against the stored operation while only 4xx drops the claim, so a committed command is never replayed as a fresh one (OMP-395).
 - Execution grants record a lane ref tied to their item and grant; seal, stamp, and resume now refuse a mismatched ref.
 - Clarified worker and auditor completion instructions to honor assigned scope, verification duties, and harness stop boundaries.
 - Fixed paused execution planning guidance and kept pause notices in their owning session across session switches.
