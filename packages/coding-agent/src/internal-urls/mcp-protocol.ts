@@ -1,4 +1,5 @@
 import { MCPManager } from "../mcp/manager";
+import { isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "../mcp/timeout";
 import type { MCPResourceReadResult } from "../mcp/types";
 import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
 
@@ -92,6 +93,41 @@ function resolveTargetServer(mcpManager: MCPManager, uri: string): string | unde
 	return bestTemplateMatch?.serverName;
 }
 
+/**
+ * Bound the wait for servers still inside the startup race.
+ *
+ * The signal is each server's in-flight connect promise, not another sleep.
+ * `timeoutMs` caps a server that never answers (the MCP timeout, so a loaded
+ * machine gets the same budget as every other MCP call). Callers reload the
+ * resource catalog after this returns and only then decide a URI is absent.
+ */
+async function waitForConnectingServers(manager: MCPManager, timeoutMs: number): Promise<void> {
+	const pending = manager.getAllServerNames().filter(name => manager.getConnectionStatus(name) === "connecting");
+	await Promise.allSettled(
+		pending.map(async name => {
+			if (!isMCPTimeoutEnabled(timeoutMs)) {
+				await manager.waitForConnection(name).catch(() => undefined);
+				return;
+			}
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const bounded = new Promise<void>(resolve => {
+				timer = setTimeout(resolve, timeoutMs);
+			});
+			try {
+				await Promise.race([
+					manager.waitForConnection(name).then(
+						() => undefined,
+						() => undefined,
+					),
+					bounded,
+				]);
+			} finally {
+				if (timer !== undefined) clearTimeout(timer);
+			}
+		}),
+	);
+}
+
 function formatAvailableResources(mcpManager: MCPManager): string {
 	const available = mcpManager
 		.getConnectedServers()
@@ -126,6 +162,14 @@ export class McpProtocolHandler implements ProtocolHandler {
 		const uri = extractResourceUri(url);
 		let targetServer = resolveTargetServer(mcpManager, uri);
 		if (!targetServer) {
+			await Promise.allSettled(mcpManager.getConnectedServers().map(name => mcpManager.ensureServerResources(name)));
+			targetServer = resolveTargetServer(mcpManager, uri);
+		}
+		if (!targetServer && mcpManager instanceof MCPManager) {
+			// Catalog-only test doubles are plain objects installed via
+			// `setInstance`, so they skip this. A real manager may still be
+			// bringing a server up after the startup race.
+			await waitForConnectingServers(mcpManager, resolveMCPTimeoutMs());
 			await Promise.allSettled(mcpManager.getConnectedServers().map(name => mcpManager.ensureServerResources(name)));
 			targetServer = resolveTargetServer(mcpManager, uri);
 		}
