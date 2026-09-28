@@ -5,7 +5,7 @@ from datetime import datetime
 from uuid import UUID
 
 
-from .models import CommandEnvelope
+from .models import OWNER_APPROVAL_COMMAND_TYPES, CommandEnvelope
 from .store import WorkStore, WorkStoreError
 
 
@@ -93,6 +93,9 @@ class WorkService:
             raise WorkError("forbidden", status=403)
         scope = self._scopes[envelope.command.type]
         if scope not in principal.scopes:
+            self._record_owner_approval_refusal(
+                principal, envelope, "forbidden", ()
+            )
             raise WorkError("forbidden", status=403)
         if envelope.command.type in {"stage_import_batch", "promote_import_batch"}:
             raise WorkError("unavailable", status=503)
@@ -120,11 +123,33 @@ class WorkService:
                 "artifact_unavailable": 503,
                 "unavailable": 503,
             }
+            self._record_owner_approval_refusal(
+                principal, envelope, error.code, error.diagnostics
+            )
             raise WorkError(
                 error.code,
                 status=statuses.get(error.code, 409),
                 diagnostics=error.diagnostics,
             ) from error
+
+    def _record_owner_approval_refusal(
+        self,
+        principal: Principal,
+        envelope: CommandEnvelope,
+        code: str,
+        diagnostics: tuple[str, ...],
+    ) -> None:
+        # Record only in-workspace owner-approval refusals. Status mapping
+        # stays in execute. A recording error propagates.
+        if envelope.command.type not in OWNER_APPROVAL_COMMAND_TYPES:
+            return
+        self._store.record_refused_attempt(
+            envelope,
+            actor_id=principal.actor_id,
+            actor_kind=principal.actor_kind,
+            code=code,
+            diagnostics=diagnostics,
+        )
 
     def activity(
         self,
