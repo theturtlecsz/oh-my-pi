@@ -180,7 +180,7 @@ class ScriptedModelServer:
             def do_GET(self) -> None:  # noqa: N802
                 service._handle(self)
 
-            def log_message(self, _format: str, *_args: object) -> None:
+            def log_message(self, format: str, *args: object) -> None:
                 return
 
         server_class: type[ThreadingHTTPServer] = _ScriptedHTTPServer

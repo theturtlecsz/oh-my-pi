@@ -17,6 +17,7 @@ Exits 0 and prints nothing if qualified; prints violations and exits 1 if any.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import sys
 from collections.abc import Mapping, Sequence
@@ -132,14 +133,12 @@ def _shares_volume(m1: Mount, m2: Mount) -> tuple[bool, str]:
         p2 = os.path.normpath(m2.source)
         if p1 == p2:
             return True, p1
-        try:
+        with contextlib.suppress(TypeError, ValueError):
             pp1 = PurePosixPath(p1)
             pp2 = PurePosixPath(p2)
             if pp1.is_absolute() == pp2.is_absolute():
                 if pp1.is_relative_to(pp2) or pp2.is_relative_to(pp1):
                     return True, p1
-        except Exception:
-            pass
         return False, ""
     return False, ""
 

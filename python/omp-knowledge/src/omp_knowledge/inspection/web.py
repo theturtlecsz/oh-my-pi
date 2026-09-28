@@ -219,7 +219,7 @@ class InspectionServer(HTTPServer):
 class InspectionHandler(BaseHTTPRequestHandler):
     server: InspectionServer
 
-    def log_message(self, format: str, *args: Any) -> None:
+    def log_message(self, format: str, *args: Any) -> None:  # pylint: disable=redefined-builtin
         # Suppress routine console log spam
         pass
 
