@@ -6023,6 +6023,9 @@ class PostgresWorkStore(ResearchStoreMixin):
                 ("fresh independent native PASS is required",),
             )
 
+        if payload.draft.budget is None:
+            raise WorkStoreError("intake_not_ready", ("budget:missing",))
+
         item = self._create_items(
             cur,
             envelope.workspace_id,

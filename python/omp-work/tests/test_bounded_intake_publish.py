@@ -33,6 +33,7 @@ from omp_work.v1.models import (
     IntakeGoal,
     IntakeSource,
     IntakeSourceSpan,
+    ItemBudget,
     PublishBoundedIntakeCommand,
 )
 from omp_work.v1.semantics import (
@@ -74,6 +75,12 @@ def _draft() -> BoundedIntakeDraft:
                 oracle="automated_test",
                 source_span_ids=("all",),
             ),
+        ),
+        budget=ItemBudget(
+            usd="50.00",
+            tokens=500_000,
+            wall_clock_seconds=3600,
+            max_subagents=2,
         ),
     )
 

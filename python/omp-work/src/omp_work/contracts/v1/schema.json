@@ -1830,6 +1830,17 @@
               "title": "Archetype",
               "type": "string"
             },
+            "budget": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ItemBudget"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "constraints": {
               "default": [],
               "items": {
@@ -2088,6 +2099,38 @@
             "material"
           ],
           "title": "IntakeUnknown",
+          "type": "object"
+        },
+        "ItemBudget": {
+          "additionalProperties": false,
+          "properties": {
+            "max_subagents": {
+              "minimum": 0,
+              "title": "Max Subagents",
+              "type": "integer"
+            },
+            "tokens": {
+              "exclusiveMinimum": 0,
+              "title": "Tokens",
+              "type": "integer"
+            },
+            "usd": {
+              "title": "Usd",
+              "type": "string"
+            },
+            "wall_clock_seconds": {
+              "exclusiveMinimum": 0,
+              "title": "Wall Clock Seconds",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "usd",
+            "tokens",
+            "wall_clock_seconds",
+            "max_subagents"
+          ],
+          "title": "ItemBudget",
           "type": "object"
         },
         "KnownIntakeValue": {
@@ -2171,6 +2214,17 @@
               "title": "Archetype",
               "type": "string"
             },
+            "budget": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ItemBudget"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "constraints": {
               "default": [],
               "items": {
@@ -2429,6 +2483,38 @@
             "material"
           ],
           "title": "IntakeUnknown",
+          "type": "object"
+        },
+        "ItemBudget": {
+          "additionalProperties": false,
+          "properties": {
+            "max_subagents": {
+              "minimum": 0,
+              "title": "Max Subagents",
+              "type": "integer"
+            },
+            "tokens": {
+              "exclusiveMinimum": 0,
+              "title": "Tokens",
+              "type": "integer"
+            },
+            "usd": {
+              "title": "Usd",
+              "type": "string"
+            },
+            "wall_clock_seconds": {
+              "exclusiveMinimum": 0,
+              "title": "Wall Clock Seconds",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "usd",
+            "tokens",
+            "wall_clock_seconds",
+            "max_subagents"
+          ],
+          "title": "ItemBudget",
           "type": "object"
         },
         "KnownIntakeValue": {
@@ -4465,6 +4551,38 @@
           "title": "IntakeUnknown",
           "type": "object"
         },
+        "ItemBudget": {
+          "additionalProperties": false,
+          "properties": {
+            "max_subagents": {
+              "minimum": 0,
+              "title": "Max Subagents",
+              "type": "integer"
+            },
+            "tokens": {
+              "exclusiveMinimum": 0,
+              "title": "Tokens",
+              "type": "integer"
+            },
+            "usd": {
+              "title": "Usd",
+              "type": "string"
+            },
+            "wall_clock_seconds": {
+              "exclusiveMinimum": 0,
+              "title": "Wall Clock Seconds",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "usd",
+            "tokens",
+            "wall_clock_seconds",
+            "max_subagents"
+          ],
+          "title": "ItemBudget",
+          "type": "object"
+        },
         "KnownIntakeValue": {
           "additionalProperties": false,
           "properties": {
@@ -4524,6 +4642,17 @@
           "default": "small_code_change",
           "title": "Archetype",
           "type": "string"
+        },
+        "budget": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemBudget"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "constraints": {
           "default": [],
@@ -6741,6 +6870,17 @@
               "title": "Archetype",
               "type": "string"
             },
+            "budget": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ItemBudget"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "constraints": {
               "default": [],
               "items": {
@@ -8711,6 +8851,38 @@
             "material"
           ],
           "title": "IntakeUnknown",
+          "type": "object"
+        },
+        "ItemBudget": {
+          "additionalProperties": false,
+          "properties": {
+            "max_subagents": {
+              "minimum": 0,
+              "title": "Max Subagents",
+              "type": "integer"
+            },
+            "tokens": {
+              "exclusiveMinimum": 0,
+              "title": "Tokens",
+              "type": "integer"
+            },
+            "usd": {
+              "title": "Usd",
+              "type": "string"
+            },
+            "wall_clock_seconds": {
+              "exclusiveMinimum": 0,
+              "title": "Wall Clock Seconds",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "usd",
+            "tokens",
+            "wall_clock_seconds",
+            "max_subagents"
+          ],
+          "title": "ItemBudget",
           "type": "object"
         },
         "KnownIntakeValue": {
@@ -17648,6 +17820,38 @@
       "title": "IntakeUnknown",
       "type": "object"
     },
+    "ItemBudget": {
+      "additionalProperties": false,
+      "properties": {
+        "max_subagents": {
+          "minimum": 0,
+          "title": "Max Subagents",
+          "type": "integer"
+        },
+        "tokens": {
+          "exclusiveMinimum": 0,
+          "title": "Tokens",
+          "type": "integer"
+        },
+        "usd": {
+          "title": "Usd",
+          "type": "string"
+        },
+        "wall_clock_seconds": {
+          "exclusiveMinimum": 0,
+          "title": "Wall Clock Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "usd",
+        "tokens",
+        "wall_clock_seconds",
+        "max_subagents"
+      ],
+      "title": "ItemBudget",
+      "type": "object"
+    },
     "KnownIntakeValue": {
       "additionalProperties": false,
       "properties": {
@@ -18113,6 +18317,17 @@
               "title": "Archetype",
               "type": "string"
             },
+            "budget": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ItemBudget"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "constraints": {
               "default": [],
               "items": {
@@ -18371,6 +18586,38 @@
             "material"
           ],
           "title": "IntakeUnknown",
+          "type": "object"
+        },
+        "ItemBudget": {
+          "additionalProperties": false,
+          "properties": {
+            "max_subagents": {
+              "minimum": 0,
+              "title": "Max Subagents",
+              "type": "integer"
+            },
+            "tokens": {
+              "exclusiveMinimum": 0,
+              "title": "Tokens",
+              "type": "integer"
+            },
+            "usd": {
+              "title": "Usd",
+              "type": "string"
+            },
+            "wall_clock_seconds": {
+              "exclusiveMinimum": 0,
+              "title": "Wall Clock Seconds",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "usd",
+            "tokens",
+            "wall_clock_seconds",
+            "max_subagents"
+          ],
+          "title": "ItemBudget",
           "type": "object"
         },
         "KnownIntakeValue": {
@@ -18497,6 +18744,17 @@
               "title": "Archetype",
               "type": "string"
             },
+            "budget": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ItemBudget"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "constraints": {
               "default": [],
               "items": {
@@ -18755,6 +19013,38 @@
             "material"
           ],
           "title": "IntakeUnknown",
+          "type": "object"
+        },
+        "ItemBudget": {
+          "additionalProperties": false,
+          "properties": {
+            "max_subagents": {
+              "minimum": 0,
+              "title": "Max Subagents",
+              "type": "integer"
+            },
+            "tokens": {
+              "exclusiveMinimum": 0,
+              "title": "Tokens",
+              "type": "integer"
+            },
+            "usd": {
+              "title": "Usd",
+              "type": "string"
+            },
+            "wall_clock_seconds": {
+              "exclusiveMinimum": 0,
+              "title": "Wall Clock Seconds",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "usd",
+            "tokens",
+            "wall_clock_seconds",
+            "max_subagents"
+          ],
+          "title": "ItemBudget",
           "type": "object"
         },
         "KnownIntakeValue": {

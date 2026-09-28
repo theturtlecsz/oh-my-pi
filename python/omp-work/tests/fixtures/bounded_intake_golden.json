@@ -929,7 +929,13 @@
             "observable_outcome": "the dry-run test exits zero",
             "oracle": "automated_test"
           }
-        ]
+        ],
+        "budget": {
+          "usd": "50.00",
+          "tokens": 500000,
+          "wall_clock_seconds": 3600,
+          "max_subagents": 2
+        }
       }
     },
     "expected": {
@@ -979,7 +985,13 @@
             "observable_outcome": "the status-count test exits zero",
             "oracle": "automated_test"
           }
-        ]
+        ],
+        "budget": {
+          "usd": "50.00",
+          "tokens": 500000,
+          "wall_clock_seconds": 3600,
+          "max_subagents": 2
+        }
       }
     },
     "expected": {
@@ -1052,7 +1064,13 @@
             "observable_outcome": "omp stats without --json still prints the human table",
             "oracle": "static_check"
           }
-        ]
+        ],
+        "budget": {
+          "usd": "50.00",
+          "tokens": 500000,
+          "wall_clock_seconds": 3600,
+          "max_subagents": 2
+        }
       },
       "advice_text": "Considered. Add --json to the stats CLI and keep the human table as the default."
     },

@@ -638,6 +638,8 @@ BOUNDED_INTAKE_RULE_BUNDLE_SHA256 = sha256(
 
 def bounded_intake_semantic_sha256(draft: BoundedIntakeDraft) -> str:
     normalized = draft.model_dump(mode="json")
+    if "budget" in normalized and normalized["budget"] is None:
+        del normalized["budget"]
     if "source" in normalized and "spans" in normalized["source"]:
         normalized["source"]["spans"] = sorted(
             normalized["source"]["spans"],
