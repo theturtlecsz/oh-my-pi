@@ -641,7 +641,7 @@ export async function findMostRecentSession(
 }
 
 /** Session id embedded in a `<file-safe-timestamp>_<id>.jsonl` filename, if present. */
-function sessionIdFromSessionPath(file: string): string | undefined {
+export function sessionIdFromSessionPath(file: string): string | undefined {
 	const base = path.basename(file);
 	if (!base.endsWith(".jsonl")) return undefined;
 	const sep = base.lastIndexOf("_");

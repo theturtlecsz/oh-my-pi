@@ -62,7 +62,13 @@ import {
 	type TtsrInjectionEntry,
 	type UsageStatistics,
 } from "./session-entries";
-import { findMostRecentSession, listAllSessions, listSessions, type SessionInfo } from "./session-listing";
+import {
+	findMostRecentSession,
+	listAllSessions,
+	listSessions,
+	type SessionInfo,
+	sessionIdFromSessionPath,
+} from "./session-listing";
 import {
 	loadEntriesFromFile,
 	loadSessionFile,
@@ -1109,7 +1115,10 @@ export class SessionManager {
 	#resetToNewSession(options?: NewSessionOptions, forcedSessionFile?: string): string | undefined {
 		this.#diskTail = Promise.resolve();
 		this.#clearDiskError();
-		this.#sessionId = mintSessionId();
+		this.#sessionId =
+			options?.sessionId ??
+			(forcedSessionFile ? sessionIdFromSessionPath(forcedSessionFile) : undefined) ??
+			mintSessionId();
 		this.#sessionName = undefined;
 		this.#titleSource = undefined;
 		this.#titleUpdatedAt = "";
@@ -1384,7 +1393,8 @@ export class SessionManager {
 		if (fileEntries.length === 0) {
 			// Explicit but empty/missing path (e.g. --session flag): start fresh but
 			// keep the requested path and materialize the header immediately.
-			this.#resetToNewSession(undefined, resolvedSessionFile);
+			const embeddedId = sessionIdFromSessionPath(resolvedSessionFile);
+			this.#resetToNewSession(embeddedId ? { sessionId: embeddedId } : undefined, resolvedSessionFile);
 			this.#forceFileCreation = true;
 			await this.#rewriteAtomically();
 			this.#fileIsCurrent = true;

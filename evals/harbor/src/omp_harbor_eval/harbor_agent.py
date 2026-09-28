@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
+import shlex
 import tempfile
 import uuid
 from collections.abc import Callable
@@ -34,6 +36,7 @@ from .docker_ops import (
     pid_killer,
     read_file,
     rpc_command,
+    run,
     write_file,
 )
 from .evidence import MANIFEST_NAME, EvidenceWriter
@@ -92,6 +95,80 @@ def _bundle_hook(worker: str, workdir: str, bundle: Path, docker: str) -> Callab
 
 def _omp_args(task_home: str) -> list[str]:
     return ["--mode", "rpc", "--model", "scripted/scripted", "--session-dir", f"{task_home}/{_SESSION_DIR}"]
+
+
+def _credentials_dir() -> Path:
+    """The provisioned credential bundle written by scripts/provision-credentials.sh."""
+
+    value = os.environ.get("OMP_HARBOR_CREDENTIALS_DIR")
+    directory = Path(value) if value else Path.home() / ".local/state/omp/harbor-fixtures"
+    if not directory.is_dir():
+        raise ValueError(
+            f"provisioned credentials missing at {directory}: run evals/harbor/scripts/provision-credentials.sh "
+            "(or set OMP_HARBOR_CREDENTIALS_DIR). No worker credential is written in code."
+        )
+    return directory
+
+
+def _provisioned_owner(cred_dir: Path) -> tuple[str, bytes]:
+    """Read the owner id and capability JSON from the provisioned bundle.
+
+    The worker's bearer is the capability's token, so the credential comes from
+    the same supplied bundle the workservice mounts — never synthesized here.
+    """
+
+    cap_file = cred_dir / "capabilities" / "owner.json"
+    actor_file = cred_dir / "credentials" / "operator-actor-id"
+    if not cap_file.is_file():
+        raise ValueError(f"provisioned owner capability missing: {cap_file}")
+    capability = cap_file.read_bytes()
+    owner_id = actor_file.read_text(encoding="utf-8").strip() if actor_file.is_file() else ""
+    if not owner_id:
+        try:
+            owner_id = str(json.loads(capability.decode("utf-8")).get("actor_id") or "")
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"provisioned owner capability is not JSON: {cap_file}") from exc
+    if not owner_id:
+        raise ValueError(f"provisioned owner actor id missing: {actor_file} or {cap_file}")
+    return owner_id, capability
+
+
+def stage_worker_environment(
+    worker: str,
+    task: Any,
+    *,
+    workspace_id: str,
+    docker: str,
+) -> None:
+    """Stage Work Ledger client config, provisioned credentials, marker, and extensions.
+
+    Every secret comes from the provisioned bundle: the owner capability is
+    copied as-is and its bearer_file path is what omp reads. Nothing here
+    invents a token or an owner capability, and a missing bundle is an error.
+    """
+
+    cred_dir = _credentials_dir()
+    owner_id, owner_capability = _provisioned_owner(cred_dir)
+
+    bearer_file = f"{task.home}/.config/omp-work/capabilities/owner.json"
+    client_config = {
+        "base_url": task.workservice_url,
+        "workspace_id": workspace_id,
+        "owner_id": owner_id,
+        "bearer_file": bearer_file,
+    }
+    client_json_bytes = json.dumps(client_config, indent=2, sort_keys=True).encode("utf-8")
+
+    write_file(worker, f"{task.home}/.config/omp-work/client.json", client_json_bytes, docker=docker, mode=0o600)
+    write_file(worker, bearer_file, owner_capability, docker=docker, mode=0o600)
+    write_file(worker, f"{task.working_dir}/.work-project", b"The Bookends\n", docker=docker)
+
+    install_script = (
+        f"if [ -f {shlex.quote(task.working_dir)}/session-system/install.sh ] && "
+        f"[ ! -f {shlex.quote(task.home)}/.omp/agent/extensions/work-now.ts ]; then "
+        f"HOME={shlex.quote(task.home)} bash {shlex.quote(task.working_dir)}/session-system/install.sh --copy; fi"
+    )
+    run(docker, ["exec", worker, "sh", "-c", install_script])
 
 
 class OmpRpcAgent(BaseAgent):
@@ -153,6 +230,12 @@ class OmpRpcAgent(BaseAgent):
                 worker,
                 f"{task.home}/{_MODELS_PATH}",
                 models_yml(task.model_url).encode("utf-8"),
+                docker=self.docker,
+            )
+            stage_worker_environment(
+                worker,
+                task,
+                workspace_id=workspace_id,
                 docker=self.docker,
             )
             sidecar = start_model_sidecar(

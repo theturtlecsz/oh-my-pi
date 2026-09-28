@@ -56,6 +56,8 @@ export interface NewSessionOptions {
 	drop?: boolean;
 	/** Additional workspace directories to seed on the new session. */
 	additionalDirectories?: string[];
+	/** Pre-allocated session ID to preserve (e.g. when resuming an empty session file). */
+	sessionId?: string;
 }
 
 export interface SessionEntryBase {

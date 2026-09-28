@@ -54,6 +54,10 @@ RUN printf '%s\n' \
         > /usr/local/bin/omp \
     && chmod +x /usr/local/bin/omp
 
+RUN HOME=/home/agent bash /workspace/session-system/install.sh --copy
+
+RUN printf 'The Bookends\n' > /workspace/.work-project
+
 RUN chown -R agent:agent /workspace /home/agent
 
 USER agent

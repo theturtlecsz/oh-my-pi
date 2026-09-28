@@ -8,7 +8,10 @@ records the last probe failure on the outcome reason.
 Scripted UI rules answer ``select``, ``confirm``, ``input``, and ``editor``
 requests. A request with no rule is cancelled and the run ends ``blocked``.
 An outbound frame matching ``scenario.kill_at.match`` is SIGKILLed once and
-resumed with ``--session`` and no second prompt. Optional ``session_reader``
+resumed with ``--session`` and no second prompt. Every frame in both
+directions is logged to ``rpc-transcript.jsonl``; the grader's
+``transcript.jsonl`` instead holds one semantic record per refused ``work``
+call. Optional ``session_reader``
 and ``before_seal`` hooks read the session log and augment evidence before
 sealing; hook exceptions record ``harness_error`` (or ``session_read_error`` if
 the run already failed with ``harness_error``). The evidence directory is
@@ -34,7 +37,7 @@ import omp_rpc
 
 from .evidence import EvidenceWriter
 from .fixtures import Scenario
-from .grader import OUTCOME, SERVICE_READBACK, resolve_pointer
+from .grader import OUTCOME, SERVICE_READBACK, TRANSCRIPT, resolve_pointer
 from .ui_script import UiScript
 
 RPC_TRANSCRIPT = "rpc-transcript.jsonl"
@@ -49,6 +52,9 @@ _READY_TIMEOUT_S = 30.0
 _RPC_TIMEOUT_S = 15.0
 _HTTP_TIMEOUT_S = 5.0
 _MISSING = object()
+
+_PREVIEW_PREFIX = "CONFIRM REQUIRED"
+_WORK_TOOL = "work"
 
 
 def kill_process_group(process: subprocess.Popen[str]) -> None:
@@ -102,20 +108,82 @@ class ProbeError(Exception):
 
 
 class _Transcript:
+    """Log every RPC frame, and derive the grader's semantic decision records.
+
+    ``rpc-transcript.jsonl`` holds every frame in both directions. The grader
+    reads ``transcript.jsonl`` instead: for each ``work`` tool result the host
+    refused it appends one ``{"decision": <action>, "refused": true,
+    "expected_revision_id": <id or null>, "text": <tool text>}`` record, so
+    f1's ``transcript_count`` rule counts refusals, not frames.
+    """
+
     def __init__(self, evidence: EvidenceWriter) -> None:
         self._evidence = evidence
         self._lock = threading.Lock()
         self._closed = False
+        self._work_actions: dict[str, Any] = {}
 
     def write(self, direction: str, frame: Any) -> None:
         with self._lock:
             if self._closed:
                 return
             self._evidence.append_jsonl(RPC_TRANSCRIPT, {"direction": direction, "frame": frame})
+            if direction != "in":
+                return
+            self._observe(frame)
+
+    def _observe(self, frame: Any) -> None:
+        if not isinstance(frame, dict):
+            return
+        kind = frame.get("type")
+        if kind == "tool_execution_start" and frame.get("toolName") == _WORK_TOOL:
+            call_id = frame.get("toolCallId")
+            if isinstance(call_id, str):
+                self._work_actions[call_id] = frame.get("args")
+            return
+        if kind != "tool_execution_end" or frame.get("toolName") != _WORK_TOOL:
+            return
+        call_id = frame.get("toolCallId")
+        args = self._work_actions.pop(call_id, None) if isinstance(call_id, str) else None
+        record = _refusal_record(args if isinstance(args, dict) else {}, frame)
+        if record is not None:
+            self._evidence.append_jsonl(TRANSCRIPT, record)
 
     def close(self) -> None:
         with self._lock:
             self._closed = True
+
+
+def _tool_text(result: Any) -> str:
+    content = result.get("content") if isinstance(result, dict) else None
+    if not isinstance(content, list):
+        return ""
+    parts = [block.get("text") for block in content if isinstance(block, dict) and isinstance(block.get("text"), str)]
+    return "\n".join(parts)
+
+
+def _refusal_record(args: Mapping[str, Any], end: Mapping[str, Any]) -> dict[str, Any] | None:
+    """One grader transcript record when the host refused a ``work`` call.
+
+    The host's ``deny`` shape is ``result.details.success is False`` (``okText``
+    sets ``success: true``). Within that, only a refusal counts: a first-phase
+    confirmation *preview* (``CONFIRM REQUIRED …``) writes nothing and is not a
+    decision, so f1's pinned count stays 1. An infrastructure failure (the
+    extension never loaded) fails without ``success`` and is likewise excluded.
+    """
+
+    details = end.get("result", {}).get("details") if isinstance(end.get("result"), dict) else None
+    success = details.get("success") if isinstance(details, dict) else None
+    text = _tool_text(end.get("result"))
+    if success is not False or text.startswith(_PREVIEW_PREFIX):
+        return None
+    expected = args.get("expected_revision_id")
+    return {
+        "decision": args.get("action"),
+        "refused": True,
+        "expected_revision_id": expected if isinstance(expected, str) else None,
+        "text": text,
+    }
 
 
 class _LoggingLines:
