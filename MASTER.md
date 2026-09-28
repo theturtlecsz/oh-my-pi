@@ -2,9 +2,9 @@ Status moved to the Work Ledger on 2026-09-25. Checkpoint and status sections be
 
 # OMP master tracker
 
-## Current checkpoint — September 19, 2026, E1 installed lifecycle PASS
+## Frozen checkpoint — September 19, 2026, E1: source delivered, not installed-qualified in this repository
 
-Owner-authorized E1 contract approval is committed at `0116304a725246bda3c8ffbc2a060d9287129b6c`
+Owner-authorized E1 contract approval is committed at `0116304a725246bda3c8ffbc2a060d9287129b6c` (this commit and its digest are not in this repository; see [E1 packet status](docs/programme/E1-CONTRACT-APPROVAL-PACKET.md))
 for exact digest `a4da1fef…`. Final OMP candidate `0aed552c19ff23a59888056638f9566c59bdf271`
 was staged as immutable `staged-omp-r11` (manifest `94a5bbeb…`) with noneditable WorkService,
 Bun 1.4.0 and pinned native addons. Final Web index tree is `ccef349d…`. Required-mode installed
@@ -16,7 +16,7 @@ plus negative no-completion/no-version-mutation effects. Per-step HAR/JUnit evid
 retained. [Result and identities](/home/thetu/.codex/workflows/economy/artifacts/full-programme-e1-controls-20260918/INSTALLED-LIFECYCLE-RESULT.md).
 Fresh independent Kimi K3 256K review reproduced claims and returned **PASS** with no actionable
 finding. [Review](/home/thetu/.codex/workflows/economy/artifacts/full-programme-e1-controls-20260918/INSTALLED-LIFECYCLE-FINAL-INDEPENDENT-REVIEW.md).
-This accepts the frozen E1 installed controls/recovery/installation delivery only. Production
+The external run was recorded at host paths and this repository holds no Work Ledger record or installed check for it; this covers the frozen E1 installed controls/recovery/installation delivery only. Production
 activation, native work-item closure/credit, 20-task and 72-hour qualification, Q36, and E2–E9
 remain separate and open. No push, merge, live migration, service restart, cutover or Q36 effect.
 
