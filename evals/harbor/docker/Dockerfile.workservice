@@ -1,0 +1,40 @@
+# Real WorkService image for the Harbor fixtures: PostgreSQL 18 plus the
+# unmodified python/omp-work package. The entrypoint under evals/harbor starts
+# the database, provisions credentials, and runs `python -m omp_work serve`,
+# which serves omp_work.v1.server.create_app. Nothing under python/omp-work/src
+# is stubbed or patched.
+#
+# Build context: the repository root.
+#   docker build -t omp-workservice:dev -f evals/harbor/docker/Dockerfile.workservice .
+FROM postgres:18-bookworm
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        python3 \
+        python3-venv \
+        python3-pip \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY python/omp-work /opt/omp-work
+COPY python/omp-rpc /opt/omp-rpc
+COPY evals/harbor/docker/workservice-entrypoint.sh /opt/harbor/workservice-entrypoint.sh
+
+RUN python3 -m venv /opt/venv \
+    && /opt/venv/bin/pip install --upgrade pip setuptools wheel \
+    && /opt/venv/bin/pip install --no-build-isolation /opt/omp-work /opt/omp-rpc "pyyaml>=6.0.2" \
+    && chmod 0755 /opt/harbor/workservice-entrypoint.sh
+
+ENV PATH="/opt/venv/bin:/usr/lib/postgresql/18/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+    XDG_CONFIG_HOME=/root/.config \
+    PYTHONPATH="/opt/omp-work/src:/opt/omp-rpc/src"
+
+# Bypass the postgres image entrypoint so the compose `command` is the whole argv.
+ENTRYPOINT []
+CMD ["bash", "/opt/harbor/workservice-entrypoint.sh"]

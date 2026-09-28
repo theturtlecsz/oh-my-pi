@@ -1,0 +1,59 @@
+# Worker image for the Harbor fixtures (f1 and f2). Carries the checked-out
+# oh-my-pi repository at /workspace plus an `omp` shim, so the fixture's omp
+# session and its bun/ts independent tests run against the tree the trial
+# staged. f2's compose references this image as omp-agent:dev; f1 references
+# omp-f1-agent:dev, which build-images.sh tags from this image.
+#
+# It also runs the scripted-model sidecar: netns.py runs
+# `python -m omp_harbor_eval.scripted_model` inside this image with
+# evals/harbor/src and python/omp-rpc/src mounted read-only, so it needs a
+# python interpreter with pyyaml (the harbor package itself is mounted).
+#
+# Build context: the repository root.
+#   docker build -t omp-agent:dev -f evals/harbor/docker/Dockerfile.agent .
+FROM oven/bun:1.4.0-slim
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    HOME=/home/agent
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        git \
+        python3 \
+        python3-pip \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN ln -sf /usr/bin/python3 /usr/local/bin/python
+
+# In oven/bun, uid 1000 is `bun`. Rename it to `agent` with HOME=/home/agent.
+RUN usermod -l agent -d /home/agent -m bun && groupmod -n agent bun
+
+RUN pip install --no-cache-dir --break-system-packages "pyyaml>=6.0.2"
+
+WORKDIR /workspace
+
+COPY . /workspace
+
+RUN rm -rf node_modules
+
+RUN git config --global user.name "omp-harbor" \
+    && git config --global user.email "omp-harbor@localhost" \
+    && git config --global init.defaultBranch main \
+    && git config --global --add safe.directory /workspace
+
+RUN bun install && bun add zod@3.25.76
+
+RUN if [ ! -d .git ]; then \
+        git init && git add -A && git commit -m "initial harbor worker tree"; \
+    fi
+
+RUN printf '%s\n' \
+        '#!/bin/sh' \
+        'exec bun /workspace/packages/coding-agent/src/cli.ts "$@"' \
+        > /usr/local/bin/omp \
+    && chmod +x /usr/local/bin/omp
+
+RUN chown -R agent:agent /workspace /home/agent
+
+USER agent

@@ -10,7 +10,7 @@ name: omp-harbor-zero-spend
 services:
   workservice:
     image: omp-workservice:dev
-    command: ["python", "-m", "omp_work.service"]
+    command: ["bash", "/opt/harbor/workservice-entrypoint.sh"]
     environment:
       OMP_SERVICE_BIND_HOST: 127.0.0.1
       OMP_SERVICE_BIND_PORT: "8080"
