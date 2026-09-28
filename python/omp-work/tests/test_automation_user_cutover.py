@@ -40,6 +40,12 @@ FAKE_SYSTEMCTL = """#!/usr/bin/env bash
 # Fake systemctl for the cutover test: `-M <user>@` selects the automation
 # user's manager, anything else is the owner's. State lives in
 # $FAKE_SYSTEMD_STATE, invocations are appended to $FAKE_LOG.
+#
+# Exit codes follow the real tool: `is-enabled`/`is-active` print the state but
+# exit non-zero for `disabled`/`inactive`, and an unreadable unit prints
+# nothing and exits non-zero. $FAKE_SYSTEMD_FAIL, when set to `<side> <verb>`
+# or `<side> <verb> <unit>`, makes every matching call fail without touching
+# state.
 set -u
 printf 'systemctl %s\\n' "$*" >>"$FAKE_LOG"
 
@@ -56,6 +62,18 @@ while [ "$i" -le "$#" ]; do
 done
 
 cmd=${positional[0]:-}
+last=${positional[-1]:-}
+if [ -n "${FAKE_SYSTEMD_FAIL:-}" ]; then
+	case "$side $cmd $last" in
+		"$FAKE_SYSTEMD_FAIL" | "$FAKE_SYSTEMD_FAIL "*) matched=1 ;;
+		*) matched=0 ;;
+	esac
+	if [ "$matched" -eq 1 ]; then
+		printf 'fake systemctl: injected failure: %s %s %s\\n' "$side" "$cmd" "$last" >&2
+		exit 1
+	fi
+fi
+
 python3 - "$FAKE_SYSTEMD_STATE" "$side" "$cmd" "${positional[@]:1}" <<'PY'
 import json
 import os
@@ -70,9 +88,11 @@ section = state.setdefault(side, {})
 if cmd in ("is-enabled", "is-active"):
     key = "is_enabled" if cmd == "is-enabled" else "is_active"
     value = section.get(args[-1], {}).get(key, "")
-    if value:
-        print(value)
-    sys.exit(0 if value else 1)
+    if not value:
+        print("Failed to get unit state: " + args[-1], file=sys.stderr)
+        sys.exit(1)
+    print(value)
+    sys.exit(0 if value in ("enabled", "active") else 1)
 
 if cmd in ("enable", "disable", "start", "stop", "restart"):
     name = args[-1]
@@ -168,6 +188,7 @@ def setup(tmp_path: Path) -> dict[str, Any]:
     env["FAKE_LOG"] = str(log)
     env["FAKE_SYSTEMD_STATE"] = str(systemd_state)
     env.pop("FAKE_SYSTEMD_STUCK", None)
+    env.pop("FAKE_SYSTEMD_FAIL", None)
     env.pop("FAKE_DOCKER_OUTPUT", None)
 
     return {
@@ -400,3 +421,86 @@ def test_plan_mutates_nothing(setup: dict[str, Any]) -> None:
     for line in read_calls(setup):
         _, verb, _ = parse_call(line)
         assert verb not in mutating, line
+
+
+def test_plan_prints_disabled_and_inactive_states(setup: dict[str, Any]) -> None:
+    # `is-enabled`/`is-active` exit non-zero for disabled/inactive while still
+    # printing the state; plan must show the printed word, not `unknown`.
+    proc = run_cutover(setup, "plan")
+    assert proc.returncode == 0, proc.stderr
+
+    lines = proc.stdout.splitlines()
+    assert "  owner\tflood-dash-http.service\tdisabled\tactive\n" in [
+        f"{line}\n" for line in lines
+    ]
+    assert "  owner\tflood-operator.timer\tenabled\tinactive\n" in [
+        f"{line}\n" for line in lines
+    ]
+    assert "unknown" not in proc.stdout
+
+
+def test_apply_refuses_when_owner_unit_state_is_unreadable(
+    setup: dict[str, Any],
+) -> None:
+    before = read_state(setup)
+
+    proc = run_cutover(setup, "apply", extra_env={"FAKE_SYSTEMD_FAIL": "owner is-active"})
+    assert proc.returncode == 1
+    assert "is-active" in proc.stderr
+    assert read_state(setup) == before
+    assert not setup["state_file"].exists()
+
+
+def test_apply_fails_when_owner_unit_cannot_be_stopped(setup: dict[str, Any]) -> None:
+    before = read_state(setup)
+
+    proc = run_cutover(
+        setup,
+        "apply",
+        extra_env={"FAKE_SYSTEMD_FAIL": "owner disable flood.service"},
+    )
+    assert proc.returncode == 1
+    assert "run: cutover.sh rollback --state-file" in proc.stdout + proc.stderr
+    assert setup["state_file"].exists()
+    # The failed stop left flood.service enabled and active.
+    failed_state = read_state(setup)
+    assert failed_state["owner"]["flood.service"] == {
+        "is_enabled": "enabled",
+        "is_active": "active",
+    }
+    assert before["owner"]["flood.service"] == failed_state["owner"]["flood.service"]
+
+    rolled = run_cutover(setup, "rollback")
+    assert rolled.returncode == 0, rolled.stderr
+    assert read_state(setup)["owner"] == before["owner"]
+
+
+def test_rollback_refuses_corrupt_state_file_before_mutation(
+    setup: dict[str, Any],
+) -> None:
+    assert run_cutover(setup, "apply").returncode == 0
+    before = read_state(setup)
+
+    setup["state_file"].write_text("{not json", encoding="utf-8")
+    proc = run_cutover(setup, "rollback")
+    assert proc.returncode == 1
+    assert "unreadable" in proc.stderr
+    # The snapshot was read before any unit was touched, so nothing changed.
+    assert read_state(setup) == before
+    assert setup["state_file"].read_text(encoding="utf-8") == "{not json"
+
+
+def test_rollback_reports_failed_owner_restore(setup: dict[str, Any]) -> None:
+    assert run_cutover(setup, "apply").returncode == 0
+    setup["log"].write_text("", encoding="utf-8")
+
+    proc = run_cutover(
+        setup,
+        "rollback",
+        extra_env={"FAKE_SYSTEMD_FAIL": "owner enable flood.service"},
+    )
+    assert proc.returncode == 1
+    assert "flood.service" in proc.stderr
+    # A partial restore is not a rollback: F keeps no rolled_back_at stamp.
+    final = json.loads(setup["state_file"].read_text(encoding="utf-8"))
+    assert "rolled_back_at" not in final

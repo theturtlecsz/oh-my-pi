@@ -140,10 +140,21 @@ for name, entry in units.items():
 PY
 }
 
+# is-enabled/is-active print the state and exit non-zero for `disabled` and
+# `inactive`, so the printed word is a valid reading: only an empty output means
+# the state could not be read.
 query_state() {
 	local unit=$1 kind=$2 probe=$3 value
-	value=$("$probe" "$kind" "$unit" 2>/dev/null) || value=""
+	value=$("$probe" "$kind" "$unit" 2>/dev/null || true)
 	[ -n "$value" ] || return 1
+	printf '%s' "$value"
+}
+
+# Same reading for display: keep the printed word, `unknown` only when empty.
+format_state() {
+	local value
+	value=$("$@" 2>/dev/null || true)
+	[ -n "$value" ] || value=unknown
 	printf '%s' "$value"
 }
 
@@ -188,14 +199,16 @@ capture_owner_state() {
 # Put one owner unit back into its snapshot state. `enable`/`disable` restore
 # the is-enabled axis, `start`/`stop` the is-active one. Units with no
 # enablement state (`static`, a unit that is gone) only get the active axis.
+# A command that fails is fatal: the caller must report a partial restore, not
+# a successful one.
 restore_owner_unit() {
 	local unit=$1 enabled=$2 active=$3
 	case "$enabled" in
 		enabled | enabled-runtime | linked | linked-runtime | alias | indirect)
-			owner enable "$unit" >/dev/null 2>&1 || true
+			owner enable "$unit" >/dev/null || return 1
 			;;
 		disabled | masked | masked-runtime)
-			owner disable "$unit" >/dev/null 2>&1 || true
+			owner disable "$unit" >/dev/null || return 1
 			;;
 		static | generated | transient | not-found | bad) ;;
 		*)
@@ -205,10 +218,10 @@ restore_owner_unit() {
 	esac
 	case "$active" in
 		active | activating | reloading)
-			owner start "$unit" >/dev/null 2>&1 || true
+			owner start "$unit" >/dev/null || return 1
 			;;
 		inactive | deactivating | failed)
-			owner stop "$unit" >/dev/null 2>&1 || true
+			owner stop "$unit" >/dev/null || return 1
 			;;
 		unknown | not-found) ;;
 		*)
@@ -218,18 +231,26 @@ restore_owner_unit() {
 	esac
 }
 
+# Restore every owner unit. Returns non-zero if any unit could not be restored,
+# so the caller can leave the state file without rolled_back_at.
 restore_owner_state() {
-	local snapshot line name enabled active
+	local snapshot line name enabled active failed=""
 	if ! snapshot=$(json_units); then
 		echo "cutover.sh: state file F is unreadable: $state_file" >&2
-		exit 1
+		return 1
 	fi
 	while IFS= read -r line; do
 		name=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])[0])' "$line")
 		enabled=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])[1])' "$line")
 		active=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])[2])' "$line")
-		restore_owner_unit "$name" "$enabled" "$active"
+		if ! restore_owner_unit "$name" "$enabled" "$active"; then
+			failed="${failed:+$failed }$name"
+		fi
 	done <<<"$snapshot"
+	if [ -n "$failed" ]; then
+		echo "cutover.sh: could not restore owner unit(s): $failed" >&2
+		return 1
+	fi
 }
 
 add_rolled_back_at() {
@@ -257,14 +278,14 @@ if [ "$action" = plan ]; then
 	echo "owner units (stopped and disabled by apply; state saved to F):"
 	for unit in "${owner_units[@]}"; do
 		printf '  owner\t%s\t%s\t%s\n' "$unit" \
-			"$(owner is-enabled "$unit" 2>/dev/null || echo unknown)" \
-			"$(owner is-active "$unit" 2>/dev/null || echo unknown)"
+			"$(format_state owner is-enabled "$unit")" \
+			"$(format_state owner is-active "$unit")"
 	done
 	echo "automation units (enabled and started by apply; enabled-and-active checked after):"
 	for unit in "${automation_units[@]}"; do
 		printf '  automation\t%s\t%s\t%s\n' "$unit" \
-			"$(remote is-enabled "$unit" 2>/dev/null || echo unknown)" \
-			"$(remote is-active "$unit" 2>/dev/null || echo unknown)"
+			"$(format_state remote is-enabled "$unit")" \
+			"$(format_state remote is-active "$unit")"
 	done
 	echo "nothing was changed"
 	exit 0
@@ -309,14 +330,32 @@ if [ "$action" = apply ]; then
 		remote enable --now "$unit" >/dev/null 2>&1 || true
 	done
 
-	failed=""
-	for unit in "${automation_units[@]}"; do
-		if [ "$(remote is-active "$unit" 2>/dev/null || true)" != active ]; then
-			if [ -z "$failed" ]; then failed=$unit; else failed="$failed $unit"; fi
+	# Both halves must match the cutover's intent before the switch is called
+	# good: owner stopped and disabled, automation enabled and active. The
+	# automation half alone is not enough — a failed owner stop would leave
+	# flood running under both users. An unreadable state prints `unknown` and
+	# so fails the check too.
+	owner_failed=""
+	automation_failed=""
+	for unit in "${owner_units[@]}"; do
+		if [ "$(format_state owner is-active "$unit")" != inactive ]; then
+			owner_failed="${owner_failed:+$owner_failed }$unit"
+		fi
+		if [ "$(format_state owner is-enabled "$unit")" != disabled ]; then
+			owner_failed="${owner_failed:+$owner_failed }$unit"
 		fi
 	done
-	if [ -n "$failed" ]; then
-		echo "cutover.sh: post-check failed: automation unit(s) not active: $failed" >&2
+	for unit in "${automation_units[@]}"; do
+		if [ "$(format_state remote is-active "$unit")" != active ]; then
+			automation_failed="${automation_failed:+$automation_failed }$unit"
+		fi
+		if [ "$(format_state remote is-enabled "$unit")" != enabled ]; then
+			automation_failed="${automation_failed:+$automation_failed }$unit"
+		fi
+	done
+	if [ -n "$owner_failed" ] || [ -n "$automation_failed" ]; then
+		[ -z "$owner_failed" ] || echo "cutover.sh: post-check failed: owner unit(s) not stopped: $owner_failed" >&2
+		[ -z "$automation_failed" ] || echo "cutover.sh: post-check failed: automation unit(s) not enabled+active: $automation_failed" >&2
 		echo "run: cutover.sh rollback --state-file $state_file"
 		exit 1
 	fi
@@ -333,12 +372,30 @@ if [ "$action" = rollback ]; then
 		exit 1
 	fi
 
+	# Read the snapshot before touching anything. json_units does not use the
+	# shell's set -e (it is a command substitution), so a corrupt file must be
+	# checked here — otherwise the automation units are already stopped before
+	# the failure is noticed and the owner stays unrestored.
+	if ! json_units >/dev/null; then
+		echo "cutover.sh: refusing: state file F is unreadable: $state_file" >&2
+		exit 1
+	fi
+
+	automation_running=""
 	for unit in "${automation_units[@]}"; do
-		remote disable --now "$unit" >/dev/null 2>&1 || true
+		remote disable --now "$unit" >/dev/null 2>&1 \
+			|| automation_running="${automation_running:+$automation_running }$unit"
 	done
 
-	restore_owner_state
+	if ! restore_owner_state; then
+		echo "cutover.sh: rollback incomplete; state file left unchanged: $state_file" >&2
+		exit 1
+	fi
+
 	add_rolled_back_at
+	if [ -n "$automation_running" ]; then
+		echo "cutover.sh: rollback done, but automation unit(s) could not be stopped: $automation_running" >&2
+	fi
 	echo "cutover.sh: rollback done; owner units restored from $state_file"
 	exit 0
 fi

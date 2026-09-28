@@ -95,17 +95,22 @@ bash infra/automation-user/cutover.sh rollback --user ompbot --state-file $S
   the automation units, and changes nothing.
 - `apply` refuses, mutating nothing, when the state file already exists, when an
   automation unit is not installed for `ompbot` (`sudo systemctl --user -M
-  ompbot@ cat <unit>` fails), or when an owner `robomp` container is running.
-  Otherwise it saves each owner unit's `is-enabled`/`is-active` to the state
-  file, `systemctl --user disable --now` stops and disables the owner units,
-  then `sudo systemctl --user -M ompbot@ enable --now` enables and starts the
-  automation units. Any automation unit that is not active afterwards fails the
-  cutover with exit 1 and prints
+  ompbot@ cat <unit>` fails), when an owner `robomp` container is running, or
+  when an owner unit's `is-enabled`/`is-active` cannot be read. Otherwise it
+  saves each owner unit's `is-enabled`/`is-active` to the state file,
+  `systemctl --user disable --now` stops and disables the owner units, then
+  `sudo systemctl --user -M ompbot@ enable --now` enables and starts the
+  automation units. The post-check requires both halves: every owner unit
+  disabled and inactive and every automation unit enabled and active. Anything
+  else fails the cutover with exit 1 and prints
   `run: cutover.sh rollback --state-file <F>`.
-- `rollback` disables and stops the automation units, then restores every owner
-  unit to its saved `is-enabled`/`is-active` exactly (including units that were
-  enabled but inactive, or disabled but active) and records `rolled_back_at` in
-  the state file. It is idempotent, so it can be rerun.
+- `rollback` reads and validates the state file first, refusing before it
+  touches anything when the file is unreadable, then disables and stops the
+  automation units and restores every owner unit to its saved
+  `is-enabled`/`is-active` exactly (including units that were enabled but
+  inactive, or disabled but active). It records `rolled_back_at` only when every
+  owner unit was restored, and exits 1 with the un-restored units named
+  otherwise. It is idempotent, so it can be rerun.
 
 Rehearse `apply` then `rollback` before the real cutover; `systemctl --user
 list-units 'flood*' --all` must match the pre-rehearsal listing afterwards.
