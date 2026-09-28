@@ -1,9 +1,11 @@
 """Stdin/stdout stand-in for ``omp --mode rpc``.
 
-Speaks the ready, ``get_state``, prompt-ack, and scripted-event frames from
-``docs/rpc.md``. Records every inbound command. At stdin EOF (and on
-SIGTERM, which follows the client's stdin close) records whether
-``manifest.json`` exists in ``--evidence``.
+Speaks the ready, ``get_state``, prompt-ack, scripted-event, and
+``extension_ui_request`` frames from ``docs/rpc.md``. Records every inbound
+command. ``--session`` keeps the session id already stored in that file
+unless ``--resume-session-id`` replaces it. At stdin EOF (and on SIGTERM,
+which follows the client's stdin close) records whether ``manifest.json``
+exists in ``--evidence``.
 """
 
 from __future__ import annotations
@@ -86,6 +88,45 @@ def _state() -> dict[str, Any]:
     }
 
 
+def _read_session_id(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            document = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(document, dict) and document.get("type") == "session":
+            session_id = document.get("id")
+            if isinstance(session_id, str) and session_id:
+                return session_id
+    return None
+
+
+def _apply_resume_identity() -> None:
+    """A ``--session`` restart keeps the id in that file unless asked to drift."""
+
+    assert _args is not None
+    if not _args.session:
+        return
+    if _args.resume_session_id:
+        _args.session_id = _args.resume_session_id
+        return
+    found = _read_session_id(Path(_args.session))
+    if found:
+        _args.session_id = found
+
+
+def _record_invocation() -> None:
+    assert _args is not None
+    path = Path(_args.record) / "invocations.jsonl"
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"argv": sys.argv}, separators=(",", ":")) + "\n")
+        handle.flush()
+
+
 def _handle(command: dict[str, Any], events: list[Any]) -> None:
     assert _args is not None
     kind = command.get("type")
@@ -99,6 +140,8 @@ def _handle(command: dict[str, Any], events: list[Any]) -> None:
         else:
             _respond(request_id, "get_state", success=True, data=_state())
         return
+    if kind == "extension_ui_response":
+        return
     if kind == "prompt":
         if _args.reject_prompt:
             _respond(request_id, "prompt", success=False, error="not accepted")
@@ -106,6 +149,9 @@ def _handle(command: dict[str, Any], events: list[Any]) -> None:
         _respond(request_id, "prompt", success=True, data={"agentInvoked": True})
         if _args.ack_flag:
             Path(_args.ack_flag).write_text(json.dumps({"at": time.time()}) + "\n", encoding="utf-8")
+        for request in _args.ui_requests:
+            if isinstance(request, dict):
+                _emit(request)
         for event in events:
             if isinstance(event, dict):
                 _emit(event)
@@ -125,12 +171,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-ready", action="store_true")
     parser.add_argument("--bad-state", action="store_true")
     parser.add_argument("--reject-prompt", action="store_true")
+    parser.add_argument("--session", default="")
+    parser.add_argument("--resume-session-id", default="")
+    parser.add_argument("--ui-requests", default="")
     _args = parser.parse_args(argv)
     record = Path(_args.record)
     record.mkdir(parents=True, exist_ok=True)
+    _record_invocation()
+    _apply_resume_identity()
     session = Path(_args.session_file)
     session.parent.mkdir(parents=True, exist_ok=True)
-    session.write_bytes(f'{{"type":"session","id":"{_args.session_id}"}}\n{{"type":"note"}}\n'.encode())
+    if not (_args.session and session.is_file()):
+        session.write_bytes(f'{{"type":"session","id":"{_args.session_id}"}}\n{{"type":"note"}}\n'.encode())
+    ui_path = _args.ui_requests
+    ui_requests: list[Any] = []
+    if ui_path:
+        loaded_ui = json.loads(Path(ui_path).read_text(encoding="utf-8"))
+        if not isinstance(loaded_ui, list):
+            raise SystemExit("--ui-requests must be a JSON list")
+        ui_requests = loaded_ui
+    _args.ui_requests = ui_requests
     events: list[Any] = []
     if _args.events:
         loaded = json.loads(Path(_args.events).read_text(encoding="utf-8"))

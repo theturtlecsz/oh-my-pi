@@ -67,6 +67,13 @@ class Terminal:
         return self.accepted
 
 
+class KillAt:
+    """Subset of an outbound RPC frame. A match ends the RPC process."""
+
+    def __init__(self, match: dict[str, Any]) -> None:
+        self.match = match
+
+
 class Scenario:
     def __init__(
         self,
@@ -74,7 +81,7 @@ class Scenario:
         terminal: Terminal,
         model_script: tuple[Any, ...],
         ui_script: tuple[Any, ...],
-        kill_at: str | None,
+        kill_at: KillAt | None,
         timeout_s: int | float | None,
         filename: str,
     ) -> None:
@@ -203,9 +210,11 @@ def _load_scenario(document: dict[str, Any], filename: str) -> Scenario:
     ui_script = document["ui_script"]
     if not isinstance(model_script, list) or not isinstance(ui_script, list):
         raise ValueError("scenario model_script and ui_script must be lists")
-    kill_at: str | None = None
+    kill_at: KillAt | None = None
     if "kill_at" in document and document["kill_at"] is not None:
-        kill_at = _string(document["kill_at"], "scenario.kill_at")
+        raw_kill = _mapping(document["kill_at"], "scenario.kill_at")
+        _exact_keys(raw_kill, {"match"}, "scenario.kill_at")
+        kill_at = KillAt(_mapping(raw_kill["match"], "scenario.kill_at.match"))
     timeout_s: int | float | None = None
     if "timeout_s" in document and document["timeout_s"] is not None:
         raw_timeout = document["timeout_s"]
