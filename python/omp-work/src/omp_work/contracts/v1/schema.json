@@ -1783,7 +1783,8 @@
             "OMP-322",
             "OMP-323",
             "OMP-404",
-            "OMP-407"
+            "OMP-407",
+            "OMP-406"
           ],
           "title": "Issue",
           "type": "string"
