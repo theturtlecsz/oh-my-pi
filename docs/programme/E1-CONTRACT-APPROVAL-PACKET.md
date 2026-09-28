@@ -1,5 +1,7 @@
 # E1 WorkService contract approval packet — September 18, 2026
 
+**Status:** source delivered, not installed-qualified. This is a historical packet from an external worktree. The contract digest `a4da1fef0a7b538e0f31d64246af2997ea44210bc7ffd173fc1b46ee141947d0` it asks to approve, its stage-launch/preflight/budget commands and its migrations 0024–0032 are not in this repository; this repository's migrations 0024–0028 are different files. The contract this repository approves is recorded in [approval.json](../../python/omp-work/src/omp_work/contracts/v1/approval.json). No Work Ledger record or installed check in this repository shows the approval or the installed lifecycle run.
+
 ## Decision requested
 
 Approve exact `work.omp.dev/v1` contract digest

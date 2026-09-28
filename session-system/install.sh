@@ -131,6 +131,22 @@ stage() { # stage <repo-relative> <name-in-set>
 stage extensions/workflow workflow
 stage extensions/work-now.ts work-now.ts
 stage extensions/model-bookends.ts model-bookends.ts
+# --copy leaves the extension outside the workspace, so bun cannot see
+# workspace packages. @oh-my-pi/pi-work-client is not a host package omp
+# remaps. Bun 1.4 then asks the registry; a nameserver that does not answer
+# keeps loadExtensions open past the trial's 15s start (measured >18s with
+# --dns 192.0.2.1, 0.08s when DNS answers). A real copy next to the extension
+# resolves with no network. Link mode follows the symlink into the repo.
+if [ "$MODE" = "copy" ]; then
+  client_src="$REPO/../packages/work-client"
+  client_dst="$SET_DIR/node_modules/@oh-my-pi/pi-work-client"
+  mkdir -p "$(dirname "$client_dst")"
+  rm -rf "$client_dst"
+  mkdir -p "$client_dst"
+  cp -a "$client_src/package.json" "$client_dst/package.json"
+  cp -a "$client_src/src" "$client_dst/src"
+  echo "staged  $EXT_DIR/node_modules/@oh-my-pi/pi-work-client"
+fi
 if [ -d "$EXT_DIR" ]; then
   chmod --reference="$EXT_DIR" "$SET_DIR"
   touch --reference="$EXT_DIR" "$SET_DIR"
