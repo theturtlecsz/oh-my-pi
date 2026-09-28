@@ -2,25 +2,29 @@
 
 Clones ``worker-repo.bundle`` out of the evidence directory into a fresh
 temporary directory, links the gitignored host install (``node_modules`` and the
-compiled ``pi_natives.*.node`` addons) into that clone, copies each fixture
-test's ``files`` next to its ``target``, runs every independent test, records
-the exit codes, and grades the sealed evidence with those records in place of
-``independent-tests.json``. The worker filesystem is never read: the only
-inputs are the evidence directory, the fixture directory, ``REPO_ROOT``, and a
-temporary directory.
+compiled ``pi_natives.*.node`` addons) into that clone, and, when any fixture
+test requires ``OMP_INSTALLED_RELEASE``, stages that clone once before copying
+fixture files. It then copies each test's ``files`` next to its ``target``,
+runs every independent test, records the exit codes, and grades the sealed
+evidence with those records in place of ``independent-tests.json``. The worker
+filesystem is never read: the only inputs are the evidence directory, the
+fixture directory, ``REPO_ROOT``, and a temporary directory.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ElementTree
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from .evidence import EvidenceError, load_evidence
 from .fixtures import Fixture, IndependentTest, load_fixture
@@ -36,6 +40,13 @@ DEFAULT_RUNNERS: dict[str, tuple[str, ...]] = {
 }
 
 _INVALID_EVIDENCE = "invalid_evidence"
+_INSTALLED_RELEASE = "OMP_INSTALLED_RELEASE"
+_STAGE_DEST = "omp-installed-runtime"
+_STDERR_TAIL = 500
+_NATIVE_ADDONS = (
+    "pi_natives.linux-x64-baseline.node",
+    "pi_natives.linux-x64-modern.node",
+)
 
 
 def _invalid_verdict(reasons: list[str]) -> dict[str, Any]:
@@ -76,6 +87,132 @@ def _link_host_install(repo: Path) -> None:
         _link(repo / native.relative_to(REPO_ROOT), native)
 
 
+class _StageFailure(NamedTuple):
+    exit_code: int | None
+    detail: str
+
+
+def stage_argv(
+    clone: str | Path,
+    dest: str | Path,
+    repo_root: str | Path,
+    tools: Mapping[str, str],
+) -> list[str]:
+    """Argv for ``stage.ts`` with cwd = ``clone``.
+
+    ``tools`` maps ``bun`` (absolute interpreter), ``bun_version``, ``uv``, and
+    ``python`` (``uv python find 3.13``). Both ``--native`` paths are under
+    ``repo_root``.
+    """
+
+    native = Path(repo_root) / "packages" / "natives" / "native"
+    return [
+        "bun",
+        "session-system/runtime/stage.ts",
+        "--source",
+        str(clone),
+        "--destination",
+        str(dest),
+        "--bun",
+        tools["bun"],
+        "--bun-version",
+        tools["bun_version"],
+        "--uv",
+        tools["uv"],
+        "--python",
+        tools["python"],
+        "--native",
+        str(native / _NATIVE_ADDONS[0]),
+        "--native",
+        str(native / _NATIVE_ADDONS[1]),
+    ]
+
+
+def _stderr_tail(text: str) -> str:
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= _STDERR_TAIL:
+        return collapsed
+    return collapsed[-_STDERR_TAIL:]
+
+
+def _stage_reason(detail: str) -> str:
+    tail = _stderr_tail(detail)
+    if not tail:
+        tail = "no stage output"
+    return f"stage failed: {tail}"
+
+
+def _requires_installed_release(test: IndependentTest) -> bool:
+    return _INSTALLED_RELEASE in test.requires
+
+
+def _command_detail(completed: subprocess.CompletedProcess[str], fallback: str) -> str:
+    return _stderr_tail(completed.stderr) or _stderr_tail(completed.stdout) or fallback
+
+
+def _resolve_stage_tools() -> tuple[dict[str, str] | None, str]:
+    bun = shutil.which("bun")
+    if bun is None:
+        return None, "bun not found"
+    uv = shutil.which("uv")
+    if uv is None:
+        return None, "uv not found"
+    version = subprocess.run([bun, "--version"], capture_output=True, text=True, check=False)
+    if version.returncode != 0:
+        return None, _command_detail(version, "bun --version failed")
+    bun_version = version.stdout.strip()
+    if not bun_version:
+        return None, "bun --version produced no version"
+    python = subprocess.run([uv, "python", "find", "3.13"], capture_output=True, text=True, check=False)
+    if python.returncode != 0:
+        return None, _command_detail(python, "uv python find 3.13 failed")
+    python_path = python.stdout.strip()
+    if not python_path:
+        return None, "uv python find 3.13 produced no interpreter"
+    return {"bun": bun, "bun_version": bun_version, "uv": uv, "python": python_path}, ""
+
+
+def _stage_installed(clone: Path, temp_dir: Path) -> tuple[dict[str, str] | None, _StageFailure | None]:
+    dest = temp_dir / _STAGE_DEST
+    tools, tool_error = _resolve_stage_tools()
+    if tools is None:
+        return None, _StageFailure(None, tool_error)
+    try:
+        completed = subprocess.run(
+            stage_argv(clone, dest, REPO_ROOT, tools),
+            cwd=clone,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        return None, _StageFailure(None, str(exc))
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip() or f"exit code {completed.returncode}"
+        return None, _StageFailure(completed.returncode, detail)
+    manifest = dest / "manifest.json"
+    if not manifest.is_file():
+        return None, _StageFailure(completed.returncode, completed.stderr.strip() or "manifest missing")
+    try:
+        digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    except OSError as exc:
+        return None, _StageFailure(completed.returncode, str(exc))
+    return {
+        "OMP_INSTALLED_RELEASE": str(dest),
+        "OMP_INSTALLED_MANIFEST_SHA256": digest,
+    }, None
+
+
+def _stage_failed_record(test: IndependentTest, failure: _StageFailure) -> dict[str, Any]:
+    return {
+        "runner": test.runner,
+        "target": test.target,
+        "exit_code": failure.exit_code,
+        "passed": False,
+        "reason": _stage_reason(failure.detail),
+    }
+
+
 def _copy_fixture_files(fixture: Fixture, test: IndependentTest, repo: Path) -> None:
     for relative in test.files:
         source = fixture.directory / relative
@@ -91,13 +228,15 @@ def _run_test(
     temp_dir: Path,
     prefix: Sequence[str],
     index: int,
+    env: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     command = [*prefix, target]
     junit_path = temp_dir / f"junit-{index}.xml"
     if runner == "pytest":
         command.append(f"--junitxml={junit_path}")
+    run_env = None if env is None else {**os.environ, **env}
     try:
-        completed = subprocess.run(command, cwd=repo, capture_output=True, text=True, check=False)
+        completed = subprocess.run(command, cwd=repo, capture_output=True, text=True, check=False, env=run_env)
     except OSError as exc:
         return {"runner": runner, "target": target, "exit_code": None, "passed": False, "reason": str(exc)}
 
@@ -196,10 +335,19 @@ def verify(
                 ]
             else:
                 _link_host_install(repo)
+                # stage.ts refuses a dirty tree, including untracked fixture files.
+                installed_env: Mapping[str, str] | None = None
+                stage_failure: _StageFailure | None = None
+                if any(_requires_installed_release(test) for test in tests):
+                    installed_env, stage_failure = _stage_installed(repo, temp_dir)
                 for index, test in enumerate(tests):
+                    if _requires_installed_release(test) and stage_failure is not None:
+                        records.append(_stage_failed_record(test, stage_failure))
+                        continue
                     _copy_fixture_files(fixture, test, repo)
                     prefix = merged.get(test.runner, (test.runner,))
-                    records.append(_run_test(test.runner, test.target, repo, temp_dir, prefix, index))
+                    env = installed_env if _requires_installed_release(test) else None
+                    records.append(_run_test(test.runner, test.target, repo, temp_dir, prefix, index, env))
 
     verdict = grade(
         evidence_path,

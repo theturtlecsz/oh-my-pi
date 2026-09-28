@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from omp_harbor_eval import EvidenceWriter, Fixture, load_fixture
-from omp_harbor_eval.verify import REPO_ROOT, main, verify
+from omp_harbor_eval.verify import REPO_ROOT, main, stage_argv, verify
 
 
 def _create_synthetic_bundle(repo_dir: Path) -> Path:
@@ -324,3 +324,116 @@ def test_repo_root_has_stage_script_and_cli_writes_out(tmp_path: Path) -> None:
     )
     assert cli.returncode == 0, cli.stderr
     assert (tmp_path / "cli.json").is_file()
+
+
+def _marker_test(marker: Path) -> str:
+    target = json.dumps(str(marker))
+    return (
+        'import { test, expect } from "bun:test";\n'
+        'import { writeFileSync } from "node:fs";\n'
+        "test('needs release', () => {\n"
+        f"  writeFileSync({target}, 'ran\\n');\n"
+        "  expect(1).toBe(1);\n"
+        "});\n"
+    )
+
+
+def _bundle_with(repo_dir: Path, files: dict[str, str]) -> Path:
+    repo_dir.mkdir(parents=True, exist_ok=True)
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=repo_dir, check=True, capture_output=True, text=True)
+
+    git("init")
+    git("config", "user.email", "eval@example.com")
+    git("config", "user.name", "Eval")
+    for relative, content in files.items():
+        path = repo_dir / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        git("add", relative)
+    git("commit", "-m", "init")
+    bundle = repo_dir.parent / "worker-repo.bundle"
+    git("bundle", "create", str(bundle), "--all")
+    return bundle
+
+
+def test_stage_failure_does_not_run_requiring_target(tmp_path: Path) -> None:
+    marker = tmp_path / "requiring-target-ran"
+    worker_repo = tmp_path / "worker-source-repo"
+    bundle = _bundle_with(
+        worker_repo,
+        {"sample.txt": "synthetic content\n", "tests/needs-release.test.ts": _marker_test(marker)},
+    )
+
+    fixtures_root = tmp_path / "fixtures"
+    fixture_dir = fixtures_root / "staged"
+    fixture_dir.mkdir(parents=True)
+    (fixture_dir / "needs-release.test.ts").write_text(_marker_test(marker), encoding="utf-8")
+    (fixture_dir / "pass.test.ts").write_text(
+        'import { test, expect } from "bun:test";\ntest("pass", () => { expect(1).toBe(1); });\n',
+        encoding="utf-8",
+    )
+    fixture = _write_fixture(
+        fixtures_root,
+        "staged",
+        [
+            {
+                "runner": "bun",
+                "target": "tests/needs-release.test.ts",
+                "files": ["needs-release.test.ts"],
+                "requires": ["OMP_INSTALLED_RELEASE"],
+            },
+            {"runner": "bun", "target": "tests/pass.test.ts", "files": ["pass.test.ts"]},
+        ],
+    )
+    evidence_dir, digest = _seal(tmp_path, fixture, bundle)
+    shutil.rmtree(worker_repo)
+
+    result = verify(evidence_dir, "staged", digest, fixtures_root=fixtures_root)
+
+    assert [record["target"] for record in result["tests"]] == [
+        "tests/needs-release.test.ts",
+        "tests/pass.test.ts",
+    ]
+    requiring = result["tests"][0]
+    assert requiring["passed"] is False
+    assert requiring["reason"].startswith("stage failed:")
+    assert requiring["reason"] != "stage failed:"
+    assert not marker.exists()
+    sibling = result["tests"][1]
+    assert sibling["exit_code"] == 0
+    assert sibling["passed"] is True
+    assert "reason" not in sibling
+
+
+def test_stage_argv_matches_installed_gate() -> None:
+    clone = "/tmp/clone"
+    dest = "/tmp/omp-installed-runtime"
+    tools = {
+        "bun": "/usr/local/bin/bun",
+        "bun_version": "1.2.3",
+        "uv": "/usr/local/bin/uv",
+        "python": "/usr/local/bin/python3.13",
+    }
+    native = REPO_ROOT / "packages" / "natives" / "native"
+    assert stage_argv(clone, dest, REPO_ROOT, tools) == [
+        "bun",
+        "session-system/runtime/stage.ts",
+        "--source",
+        clone,
+        "--destination",
+        dest,
+        "--bun",
+        tools["bun"],
+        "--bun-version",
+        tools["bun_version"],
+        "--uv",
+        tools["uv"],
+        "--python",
+        tools["python"],
+        "--native",
+        str(native / "pi_natives.linux-x64-baseline.node"),
+        "--native",
+        str(native / "pi_natives.linux-x64-modern.node"),
+    ]
