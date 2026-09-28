@@ -3,7 +3,11 @@
  * metaharness server: REST + SSE API over the run store, static web
  * dashboard, and a launcher that spawns the CLI runner as a managed child.
  *
- *   bun src/server.ts [--port 4700] [--jobs-dir <path>]
+ *   bun src/server.ts [--port 4700] [--jobs-dir <path>] [--token <t>]
+ *
+ * Binds loopback only. `--token` (else `METAHARNESS_TOKEN`, else a random
+ * 32-byte hex token) gates every `/api/*` request — `Authorization: Bearer`,
+ * or `?token=` on `/api/events` for EventSource. `/` stays open.
  *
  * API:
  *   GET    /api/experiments[?q=]          → experiment summaries across all benchmarks
@@ -21,6 +25,7 @@
  *   GET    /api/runs/:name/traces/:trace  → normalized trace
  *   GET    /api/events                    → SSE: run-list snapshots on change
  */
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Server, Subprocess } from "bun";
@@ -79,15 +84,24 @@ interface SseClient {
 	state: SseState;
 }
 
-function parseServerArgs(argv: string[]): { port: number; jobsDir: string } {
+function parseServerArgs(argv: string[]): { port: number; jobsDir: string; token?: string } {
 	let port = 4700;
 	let jobsDir = DEFAULT_JOBS_DIR;
+	let token: string | undefined;
 	for (let i = 0; i < argv.length; i++) {
 		if (argv[i] === "--port" && argv[i + 1]) port = Number(argv[++i]);
 		else if (argv[i] === "--jobs-dir" && argv[i + 1]) jobsDir = path.resolve(argv[++i]);
+		else if (argv[i] === "--token" && argv[i + 1]) token = argv[++i];
 	}
 	if (!Number.isSafeInteger(port) || port < 1 || port > 65535) throw new Error("--port must be 1..65535");
-	return { port, jobsDir };
+	return { port, jobsDir, token };
+}
+
+/** Constant-time byte equality; a length mismatch short-circuits (lengths are public). */
+function tokenMatches(presented: string, expected: string): boolean {
+	const a = Buffer.from(presented);
+	const b = Buffer.from(expected);
+	return a.byteLength === b.byteLength && crypto.timingSafeEqual(a, b);
 }
 
 /** Job names are single path segments; anything else could escape the jobs dir. */
@@ -193,6 +207,7 @@ export class ManagerServer {
 	#syncTimer: Timer | undefined;
 	#server: Server<undefined> | null = null;
 	#stopped = false;
+	#token: string | undefined;
 	readonly jobsDir: string;
 
 	constructor(jobsDir: string, dbPath?: string) {
@@ -204,12 +219,16 @@ export class ManagerServer {
 		return this.#store;
 	}
 
-	start(port: number): Server<undefined> {
+	start(port: number, opts: { token?: string } = {}): Server<undefined> {
+		this.#token = opts.token;
 		this.#store.discover();
 		this.#store.syncAll();
 		this.#syncTimer = setInterval(() => this.#tick(), 2000);
 		this.#server = Bun.serve({
 			port,
+			// Loopback only: the API drives local benchmark runners and has no
+			// business being reachable from the network.
+			hostname: "127.0.0.1",
 			idleTimeout: 0,
 			// Bun bundles the dashboard (React + TSX) from the HTML import and
 			// serves it on the same port as the API — one process, no Vite.
@@ -262,6 +281,9 @@ export class ManagerServer {
 	async #route(request: Request): Promise<Response> {
 		const url = new URL(request.url);
 		const p = url.pathname;
+		if (p.startsWith("/api/") && !this.#authorized(request, url)) {
+			return Response.json({ error: "unauthorized" }, { status: 401 });
+		}
 		try {
 			if (p === "/api/events") return this.#sseResponse();
 			if (p === "/api/benchmarks" && request.method === "GET") {
@@ -350,6 +372,25 @@ export class ManagerServer {
 			const message = err instanceof Error ? err.message : String(err);
 			return Response.json({ error: message }, { status: 400 });
 		}
+	}
+
+	/**
+	 * Token gate for `/api/*`. No token configured → open (loopback default).
+	 * With a token, accept `Authorization: Bearer <t>`, or `?token=<t>` on
+	 * `/api/events` only (EventSource cannot set request headers). The `/`
+	 * dashboard stays open so a browser can load the app, then hand its token
+	 * to the API calls the app makes.
+	 */
+	#authorized(request: Request, url: URL): boolean {
+		const token = this.#token;
+		if (!token) return true;
+		const header = request.headers
+			.get("authorization")
+			?.match(/^Bearer\s+(.+)$/i)?.[1]
+			.trim();
+		const query = url.pathname === "/api/events" ? url.searchParams.get("token") : null;
+		const presented = query ?? header;
+		return presented !== null && presented !== undefined && tokenMatches(presented, token);
 	}
 
 	#sseResponse(): Response {
@@ -760,11 +801,17 @@ if (import.meta.main) {
 		__metaharnessHooks?: boolean;
 	};
 	await host.__metaharnessServer?.stop();
-	const { port, jobsDir } = parseServerArgs(process.argv.slice(2));
+	const { port, jobsDir, token: flagToken } = parseServerArgs(process.argv.slice(2));
+	// Every instance gets a token: the browser needs it to reach the API, so
+	// the printed URL carries it. `--token` wins, then the environment, then a
+	// fresh random one.
+	const token = flagToken ?? process.env.METAHARNESS_TOKEN ?? crypto.randomBytes(32).toString("hex");
 	const manager = new ManagerServer(jobsDir);
 	host.__metaharnessServer = manager;
-	const server = manager.start(port);
-	process.stdout.write(`metaharness listening on http://localhost:${server.port} (jobs: ${jobsDir})\n`);
+	const server = manager.start(port, { token });
+	process.stdout.write(
+		`metaharness listening on http://127.0.0.1:${server.port}/?token=${token} (jobs: ${jobsDir})\n`,
+	);
 	// Process-wide hooks register once; `--hot` re-evals reuse them via `host`.
 	if (!host.__metaharnessHooks) {
 		host.__metaharnessHooks = true;

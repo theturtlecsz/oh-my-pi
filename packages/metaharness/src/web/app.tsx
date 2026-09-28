@@ -104,6 +104,43 @@ interface TranscriptEntry {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+/**
+ * API token plumbing. The CLI prints `/?token=<t>`; the dashboard reads it
+ * once, keeps it in sessionStorage for reloads, then strips it from the URL
+ * (it would otherwise leak into history, screenshots, and Referer). Every
+ * `/api` fetch sends it as `Authorization: Bearer`; EventSource — which cannot
+ * set headers — passes it in `?token=` instead.
+ */
+const TOKEN_KEY = "metaharness.token";
+const token = ((): string | undefined => {
+	const fromUrl = new URLSearchParams(location.search).get("token");
+	if (fromUrl) {
+		try {
+			sessionStorage.setItem(TOKEN_KEY, fromUrl);
+		} catch {}
+		const url = new URL(location.href);
+		url.searchParams.delete("token");
+		history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+		return fromUrl;
+	}
+	try {
+		return sessionStorage.getItem(TOKEN_KEY) ?? undefined;
+	} catch {
+		return undefined;
+	}
+})();
+
+/** `/api/events` URL with the token attached (EventSource has no header API). */
+const eventsUrl = () => (token ? `/api/events?token=${encodeURIComponent(token)}` : "/api/events");
+
+/** Merge the bearer token into a fetch's headers without mutating the caller's. */
+function authHeaders(headers?: HeadersInit): HeadersInit | undefined {
+	if (!token) return headers;
+	const merged = new Headers(headers);
+	merged.set("authorization", `Bearer ${token}`);
+	return merged;
+}
+
 const fmtUsd = (v: number) => (v >= 100 ? `$${v.toFixed(0)}` : v >= 1 ? `$${v.toFixed(2)}` : `$${v.toFixed(3)}`);
 const fmtMin = (ms: number) => `${(ms / 60000).toFixed(1)}m`;
 const fmtEta = (etaMs: number | null) => {
@@ -113,7 +150,7 @@ const fmtEta = (etaMs: number | null) => {
 };
 
 async function getJson<T>(url: string): Promise<T> {
-	const res = await fetch(url);
+	const res = await fetch(url, { headers: authHeaders() });
 	if (!res.ok) throw new Error(`${url}: ${res.status}`);
 	return (await res.json()) as T;
 }
@@ -254,7 +291,7 @@ async function putExperimentMeta(
 ): Promise<void> {
 	const res = await fetch(`/api/experiments/${encodeURIComponent(id)}`, {
 		method: "PUT",
-		headers: { "content-type": "application/json" },
+		headers: authHeaders({ "content-type": "application/json" }),
 		body: JSON.stringify(body),
 	});
 	if (!res.ok) {
@@ -816,7 +853,7 @@ function AddArmForm({ experimentId, onDone }: { experimentId: string; onDone: ()
 			setMsg("launching…");
 			const res = await fetch(`/api/experiments/${encodeURIComponent(experimentId)}/arms`, {
 				method: "POST",
-				headers: { "content-type": "application/json" },
+				headers: authHeaders({ "content-type": "application/json" }),
 				body: JSON.stringify(body),
 			});
 			const out = (await res.json()) as { jobName?: string; error?: string };
@@ -1669,7 +1706,7 @@ function ExperimentPage({ id }: { id: string }) {
 function useRunsSse(): RunRow[] | null {
 	const [runs, setRuns] = useState<RunRow[] | null>(null);
 	useEffect(() => {
-		const es = new EventSource("/api/events");
+		const es = new EventSource(eventsUrl());
 		es.onmessage = ev => setRuns(JSON.parse(ev.data) as RunRow[]);
 		return () => es.close();
 	}, []);
@@ -1696,11 +1733,18 @@ function RunsPage({ selected }: { selected: string | null }) {
 		if (el) el.scrollTop = el.scrollHeight;
 	}, [traceData]);
 	const cancel = useCallback(async (name: string) => {
-		if (confirm(`stop ${name}?`)) await fetch(`/api/runs/${encodeURIComponent(name)}/cancel`, { method: "POST" });
+		if (confirm(`stop ${name}?`))
+			await fetch(`/api/runs/${encodeURIComponent(name)}/cancel`, {
+				method: "POST",
+				headers: authHeaders(),
+			});
 	}, []);
 	const resume = useCallback(async (name: string) => {
 		if (!confirm(`resume ${name}? completed trials are kept; interrupted, pending, and errored ones re-run`)) return;
-		const res = await fetch(`/api/runs/${encodeURIComponent(name)}/resume`, { method: "POST" });
+		const res = await fetch(`/api/runs/${encodeURIComponent(name)}/resume`, {
+			method: "POST",
+			headers: authHeaders(),
+		});
 		if (!res.ok) alert((await res.json().catch(() => null))?.error ?? `resume failed (${res.status})`);
 	}, []);
 
@@ -1886,7 +1930,7 @@ function LaunchForm({ onDone }: { onDone: () => void }) {
 			setMsg("launching…");
 			const res = await fetch("/api/runs", {
 				method: "POST",
-				headers: { "content-type": "application/json" },
+				headers: authHeaders({ "content-type": "application/json" }),
 				body: JSON.stringify(body),
 			});
 			const out = (await res.json()) as { jobName?: string; error?: string };

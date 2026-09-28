@@ -20,11 +20,14 @@
  *   bun scripts/trace-report.ts "<run>|<trace>"            # or run/trace
  *   ... --focus "known-correct fix is X; compare"          # reviewer notes
  *   ... --out report.md
+ *   ... --token <api-token>                                # default METAHARNESS_TOKEN
  *   ... --tiny openrouter/inclusionai/ling-2.6-flash
  *   ... --synth openrouter/openai/gpt-oss-120b
  *
  * Auth: provider API keys resolve through omp's auth storage
- * (~/.omp/agent/agent.db: stored key, OAuth, or env var fallback).
+ * (~/.omp/agent/agent.db: stored key, OAuth, or env var fallback). The
+ * metaharness server's own API token comes from `--token` or
+ * `METAHARNESS_TOKEN` and is sent as `Authorization: Bearer`.
  */
 
 import { parseArgs } from "node:util";
@@ -302,6 +305,7 @@ async function main(): Promise<void> {
 			synth: { type: "string", default: DEFAULT_SYNTH },
 			focus: { type: "string" },
 			out: { type: "string" },
+			token: { type: "string", default: process.env.METAHARNESS_TOKEN },
 			concurrency: { type: "string", default: "8" },
 		},
 	});
@@ -314,7 +318,10 @@ async function main(): Promise<void> {
 	}
 	const [, run, trace] = match;
 
-	const traceResponse = await fetch(`${values.base}/api/runs/${run}/traces/${trace}`);
+	// The server gates every /api route with a bearer token (EventSource is the
+	// only consumer that passes it in a query param instead).
+	const apiHeaders = values.token ? { authorization: `Bearer ${values.token}` } : undefined;
+	const traceResponse = await fetch(`${values.base}/api/runs/${run}/traces/${trace}`, { headers: apiHeaders });
 	if (!traceResponse.ok)
 		throw new Error(`trace fetch failed: HTTP ${traceResponse.status} ${await traceResponse.text()}`);
 	const traceData = (await traceResponse.json()) as TraceResponse;
@@ -322,7 +329,7 @@ async function main(): Promise<void> {
 	let meta = "";
 	let status: string | undefined;
 	try {
-		const runResponse = await fetch(`${values.base}/api/runs/${run}`);
+		const runResponse = await fetch(`${values.base}/api/runs/${run}`, { headers: apiHeaders });
 		if (runResponse.ok) {
 			const runData = (await runResponse.json()) as RunResponse;
 			const row = runData.traces.find(candidate => candidate.name === trace);

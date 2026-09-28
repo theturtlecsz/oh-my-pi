@@ -1208,6 +1208,201 @@
       "title": "AttestCutoverPlanResult",
       "type": "object"
     },
+    "AttestIntakeAdmissionResult": {
+      "$defs": {
+        "EvidenceKind": {
+          "enum": [
+            "plan",
+            "verification",
+            "audit",
+            "push",
+            "closeout",
+            "handoff",
+            "same_session_found_fixed",
+            "intake_publication",
+            "intake_admission",
+            "external_delivery"
+          ],
+          "title": "EvidenceKind",
+          "type": "string"
+        },
+        "EvidenceReceipt": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Artifact Sha256"
+            },
+            "candidate_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Commit"
+            },
+            "candidate_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Id"
+            },
+            "candidate_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Sha256"
+            },
+            "independent": {
+              "default": false,
+              "title": "Independent",
+              "type": "boolean"
+            },
+            "issued_at": {
+              "format": "date-time",
+              "title": "Issued At",
+              "type": "string"
+            },
+            "issuer": {
+              "title": "Issuer",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/EvidenceKind"
+            },
+            "payload": {
+              "additionalProperties": true,
+              "title": "Payload",
+              "type": "object"
+            },
+            "payload_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "receipt_id": {
+              "format": "uuid",
+              "title": "Receipt Id",
+              "type": "string"
+            },
+            "remote_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remote Commit"
+            },
+            "remote_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remote Ref"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "verdict": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "PASS",
+                    "NEEDS_FIX",
+                    "BLOCKED"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Verdict"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt_id",
+            "work_id",
+            "revision_id",
+            "kind",
+            "payload_sha256",
+            "issuer",
+            "issued_at"
+          ],
+          "title": "EvidenceReceipt",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "operator_actor_id": {
+          "format": "uuid",
+          "title": "Operator Actor Id",
+          "type": "string"
+        },
+        "receipt": {
+          "$ref": "#/$defs/EvidenceReceipt"
+        },
+        "type": {
+          "const": "attest_intake_admission",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "receipt",
+        "operator_actor_id"
+      ],
+      "title": "AttestIntakeAdmissionResult",
+      "type": "object"
+    },
     "AuditManifest": {
       "additionalProperties": false,
       "properties": {
@@ -4567,6 +4762,31 @@
             "plan_sha256"
           ],
           "title": "AttestCutoverPlanResult",
+          "type": "object"
+        },
+        "AttestIntakeAdmissionResult": {
+          "additionalProperties": false,
+          "properties": {
+            "operator_actor_id": {
+              "format": "uuid",
+              "title": "Operator Actor Id",
+              "type": "string"
+            },
+            "receipt": {
+              "$ref": "#/$defs/EvidenceReceipt"
+            },
+            "type": {
+              "const": "attest_intake_admission",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "receipt",
+            "operator_actor_id"
+          ],
+          "title": "AttestIntakeAdmissionResult",
           "type": "object"
         },
         "AuditManifest": {
@@ -8839,6 +9059,7 @@
               "assess_bounded_intake": "#/$defs/AssessBoundedIntakeResult",
               "attest_checkpoint_delivery": "#/$defs/CloseAttemptResult",
               "attest_cutover_plan": "#/$defs/AttestCutoverPlanResult",
+              "attest_intake_admission": "#/$defs/AttestIntakeAdmissionResult",
               "begin_close_attempt": "#/$defs/CloseAttemptResult",
               "begin_execution": "#/$defs/BeginExecutionResult",
               "bind_research_deliverable": "#/$defs/BindResearchDeliverableResult",
@@ -8955,6 +9176,9 @@
             },
             {
               "$ref": "#/$defs/RecordFableAdviceResult"
+            },
+            {
+              "$ref": "#/$defs/AttestIntakeAdmissionResult"
             },
             {
               "$ref": "#/$defs/PublishBoundedIntakeResult"
@@ -21545,6 +21769,31 @@
           "title": "AttestCutoverPlanResult",
           "type": "object"
         },
+        "AttestIntakeAdmissionResult": {
+          "additionalProperties": false,
+          "properties": {
+            "operator_actor_id": {
+              "format": "uuid",
+              "title": "Operator Actor Id",
+              "type": "string"
+            },
+            "receipt": {
+              "$ref": "#/$defs/EvidenceReceipt"
+            },
+            "type": {
+              "const": "attest_intake_admission",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "receipt",
+            "operator_actor_id"
+          ],
+          "title": "AttestIntakeAdmissionResult",
+          "type": "object"
+        },
         "AuditManifest": {
           "additionalProperties": false,
           "properties": {
@@ -25831,6 +26080,7 @@
                   "assess_bounded_intake": "#/$defs/AssessBoundedIntakeResult",
                   "attest_checkpoint_delivery": "#/$defs/CloseAttemptResult",
                   "attest_cutover_plan": "#/$defs/AttestCutoverPlanResult",
+                  "attest_intake_admission": "#/$defs/AttestIntakeAdmissionResult",
                   "begin_close_attempt": "#/$defs/CloseAttemptResult",
                   "begin_execution": "#/$defs/BeginExecutionResult",
                   "bind_research_deliverable": "#/$defs/BindResearchDeliverableResult",
@@ -25947,6 +26197,9 @@
                 },
                 {
                   "$ref": "#/$defs/RecordFableAdviceResult"
+                },
+                {
+                  "$ref": "#/$defs/AttestIntakeAdmissionResult"
                 },
                 {
                   "$ref": "#/$defs/PublishBoundedIntakeResult"
