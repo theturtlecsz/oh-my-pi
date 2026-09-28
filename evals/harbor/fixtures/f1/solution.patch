@@ -1,0 +1,15 @@
+diff --git b/session-system/extensions/workflow/work.ts a/session-system/extensions/workflow/work.ts
+index a53b804446..4231f7540c 100644
+--- b/session-system/extensions/workflow/work.ts
++++ a/session-system/extensions/workflow/work.ts
+@@ -1597,8 +1597,8 @@ export function createWorkBackend(
+ 			}
+ 			const title = (fields.title ?? previous.title).trim();
+ 			const description = fields.description ?? previous.description;
+-			const scope = previous.scope;
+-			const acceptance_criteria = previous.acceptance_criteria;
++			const scope = fields.scope !== undefined ? fields.scope.trim() : previous.scope;
++			const acceptance_criteria = fields.acceptance_criteria ?? fields.criteria ?? previous.acceptance_criteria;
+ 			const contentSha = payloadHash({ title, description, scope, acceptance_criteria });
+ 			const revision = {
+ 				revision_id: stableId("revision", item.work_id, previous.revision_id, contentSha),

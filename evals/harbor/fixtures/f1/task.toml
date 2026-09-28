@@ -1,0 +1,23 @@
+schema_version = "1.4"
+
+[task]
+name = "oh-my-pi/f1-structured-acceptance-amendment"
+version = "1.0.0"
+description = "Repair revise_work so unamended revision fields survive a structured amendment"
+
+[[task.authors]]
+name = "The Bookends"
+
+[metadata]
+category = "software_engineering"
+tags = ["workflow", "revision", "acceptance-criteria", "repair"]
+difficulty = "medium"
+
+[verifier]
+timeout_sec = 900.0
+
+[agent]
+timeout_sec = 600.0
+
+[environment]
+build_timeout_sec = 600.0
