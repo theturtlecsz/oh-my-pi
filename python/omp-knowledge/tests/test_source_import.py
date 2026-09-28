@@ -27,6 +27,7 @@ from omp_work.knowledge_publication import (
     SnapshotInvisibleError,
     StructuralPublicationStore,
 )
+from omp_work.knowledge_source import KnowledgeSourceError
 from omp_work.knowledge_structural import EnolaStructuralError
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -523,3 +524,53 @@ def test_module_entrypoint_exits_zero(tmp_path: Path) -> None:
     assert proc.stdout.startswith(f"published {SNAP_B} ")
     store = StructuralPublicationStore(state)
     assert "py/pkg/beta.beta_only_b" in _names(store, workspace, repository, SNAP_B)
+
+
+def test_invalid_checkout_refuses(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    non_git = tmp_path / "non-git"
+    non_git.mkdir()
+    with pytest.raises(KnowledgeSourceError) as exc:
+        import_source(
+            state,
+            workspace_id=uuid4(),
+            repository_id=uuid4(),
+            snapshot_id=SNAP_A,
+            checkout=non_git,
+            enola_dir=FIXTURES / "A",
+        )
+    assert exc.value.code == "checkout_invalid"
+
+
+def test_malformed_root_commit_sha_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = tmp_path / "state"
+    workspace = uuid4()
+    repository = uuid4()
+    checkout = _git_repo(
+        tmp_path / "repo", "https://example.invalid/omp/bad.git", "b.txt", "bad\n"
+    )
+
+    from omp_knowledge import source_import
+
+    orig_git = source_import._git
+
+    def fake_git(args: list[str], root: Path) -> str:
+        if args == ["rev-list", "--max-parents=0", "HEAD"]:
+            return "not-a-valid-hex-commit-sha\n"
+        return orig_git(args, root)
+
+    monkeypatch.setattr(source_import, "_git", fake_git)
+
+    with pytest.raises(KnowledgeSourceError) as exc:
+        import_source(
+            state,
+            workspace_id=workspace,
+            repository_id=repository,
+            snapshot_id=SNAP_A,
+            checkout=checkout,
+            enola_dir=FIXTURES / "A",
+        )
+    assert exc.value.code == "checkout_invalid"
+
