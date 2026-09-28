@@ -525,6 +525,8 @@ class PostgresWorkStore(ResearchStoreMixin):
                     result = self._set_focus(cur, envelope, True)
                 elif command.type == "record_project_health":
                     result = self._project_health(cur, envelope)
+                elif command.type == "record_alarm_signal":
+                    result = self._record_alarm_signal(cur, envelope)
                 elif command.type == "append_evidence":
                     result = self._append_evidence(cur, envelope)
                 elif command.type == "finalize_candidate":
@@ -656,7 +658,7 @@ class PostgresWorkStore(ResearchStoreMixin):
         event_type: str | None = None,
     ) -> None:
         payload = envelope.command.payload
-        aggregate_id = getattr(payload, "work_id", envelope.workspace_id)
+        aggregate_id = getattr(payload, "work_id", None) or envelope.workspace_id
         if hasattr(payload, "relation"):
             aggregate_id = payload.relation.source_work_id
         elif hasattr(payload, "receipt"):
@@ -3962,6 +3964,25 @@ class PostgresWorkStore(ResearchStoreMixin):
                 "health": payload.health,
                 "updated_at": cur.fetchone()["updated_at"].isoformat(),
             },
+        }
+
+    def _record_alarm_signal(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        payload = envelope.command.payload
+        if payload.work_id is not None:
+            cur.execute(
+                "SELECT 1 FROM omp_work.work_items WHERE workspace_id=%s AND work_id=%s",
+                (envelope.workspace_id, payload.work_id),
+            )
+            if cur.fetchone() is None:
+                raise WorkStoreError("invalid_request", ("work_id:unknown",))
+        return {
+            "type": "record_alarm_signal",
+            "signal": payload.signal,
+            "work_id": str(payload.work_id) if payload.work_id is not None else None,
+            "subject": payload.subject,
+            "detail": payload.detail,
         }
 
     def _activate_cutover(

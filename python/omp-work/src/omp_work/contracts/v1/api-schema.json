@@ -1035,6 +1035,55 @@
       "title": "AdmitResearchCampaignResult",
       "type": "object"
     },
+    "AlarmSignalResult": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "default": "",
+          "title": "Detail",
+          "type": "string"
+        },
+        "signal": {
+          "enum": [
+            "cost_threshold",
+            "budget_exceeded",
+            "safety_check_failed",
+            "credential_appeared"
+          ],
+          "title": "Signal",
+          "type": "string"
+        },
+        "subject": {
+          "title": "Subject",
+          "type": "string"
+        },
+        "type": {
+          "const": "record_alarm_signal",
+          "title": "Type",
+          "type": "string"
+        },
+        "work_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Work Id"
+        }
+      },
+      "required": [
+        "type",
+        "signal",
+        "subject"
+      ],
+      "title": "AlarmSignalResult",
+      "type": "object"
+    },
     "AnswerIntakeDecisionResult": {
       "additionalProperties": false,
       "properties": {
@@ -4716,6 +4765,55 @@
             "campaign"
           ],
           "title": "AdmitResearchCampaignResult",
+          "type": "object"
+        },
+        "AlarmSignalResult": {
+          "additionalProperties": false,
+          "properties": {
+            "detail": {
+              "default": "",
+              "title": "Detail",
+              "type": "string"
+            },
+            "signal": {
+              "enum": [
+                "cost_threshold",
+                "budget_exceeded",
+                "safety_check_failed",
+                "credential_appeared"
+              ],
+              "title": "Signal",
+              "type": "string"
+            },
+            "subject": {
+              "title": "Subject",
+              "type": "string"
+            },
+            "type": {
+              "const": "record_alarm_signal",
+              "title": "Type",
+              "type": "string"
+            },
+            "work_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Work Id"
+            }
+          },
+          "required": [
+            "type",
+            "signal",
+            "subject"
+          ],
+          "title": "AlarmSignalResult",
           "type": "object"
         },
         "AnswerIntakeDecisionResult": {
@@ -9146,6 +9244,7 @@
               "propose_research_trial": "#/$defs/ProposeResearchTrialResult",
               "publish_bounded_intake": "#/$defs/PublishBoundedIntakeResult",
               "put_relation": "#/$defs/RelationResult",
+              "record_alarm_signal": "#/$defs/AlarmSignalResult",
               "record_closeout_review": "#/$defs/RecordCloseoutReviewResult",
               "record_external_delivery": "#/$defs/RecordExternalDeliveryResult",
               "record_fable_advice": "#/$defs/RecordFableAdviceResult",
@@ -9300,6 +9399,9 @@
             },
             {
               "$ref": "#/$defs/ConcludeResearchCampaignResult"
+            },
+            {
+              "$ref": "#/$defs/AlarmSignalResult"
             }
           ],
           "title": "Result"
@@ -21760,6 +21862,55 @@
           "title": "AdmitResearchCampaignResult",
           "type": "object"
         },
+        "AlarmSignalResult": {
+          "additionalProperties": false,
+          "properties": {
+            "detail": {
+              "default": "",
+              "title": "Detail",
+              "type": "string"
+            },
+            "signal": {
+              "enum": [
+                "cost_threshold",
+                "budget_exceeded",
+                "safety_check_failed",
+                "credential_appeared"
+              ],
+              "title": "Signal",
+              "type": "string"
+            },
+            "subject": {
+              "title": "Subject",
+              "type": "string"
+            },
+            "type": {
+              "const": "record_alarm_signal",
+              "title": "Type",
+              "type": "string"
+            },
+            "work_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Work Id"
+            }
+          },
+          "required": [
+            "type",
+            "signal",
+            "subject"
+          ],
+          "title": "AlarmSignalResult",
+          "type": "object"
+        },
         "AnswerIntakeDecisionResult": {
           "additionalProperties": false,
           "properties": {
@@ -26204,6 +26355,7 @@
                   "propose_research_trial": "#/$defs/ProposeResearchTrialResult",
                   "publish_bounded_intake": "#/$defs/PublishBoundedIntakeResult",
                   "put_relation": "#/$defs/RelationResult",
+                  "record_alarm_signal": "#/$defs/AlarmSignalResult",
                   "record_closeout_review": "#/$defs/RecordCloseoutReviewResult",
                   "record_external_delivery": "#/$defs/RecordExternalDeliveryResult",
                   "record_fable_advice": "#/$defs/RecordFableAdviceResult",
@@ -26358,6 +26510,9 @@
                 },
                 {
                   "$ref": "#/$defs/ConcludeResearchCampaignResult"
+                },
+                {
+                  "$ref": "#/$defs/AlarmSignalResult"
                 }
               ]
             },

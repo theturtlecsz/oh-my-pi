@@ -9324,6 +9324,71 @@
           "title": "ReconciliationHashes",
           "type": "object"
         },
+        "RecordAlarmSignalCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/RecordAlarmSignalPayload"
+            },
+            "type": {
+              "const": "record_alarm_signal",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "RecordAlarmSignalCommand",
+          "type": "object"
+        },
+        "RecordAlarmSignalPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "detail": {
+              "default": "",
+              "maxLength": 500,
+              "title": "Detail",
+              "type": "string"
+            },
+            "signal": {
+              "enum": [
+                "cost_threshold",
+                "budget_exceeded",
+                "safety_check_failed",
+                "credential_appeared"
+              ],
+              "title": "Signal",
+              "type": "string"
+            },
+            "subject": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Subject",
+              "type": "string"
+            },
+            "work_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Work Id"
+            }
+          },
+          "required": [
+            "signal",
+            "subject"
+          ],
+          "title": "RecordAlarmSignalPayload",
+          "type": "object"
+        },
         "RecordCloseoutReviewCommand": {
           "additionalProperties": false,
           "properties": {
@@ -11415,6 +11480,7 @@
               "propose_research_trial": "#/$defs/ProposeResearchTrialCommand",
               "publish_bounded_intake": "#/$defs/PublishBoundedIntakeCommand",
               "put_relation": "#/$defs/PutRelationCommand",
+              "record_alarm_signal": "#/$defs/RecordAlarmSignalCommand",
               "record_closeout_review": "#/$defs/RecordCloseoutReviewCommand",
               "record_external_delivery": "#/$defs/RecordExternalDeliveryCommand",
               "record_fable_advice": "#/$defs/RecordFableAdviceCommand",
@@ -11597,6 +11663,9 @@
             },
             {
               "$ref": "#/$defs/ConcludeResearchCampaignCommand"
+            },
+            {
+              "$ref": "#/$defs/RecordAlarmSignalCommand"
             }
           ],
           "title": "Command"
@@ -19462,6 +19531,119 @@
         "users"
       ],
       "title": "ReconciliationHashes",
+      "type": "object"
+    },
+    "RecordAlarmSignalCommand": {
+      "$defs": {
+        "RecordAlarmSignalPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "detail": {
+              "default": "",
+              "maxLength": 500,
+              "title": "Detail",
+              "type": "string"
+            },
+            "signal": {
+              "enum": [
+                "cost_threshold",
+                "budget_exceeded",
+                "safety_check_failed",
+                "credential_appeared"
+              ],
+              "title": "Signal",
+              "type": "string"
+            },
+            "subject": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Subject",
+              "type": "string"
+            },
+            "work_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Work Id"
+            }
+          },
+          "required": [
+            "signal",
+            "subject"
+          ],
+          "title": "RecordAlarmSignalPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/RecordAlarmSignalPayload"
+        },
+        "type": {
+          "const": "record_alarm_signal",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "RecordAlarmSignalCommand",
+      "type": "object"
+    },
+    "RecordAlarmSignalPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "default": "",
+          "maxLength": 500,
+          "title": "Detail",
+          "type": "string"
+        },
+        "signal": {
+          "enum": [
+            "cost_threshold",
+            "budget_exceeded",
+            "safety_check_failed",
+            "credential_appeared"
+          ],
+          "title": "Signal",
+          "type": "string"
+        },
+        "subject": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Subject",
+          "type": "string"
+        },
+        "work_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Work Id"
+        }
+      },
+      "required": [
+        "signal",
+        "subject"
+      ],
+      "title": "RecordAlarmSignalPayload",
       "type": "object"
     },
     "RecordCloseoutReviewCommand": {
