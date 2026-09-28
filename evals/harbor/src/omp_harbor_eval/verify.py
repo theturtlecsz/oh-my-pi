@@ -157,13 +157,17 @@ def _resolve_stage_tools() -> tuple[dict[str, str] | None, str]:
     uv = shutil.which("uv")
     if uv is None:
         return None, "uv not found"
-    version = subprocess.run([bun, "--version"], capture_output=True, text=True, check=False)
+    version = subprocess.run(  # nosec B603 - absolute interpreter from shutil.which, fixed argv
+        [bun, "--version"], capture_output=True, text=True, check=False
+    )
     if version.returncode != 0:
         return None, _command_detail(version, "bun --version failed")
     bun_version = version.stdout.strip()
     if not bun_version:
         return None, "bun --version produced no version"
-    python = subprocess.run([uv, "python", "find", "3.13"], capture_output=True, text=True, check=False)
+    python = subprocess.run(  # nosec B603 - absolute interpreter from shutil.which, fixed argv
+        [uv, "python", "find", "3.13"], capture_output=True, text=True, check=False
+    )
     if python.returncode != 0:
         return None, _command_detail(python, "uv python find 3.13 failed")
     python_path = python.stdout.strip()
@@ -178,7 +182,7 @@ def _stage_installed(clone: Path, temp_dir: Path) -> tuple[dict[str, str] | None
     if tools is None:
         return None, _StageFailure(None, tool_error)
     try:
-        completed = subprocess.run(
+        completed = subprocess.run(  # nosec B603 - argv list built from verified tools, no shell
             stage_argv(clone, dest, REPO_ROOT, tools),
             cwd=clone,
             capture_output=True,
@@ -236,7 +240,9 @@ def _run_test(
         command.append(f"--junitxml={junit_path}")
     run_env = None if env is None else {**os.environ, **env}
     try:
-        completed = subprocess.run(command, cwd=repo, capture_output=True, text=True, check=False, env=run_env)
+        completed = subprocess.run(  # nosec B603 - argv list; runner/target come from the sealed fixture
+            command, cwd=repo, capture_output=True, text=True, check=False, env=run_env
+        )
     except OSError as exc:
         return {"runner": runner, "target": target, "exit_code": None, "passed": False, "reason": str(exc)}
 
