@@ -65,10 +65,13 @@ interface SnapshotGitContext {
  * None of that is this worktree's state, so the entire ref store is volatile
  * there. This worktree's own HEAD and current branch ref are captured as
  * explicit snapshot fields instead (see {@link snapshotGit}) — a change to
- * either still fails the check, while a sibling's commit cannot.
+ * either still fails the check, while a sibling's commit cannot. The common
+ * dir's `config` is volatile too: git resolves `user.name`/`user.email` and
+ * branch config at the common-dir level, so any sibling running `git config`
+ * or `git branch -u` rewrites it.
  *
- * A stand-alone repo (`sharedStore` false) keeps its entire ref store — the
- * fake-git-dir negative controls rely on that.
+ * A stand-alone repo (`sharedStore` false) keeps its entire ref store and
+ * `config` — the fake-git-dir negative controls rely on that.
  */
 function isVolatileGitPath(relPath: string, context: SnapshotGitContext): boolean {
 	const rel = relPath.replaceAll("\\", "/");
@@ -88,6 +91,11 @@ function isVolatileGitPath(relPath: string, context: SnapshotGitContext): boolea
 	if (top === "refs") return true;
 	if (base.startsWith("packed-refs")) return true;
 	if (top === "info" && base.startsWith("refs")) return true;
+	// A linked worktree resolves identity (`user.name`/`user.email`) and branch
+	// config at the COMMON-dir level, so any sibling running `git config` or
+	// `git branch -u` rewrites the shared `.git/config`. Discovery and baseline
+	// never write config, so a sibling's write is not this path's mutation.
+	if (rel === "config") return true;
 	return false;
 }
 
