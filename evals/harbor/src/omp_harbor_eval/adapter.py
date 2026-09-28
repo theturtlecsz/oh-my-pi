@@ -6,7 +6,9 @@ for a ready frame, a good ``get_state``, and a ready probe, sends
 Scripted UI rules answer ``select``, ``confirm``, ``input``, and ``editor``
 requests. A request with no rule is cancelled and the run ends ``blocked``.
 An outbound frame matching ``scenario.kill_at.match`` is SIGKILLed once and
-resumed with ``--session`` and no second prompt. The evidence directory is
+resumed with ``--session`` and no second prompt. Optional ``session_reader``
+and ``before_seal`` hooks read the session log and augment evidence before
+sealing; hook exceptions record ``harness_error``. The evidence directory is
 sealed before the RPC process stops.
 """
 
@@ -265,6 +267,15 @@ class ServiceProbe:
         return document
 
 
+def _read_host_session(session_file: str) -> bytes:
+    """Read the session log from the host filesystem."""
+
+    path = Path(session_file)
+    if path.is_file():
+        return path.read_bytes()
+    return b""
+
+
 class RpcAdapter:
     """One scenario, one ``prompt``, then the authoritative service readback."""
 
@@ -278,6 +289,9 @@ class RpcAdapter:
         scenario: Scenario,
         ui_script: UiScript | str | Path | None = None,
         killer: Callable[[subprocess.Popen[str]], None] | None = None,
+        *,
+        session_reader: Callable[[str], bytes] | None = None,
+        before_seal: Callable[[EvidenceWriter], None] | None = None,
     ) -> None:
         if not command:
             raise ValueError("command must be a non-empty argv")
@@ -294,6 +308,10 @@ class RpcAdapter:
         else:
             self.ui_script = UiScript.load(ui_script)
         self.killer = kill_process_group if killer is None else killer
+        self.session_reader: Callable[[str], bytes] = (
+            _read_host_session if session_reader is None else session_reader
+        )
+        self.before_seal = before_seal
 
     def run(self) -> str:
         """Return ``harness_error``, ``timeout``, ``blocked``, or the terminal readback value."""
@@ -506,11 +524,27 @@ class RpcAdapter:
                 session_document["restarts"] = list(self._restarts)
             self.evidence.write_json(SESSION_NAME, session_document)
             payload = b""
+            hook_raised = False
             if session_file:
-                path = Path(session_file)
-                if path.is_file():
-                    payload = path.read_bytes()
+                try:
+                    read_bytes = self.session_reader(session_file)
+                    if not isinstance(read_bytes, bytes):
+                        raise TypeError(f"session_reader must return bytes, got {type(read_bytes).__name__}")
+                    payload = read_bytes
+                except Exception as exc:
+                    hook_raised = True
+                    outcome = "harness_error"
+                    msg = str(exc) or type(exc).__name__
+                    reason = f"session_reader: {msg}"
+                    payload = b""
             self.evidence.add_file(SESSION_LOG, payload)
+            if not hook_raised and self.before_seal is not None:
+                try:
+                    self.before_seal(self.evidence)
+                except Exception as exc:
+                    outcome = "harness_error"
+                    msg = str(exc) or type(exc).__name__
+                    reason = f"before_seal: {msg}"
             self.evidence.write_json(
                 OUTCOME,
                 {"outcome": outcome, "reason": reason, "prompts_sent": prompts_sent},

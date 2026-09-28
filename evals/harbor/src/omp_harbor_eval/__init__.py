@@ -4,6 +4,7 @@ from .adapter import ProbeError, RpcAdapter, ServiceProbe
 from .evidence import Evidence, EvidenceError, EvidenceSealedError, EvidenceWriter, load_evidence
 from .fixtures import Fixture, IndependentTest, Scenario, Terminal, fixture_digest, load_fixture
 from .grader import grade, validate
+from .verify import verify
 
 __all__ = [
     "Evidence",
@@ -22,4 +23,5 @@ __all__ = [
     "load_evidence",
     "load_fixture",
     "validate",
+    "verify",
 ]

@@ -12,6 +12,7 @@ import json
 import shutil
 import sys
 import tempfile
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -147,13 +148,20 @@ def _rule_outcome(evidence: Evidence, rule: dict[str, Any], state: str, value: s
     return "ok", []
 
 
-def _rule_tests(evidence: Evidence, fixture: Fixture) -> tuple[str, list[str]]:
-    if INDEPENDENT_TESTS not in evidence.files:
-        return "invalid", [f"missing file: {INDEPENDENT_TESTS}"]
-    try:
-        document = evidence.read_json(INDEPENDENT_TESTS)
-    except EvidenceError as exc:
-        return "invalid", exc.reasons
+def _rule_tests(
+    evidence: Evidence,
+    fixture: Fixture,
+    test_results: Sequence[Mapping[str, Any]] | None = None,
+) -> tuple[str, list[str]]:
+    if test_results is None:
+        if INDEPENDENT_TESTS not in evidence.files:
+            return "invalid", [f"missing file: {INDEPENDENT_TESTS}"]
+        try:
+            document = evidence.read_json(INDEPENDENT_TESTS)
+        except EvidenceError as exc:
+            return "invalid", exc.reasons
+    else:
+        document = list(test_results)
     if not isinstance(document, list):
         return "invalid", [f"malformed {INDEPENDENT_TESTS}"]
     parsed: list[tuple[str, str, bool]] = []
@@ -191,12 +199,15 @@ def grade(
     *,
     run_id: str,
     nonce: str,
+    test_results: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Score one sealed directory.
 
     Returns ``status`` ``pass``, ``fail``, ``invalid_evidence``, or
     ``harness_defect``, plus ``label`` and ``reasons``. A failing ``known_bad``
-    variant is labeled ``expected_failure:seeded_defect``.
+    variant is labeled ``expected_failure:seeded_defect``. When ``test_results``
+    is given, ``independent_tests_pass`` reads those ``{runner, target, passed}``
+    records instead of ``independent-tests.json``.
     """
 
     try:
@@ -233,7 +244,7 @@ def grade(
         elif rule_type == "outcome_is":
             kind, reasons = _rule_outcome(evidence, rule, state, outcome)
         elif rule_type == "independent_tests_pass":
-            kind, reasons = _rule_tests(evidence, fixture)
+            kind, reasons = _rule_tests(evidence, fixture, test_results=test_results)
         else:
             return _invalid([f"unknown rule: {rule_type}"])
         if kind == "invalid":
