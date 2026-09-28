@@ -1,0 +1,17 @@
+schema_version = "1.4"
+
+# The kill at the enqueue boundary is the grading instrument.
+# harness_crash_injection is never scored as the model's trial.
+
+[metadata]
+scored_experiment = "repair"
+kill_run = "harness_crash_injection"
+
+[verifier]
+timeout_sec = 900.0
+
+[agent]
+timeout_sec = 900.0
+
+[environment]
+build_timeout_sec = 600.0

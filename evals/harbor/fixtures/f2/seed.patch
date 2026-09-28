@@ -1,0 +1,13 @@
+diff --git a/session-system/extensions/workflow/host.ts b/session-system/extensions/workflow/host.ts
+index 5f853875aa..f2710fcaac 100644
+--- a/session-system/extensions/workflow/host.ts
++++ b/session-system/extensions/workflow/host.ts
+@@ -2302,7 +2302,7 @@ export function createWorkflowHost(cfg: HostConfig) {
+ 				if (matches && persisted && data.sessionId && data.workId && data.revisionId) {
+ 					persistedIntents.push({ entryId: persisted.entryId, intent: data });
+ 				}
+-				if (matches || legacyDelivered) {
++				if (matches || legacyDelivered || (data.status === "queued" && !persisted)) {
+ 					deliveredPreReservations.add(`${data.grantId}:${data.preReservationVersion}`);
+ 					deliveredPostVersions.add(`${data.grantId}:${data.postVersion}`);
+ 				} else {
