@@ -15,7 +15,11 @@ it waits, within the same scenario timeout, for the agent to end, then reads
 the service once more and seals with that readback. A match before any agent
 turn, or a scenario with no model script, seals on that readback. A deadline
 that passes while the last read raised ``ProbeError`` appends ``; last probe error: ``
-and that text to the outcome reason.
+and that text to the outcome reason. A deadline that passes with a non-empty
+model script and no ``agent_start`` or ``turn_start`` ever seen keeps outcome
+``timeout``, appends ``; no agent turn started`` to the reason, and ``_seal``
+writes ``"stall": "no_agent_turn"`` into ``outcome.json``. That key is written
+only in this case.
 
 Scripted UI rules answer ``select``, ``confirm``, ``input``, and ``editor``
 requests. A request with no rule is cancelled and the run ends ``blocked``.
@@ -35,11 +39,16 @@ directions is logged to ``rpc-transcript.jsonl``; the grader's
 ``transcript.jsonl`` is created for every trial (possibly empty) and holds one
 semantic record per refused ``work`` call. Optional ``session_reader``
 and ``before_seal`` hooks read the session log and augment evidence before
-sealing; hook exceptions record ``harness_error`` (or ``session_read_error`` if
-the run already failed with ``harness_error``). If reading the startup session
-file raises after a prompt was sent, ``_seal`` queries live session state and
-retries the read on the relocated file, recording both in ``session.json``. When
-startup fails and stderr
+sealing. A ``before_seal`` exception records ``harness_error``. If reading the
+startup session file raises after a prompt was sent, ``_seal`` queries live
+session state and retries the read on the relocated file, recording both in
+``session.json``. When that read and the live-file retry both fail, no agent
+turn was seen, and the outcome is neither ``completed`` nor ``harness_error``,
+the outcome and reason are kept, ``session_read_error`` is recorded, and
+``before_seal`` still runs. A seen turn, or a ``completed`` outcome, still
+becomes ``harness_error`` with reason ``session_reader: <msg>``. An outcome
+that is already ``harness_error`` keeps its reason and records
+``session_read_error``. When startup fails and stderr
 names the worker omp log (``logs: <path>``), that file is copied to
 ``omp-startup.log`` before seal. The evidence directory is sealed before the
 RPC process stops.
@@ -713,6 +722,7 @@ class RpcAdapter:
         self._agent_finished = threading.Event()
         self._held = False
         self._held_outcome: str | None = None
+        self._stall: str | None = None
 
     def _open(self, command: Sequence[str]) -> _LoggingClient:
         if self._transcript is None:
@@ -1011,8 +1021,17 @@ class RpcAdapter:
                     reason = f"timed out after {self._timeout_s}s waiting for {pointer}"
                 if last_probe_error:
                     reason = f"{reason}; last probe error: {last_probe_error}"
+                if self.scenario.model_script and not self._turn_seen():
+                    reason = f"{reason}; no agent turn started"
+                    self._stall = "no_agent_turn"
                 return "timeout", reason, self._last
             self._early_error_event.wait(min(_POLL_INTERVAL_S, remaining))
+
+    def _turn_seen(self) -> bool:
+        """True once an ``agent_start`` or ``turn_start`` frame has arrived."""
+
+        with self._turn_lock:
+            return self._agent_turn_seen
 
     def _agent_turn_open(self) -> bool:
         """True when a scripted turn has started and the agent has not ended."""
@@ -1089,14 +1108,23 @@ class RpcAdapter:
                             except Exception as retry_exc:  # noqa: BLE001
                                 last_exc = retry_exc
                     if not recovered:
-                        hook_raised = True
                         msg = str(last_exc) or type(last_exc).__name__
-                        if outcome == "harness_error":
-                            session_read_error = f"session_reader: {msg}"
-                        else:
-                            outcome = "harness_error"
-                            reason = f"session_reader: {msg}"
+                        noted = f"session_reader: {msg}"
                         payload = b""
+                        # A missing session with no turn keeps the outcome and
+                        # still runs before_seal, unless the trial completed.
+                        # An existing harness_error keeps its reason and skips
+                        # before_seal. A seen turn becomes harness_error.
+                        keep = outcome == "harness_error" or (
+                            not self._turn_seen() and outcome != "completed"
+                        )
+                        if keep:
+                            session_read_error = noted
+                            hook_raised = outcome == "harness_error"
+                        else:
+                            hook_raised = True
+                            outcome = "harness_error"
+                            reason = noted
             self.evidence.write_json(SESSION_NAME, session_document)
             self.evidence.add_file(SESSION_LOG, payload)
             if not hook_raised and self.before_seal is not None:
@@ -1111,6 +1139,8 @@ class RpcAdapter:
                 "reason": reason,
                 "prompts_sent": prompts_sent,
             }
+            if outcome == "timeout" and self._stall == "no_agent_turn":
+                outcome_document["stall"] = "no_agent_turn"
             if session_read_error is not None:
                 outcome_document["session_read_error"] = session_read_error
             self.evidence.write_json(OUTCOME, outcome_document)
