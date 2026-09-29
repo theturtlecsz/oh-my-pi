@@ -24,6 +24,9 @@
 
 ### Fixed
 
+- HTML transcript exports show raw HTML in messages as text instead of rendering it (scripts and event handlers no longer run in the viewer).
+- The browser relay now requires a token on its CDP endpoints (`/cdp`, `/json/version`, `/json`); omp reads it from `~/.omp/browser-relay/cdp-token` automatically.
+- Images published to object-storage and cloud-drive destinations are named by content hash, so distinct images no longer overwrite each other.
 - A post-commit 5xx from the Work Ledger no longer releases the pending claim as a rolled-back refusal; any 5xx reconciles against the stored operation while only 4xx drops the claim, so a committed command is never replayed as a fresh one (OMP-395).
 - Execution grants record a lane ref tied to their item and grant; seal, stamp, and resume now refuse a mismatched ref.
 - Clarified worker and auditor completion instructions to honor assigned scope, verification duties, and harness stop boundaries.
