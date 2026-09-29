@@ -69,6 +69,20 @@ def _sanitize(text: str, token: str) -> str:
     return text
 
 
+class _DeniedFileAndData(urllib.request.FileHandler, urllib.request.DataHandler):
+    """Stand-ins so the opener rejects file: and data: instead of fetching them."""
+
+    def file_open(self, request: urllib.request.Request) -> None:
+        raise urllib.error.URLError(f"file URLs are not permitted: {request.full_url}")
+
+    def data_open(self, request: urllib.request.Request) -> None:
+        raise urllib.error.URLError(f"data URLs are not permitted: {request.full_url}")
+
+
+# Same handlers as urlopen, except file: and data: cannot be fetched.
+_OPENER = urllib.request.build_opener(_DeniedFileAndData)
+
+
 def send(
     url: str,
     token: str,
@@ -80,8 +94,8 @@ def send(
     """POST JSON body to Grokbot with authentication and idempotency key.
 
     URL must be https, or http to loopback; otherwise ValueError is raised
-    before connecting. Non-2xx and network errors raise GrokbotError (status
-    or reason, never the token).
+    before connecting. The opener rejects file: and data: schemes. Non-2xx
+    and network errors raise GrokbotError (status or reason, never the token).
     """
     _validate_url(url)
 
@@ -106,7 +120,7 @@ def send(
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _OPENER.open(req, timeout=timeout) as resp:
             status = getattr(resp, "status", resp.getcode())
             if not (200 <= status < 300):
                 raise GrokbotError(
