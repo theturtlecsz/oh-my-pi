@@ -13,6 +13,7 @@ from .models import (
     CheckpointDelivery,
     CloseAttempt,
     CloseAttemptEvent,
+    DecisionActionClass,
     EvidenceReceipt,
     IntakeBlockingQuestion,
     OperationReceipt,
@@ -520,6 +521,46 @@ class ReleaseStopResult(StrictModel):
     reason: str
 
 
+class CreateDecisionResult(StrictModel):
+    type: Literal["create_decision"]
+    decision_id: UUID
+    project_id: UUID
+    mission_id: str | None = None
+    action_class: DecisionActionClass | None = None
+    created_at: datetime
+
+
+class AnswerDecisionResult(StrictModel):
+    type: Literal["answer_decision"]
+    decision_id: UUID
+    mission_id: str | None = None
+    answer: str
+    resume_state: str | None = None
+
+
+class DecisionView(StrictModel):
+    decision_id: UUID
+    project_id: UUID
+    mission_id: str | None = None
+    status: Literal["pending", "answered"]
+    question: str
+    why_it_matters: str
+    risk_of_delay: str
+    options: tuple[str, ...]
+    evidence_refs: tuple[str, ...] = ()
+    default_if_any: str | None = None
+    risk_of_each_choice: dict[str, str]
+    action_class: DecisionActionClass | None = None
+    answer: str | None = None
+    answered_at: datetime | None = None
+
+
+class DecisionsPage(StrictModel):
+    decisions: tuple[DecisionView, ...] = ()
+    next_created_at: datetime | None = None
+    next_decision_id: UUID | None = None
+
+
 CommandResult = Annotated[
     CreateWorkBatchResult
     | CreateSameSessionChildResult
@@ -566,7 +607,9 @@ CommandResult = Annotated[
     | ConcludeResearchCampaignResult
     | AlarmSignalResult
     | EngageStopResult
-    | ReleaseStopResult,
+    | ReleaseStopResult
+    | CreateDecisionResult
+    | AnswerDecisionResult,
     Field(discriminator="type"),
 ]
 

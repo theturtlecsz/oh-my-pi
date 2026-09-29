@@ -275,6 +275,59 @@ def create_app(
                 status_code=error.status,
             )
 
+    @app.get("/v1/workspaces/{workspace_id}/decisions")
+    def decisions(
+        request: Request,
+        workspace_id: UUID,
+        status: str | None = None,
+        project_id: UUID | None = None,
+        mission_id: str | None = None,
+        after_created_at: datetime | None = None,
+        after_decision_id: UUID | None = None,
+        limit: int = Query(100, ge=1, le=500),
+    ) -> JSONResponse:
+        try:
+            _require_contract(request, service_digest)
+            principal = _principal(request, capabilities_dir)
+            if (after_created_at is None) != (after_decision_id is None):
+                raise WorkError(
+                    "invalid_request",
+                    status=400,
+                    diagnostics=(
+                        "after_created_at and after_decision_id must be provided together",
+                    ),
+                )
+            after = (
+                (after_created_at, after_decision_id)
+                if after_created_at is not None and after_decision_id is not None
+                else None
+            )
+            return JSONResponse(
+                jsonable_encoder(
+                    service.decisions(
+                        principal,
+                        workspace_id,
+                        status=status,
+                        project_id=project_id,
+                        mission_id=mission_id,
+                        after=after,
+                        limit=limit,
+                    )
+                )
+            )
+        except WorkError as error:
+            return JSONResponse(
+                {
+                    "error": {
+                        "code": error.code,
+                        "request_id": None,
+                        "correlation_id": None,
+                        "diagnostics": list(error.diagnostics[:8]),
+                    }
+                },
+                status_code=error.status,
+            )
+
     @app.get("/v1/workspaces/{workspace_id}/activity")
     def activity(
         request: Request,

@@ -17,6 +17,7 @@
     "decisions/0013-alarm-signals.md",
     "decisions/0014-agent-stop-control.md",
     "decisions/0015-mission-record.md",
+    "decisions/0015-decision-records.md",
     "examples.json",
     "manifest.json",
     "research-artifact-hash.json",

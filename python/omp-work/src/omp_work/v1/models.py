@@ -1871,6 +1871,77 @@ class LinkMissionWorkCommand(StrictModel):
     payload: LinkMissionWorkPayload
 
 
+# D16/D35 (ADR 0005): a decision carries a non-null action_class exactly for
+# tier-3 high-risk authorization, whose answer needs the owner's signature.
+# The ten class ids are exactly ``action_tiers.TIER3``. D40: an action no tier
+# lists is tier 3, so "unlisted" is a tier-3 class too, and a contract-version
+# change is tier 3 by D30 ("contract_hash").
+DecisionActionClass = Literal[
+    "merge_protected_branch",
+    "production_deploy",
+    "destructive_infra",
+    "credential_change",
+    "delete_persistent_data",
+    "billing_change",
+    "publish_as_owner",
+    "broaden_scope",
+    "outside_secrets",
+    "disable_safeguards",
+    "contract_hash",
+    "unlisted",
+]
+
+
+class CreateDecisionPayload(StrictModel):
+    """One owner-facing decision record: the question, why it blocks progress,
+    the bounded option set, and — for tier-3 actions — the action class."""
+
+    decision_id: UUID
+    project_id: UUID
+    mission_id: str | None = Field(default=None, min_length=1)
+    question: str = Field(min_length=1)
+    why_it_matters: str = Field(min_length=1)
+    risk_of_delay: str = Field(min_length=1)
+    options: tuple[str, ...] = Field(min_length=2, max_length=10)
+    evidence_refs: tuple[str, ...] = ()
+    default_if_any: str | None = None
+    risk_of_each_choice: dict[str, str]
+    action_class: DecisionActionClass | None = None
+    resume_state: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def validate_decision(self) -> CreateDecisionPayload:
+        if not self.question.strip() or not self.why_it_matters.strip():
+            raise ValueError("question and why_it_matters must carry non-blank text")
+        if not self.risk_of_delay.strip():
+            raise ValueError("risk_of_delay must carry non-blank text")
+        if len(set(self.options)) != len(self.options):
+            raise ValueError("options must be unique")
+        if self.default_if_any is not None and self.default_if_any not in self.options:
+            raise ValueError("default_if_any must name one of the options")
+        if set(self.risk_of_each_choice) != set(self.options):
+            raise ValueError("risk_of_each_choice keys must match options exactly")
+        if any(not risk.strip() for risk in self.risk_of_each_choice.values()):
+            raise ValueError("every option needs a non-blank risk")
+        return self
+
+
+class AnswerDecisionPayload(StrictModel):
+    decision_id: UUID
+    answer: str = Field(min_length=1)
+    owner_signature: str | None = Field(default=None, min_length=1)
+
+
+class CreateDecisionCommand(StrictModel):
+    type: Literal["create_decision"]
+    payload: CreateDecisionPayload
+
+
+class AnswerDecisionCommand(StrictModel):
+    type: Literal["answer_decision"]
+    payload: AnswerDecisionPayload
+
+
 Command = Annotated[
     CreateWorkBatchCommand
     | CreateSameSessionChildCommand
@@ -1931,7 +2002,9 @@ Command = Annotated[
     | ReviseMissionCommand
     | ApproveMissionCommand
     | SetMissionStatusCommand
-    | LinkMissionWorkCommand,
+    | LinkMissionWorkCommand
+    | CreateDecisionCommand
+    | AnswerDecisionCommand,
     Field(discriminator="type"),
 ]
 
@@ -2172,6 +2245,7 @@ class Approval(StrictModel):
         "OMP-406",
         "OMP-405",
         "OMP-413",
+        "OMP-414",
     ]
     attestation: hex64 | None = None
 
