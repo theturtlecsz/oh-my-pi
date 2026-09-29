@@ -1,8 +1,9 @@
-"""Compile and reproduce a fleet context bundle from the command line (OMP-311).
+"""Compile and reproduce a fleet context bundle from the command line (OMP-311, OMP-419).
 
 ``compile`` reads one workflow view from stdin, retrieves exact, structural,
 procedural and semantic items, reranks the optional ones, compiles against
 ``omp tokens count``, and persists the bundle before it prints anything.
+``stage`` runs an in-process stage compile from context settings.
 ``reproduce`` replays a persisted bundle offline. A compile failure exits 2
 with a reason on stderr and an empty stdout; a reproduction failure exits 3.
 """
@@ -12,6 +13,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import shutil
 import subprocess  # nosec B404 - invokes git to resolve the workspace remote
 import sys
@@ -27,6 +29,7 @@ from pydantic import Field
 
 from omp_knowledge.context.compiler import compile_bundle
 from omp_knowledge.context.models import CompileRequest, ContextItem, Stage, StageIdentity
+from omp_knowledge.context.project_sources import ProjectContext
 from omp_knowledge.context.rerank import HttpReranker, OrderReranker, Reranker
 from omp_knowledge.context.routes import ContextRouteStore
 from omp_knowledge.context.semantic import semantic_items
@@ -60,6 +63,12 @@ class _CompileStdin(StrictModel):
     workflow: WorkflowView
 
 
+class _StageStdin(_CompileStdin):
+    """The one JSON object ``stage`` reads from stdin."""
+
+    project: ProjectContext | None = None
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m omp_knowledge.context")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -81,6 +90,9 @@ def _build_parser() -> argparse.ArgumentParser:
     compile_parser.add_argument("--structural-limit", type=int, default=DEFAULT_STRUCTURAL_LIMIT)
     compile_parser.add_argument("--semantic-limit", type=int, default=DEFAULT_SEMANTIC_LIMIT)
     compile_parser.add_argument("--json", action="store_true")
+
+    stage_parser = subcommands.add_parser("stage")
+    stage_parser.add_argument("--settings")
 
     reproduce_parser = subcommands.add_parser("reproduce")
     reproduce_parser.add_argument("--state-dir", required=True)
@@ -147,15 +159,23 @@ def _resolve_repository(cwd: str) -> str | None:
     return normalize_remote_url(result.stdout.strip())
 
 
-def _read_compile_stdin(stdin: TextIO | None) -> _CompileStdin:
+def _read_json_stdin(stdin: TextIO | None, command: str) -> dict[str, Any]:
     stream = sys.stdin if stdin is None else stdin
     raw = stream.read()
     if not raw.strip():
-        raise ValueError("compile expects a JSON object on stdin")
+        raise ValueError(f"{command} expects a JSON object on stdin")
     payload = json.loads(raw)
     if not isinstance(payload, dict):
-        raise ValueError("compile stdin must be a JSON object")
-    return _CompileStdin.model_validate(payload)
+        raise ValueError(f"{command} stdin must be a JSON object")
+    return payload
+
+
+def _read_compile_stdin(stdin: TextIO | None) -> _CompileStdin:
+    return _CompileStdin.model_validate(_read_json_stdin(stdin, "compile"))
+
+
+def _read_stage_stdin(stdin: TextIO | None) -> _StageStdin:
+    return _StageStdin.model_validate(_read_json_stdin(stdin, "stage"))
 
 
 def _reranker(url: str | None, model: str | None) -> Reranker:
@@ -547,6 +567,38 @@ def _compile(
     )
 
 
+def _stage(
+    args: argparse.Namespace,
+    *,
+    stdin: TextIO | None,
+    engine: KnowledgeEngine | None = None,
+    reranker: Reranker | None = None,
+) -> dict[str, Any]:
+    from omp_knowledge.context.stage import (
+        compile_stage,
+        default_settings_path,
+        load_settings,
+    )
+
+    settings_path = args.settings
+    if settings_path is None:
+        settings_path = default_settings_path(os.environ)
+
+    settings = load_settings(settings_path)
+    body = _read_stage_stdin(stdin)
+
+    return compile_stage(
+        settings,
+        view=body.workflow,
+        stage=body.stage,
+        attempt_id=body.attempt_id,
+        cwd=body.cwd,
+        project=body.project,
+        engine=engine,
+        reranker=reranker,
+    )
+
+
 def _reproduce(args: argparse.Namespace) -> dict[str, Any]:
     store = ContextBundleStore(args.state_dir)
     text = store.reproduce(args.bundle_id)
@@ -584,6 +636,13 @@ def main(
                 stdin=stdin,
                 engine=engine,
                 embedder=embedder,
+                reranker=reranker,
+            )
+        elif args.command == "stage":
+            payload = _stage(
+                args,
+                stdin=stdin,
+                engine=engine,
                 reranker=reranker,
             )
         else:
