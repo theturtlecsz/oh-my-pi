@@ -6,7 +6,7 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 import type { CurrentSmolHarness } from "../../../../docs/reports/jev-measurement/harness";
 import { withoutJevSettings } from "../../../../docs/reports/jev-measurement/router-harness";
 import { jevEnvPath } from "../../../../docs/reports/jev-measurement/router-transport";
-import { buildCurrentSmolHarness, main } from "../../../../docs/reports/jev-measurement/run-router";
+import { main } from "../../../../docs/reports/jev-measurement/run-router";
 
 describe("run-router CLI and current harness construction", () => {
 	let tempDir: TempDir;
@@ -123,10 +123,17 @@ describe("run-router CLI and current harness construction", () => {
 		);
 		expect(unexpectedStopSection).not.toContain("not measured");
 
-		// Verify results.json was written and populated
+		// Verify results.json was written and populated, and the report uses the
+		// same current-side cost source the JSON records.
 		const json = (await Bun.file(jsonPath).json()) as typeof results;
 		expect(json.current.auto_thinking?.accuracy).toBe(1);
 		expect(json.current.unexpected_stop?.accuracy).toBe(1);
+		expect(json.current.auto_thinking?.costSource).toBe("provider-usage");
+		expect(json.current.unexpected_stop?.costSource).toBe("provider-usage");
+		expect(autoThinkingSection).toContain("provider-usage");
+		expect(unexpectedStopSection).toContain("provider-usage");
+		expect(autoThinkingSection).not.toContain("generation-record");
+		expect(unexpectedStopSection).not.toContain("generation-record");
 	});
 
 	it("without --fake-current, constructs a real current harness via injected factory without reaching openrouter or network", async () => {
@@ -211,14 +218,5 @@ describe("run-router CLI and current harness construction", () => {
 		expect(wrapped.get("jev.autoThinking")).toBe(false);
 		expect(wrapped.get("jev.unexpectedStop")).toBe(false);
 		expect(wrapped.get("providers.autoThinkingModel")).toBe("online");
-	});
-
-	it("buildCurrentSmolHarness constructs a settings and registry harness with Jev forced off", async () => {
-		const harness = await buildCurrentSmolHarness();
-		expect(harness.settings).toBeDefined();
-		expect(harness.registry).toBeDefined();
-		expect(harness.settings.get("jev.enabled")).toBe(false);
-		expect(harness.settings.get("jev.autoThinking")).toBe(false);
-		expect(harness.settings.get("jev.unexpectedStop")).toBe(false);
 	});
 });

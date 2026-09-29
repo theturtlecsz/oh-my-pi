@@ -21,7 +21,7 @@ Sample size: {{auto_thinking_sample_size}} prompts
 | p50 Latency (ms) | {{auto_thinking_current_p50}} | {{auto_thinking_route_p50}} |
 | p95 Latency (ms) | {{auto_thinking_current_p95}} | {{auto_thinking_route_p95}} |
 | Cost per 1000 calls ($) | {{auto_thinking_current_cost}} | {{auto_thinking_route_cost}} |
-| Cost source | provider usage | {{auto_thinking_route_cost_source}} |
+| Cost source | {{auto_thinking_current_cost_source}} | {{auto_thinking_route_cost_source}} |
 | Unparseable / off-list | — | {{auto_thinking_route_unparseable}} |
 | Transport-failure rate | — | {{auto_thinking_route_transport_failure}} |
 
@@ -44,7 +44,7 @@ The router has no probability output, so the 0.70 threshold is not applied. A ro
 | p50 Latency (ms) | {{unexpected_stop_current_p50}} | {{unexpected_stop_route_p50}} |
 | p95 Latency (ms) | {{unexpected_stop_current_p95}} | {{unexpected_stop_route_p95}} |
 | Cost per 1000 calls ($) | {{unexpected_stop_current_cost}} | {{unexpected_stop_route_cost}} |
-| Cost source | provider usage | {{unexpected_stop_route_cost_source}} |
+| Cost source | {{unexpected_stop_current_cost_source}} | {{unexpected_stop_route_cost_source}} |
 | Unparseable / off-list | — | {{unexpected_stop_route_unparseable}} |
 | Transport-failure rate | — | {{unexpected_stop_route_transport_failure}} |
 
@@ -80,7 +80,7 @@ Routed reasoning effort reported: {{robomp_route_routed_effort}}
 - **Off-list / off-options behaviour.** The typed API's answer-space validation (`off_list`, `off_options`) has no router equivalent; a routed answer with no allowed label is counted as unparseable, one bucket only.
 - **Robomp routed-decision equivalence.** The prefilter's yes/no gates (`batch_audit`, `first_person_failure`, `wanted_different_behavior`, `upstream_cause`, `nondefault_exotic_env`) and its answer/session route are not measured — only the primary label and a derived skip share.
 - **Router internals.** Jev Router's own routing cost and the sub-request it forwards are not visible; the report reads the routed model id and reasoning effort OpenRouter returns, and the routed model's price is what the cost column reflects.
-- **Current-side auto-thinking model identity.** The current side runs the configured smol role through the classifiers; its latency and cost are per-call provider values, not a matched-model comparison to whichever model the router picked.
+- **Current-side auto-thinking model identity.** The current side runs the model `resolveRoleSelection(["tiny", "smol"], ...)` returns (configured `modelRoles.tiny` first, then `modelRoles.smol`). Its latency and cost are per-call provider values, not a matched-model comparison to whichever model the router picked. The current-side cost source is `provider-usage` when the provider reported a non-zero completion cost, and `unavailable` when that side ran and reported none.
 
 ## Verdict
 

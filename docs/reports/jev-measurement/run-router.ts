@@ -114,6 +114,7 @@ export function renderRouterReport(results: RouterMeasurementResults, template: 
 	fill("auto_thinking_current_p50", currentAt ? formatNumber(currentAt.p50LatencyMs, 1) : "not measured");
 	fill("auto_thinking_current_p95", currentAt ? formatNumber(currentAt.p95LatencyMs, 1) : "not measured");
 	fill("auto_thinking_current_cost", currentAt ? formatUsd(currentAt.costPer1000Usd) : "not measured");
+	fill("auto_thinking_current_cost_source", currentAt ? currentAt.costSource : "not measured");
 	fill("unexpected_stop_current_accuracy", currentUs ? formatPercent(currentUs.accuracy) : "not measured");
 	fill(
 		"unexpected_stop_current_precision",
@@ -126,6 +127,7 @@ export function renderRouterReport(results: RouterMeasurementResults, template: 
 	fill("unexpected_stop_current_p50", currentUs ? formatNumber(currentUs.p50LatencyMs, 1) : "not measured");
 	fill("unexpected_stop_current_p95", currentUs ? formatNumber(currentUs.p95LatencyMs, 1) : "not measured");
 	fill("unexpected_stop_current_cost", currentUs ? formatUsd(currentUs.costPer1000Usd) : "not measured");
+	fill("unexpected_stop_current_cost_source", currentUs ? currentUs.costSource : "not measured");
 
 	return rendered;
 }
@@ -202,7 +204,6 @@ export interface RunRouterMainDeps {
 	readKey?: (configHome?: string) => string | undefined;
 	buildCurrentHarness?: () => Promise<CurrentSmolHarness>;
 	fetch?: FetchImpl;
-	apiKey?: string;
 }
 
 export async function main(
@@ -217,7 +218,6 @@ export async function main(
 	let generationRecords = false;
 	let fakeTransportPath: string | undefined;
 	let fakeCurrentPath: string | undefined;
-	let explicitApiKey: string | undefined;
 
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
@@ -234,18 +234,15 @@ export async function main(
 		else if (arg.startsWith("--fake-transport=")) fakeTransportPath = arg.slice("--fake-transport=".length);
 		else if (arg === "--fake-current") fakeCurrentPath = args[++i];
 		else if (arg.startsWith("--fake-current=")) fakeCurrentPath = arg.slice("--fake-current=".length);
-		else if (arg === "--api-key") explicitApiKey = args[++i];
-		else if (arg.startsWith("--api-key=")) explicitApiKey = arg.slice("--api-key=".length);
 		else {
 			console.error(`usage error: unexpected argument ${arg}`);
 			process.exit(2);
 		}
 	}
 
-	// The key is read at run time from the owner's env file. Tests never reach
-	// here: they call runRouter() with an explicit fake transport and key.
-	const apiKey =
-		deps.apiKey ?? explicitApiKey ?? (deps.readKey ? deps.readKey(configHome) : readJevEnvKey(configHome));
+	// The key is read at run time from ~/.config/omp/jev.env (OPENROUTER_API_KEY).
+	// Tests point --config-home at a temp file, or inject deps.readKey.
+	const apiKey = deps.readKey ? deps.readKey(configHome) : readJevEnvKey(configHome);
 	if (!apiKey) {
 		const home = configHome ?? "the owner's config home";
 		console.error(`ERROR: no OpenRouter key found in ${keySourceLabel(home)}`);

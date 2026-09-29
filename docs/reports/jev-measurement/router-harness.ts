@@ -109,8 +109,12 @@ export interface RouterRouteMetrics {
 	p50LatencyMs: number;
 	p95LatencyMs: number;
 	costPer1000Usd: number;
-	/** Where costPer1000Usd came from: a generation record, or tokens x catalogue price. */
-	costSource: "generation-record" | "tokens-x-catalogue-price" | "unavailable";
+	/**
+	 * Where costPer1000Usd came from. Router rows use an OpenRouter generation
+	 * record or tokens times catalogue price. The current side uses the
+	 * provider-reported completion cost (`provider-usage`).
+	 */
+	costSource: "generation-record" | "tokens-x-catalogue-price" | "provider-usage" | "unavailable";
 	/** Routed answers that carried no allowed label. There is no separate off-list bucket in router mode. */
 	unparseableRate: number;
 	transportFailureRate: number;
@@ -442,7 +446,7 @@ async function measureCurrent(
 		p50LatencyMs: percentile(latencies, 0.5),
 		p95LatencyMs: percentile(latencies, 0.95),
 		costPer1000Usd: (costTotal / total) * 1000,
-		costSource: costTotal > 0 ? "generation-record" : "unavailable",
+		costSource: costTotal > 0 ? "provider-usage" : "unavailable",
 		unparseableRate: unparseable / total,
 		transportFailureRate: 0,
 		routedModels: { [CURRENT_MODEL.id]: items.length },
