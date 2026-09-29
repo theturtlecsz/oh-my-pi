@@ -64,6 +64,7 @@ from .models import (
     RiderProof,
     SameSessionFoundFixedPayload,
 )
+from omp_work.egress_store import EgressStoreMixin
 from omp_work.project_store import ProjectStoreMixin
 from omp_work.research.store import ResearchStoreMixin
 from .store_shared import WorkStoreError
@@ -390,7 +391,7 @@ def _intake_classifications(
     return {wid: classified[wid] for wid in target_ids if wid in classified}
 
 
-class PostgresWorkStore(ProjectStoreMixin, ResearchStoreMixin):
+class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin):
     def __init__(self, config: OperationsConfig) -> None:
         self._config = config
 
