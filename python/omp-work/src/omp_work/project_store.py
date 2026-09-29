@@ -372,21 +372,21 @@ class ProjectStoreMixin:
             history = [dict(row) for row in cur.fetchall()]
 
             cur.execute(
-                f"SELECT {_MANDATE_FIELDS} FROM omp_work.standing_mandates"
+                f"SELECT {_MANDATE_FIELDS} FROM omp_work.standing_mandates"  # nosec B608 - static column list
                 " WHERE workspace_id=%s AND project_id=%s AND active",
                 (workspace_id, project_id),
             )
             mandate = cur.fetchone()
 
             cur.execute(
-                f"SELECT {_POLICY_FIELDS} FROM omp_work.standing_policies"
+                f"SELECT {_POLICY_FIELDS} FROM omp_work.standing_policies"  # nosec B608 - static column list
                 " WHERE workspace_id=%s AND project_id=%s AND active ORDER BY policy_id",
                 (workspace_id, project_id),
             )
             policies = [dict(row) for row in cur.fetchall()]
 
             cur.execute(
-                f"SELECT {_BUDGET_FIELDS} FROM omp_work.spend_budgets"
+                f"SELECT {_BUDGET_FIELDS} FROM omp_work.spend_budgets"  # nosec B608 - static column list
                 " WHERE workspace_id=%s AND project_id=%s AND active AND mission_id IS NULL",
                 (workspace_id, project_id),
             )
@@ -888,7 +888,7 @@ class ProjectStoreMixin:
         project_id: UUID,
     ) -> StandingMandate | None:
         cur.execute(
-            f"SELECT {_MANDATE_FIELDS} FROM omp_work.standing_mandates"
+            f"SELECT {_MANDATE_FIELDS} FROM omp_work.standing_mandates"  # nosec B608 - static column list
             " WHERE workspace_id=%s AND project_id=%s AND active",
             (workspace_id, project_id),
         )
@@ -912,7 +912,7 @@ class ProjectStoreMixin:
         policy_id: UUID,
     ) -> StandingPolicy | None:
         cur.execute(
-            f"SELECT {_POLICY_FIELDS} FROM omp_work.standing_policies"
+            f"SELECT {_POLICY_FIELDS} FROM omp_work.standing_policies"  # nosec B608 - static column list
             " WHERE workspace_id=%s AND project_id=%s AND policy_id=%s AND active",
             (workspace_id, project_id, policy_id),
         )
@@ -929,7 +929,7 @@ class ProjectStoreMixin:
         mission_id: UUID | None,
     ) -> tuple[SpendBudget | None, UUID | None]:
         cur.execute(
-            f"SELECT {_BUDGET_FIELDS} FROM omp_work.spend_budgets"
+            f"SELECT {_BUDGET_FIELDS} FROM omp_work.spend_budgets"  # nosec B608 - static column list
             " WHERE workspace_id=%s AND project_id=%s AND active"
             " AND mission_id IS NOT DISTINCT FROM %s",
             (workspace_id, project_id, mission_id),
@@ -955,7 +955,7 @@ class ProjectStoreMixin:
     ) -> tuple[SpendBudget | None, UUID | None]:
         """Load one active budget FOR UPDATE so a decide-then-record spend serializes."""
         cur.execute(
-            f"SELECT {_BUDGET_FIELDS} FROM omp_work.spend_budgets"
+            f"SELECT {_BUDGET_FIELDS} FROM omp_work.spend_budgets"  # nosec B608 - static column list
             " WHERE workspace_id=%s AND project_id=%s AND active"
             " AND mission_id IS NOT DISTINCT FROM %s FOR UPDATE",
             (workspace_id, project_id, mission_id),
@@ -1058,7 +1058,7 @@ class ProjectStoreMixin:
     ) -> list[StandingPolicy]:
         """Every active policy on the project, in policy_id order."""
         cur.execute(
-            f"SELECT {_POLICY_FIELDS} FROM omp_work.standing_policies"
+            f"SELECT {_POLICY_FIELDS} FROM omp_work.standing_policies"  # nosec B608 - static column list
             " WHERE workspace_id=%s AND project_id=%s AND active ORDER BY policy_id",
             (workspace_id, project_id),
         )
@@ -1072,7 +1072,7 @@ class ProjectStoreMixin:
     ) -> list[StandingPolicy]:
         """The active spend_beyond_threshold policies, for authorize_spend."""
         cur.execute(
-            f"SELECT {_POLICY_FIELDS} FROM omp_work.standing_policies"
+            f"SELECT {_POLICY_FIELDS} FROM omp_work.standing_policies"  # nosec B608 - static column list
             " WHERE workspace_id=%s AND project_id=%s AND active"
             " AND action_class='spend_beyond_threshold' ORDER BY policy_id",
             (workspace_id, project_id),
