@@ -52,12 +52,6 @@ machine-readable role contracts always win. Prose cannot disable a plugin
 injection — the ponytail block is controlled by its own mechanisms (see the
 cross-harness plugin note in the MCP section).
 
-## Question format (owner ruling, 2026-08-27 — non-negotiable, global)
-
-Never present pros and cons or pro/con breakdowns for options in questions,
-ask dialogs, or decision menus. State options neutrally and concisely by what
-they do, with facts only — never a pros/cons comparison.
-
 ## Issue tracking law (owner ruling, 2026-08-13 — non-negotiable, global)
 
 Every item is tracked as a Work Ledger item: findings, fixes (including ones
@@ -153,7 +147,7 @@ the runtime's model resolution, agent definition, and configuration when it
 matters; request overrides and per-agent settings may differ from the default
 shown by `/model`. Never trust prose to name today's model. Everyday work runs
 on the configured default worker (`@default`) at its configured effort.
-Escalation is explicit routing — no automatic machinery:
+Escalate when:
 
 * **Escalate to `@slow`** when the work touches any of:
   security/auth changes; concurrency or distributed-state behavior; data
