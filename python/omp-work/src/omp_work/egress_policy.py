@@ -7,24 +7,34 @@ whose u-octet must be zero.
 Reason codes: ``invalid`` (unparseable input), ``metadata`` (cloud instance
 metadata endpoint), ``nat64_u_octet`` (RFC 6052 NAT64 address with a non-zero
 u-octet), and ``not_global`` (not globally routable, or multicast).
+
+:func:`build_policy` compiles the owner-signed :class:`ProjectEgress` record,
+the active ``network_access`` standing policies and the model proxy into an
+:class:`EgressPolicy`: registries and remotes are normalized to origins only,
+and malformed or non-https/http entries are dropped.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from ipaddress import IPv4Address, IPv6Address, IPv6Network, ip_address
 from typing import Literal, Protocol, runtime_checkable
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, unquote, urlsplit
+
+from omp_work.standing_policy import StandingPolicy
 
 __all__ = [
+    "EgressPolicy",
     "EgressRecord",
     "EgressRecorder",
     "Identity",
     "MemoryRecorder",
+    "ProjectEgress",
     "Stage",
     "blocked_address",
+    "build_policy",
     "research_refusal",
 ]
 
@@ -106,7 +116,182 @@ def blocked_address(ip: str | IPv4Address | IPv6Address) -> str | None:
     return "not_global"
 
 
+_HANDLED_SCHEMES: frozenset[str] = frozenset({"http", "https"})
+_DEFAULT_PORTS: dict[str, int] = {"https": 443, "http": 80}
+
+
+def _norm_host(host: str) -> str:
+    """Normalize a host: lower-case, drop a trailing dot, strip brackets, canonical IP."""
+    text = host.strip().lower().rstrip(".")
+    if text.startswith("[") and text.endswith("]"):
+        text = text[1:-1]
+    try:
+        return str(ip_address(text))
+    except ValueError:
+        return text
+
+
+def _parse_host_port(text: str) -> tuple[str, int] | None:
+    """Parse ``host:port`` or ``[v6]:port``, requiring an explicit port."""
+    candidate = text.strip()
+    if not candidate or any(ch.isspace() for ch in candidate):
+        return None
+    if candidate.startswith("["):
+        end = candidate.find("]")
+        if end == -1:
+            return None
+        host = _norm_host(candidate[1:end])
+        rest = candidate[end + 1 :]
+        if rest.startswith(":") and rest[1:].isdigit():
+            return (host, int(rest[1:]))
+        return None
+    if ":" in candidate:
+        head, _, tail = candidate.rpartition(":")
+        if not tail.isdigit() or ":" in head or not head:
+            return None
+        return (_norm_host(head), int(tail))
+    return None
+
+
+def _parse_registry(value: object) -> tuple[str, int] | None:
+    """Return ``(https host, port)`` for an ``https://`` registry, else ``None``.
+
+    Only ``https://host[:port]`` with an optional trailing ``/`` is kept; any
+    other scheme, a path, a query, a fragment, or userinfo grants nothing.
+    """
+    if not isinstance(value, str):
+        return None
+    parts = urlsplit(value.strip())
+    if parts.scheme.lower() != "https":
+        return None
+    if parts.username is not None or parts.password is not None:
+        return None
+    if parts.query or parts.fragment or parts.path not in ("", "/"):
+        return None
+    try:
+        host = parts.hostname
+        port = parts.port
+    except ValueError:
+        return None
+    if not host:
+        return None
+    return (_norm_host(host), port or 443)
+
+
+def _parse_remote(value: object) -> tuple[str, str, int, str] | None:
+    """Return ``(scheme, host, port, repo path)`` for an ``http(s)`` remote, else ``None``.
+
+    Userinfo, a query, a fragment, an empty repo path, a trailing ``/``, a
+    trailing ``.git``, and a percent-decoded path segment that is empty, ``.``
+    or ``..`` are all dropped. Any other scheme (``ssh``, the scp-like
+    ``git@host:path``) grants nothing.
+    """
+    if not isinstance(value, str):
+        return None
+    parts = urlsplit(value.strip())
+    scheme = parts.scheme.lower()
+    if scheme not in _HANDLED_SCHEMES:
+        return None
+    if parts.username is not None or parts.password is not None:
+        return None
+    if parts.query or parts.fragment:
+        return None
+    try:
+        host = parts.hostname
+        port = parts.port
+    except ValueError:
+        return None
+    if not host:
+        return None
+    path = parts.path.rstrip("/")
+    if path.endswith(".git"):
+        path = path[:-4]
+    if not path:
+        return None
+    for segment in path.split("/")[1:]:
+        decoded = unquote(segment)
+        if decoded in ("", ".", ".."):
+            return None
+    return (scheme, _norm_host(host), port or _DEFAULT_PORTS[scheme], path)
+
+
+def _is_expired(policy: StandingPolicy, now: datetime) -> bool:
+    expires = policy.expires_at
+    if expires is None:
+        return False
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=UTC)
+    return expires <= now
+
+
+def build_policy(
+    egress: ProjectEgress | None,
+    standing: Iterable[StandingPolicy],
+    model_proxy: str,
+) -> EgressPolicy:
+    """Compile an egress policy. The only constructor for :class:`EgressPolicy`.
+
+    ``model_proxy`` is required and must carry a port. Registries are kept only
+    as an https origin; remotes only as an http(s) URL with a non-empty repo
+    path; standing policies only when they are ``network_access`` and not yet
+    expired. No worktree input.
+    """
+    parsed_proxy = _parse_host_port(model_proxy)
+    if parsed_proxy is None:
+        raise ValueError(f"model_proxy requires host:port, got {model_proxy!r}")
+    proxy_host, proxy_port = parsed_proxy
+
+    registries: set[tuple[str, int]] = set()
+    remotes: set[tuple[str, str, int, str]] = set()
+    if egress is not None:
+        for raw in egress.registries:
+            parsed = _parse_registry(raw)
+            if parsed is not None:
+                registries.add(parsed)
+        for raw in egress.remotes:
+            parsed = _parse_remote(raw)
+            if parsed is not None:
+                remotes.add(parsed)
+
+    now = datetime.now(UTC)
+    kept: list[StandingPolicy] = []
+    for policy in standing:
+        if policy.action_class != "network_access":
+            continue
+        if _is_expired(policy, now):
+            continue
+        kept.append(policy)
+
+    return EgressPolicy(
+        model_proxy=(proxy_host, proxy_port),
+        registries=frozenset(registries),
+        remotes=frozenset(remotes),
+        standing=tuple(kept),
+        decision_id=egress.decision_id if egress is not None else None,
+    )
+
+
 Stage = Literal["repository", "research"]
+
+
+@dataclass(frozen=True)
+class ProjectEgress:
+    """Owner-signed project egress record: registries and repository remotes."""
+
+    registries: tuple[str, ...]
+    remotes: tuple[str, ...]
+    decision_id: str | None
+
+
+@dataclass(frozen=True)
+class EgressPolicy:
+    """Compiled egress policy. Construct with :func:`build_policy`."""
+
+    model_proxy: tuple[str, int]
+    registries: frozenset[tuple[str, int]]
+    remotes: frozenset[tuple[str, str, int, str]]
+    standing: tuple[StandingPolicy, ...]
+    decision_id: str | None
 
 
 @dataclass(frozen=True)

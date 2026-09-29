@@ -3,19 +3,23 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from ipaddress import IPv4Address, IPv6Address
 
 import pytest
 
 from omp_work.egress_policy import (
+    EgressPolicy,
     EgressRecord,
     EgressRecorder,
     Identity,
     MemoryRecorder,
+    ProjectEgress,
     blocked_address,
+    build_policy,
     research_refusal,
 )
+from omp_work.standing_policy import StandingPolicy
 
 
 @pytest.mark.parametrize(
@@ -290,4 +294,152 @@ def test_memory_recorder_protocol_and_call_order() -> None:
     dispatch(recorder, r3)
 
     assert recorder.records == [r1, r2, r3]
+
+
+def _standing(
+    policy_id: str,
+    action_class: str,
+    *,
+    expires_at: datetime | None = None,
+) -> StandingPolicy:
+    return StandingPolicy(
+        policy_id=policy_id,
+        action_class=action_class,
+        destinations=("https://allowed.example.com",),
+        expires_at=expires_at,
+        decision_id="dec-1",
+    )
+
+
+def test_build_policy_keeps_unexpired_network_access_drops_others() -> None:
+    now = datetime.now(timezone.utc)
+    kept = _standing("pol-net", "network_access", expires_at=now + timedelta(hours=1))
+    expired = _standing("pol-exp", "network_access", expires_at=now - timedelta(hours=1))
+    push = _standing("pol-push", "push_branch")
+    never = _standing("pol-forever", "network_access")
+
+    policy = build_policy(
+        ProjectEgress(registries=(), remotes=(), decision_id="dec-egress"),
+        [kept, expired, push, never],
+        "proxy.example.com:8443",
+    )
+
+    assert policy.standing == (kept, never)
+    assert policy.model_proxy == ("proxy.example.com", 8443)
+    assert policy.decision_id == "dec-egress"
+    # Frozen dataclass.
+    with pytest.raises(FrozenInstanceError):
+        policy.decision_id = "other"  # type: ignore[misc]
+
+
+def test_build_policy_drops_expired_naive_expiry_as_utc() -> None:
+    # A naive expiry is interpreted as UTC; an hour ago is already past.
+    naive_past = (datetime.now(timezone.utc) - timedelta(hours=1)).replace(tzinfo=None)
+    expired = _standing("pol-naive", "network_access", expires_at=naive_past)
+    naive_future = (datetime.now(timezone.utc) + timedelta(hours=1)).replace(tzinfo=None)
+    live = _standing("pol-naive-live", "network_access", expires_at=naive_future)
+
+    policy = build_policy(None, [expired, live], "proxy:443")
+
+    assert policy.standing == (live,)
+
+
+@pytest.mark.parametrize("model_proxy", ["proxy", "proxy:x"])
+def test_build_policy_model_proxy_requires_port(model_proxy: str) -> None:
+    with pytest.raises(ValueError):
+        build_policy(None, [], model_proxy)
+
+
+def test_build_policy_normalizes_registries() -> None:
+    egress = ProjectEgress(
+        registries=(
+            "http://reg.example.com",
+            "https://reg.example.com/v2",
+            "HTTPS://Reg.example.com",
+        ),
+        remotes=(),
+        decision_id="dec-reg",
+    )
+    policy = build_policy(egress, [], "proxy.example.com:443")
+
+    assert policy.registries == frozenset({("reg.example.com", 443)})
+
+
+def test_build_policy_normalizes_remotes() -> None:
+    egress = ProjectEgress(
+        registries=(),
+        remotes=(
+            "ssh://git@h/o/r",
+            "ssh://git @h/o/r",
+            "git@h:o/r",
+            "git @h:o/r",
+            "https://h/",
+            "https://h/o/../r",
+            "https://Git.Example.com./o/r.git/",
+        ),
+        decision_id="dec-remote",
+    )
+    policy = build_policy(egress, [], "proxy.example.com:443")
+
+    assert policy.remotes == frozenset({("https", "git.example.com", 443, "/o/r")})
+
+
+def test_build_policy_registry_and_remote_origin_ports() -> None:
+    egress = ProjectEgress(
+        registries=("https://reg.example.com:8443", "https://reg.example.com/"),
+        remotes=("http://h:8080/o/r.git", "https://h/o/r"),
+        decision_id="dec-ports",
+    )
+    policy = build_policy(egress, [], "proxy.example.com:443")
+
+    assert policy.registries == frozenset(
+        {("reg.example.com", 8443), ("reg.example.com", 443)}
+    )
+    assert policy.remotes == frozenset(
+        {
+            ("http", "h", 8080, "/o/r"),
+            ("https", "h", 443, "/o/r"),
+        }
+    )
+
+
+def test_build_policy_drops_remote_userinfo_query_and_fragment() -> None:
+    egress = ProjectEgress(
+        registries=(),
+        remotes=(
+            "https://u:p@h/o/r",
+            "https://h/o/r?x=1",
+            "https://h/o/r#frag",
+        ),
+        decision_id="dec-bad",
+    )
+    policy = build_policy(egress, [], "proxy.example.com:443")
+
+    assert policy.remotes == frozenset()
+
+
+def test_build_policy_normalizes_ip_hosts() -> None:
+    egress = ProjectEgress(
+        registries=(),
+        remotes=("https://[2001:DB8::1]:8443/o/r",),
+        decision_id="dec-ip",
+    )
+    policy = build_policy(egress, [], "[::1]:443")
+
+    assert policy.remotes == frozenset({("https", "2001:db8::1", 8443, "/o/r")})
+    assert policy.model_proxy == ("::1", 443)
+
+
+def test_egress_policy_holds_only_normalized_origins() -> None:
+    policy = build_policy(
+        ProjectEgress(registries=(), remotes=(), decision_id=None),
+        [],
+        "proxy.example.com:443",
+    )
+    assert isinstance(policy, EgressPolicy)
+    assert policy.registries == frozenset()
+    assert policy.remotes == frozenset()
+    assert policy.standing == ()
+    assert policy.decision_id is None
+
 
