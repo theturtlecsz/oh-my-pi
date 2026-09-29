@@ -39,3 +39,17 @@ LLM reasoning proposes, deterministic software validates and authorizes, Run Own
 ## Contract versions (D30)
 
 Chris approves the contract versions of OMP-405 (stop control) and OMP-411 to OMP-426 (mandate); other items keep flood's procedure; OMP-403 and OMP-429 to OMP-431 are Chris's too (OMP-412).
+
+## Run Owner invariants
+
+From MANDATE-VALIDATION.md (2026-09-28). ADR 0004 is unchanged (D28). Under A10, OMP-421 builds these checks before the OMP-417 orchestrator; they are not built yet.
+
+| Invariant | Control-plane check | Lands in | Test |
+| --- | --- | --- | --- |
+| Single mutation authority | Only WorkService writes; workers hold no write scope and return proposals | OMP-402, OMP-403, OMP-421 | A worker's write command is refused |
+| Admission control | Needs approved mission scope, effort field, budget reservation, free capacity | OMP-417, OMP-420, OMP-421 | A job missing scope, effort or reservation is refused |
+| Budget policy | Reservation before dispatch; usage per job; threshold event; overrun pauses and raises a decision | OMP-404, OMP-413, OMP-417 | Dispatch without reservation refused; overrun pauses |
+| Worker lifecycle | Register, lease, renew, fence; after reclaim read state, re-dispatch once | OMP-400, OMP-417 | Fenced write refused; reclaimed job resumes once |
+| Acceptance semantics | Sealed criteria, evidence per criterion, independent reviewer PASS | OMP-417, OMP-420, OMP-421 | Close without PASS or with self-review refused |
+| Authoritative state | WorkService only; sessions and pending files are caches | OMP-413, OMP-417 | Restart test reads only WorkService |
+| Contract freeze | Mission and stop-control contract versions need Chris's approval (D30) | OMP-405, OMP-413 to OMP-416 | Version without approval record does not activate |
