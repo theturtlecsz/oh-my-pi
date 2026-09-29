@@ -54,6 +54,24 @@
       ]
     },
     {
+      "tool_calls": [
+        {
+          "id": "revise-stale-confirm",
+          "name": "work",
+          "resolved": "confirmation_id",
+          "arguments": {
+            "action": "revise_work",
+            "work": "OMP-1",
+            "scope": "stale/scope",
+            "acceptance_criteria": ["Stale AC"],
+            "expected_revision_id": "00000000-0000-7000-8000-000000000010",
+            "confirm": true,
+            "confirmation_id": "$confirmation_id"
+          }
+        }
+      ]
+    },
+    {
       "text": "The amendment landed as revision 2; the stale re-revision was refused."
     }
   ],

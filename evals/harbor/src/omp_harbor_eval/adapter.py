@@ -18,11 +18,10 @@ startup. A readback that is already terminal, with the grant visible and no
 queued outbox, still takes that one restart. An ``extension_error``, any
 error event, or an ``extension_ui_request`` notify whose ``notifyType`` is
 ``error``, before the first ``agent_start`` or ``turn_start`` ends the trial
-at once as ``harness_error`` with that text, ahead of a crash restart. Every
-frame in both
+at once as ``harness_error`` with that text, ahead of a crash restart. Every frame in both
 directions is logged to ``rpc-transcript.jsonl``; the grader's
-``transcript.jsonl`` instead holds one semantic record per refused ``work``
-call. Optional ``session_reader``
+``transcript.jsonl`` is created for every trial (possibly empty) and holds one
+semantic record per refused ``work`` call. Optional ``session_reader``
 and ``before_seal`` hooks read the session log and augment evidence before
 sealing; hook exceptions record ``harness_error`` (or ``session_read_error`` if
 the run already failed with ``harness_error``). If reading the startup session
@@ -200,10 +199,11 @@ class _Transcript:
     """Log every RPC frame, and derive the grader's semantic decision records.
 
     ``rpc-transcript.jsonl`` holds every frame in both directions. The grader
-    reads ``transcript.jsonl`` instead: for each ``work`` tool result the host
-    refused it appends one ``{"decision": <action>, "refused": true,
-    "expected_revision_id": <id or null>, "text": <tool text>}`` record, so
-    f1's ``transcript_count`` rule counts refusals, not frames.
+    reads ``transcript.jsonl`` instead: created for every trial (possibly empty),
+    for each ``work`` tool result the host refused it appends one
+    ``{"decision": <action>, "refused": true, "expected_revision_id": <id or null>,
+    "text": <tool text>}`` record, so f1's ``transcript_count`` rule counts
+    refusals, not frames.
     """
 
     def __init__(
@@ -216,6 +216,12 @@ class _Transcript:
         self._lock = threading.Lock()
         self._closed = False
         self._work_actions: dict[str, Any] = {}
+        with self._lock:
+            self._ensure_transcript_file()
+
+    def _ensure_transcript_file(self) -> None:
+        if not (self._evidence.directory / TRANSCRIPT).is_file():
+            self._evidence.add_file(TRANSCRIPT, b"")
 
     def write(self, direction: str, frame: Any) -> None:
         callback: Callable[[Any], None] | None = None
@@ -250,6 +256,7 @@ class _Transcript:
     def close(self) -> None:
         with self._lock:
             self._closed = True
+            self._ensure_transcript_file()
 
 
 def _tool_text(result: Any) -> str:
@@ -889,6 +896,8 @@ class RpcAdapter:
         try:
             self._capture_startup_log(reason)
             self.evidence.write_json(SERVICE_READBACK, readback if readback is not None else {})
+            if not (self.evidence.directory / TRANSCRIPT).is_file():
+                self.evidence.add_file(TRANSCRIPT, b"")
             session_document: dict[str, Any] = {"id": session_id, "file": session_file}
             if self._restarts:
                 session_document["restarts"] = list(self._restarts)

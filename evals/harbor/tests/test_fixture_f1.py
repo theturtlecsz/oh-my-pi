@@ -166,17 +166,18 @@ def test_scenario_scripts_match_their_authored_sidecars() -> None:
     # be the same rules the scenario carries or the fixture would drift silently.
     assert ui_script == list(fixture.scenario.ui_script)
 
-    # The amendment, its transcript-bound confirmation, then the stale retry.
+    # The amendment, its confirmation, then the stale retry and its confirmation.
     calls = [
         step["tool_calls"][0]["arguments"]
         for step in fixture.scenario.model_script
         if "tool_calls" in step
     ]
-    assert [call.get("confirm") for call in calls] == [None, True, None]
-    assert calls[0]["expected_revision_id"] == calls[2]["expected_revision_id"]
+    assert [call.get("confirm") for call in calls] == [None, True, None, True]
+    assert calls[0]["expected_revision_id"] == calls[2]["expected_revision_id"] == calls[3]["expected_revision_id"]
     assert calls[0]["scope"] == calls[1]["scope"] == "amended/scope"
     assert calls[0]["acceptance_criteria"] == ["Amended AC 1", "Amended AC 2"]
-    assert calls[2]["scope"] == "stale/scope"
+    assert calls[2]["scope"] == calls[3]["scope"] == "stale/scope"
+    assert calls[1]["confirmation_id"] == calls[3]["confirmation_id"] == "$confirmation_id"
     assert ui_script == [{"method": "confirm", "title": "Run work?", "answer": {"confirmed": True}}]
 
 
