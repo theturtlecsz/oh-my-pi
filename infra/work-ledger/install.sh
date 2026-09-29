@@ -94,6 +94,20 @@ Restart=on-failure
 [Install]
 WantedBy=default.target
 ''',
+    "omp-work-jobs-worker.service": f'''[Unit]
+Description=OMP Work Ledger Native Jobs Worker
+Requires=omp-work-service.service
+After=omp-work-service.service
+
+[Service]
+Type=simple
+{environment}
+ExecStart={python_command} -I -B -m omp_work jobs worker --config {quoted(config + '/jobs-worker.json')}
+Restart=always
+
+[Install]
+WantedBy=default.target
+''',
     "omp-work-backup.service": f'''[Service]
 Type=oneshot
 {environment}

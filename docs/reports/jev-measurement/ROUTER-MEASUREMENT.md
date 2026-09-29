@@ -50,9 +50,21 @@ Everything downstream of "probability" therefore does not survive the move. What
 
 ## Metrics that stay comparable to the OMP-298 report
 
-- **Accuracy vs current.** Same datasets, same labels, same scoring; the current-side numbers come from the OMP-298 path (the configured smol classifier with the Jev decision path forced off), so the column comparison holds.
+- **Accuracy vs current.** Same datasets, same labels, same scoring; the current-side numbers come from the OMP-298 path (the configured classifier with the Jev decision path forced off), so the column comparison holds. The current side uses the model described in [Current-side smol model and harness resolution](#current-side-smol-model-and-harness-resolution).
 - **p50 / p95 latency.** Per-call wall time, measured the same way on both sides.
-- **Cost per 1000 calls.** Jev-side from actual OpenRouter usage (the generation record's `total_cost`); current-side from provider-reported usage. Every Jev cell records its cost source, so a price derived without a generation record is visible.
+- **Cost per 1000 calls.** Jev-side from actual OpenRouter usage (the generation record's `total_cost`); current-side from provider-reported completion usage. The report and `results.json` use the same cost-source label: `generation-record` or `tokens-x-catalogue-price` on the Jev side, and `provider-usage` on the current side when that side reported a non-zero completion cost (`unavailable` when it ran and reported none). A current-side cell is `not measured` only when that side did not run.
+
+## Current-side smol model and harness resolution
+
+The current side runs `classifyDifficulty` and `classifyUnexpectedStop` with the Jev decision path forced off.
+
+- **Which model it uses:** The first model `resolveRoleSelection(["tiny", "smol"], settings, registry.getAvailable())` returns. A configured `modelRoles.tiny` is selected first. `modelRoles.smol` is used when tiny does not resolve to an available model.
+- **Where it comes from:** `buildCurrentSmolHarness()` in `run-router.ts`:
+  1. `Settings.loadReadOnly()` reads `config.yml` or `config.yaml` from the agent directory (`~/.omp/agent` by default) and merges project settings, including model roles from the project `.omp/config.yml`.
+  2. `discoverAuthStorage()` opens the local credential store at `~/.omp/agent/agent.db`, or an auth broker when one is configured (`OMP_AUTH_BROKER_URL` / `OMP_AUTH_BROKER_TOKEN`, or `auth.broker.url` / `auth.broker.token` in the agent `config.yml`, with `~/.omp/auth-broker.token` when that file holds the broker token).
+  3. `ModelRegistry` is built from that credential store and the read-only settings.
+  4. `withoutJevSettings()` forces `jev.enabled`, `jev.autoThinking`, and `jev.unexpectedStop` to false.
+  5. Both classifiers call `resolveRoleSelection(["tiny", "smol"], settings, registry.getAvailable())`. Roles are tried in that order. For each role, `resolveModelRoleValue(settings.getModelRole(role), ...)` returns no model when that role is unset, so an unset role does not consult `MODEL_PRIO`. The `MODEL_PRIO.smol` list in `packages/coding-agent/src/config/model-resolver.ts` is used only when a stored role value is an alias such as `@smol` and that alias has no concrete override.
 
 ## What the report must say is not measured
 
@@ -62,7 +74,7 @@ The report's "What is not measured" section (in `router-report-template.md`) sta
 - Off-list / off-options answer-space validation — a routed answer with no allowed label is one unparseable bucket, not two.
 - Robomp routed-decision equivalence — the five yes/no gates and the answer/session route are not reproduced.
 - Router internals — Jev Router's own routing cost and its forwarded sub-request are invisible; only the routed model id, its reasoning effort, and its price are reported.
-- Current-side model identity — the current side runs the configured smol role, not a matched model, so the latency/cost comparison is not a same-model comparison.
+- Current-side model identity — the current side runs the model `resolveRoleSelection(["tiny", "smol"], settings, registry.getAvailable())` returns (configured `modelRoles.tiny` first, then `modelRoles.smol`; those roles are read from the agent directory `config.yml` / `config.yaml` and the project `.omp/config.yml`), not a matched model, so the latency/cost comparison is not a same-model comparison.
 
 ## WP5 verdict decision
 

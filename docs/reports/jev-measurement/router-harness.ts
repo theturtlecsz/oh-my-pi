@@ -109,8 +109,12 @@ export interface RouterRouteMetrics {
 	p50LatencyMs: number;
 	p95LatencyMs: number;
 	costPer1000Usd: number;
-	/** Where costPer1000Usd came from: a generation record, or tokens x catalogue price. */
-	costSource: "generation-record" | "tokens-x-catalogue-price" | "unavailable";
+	/**
+	 * Where costPer1000Usd came from. Router rows use an OpenRouter generation
+	 * record or tokens times catalogue price. The current side uses the
+	 * provider-reported completion cost (`provider-usage`).
+	 */
+	costSource: "generation-record" | "tokens-x-catalogue-price" | "provider-usage" | "unavailable";
 	/** Routed answers that carried no allowed label. There is no separate off-list bucket in router mode. */
 	unparseableRate: number;
 	transportFailureRate: number;
@@ -424,14 +428,25 @@ async function measureCurrent(
 	const total = items.length || 1;
 	const correct = values.filter((v, i) => v !== undefined && v === items[i].expected).length;
 	const unparseable = values.filter(v => v === undefined).length;
+	let precision: number | undefined;
+	let recall: number | undefined;
+	if (mode === "stop") {
+		const tp = values.filter((v, i) => v === "continue" && items[i].expected === "continue").length;
+		const fp = values.filter((v, i) => v === "continue" && items[i].expected !== "continue").length;
+		const fn = values.filter((v, i) => v !== "continue" && items[i].expected === "continue").length;
+		precision = tp + fp > 0 ? tp / (tp + fp) : 1;
+		recall = tp + fn > 0 ? tp / (tp + fn) : 1;
+	}
 	return {
 		sampleSize: items.length,
 		answerRate: (items.length - unparseable) / total,
 		accuracy: correct / total,
+		precision,
+		recall,
 		p50LatencyMs: percentile(latencies, 0.5),
 		p95LatencyMs: percentile(latencies, 0.95),
 		costPer1000Usd: (costTotal / total) * 1000,
-		costSource: costTotal > 0 ? "generation-record" : "unavailable",
+		costSource: costTotal > 0 ? "provider-usage" : "unavailable",
 		unparseableRate: unparseable / total,
 		transportFailureRate: 0,
 		routedModels: { [CURRENT_MODEL.id]: items.length },
@@ -444,7 +459,7 @@ async function measureCurrent(
  * the plain smol classifier. Mirrors the harness's own `withoutJev`, kept local
  * so this module adds no export to the existing harness.
  */
-function withoutJevSettings(settings: CurrentSmolHarness["settings"]): CurrentSmolHarness["settings"] {
+export function withoutJevSettings(settings: CurrentSmolHarness["settings"]): CurrentSmolHarness["settings"] {
 	const forcedOff = new Set(["jev.enabled", "jev.autoThinking", "jev.unexpectedStop"]);
 	return new Proxy(settings, {
 		get(target, prop, receiver) {

@@ -262,6 +262,7 @@ def claim_job(
     workspace_id: UUID,
     actor_id: UUID,
     worker_id: str,
+    resource_limits: dict[str, int] | None = None,
 ) -> dict[str, object]:
     """Lease the oldest matching native backlog job to one active worker.
 
@@ -269,18 +270,23 @@ def claim_job(
     ``job_worker_unavailable``. The worker row is locked, then the oldest
     backlog native job in the workspace is taken with ``FOR UPDATE SKIP
     LOCKED``. It must be one whose capabilities the worker holds, whose
-    resource weight fits the worker's free capacity, and whose ancestors are
-    not cancelled. Weight is ``cpu + memory_mib + gpu + model_calls``. Free
-    capacity is ``capacity`` minus the weight of that worker's unreleased
-    reservations. The lease stores the job's resources on reservation
-    ``{job_id}:{fence}``. A job with a ``trial_id`` is eligible only while
-    the trial is proposed, the campaign is admitted or running, and the
-    worker's component is in ``compatibility.workers``. No match returns
-    ``job: None``.
+    resource weight fits the worker's free capacity, whose per-resource
+    limits are not exceeded, and whose ancestors are not cancelled. Weight
+    is ``cpu + memory_mib + gpu + model_calls``. Free capacity is ``capacity``
+    minus the weight of that worker's unreleased reservations. The lease
+    stores the job's resources on reservation ``{job_id}:{fence}``. A job
+    with a ``trial_id`` is eligible only while the trial is proposed, the
+    campaign is admitted or running, and the worker's component is in
+    ``compatibility.workers``. No match returns ``job: None``.
     """
+    limits = _require_resource_limits(resource_limits)
     if not isinstance(worker_id, str) or not worker_id:
         raise JobError("job_worker_unavailable", ("unknown worker",))
-    request = {"workspace_id": str(workspace_id), "worker_id": worker_id}
+    request = {
+        "workspace_id": str(workspace_id),
+        "worker_id": worker_id,
+        "resource_limits": limits,
+    }
 
     with store.transaction(workspace_id, actor_id) as cur:
 
@@ -300,9 +306,8 @@ def claim_job(
             if worker["state"] != "active":
                 raise JobError("job_worker_unavailable", ("worker is not active",))
             held = set(_json_list(worker["capabilities"]))
-            free = int(worker["capacity"]) - _reserved_weight(
-                cur, workspace_id, worker_id
-            )
+            reserved_res = _reserved_resources(cur, workspace_id, worker_id)
+            free = int(worker["capacity"]) - sum(reserved_res.values())
             component = str(worker["component_sha256"])
             cur.execute(
                 """
@@ -315,7 +320,15 @@ def claim_job(
             )
             for candidate in cur.fetchall():
                 if not _claimable(
-                    store, cur, workspace_id, candidate, held, free, component
+                    store,
+                    cur,
+                    workspace_id,
+                    candidate,
+                    held,
+                    free,
+                    component,
+                    reserved_res,
+                    limits,
                 ):
                     continue
                 cur.execute(
@@ -329,7 +342,15 @@ def claim_job(
                 )
                 locked = cur.fetchone()
                 if locked is None or not _claimable(
-                    store, cur, workspace_id, locked, held, free, component
+                    store,
+                    cur,
+                    workspace_id,
+                    locked,
+                    held,
+                    free,
+                    component,
+                    reserved_res,
+                    limits,
                 ):
                     continue
                 if _root_budget_exhausted(
@@ -376,6 +397,27 @@ def _capabilities(value: object) -> list[str]:
             ("capabilities must be strings",),
         )
     return sorted(set(value))
+
+
+def _require_resource_limits(value: object) -> dict[str, int] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise JobError("invalid_request", ("resource_limits must be a dict or None",))
+    if not set(value.keys()).issubset(_RESOURCE_KEYS):
+        raise JobError(
+            "invalid_request",
+            ("resource_limits keys must be subset of cpu, memory_mib, gpu, model_calls",),
+        )
+    limits: dict[str, int] = {}
+    for key, limit in value.items():
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+            raise JobError(
+                "invalid_request",
+                ("resource_limits values must be integers >= 0",),
+            )
+        limits[key] = limit
+    return limits
 
 
 def _require_resources(value: object) -> dict[str, int]:
@@ -531,7 +573,7 @@ def _weight(value: object) -> int | None:
     return sum(vector.values())
 
 
-def _reserved_weight(cur: Any, workspace_id: UUID, worker_id: str) -> int:
+def _reserved_resources(cur: Any, workspace_id: UUID, worker_id: str) -> dict[str, int]:
     cur.execute(
         """
         SELECT resources FROM omp_jobs.reservations
@@ -539,12 +581,17 @@ def _reserved_weight(cur: Any, workspace_id: UUID, worker_id: str) -> int:
         """,
         (workspace_id, worker_id),
     )
-    total = 0
+    totals: dict[str, int] = {k: 0 for k in _RESOURCE_KEYS}
     for row in cur.fetchall():
-        weight = _weight(row["resources"])
-        if weight is not None:
-            total += weight
-    return total
+        vector = _resource_vector(row["resources"])
+        if vector is not None:
+            for k in _RESOURCE_KEYS:
+                totals[k] += vector.get(k, 0)
+    return totals
+
+
+def _reserved_weight(cur: Any, workspace_id: UUID, worker_id: str) -> int:
+    return sum(_reserved_resources(cur, workspace_id, worker_id).values())
 
 
 def _root_budget_exhausted(
@@ -578,10 +625,19 @@ def _claimable(
     held: set[str],
     free_weight: int,
     component_sha256: str,
+    reserved_res: dict[str, int] | None = None,
+    limits: dict[str, int] | None = None,
 ) -> bool:
     weight = _weight(job["resources"])
     if weight is None or weight > free_weight:
         return False
+    if limits is not None and reserved_res is not None:
+        vector = _resource_vector(job["resources"])
+        if vector is None:
+            return False
+        for res_name, limit in limits.items():
+            if reserved_res.get(res_name, 0) + vector.get(res_name, 0) > limit:
+                return False
     if job["lease_seconds"] is None:
         return False
     if not set(_json_list(job["required_capabilities"])) <= held:

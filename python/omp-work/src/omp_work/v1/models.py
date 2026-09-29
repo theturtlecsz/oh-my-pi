@@ -1726,6 +1726,20 @@ class ConcludeResearchCampaignCommand(StrictModel):
     payload: ConcludeResearchCampaignPayload
 
 
+class StopReasonPayload(StrictModel):
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class EngageStopCommand(StrictModel):
+    type: Literal["engage_stop"]
+    payload: StopReasonPayload
+
+
+class ReleaseStopCommand(StrictModel):
+    type: Literal["release_stop"]
+    payload: StopReasonPayload
+
+
 Command = Annotated[
     CreateWorkBatchCommand
     | CreateSameSessionChildCommand
@@ -1779,7 +1793,9 @@ Command = Annotated[
     | BindResearchDeliverableCommand
     | SetResearchCampaignStateCommand
     | ConcludeResearchCampaignCommand
-    | RecordAlarmSignalCommand,
+    | RecordAlarmSignalCommand
+    | EngageStopCommand
+    | ReleaseStopCommand,
     Field(discriminator="type"),
 ]
 
@@ -1829,6 +1845,7 @@ class SecurityPolicy(StrictModel):
     auditor_scopes: tuple[Literal["work.candidate.read"], ...]
     importer_scopes: tuple[Literal["work.import"], ...]
     operator_scopes: tuple[Literal["work.operate"], ...]
+    stop_client_scopes: tuple[Literal["work.stop"], ...]
     rls: Literal["force_workspace_actor_claims_no_public_no_bypassrls"]
     credentials: Literal[
         "operator_managed_mode_0600_host_only_no_agent_or_postgres_dsn"
@@ -2017,6 +2034,7 @@ class Approval(StrictModel):
         "OMP-404",
         "OMP-407",
         "OMP-406",
+        "OMP-405",
     ]
     attestation: hex64 | None = None
 

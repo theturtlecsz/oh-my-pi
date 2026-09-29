@@ -3,6 +3,7 @@
  * service (work.omp.dev/v1). Types mirror python/omp-work/src/omp_work/v1/
  * models.py + api_models.py one-for-one; the service is the authority.
  */
+import * as crypto from "node:crypto";
 import * as os from "node:os";
 import { WORK_CONTRACT_SHA256 } from "./contract";
 import type {
@@ -790,6 +791,10 @@ export type SkipActiveItemPayload = {
 	reason: string;
 };
 
+/** Stop reason for `engage_stop` / `release_stop`. The service requires 1–500 characters. */
+export type EngageStopPayload = { reason: string };
+export type ReleaseStopPayload = { reason: string };
+
 export * from "./research.generated";
 
 export type ResearchCapability = string;
@@ -858,7 +863,9 @@ export type Command =
 	| { type: "record_research_observation"; payload: RecordResearchObservationPayload }
 	| { type: "bind_research_deliverable"; payload: BindResearchDeliverablePayload }
 	| { type: "set_research_campaign_state"; payload: SetResearchCampaignStatePayload }
-	| { type: "conclude_research_campaign"; payload: ConcludeResearchCampaignPayload };
+	| { type: "conclude_research_campaign"; payload: ConcludeResearchCampaignPayload }
+	| { type: "engage_stop"; payload: EngageStopPayload }
+	| { type: "release_stop"; payload: ReleaseStopPayload };
 
 // ---- command results ----
 
@@ -973,7 +980,9 @@ export type CommandResult =
 	| RecordResearchObservationResult
 	| BindResearchDeliverableResult
 	| SetResearchCampaignStateResult
-	| ConcludeResearchCampaignResult;
+	| ConcludeResearchCampaignResult
+	| { type: "engage_stop"; stopped: boolean; reason: string }
+	| { type: "release_stop"; stopped: boolean; reason: string };
 
 export type ExecutionGrantView = {
 	grant_id: UUID;
@@ -1092,6 +1101,15 @@ export type StoredOperation = {
 	result: CommandResult | null;
 };
 export type HealthView = { live: boolean; ready: boolean; alerts: string[]; service_fingerprint?: string | null };
+
+/** `GET /v1/workspaces/{workspace_id}/stop`. Nullable fields are null before any stop event. */
+export type StopStatusView = {
+	workspace_id: UUID;
+	stopped: boolean;
+	reason: string | null;
+	changed_at: string | null;
+	changed_by_actor_kind: string | null;
+};
 
 /** /center recent-activity projection (OMP-25) — normalized event metadata
  *  only; receipt bodies and audit payloads never cross this read. */
@@ -1373,5 +1391,28 @@ export class WorkClient {
 	execution(grantIdOrKey?: string): Promise<ExecutionView> {
 		const suffix = grantIdOrKey ? `/${encodeURIComponent(grantIdOrKey)}` : "";
 		return this.request("GET", `/v1/workspaces/${this.workspaceId}/execution${suffix}`) as Promise<ExecutionView>;
+	}
+
+	stopStatus(): Promise<StopStatusView> {
+		return this.request("GET", `/v1/workspaces/${this.workspaceId}/stop`) as Promise<StopStatusView>;
+	}
+
+	engageStop(reason: string): Promise<CommandResponse> {
+		return this.execute(this.stopEnvelope("engage_stop", reason));
+	}
+
+	releaseStop(reason: string): Promise<CommandResponse> {
+		return this.execute(this.stopEnvelope("release_stop", reason));
+	}
+
+	private stopEnvelope(type: "engage_stop" | "release_stop", reason: string): CommandEnvelope {
+		return {
+			api_version: "work.omp.dev/v1",
+			workspace_id: this.workspaceId,
+			operation_id: crypto.randomUUID(),
+			request_id: crypto.randomUUID(),
+			correlation_id: crypto.randomUUID(),
+			command: { type, payload: { reason } },
+		};
 	}
 }

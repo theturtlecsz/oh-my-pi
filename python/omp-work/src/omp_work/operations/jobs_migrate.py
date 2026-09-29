@@ -1,7 +1,8 @@
 """Apply omp_jobs schema migrations (separate from work.omp.dev/v1).
 
-NOT wired into migration_set_sha256() or the main migrate() path.
-Uses OperationsConfig.defaults() + _connect as omp_work_migrator.
+``ops migrate`` now applies this set inline (``operations.database.migrate``);
+``apply_jobs_migrations`` remains the standalone applier and skips the ordinals
+the inline path already recorded in ``omp_jobs.schema_migrations``.
 """
 from __future__ import annotations
 

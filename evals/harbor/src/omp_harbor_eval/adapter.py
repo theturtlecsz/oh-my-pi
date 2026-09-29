@@ -8,7 +8,14 @@ records the last probe failure on the outcome reason.
 Scripted UI rules answer ``select``, ``confirm``, ``input``, and ``editor``
 requests. A request with no rule is cancelled and the run ends ``blocked``.
 An outbound frame matching ``scenario.kill_at.match`` is SIGKILLed once and
-resumed with ``--session`` and no second prompt. An ``extension_error``, any
+resumed with ``--session`` and no second prompt. ``kill_at.boundary`` of
+``enqueue`` does not kill on that frame: the match only arms the crash. The
+process is killed once the execution grant is visible and the live session
+file contains a ``*-execute-outbox`` custom entry with ``status`` ``queued``
+(the record written after the continuation ``sendMessage``). The resumed
+session file is that live file when it differs from the one captured at
+startup. A readback that is already terminal, with the grant visible and no
+queued outbox, still takes that one restart. An ``extension_error``, any
 error event, or an ``extension_ui_request`` notify whose ``notifyType`` is
 ``error``, before the first ``agent_start`` or ``turn_start`` ends the trial
 at once as ``harness_error`` with that text, ahead of a crash restart. Every
@@ -83,6 +90,50 @@ def kill_process_group(process: subprocess.Popen[str]) -> None:
             os.killpg(pgid, signal.SIGKILL)
     except OSError:
         return
+
+
+def _grant_visible(document: dict[str, Any] | None) -> bool:
+    """True when a probe read shows an execution grant that already exists."""
+
+    if not isinstance(document, dict):
+        return False
+    execution = document.get("execution")
+    if not isinstance(execution, dict):
+        return False
+    grant = execution.get("grant")
+    if not isinstance(grant, dict):
+        return False
+    state = grant.get("state")
+    return isinstance(state, str) and state != ""
+
+
+def _queued_execute_outbox(payload: bytes) -> bool:
+    """True when ``payload`` is a session log whose continuation was queued.
+
+    ``deliverExecutionMessage`` appends ``<entryType>-execute-outbox`` with
+    ``status`` ``pending`` before ``sendMessage`` and ``queued`` after it.
+    Only ``queued`` is the enqueue boundary.
+    """
+
+    for line in payload.splitlines():
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(entry, dict) or entry.get("type") != "custom":
+            continue
+        custom_type = entry.get("customType")
+        data = entry.get("data")
+        if (
+            isinstance(custom_type, str)
+            and custom_type.endswith("-execute-outbox")
+            and isinstance(data, dict)
+            and data.get("status") == "queued"
+        ):
+            return True
+    return False
 
 
 def _frame_subset(pattern: Any, frame: Any) -> bool:
@@ -486,6 +537,8 @@ class RpcAdapter:
             session_file = state.session_file
             self._session_id = session_id
             self._session_file = session_file
+            self._live_session_id = session_id
+            self._live_session_file = session_file
             if session_id == "" or session_file is None or session_file == "":
                 reason = "get_state did not return a session id and file"
             else:
@@ -526,6 +579,13 @@ class RpcAdapter:
         self._blocked = threading.Event()
         self._block_reason = ""
         self._kill_armed = self.scenario.kill_at is not None
+        self._kill_after_enqueue = False
+        self._grant_seen = False
+        self._rpc_process: subprocess.Popen[str] | None = None
+        self._live_session_id = None
+        self._live_session_file = None
+        self._enqueue_session_id: str | None = None
+        self._enqueue_session_file: str | None = None
         self._restarted = False
         self._deadline: float | None = None
         self._timeout_s = _DEFAULT_TIMEOUT_S
@@ -642,9 +702,61 @@ class RpcAdapter:
             return
         if not _frame_subset(self.scenario.kill_at.match, frame):
             return
+        self._rpc_process = process
+        if self.scenario.kill_at.boundary == "enqueue":
+            # The prompt frame names the command. The continuation is not queued yet.
+            self._kill_after_enqueue = True
+            return
+        self._fire_kill()
+
+    def _fire_kill(self) -> None:
+        if self._restarted or not self._kill_armed:
+            return
+        process = self._rpc_process
+        if process is None:
+            return
         self._kill_armed = False
+        self._kill_after_enqueue = False
         self._killed.set()
         self.killer(process)
+
+    def _follow_live_session(self) -> None:
+        """Track a session file created after startup, such as /execute relocation."""
+
+        client = self._client
+        if client is None:
+            return
+        try:
+            state = client.get_state()
+        except Exception:  # noqa: BLE001 - a missed read is retried on the next poll
+            return
+        if isinstance(state.session_file, str) and state.session_file:
+            self._live_session_file = state.session_file
+        if isinstance(state.session_id, str) and state.session_id:
+            self._live_session_id = state.session_id
+
+    def _enqueue_ready(self, document: dict[str, Any] | None) -> bool:
+        """True once the grant exists and the live session recorded the queued outbox."""
+
+        if not self._kill_after_enqueue or self._restarted:
+            return False
+        self._follow_live_session()
+        if _grant_visible(document):
+            self._grant_seen = True
+        if not self._grant_seen:
+            return False
+        path = self._live_session_file or self._session_file
+        if not path:
+            return False
+        try:
+            payload = self.session_reader(path)
+        except Exception:  # noqa: BLE001 - the session file may not be readable yet
+            return False
+        if not isinstance(payload, bytes) or not _queued_execute_outbox(payload):
+            return False
+        self._enqueue_session_file = path
+        self._enqueue_session_id = self._live_session_id or self._session_id
+        return True
 
     def _on_ui(self, client: _LoggingClient, request: omp_rpc.ExtensionUiRequest) -> None:
         if not request.requires_response():
@@ -692,18 +804,21 @@ class RpcAdapter:
             return early
         self._restarted = True
         self._kill_armed = False
+        self._kill_after_enqueue = False
         old = self._client
         if old is not None:
             old.stop()
         early = self._pre_turn_failure()
         if early is not None:
             return early
-        if not self._session_file:
+        session_file = self._enqueue_session_file or self._session_file
+        expected_id = self._enqueue_session_id or self._session_id
+        if not session_file:
             return "harness_error", "restart requires a session file", self._last
-        client = self._open((*self.command, "--session", self._session_file))
+        client = self._open((*self.command, "--session", session_file))
         state = client.get_state()
         self._restarts.append({"id": state.session_id, "file": state.session_file})
-        if state.session_id != self._session_id:
+        if state.session_id != expected_id:
             return "harness_error", "restart session id differs from the original", self._last
         return self._wait_for_terminal()
 
@@ -725,6 +840,10 @@ class RpcAdapter:
                 document = self.probe.read()
             except ProbeError:
                 document = None
+            if self._enqueue_ready(document):
+                self._fire_kill()
+            if self._killed.is_set() and not self._restarted:
+                return self._restart_and_wait()
             if document is not None:
                 self._last = document
                 try:
@@ -736,6 +855,12 @@ class RpcAdapter:
                 if self._killed.is_set() and not self._restarted:
                     return self._restart_and_wait()
                 if value is not _MISSING and _matches(value, accepted):
+                    # The fake trial is already terminal and never writes an outbox.
+                    # A real grant stays non-terminal until after the queued line.
+                    if self._kill_after_enqueue and self._grant_seen and not self._restarted:
+                        self._fire_kill()
+                        if self._killed.is_set():
+                            return self._restart_and_wait()
                     outcome = value if isinstance(value, str) else "completed"
                     return outcome, "terminal", self._last
             remaining = self._deadline - time.monotonic()

@@ -36,7 +36,7 @@ import type {
 const EXPERIMENT_TOOL_NAMES = ["init_experiment", "run_experiment", "log_experiment", "update_notes"];
 
 const logExperimentSchema = type({
-	metric: type("number").describe("primary metric value"),
+	metric: type("number").describe("primary metric value; ignored when the harness parsed a primary metric"),
 	status: type("'keep'|'discard'|'crash'|'checks_failed'").describe("run outcome"),
 	description: type("string").describe("short run description"),
 	"metrics?": type({ "[string]": "number" }).describe("secondary metrics"),
@@ -58,7 +58,7 @@ export function createLogExperimentTool(
 		name: "log_experiment",
 		label: "Log Experiment",
 		description:
-			"Log the result of the latest run_experiment. Records the metric, optional ASI metadata, modified paths, and scope deviations. On `keep`, modified files are committed; on `discard`/`crash`/`checks_failed`, the worktree is reverted. Pass `flag_runs` to mark earlier runs as suspect; flagged runs are excluded from baseline and best-metric math.",
+			"Log the result of the latest run_experiment. Records the metric, optional ASI metadata, modified paths, and scope deviations. When the pending run has a harness-parsed primary metric, that value is recorded and a different agent metric is ignored. On `keep`, modified files are committed; on `discard`/`crash`/`checks_failed`, the worktree is reverted. Pass `flag_runs` to mark earlier runs as suspect; flagged runs are excluded from baseline and best-metric math.",
 		parameters: logExperimentSchema,
 		defaultInactive: true,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -116,6 +116,9 @@ export function createLogExperimentTool(
 
 			const justification = params.justification?.trim() || null;
 			const warnings: string[] = [];
+			// Harness-parsed primary wins. The agent metric is recorded only when parsing produced none.
+			const agentMetric = params.metric;
+			const metric = pendingRun.parsedPrimary !== null ? pendingRun.parsedPrimary : agentMetric;
 
 			const headSha = await tryReadHeadSha(ctx.cwd);
 			const explicitCommit = params.commit?.trim();
@@ -128,7 +131,7 @@ export function createLogExperimentTool(
 						ctx.cwd,
 						params.description,
 						params.status,
-						params.metric,
+						metric,
 						params.metrics ?? {},
 						allModified,
 						session.primaryMetric,
@@ -171,7 +174,6 @@ export function createLogExperimentTool(
 				gitNote = revertResult.note ?? null;
 			}
 
-			const metric = params.metric;
 			const secondaryMetrics: NumericMetricMap = mergeMetrics(
 				pendingRun.parsedMetrics,
 				params.metrics,
@@ -179,10 +181,8 @@ export function createLogExperimentTool(
 			);
 			const asi: ASIData | undefined = mergeAsi(pendingRun.parsedAsi, sanitizeAsi(params.asi));
 
-			if (pendingRun.parsedPrimary !== null && metric !== pendingRun.parsedPrimary) {
-				warnings.push(
-					`Logged metric ${metric} differs from parsed primary ${pendingRun.parsedPrimary}. Both values stored.`,
-				);
+			if (pendingRun.parsedPrimary !== null && agentMetric !== pendingRun.parsedPrimary) {
+				warnings.push(`Logged metric ${agentMetric} ignored; harness-parsed ${pendingRun.parsedPrimary} recorded.`);
 			}
 
 			const loggedAt = Date.now();

@@ -13,6 +13,7 @@ from omp_work import contract_sha256
 from .api_models import (
     CommandResponse,
     DomainEventsPage,
+    StopStatusView,
     StoredOperationView,
     WorkflowView,
     WorkItemsPage,
@@ -65,6 +66,13 @@ class WorkClient:
     def tree(self) -> WorkspaceTree:
         return WorkspaceTree.model_validate(
             self._get(f"/v1/workspaces/{self._workspace_id}/tree")
+        )
+
+    def stop_status(self) -> StopStatusView:
+        """OMP-405: the workspace's stop state, derived from the latest applied
+        engage_stop/release_stop domain event."""
+        return StopStatusView.model_validate(
+            self._get(f"/v1/workspaces/{self._workspace_id}/stop")
         )
 
     def focus(self, owner_id: UUID) -> FocusSlot:

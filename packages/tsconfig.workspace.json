@@ -324,6 +324,9 @@
 			"@oh-my-pi/pi-coding-agent/extensibility/extensions/*": [
 				"./coding-agent/src/extensibility/extensions/*.ts"
 			],
+			"@oh-my-pi/pi-coding-agent/autoresearch/tournament/*": [
+				"./coding-agent/src/autoresearch/tournament/*.ts"
+			],
 			"@oh-my-pi/pi-coding-agent/extensibility/plugins/*": [
 				"./coding-agent/src/extensibility/plugins/*.ts"
 			],

@@ -22,7 +22,7 @@ from omp_work.operations.fingerprints import (
 )
 
 from .api_models import CommandResponse
-from .models import CommandEnvelope, SetExecutionStateCommand
+from .models import CommandEnvelope, EngageStopCommand, SetExecutionStateCommand
 from .service import Principal, WorkError, WorkService
 from .store import PostgresWorkStore, WorkStore
 
@@ -248,6 +248,27 @@ def create_app(
     def execution(request: Request, workspace_id: UUID, grant_id: str = "") -> JSONResponse:
         return read_route(request, workspace_id, "execution", grant_id)
 
+    @app.get("/v1/workspaces/{workspace_id}/stop")
+    def stop(request: Request, workspace_id: UUID) -> JSONResponse:
+        try:
+            _require_contract(request, service_digest)
+            principal = _principal(request, capabilities_dir)
+            return JSONResponse(
+                jsonable_encoder(service.stop_status(principal, workspace_id))
+            )
+        except WorkError as error:
+            return JSONResponse(
+                {
+                    "error": {
+                        "code": error.code,
+                        "request_id": None,
+                        "correlation_id": None,
+                        "diagnostics": list(error.diagnostics[:8]),
+                    }
+                },
+                status_code=error.status,
+            )
+
     @app.get("/v1/workspaces/{workspace_id}/activity")
     def activity(
         request: Request,
@@ -438,7 +459,11 @@ def create_app(
                     and envelope.command.payload.target_state
                     in ("paused", "stopped", "canceled")
                 )
-                if not (is_service_refresh or is_halt_or_pause):
+                # OMP-405: engaging the agent stop is a safety action — it must
+                # land even when this process is stale. Releasing it is not, so
+                # release_stop (and everything else) keeps the 503 refusal.
+                is_engage_stop = isinstance(envelope.command, EngageStopCommand)
+                if not (is_service_refresh or is_halt_or_pause or is_engage_stop):
                     raise WorkError(
                         "unavailable",
                         status=503,

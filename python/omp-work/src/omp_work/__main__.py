@@ -23,6 +23,7 @@ from . import (
     validate_bundle,
 )
 from .operations import cli as operations_cli
+from .operations import stop as stop_ops
 from .operations.config import OperationsConfig
 from .operations.database import collect_health
 from .v1.client import WorkClient
@@ -217,6 +218,50 @@ def _run_alarms_command(args: argparse.Namespace) -> int:
     return 2
 
 
+def _run_stop_command(args: argparse.Namespace) -> int:
+    if args.stop_command == "install-guards":
+        try:
+            stop_ops.install_guards(
+                args.units,
+                systemd_dir=args.systemd_dir,
+                interval=args.interval,
+            )
+            return 0
+        except Exception as error:
+            print(f"stop: {error}", file=sys.stderr)
+            return 2
+
+    client_config = args.client_config or str(_default_client_config())
+    try:
+        client, workspace_id = stop_ops.load_client(
+            Path(client_config), args.bearer_file
+        )
+    except Exception as error:
+        print(f"stop: {error}", file=sys.stderr)
+        return 255
+    try:
+        if args.stop_command == "watch":
+            stop_ops.watch(client, args.units, interval=args.interval)
+            return 0
+        if args.stop_command == "check":
+            return stop_ops.check(client)
+        if args.stop_command == "status":
+            view = stop_ops.status(client)
+            print(json.dumps(view.model_dump(mode="json"), sort_keys=True))
+            return 0
+        if args.stop_command == "engage":
+            response = stop_ops.engage(client, workspace_id, args.reason)
+        else:
+            response = stop_ops.release(client, workspace_id, args.reason)
+        print(response.model_dump_json())
+        return 0
+    except Exception as error:
+        print(f"stop: {error}", file=sys.stderr)
+        return 255
+    finally:
+        client.close()
+
+
 def main(argv: list[str] | None = None) -> int | None:
     parser = argparse.ArgumentParser(prog="python -m omp_work")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -266,6 +311,29 @@ def main(argv: list[str] | None = None) -> int | None:
     alerts.add_argument("--workspace", required=True, type=UUID)
     alerts.add_argument("--actor", required=True, type=UUID)
 
+    stop = subcommands.add_parser("stop")
+    stop_commands = stop.add_subparsers(dest="stop_command", required=True)
+    stop_scope = argparse.ArgumentParser(add_help=False)
+    stop_scope.add_argument("--client-config")
+    stop_scope.add_argument("--bearer-file", type=Path)
+    stop_commands.add_parser("status", parents=[stop_scope])
+    stop_commands.add_parser("check", parents=[stop_scope])
+    engage = stop_commands.add_parser("engage", parents=[stop_scope])
+    engage.add_argument("--reason", required=True)
+    release = stop_commands.add_parser("release", parents=[stop_scope])
+    release.add_argument("--reason", required=True)
+    watch_parser = stop_commands.add_parser("watch", parents=[stop_scope])
+    watch_parser.add_argument(
+        "--unit", action="extend", nargs="+", dest="units", required=True
+    )
+    watch_parser.add_argument("--interval", type=float, default=5.0)
+    install_parser = stop_commands.add_parser("install-guards", parents=[stop_scope])
+    install_parser.add_argument(
+        "--unit", action="extend", nargs="+", dest="units", required=True
+    )
+    install_parser.add_argument("--systemd-dir", type=Path, default=None)
+    install_parser.add_argument("--interval", type=float, default=5.0)
+
     alarms = subcommands.add_parser("alarms")
     alarm_common = argparse.ArgumentParser(add_help=False)
     alarm_common.add_argument("--state", required=True)
@@ -278,11 +346,29 @@ def main(argv: list[str] | None = None) -> int | None:
     watch = alarm_commands.add_parser("watch-credentials", parents=[alarm_common])
     watch.add_argument("--root", action="append")
 
+    jobs_parser = subcommands.add_parser("jobs")
+    jobs_sub = jobs_parser.add_subparsers(dest="jobs_command", required=True)
+
+    worker_parser = jobs_sub.add_parser("worker")
+    worker_parser.add_argument("--config", required=True, type=Path)
+    worker_parser.add_argument("--once", action="store_true", default=False)
+
+    check_parser = jobs_sub.add_parser("check")
+    check_parser.add_argument("--config", required=True, type=Path)
+    check_parser.add_argument("--work-id", default=None)
+    check_parser.add_argument("--count", type=int, default=1)
+    check_parser.add_argument("--timeout", type=float, default=30.0)
+
+    reg_parser = jobs_sub.add_parser("register-component")
+    reg_parser.add_argument("--config", required=True, type=Path)
+
     args = parser.parse_args(argv)
     if args.command == "alarms":
         if args.client_config is None:
             args.client_config = str(_default_client_config())
         return _run_alarms_command(args)
+    if args.command == "stop":
+        return _run_stop_command(args)
     if args.command == "serve":
         if args.host not in {"127.0.0.1", "::1", "localhost"}:
             raise SystemExit("non-loopback bind refused")
@@ -413,6 +499,24 @@ def main(argv: list[str] | None = None) -> int | None:
             return 0
     if args.command == "budget-alerts":
         return _budget_alerts(args.workspace, args.actor)
+    if args.command == "jobs":
+        from .jobs.process import check, register_component, run_worker
+
+        if args.jobs_command == "worker":
+            res = run_worker(args.config, once=args.once)
+            return 0 if res is None else res
+        if args.jobs_command == "register-component":
+            register_component(args.config)
+            return 0
+        if args.jobs_command == "check":
+            result = check(
+                args.config,
+                work_id=args.work_id,
+                count=args.count,
+                timeout=args.timeout,
+            )
+            print(json.dumps(result, indent=2))
+            return 0 if result.get("passed") else 1
     return 2
 
 

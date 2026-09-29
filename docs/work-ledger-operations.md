@@ -26,7 +26,15 @@ This must be run by the owner in an interactive terminal after reviewing the pri
 
 The attestation is not an unforgeable proof of owner intent, and one is not possible here: the owner, flood, and implementers all run as the same local user on one host, so no secret exists that an implementer cannot read, and CI could not verify a secret-keyed signature because it would have to hold the same key. The marker only proves the file matches what `omp-work approve` writes, not who ran the command. The enforcing control is provenance:
 
-`bun scripts/approval-provenance.ts --base <rev>` runs in the CI `check` job on pull requests (`--base` is the PR's target branch). It fails when any commit in `<base>..<head>` adds or changes `approval.json` unless that commit is authored by `flood-owner` with a subject containing `owner step by flood` or `flood rebase_repair`; for a merge commit it fails only when the merged blob matches no parent (a conflict resolution that rewrote the attestation).
+`bun scripts/approval-provenance.ts --base <rev>` runs in the CI `check` job on pull requests (`--base` is the PR's target branch). It fails when any commit in `<base>..<head>` adds or changes `approval.json` unless that commit is authored by `flood-owner` with a subject containing `owner step by flood`, `flood rebase_repair`, or `owner step by owner session`; for a merge commit it fails only when the merged blob matches no parent (a conflict resolution that rewrote the attestation).
+
+An owner session that commits the approval itself produces the `owner step by owner session` form with the helper:
+
+```sh
+bun scripts/commit-contract-approval.ts --issue <work-key> [--digest <sha256>]
+```
+
+The helper stages `approval.json` and `packages/work-client/src/contract.ts` and commits them with author and committer `flood-owner <flood@localhost>` and that subject marker, so a session commit passes the same check the flood-applied `owner step by flood` commit does. The commit identity comes from the helper, not from the session's git config. It never writes, rewrites, or regenerates the approval bytes — `omp-work approve` owns the file, and the helper only stages what that command already wrote. A bare `git commit` of the approval is rejected by CI; this helper is the required commit form.
 
 Implementers never write `approval.json` or the `WORK_CONTRACT_SHA256` digest in `packages/work-client/src/contract.ts`, including when resolving a rebase conflict.
 

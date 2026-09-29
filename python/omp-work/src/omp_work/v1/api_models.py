@@ -508,6 +508,18 @@ class ResearchView(StrictModel):
     artifacts: tuple[ResearchArtifact, ...] = ()
 
 
+class EngageStopResult(StrictModel):
+    type: Literal["engage_stop"]
+    stopped: bool
+    reason: str
+
+
+class ReleaseStopResult(StrictModel):
+    type: Literal["release_stop"]
+    stopped: bool
+    reason: str
+
+
 CommandResult = Annotated[
     CreateWorkBatchResult
     | CreateSameSessionChildResult
@@ -552,7 +564,9 @@ CommandResult = Annotated[
     | BindResearchDeliverableResult
     | SetResearchCampaignStateResult
     | ConcludeResearchCampaignResult
-    | AlarmSignalResult,
+    | AlarmSignalResult
+    | EngageStopResult
+    | ReleaseStopResult,
     Field(discriminator="type"),
 ]
 
@@ -618,5 +632,13 @@ class DomainEventsPage(StrictModel):
     watermark_sequence: int
     next_after_sequence: int
     has_more: bool
+
+
+class StopStatusView(StrictModel):
+    workspace_id: UUID
+    stopped: bool
+    reason: str | None = None
+    changed_at: datetime | None = None
+    changed_by_actor_kind: str | None = None
 
 

@@ -18,6 +18,9 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { discoverAuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-broker-config";
 import type { FetchImpl } from "@oh-my-pi/pi-utils";
 import { type CurrentSmolHarness } from "./harness";
 import {
@@ -27,8 +30,20 @@ import {
 	type RouterPromptItem,
 	type RouterTurnEndItem,
 	runRouterMeasurement,
+	withoutJevSettings,
 } from "./router-harness";
 import { makeOpenRouterFetch, readJevEnvKey, ROUTER_ENV_DIR, ROUTER_ENV_FILE } from "./router-transport";
+
+/**
+ * Builds the real current-side harness: the owner's configured settings and
+ * model registry, with the Jev decision path forced off via withoutJevSettings.
+ */
+export async function buildCurrentSmolHarness(): Promise<CurrentSmolHarness> {
+	const rawSettings = await Settings.loadReadOnly();
+	const settings = withoutJevSettings(rawSettings);
+	const registry = new ModelRegistry(await discoverAuthStorage(), undefined, { settings });
+	return { settings, registry };
+}
 
 function formatPercent(value?: number): string {
 	if (value === undefined || Number.isNaN(value)) return "0.0%";
@@ -99,12 +114,20 @@ export function renderRouterReport(results: RouterMeasurementResults, template: 
 	fill("auto_thinking_current_p50", currentAt ? formatNumber(currentAt.p50LatencyMs, 1) : "not measured");
 	fill("auto_thinking_current_p95", currentAt ? formatNumber(currentAt.p95LatencyMs, 1) : "not measured");
 	fill("auto_thinking_current_cost", currentAt ? formatUsd(currentAt.costPer1000Usd) : "not measured");
+	fill("auto_thinking_current_cost_source", currentAt ? currentAt.costSource : "not measured");
 	fill("unexpected_stop_current_accuracy", currentUs ? formatPercent(currentUs.accuracy) : "not measured");
-	fill("unexpected_stop_current_precision", currentUs?.precision ? formatPercent(currentUs.precision) : "not measured");
-	fill("unexpected_stop_current_recall", currentUs?.recall ? formatPercent(currentUs.recall) : "not measured");
+	fill(
+		"unexpected_stop_current_precision",
+		currentUs && currentUs.precision !== undefined ? formatPercent(currentUs.precision) : "not measured",
+	);
+	fill(
+		"unexpected_stop_current_recall",
+		currentUs && currentUs.recall !== undefined ? formatPercent(currentUs.recall) : "not measured",
+	);
 	fill("unexpected_stop_current_p50", currentUs ? formatNumber(currentUs.p50LatencyMs, 1) : "not measured");
 	fill("unexpected_stop_current_p95", currentUs ? formatNumber(currentUs.p95LatencyMs, 1) : "not measured");
 	fill("unexpected_stop_current_cost", currentUs ? formatUsd(currentUs.costPer1000Usd) : "not measured");
+	fill("unexpected_stop_current_cost_source", currentUs ? currentUs.costSource : "not measured");
 
 	return rendered;
 }
@@ -177,8 +200,17 @@ export async function runRouter(options: RunRouterOptions): Promise<RouterMeasur
 	return results;
 }
 
-async function main() {
-	const args = process.argv.slice(2);
+export interface RunRouterMainDeps {
+	readKey?: (configHome?: string) => string | undefined;
+	buildCurrentHarness?: () => Promise<CurrentSmolHarness>;
+	fetch?: FetchImpl;
+}
+
+export async function main(
+	argv: string[] = process.argv.slice(2),
+	deps: RunRouterMainDeps = {},
+): Promise<RouterMeasurementResults> {
+	const args = argv;
 	let setsDir = "";
 	let outPath = "docs/reports/jev-router-measurement-report.md";
 	let jsonPath: string | undefined;
@@ -208,25 +240,29 @@ async function main() {
 		}
 	}
 
-	// The key is read at run time from the owner's env file. Tests never reach
-	// here: they call runRouter() with an explicit fake transport and key.
-	const apiKey = readJevEnvKey(configHome);
+	// The key is read at run time from ~/.config/omp/jev.env (OPENROUTER_API_KEY).
+	// Tests point --config-home at a temp file, or inject deps.readKey.
+	const apiKey = deps.readKey ? deps.readKey(configHome) : readJevEnvKey(configHome);
 	if (!apiKey) {
 		const home = configHome ?? "the owner's config home";
 		console.error(`ERROR: no OpenRouter key found in ${keySourceLabel(home)}`);
 		process.exit(1);
 	}
 
-	let fetchImpl: FetchImpl = makeOpenRouterFetch();
+	let fetchImpl: FetchImpl = deps.fetch ?? makeOpenRouterFetch();
 	if (fakeTransportPath) {
 		const mod = await import(path.resolve(fakeTransportPath));
 		fetchImpl = mod.fakeOpenRouter ?? mod.default ?? mod;
 	}
 
+	let current: CurrentSmolHarness | undefined;
 	let fakeCurrent: RouterCurrentHandler | undefined;
 	if (fakeCurrentPath) {
 		const mod = await import(path.resolve(fakeCurrentPath));
 		fakeCurrent = mod.fakeCurrent ?? mod.default ?? mod;
+	} else {
+		const factory = deps.buildCurrentHarness ?? buildCurrentSmolHarness;
+		current = await factory();
 	}
 
 	const results = await runRouter({
@@ -236,11 +272,13 @@ async function main() {
 		outPath,
 		jsonPath,
 		generationRecords,
+		current,
 		fakeCurrent,
 	});
 
 	console.log(`router: ${results.routerModel} (key read from ${keySourceLabel(configHome ?? "~/.config")})`);
 	console.log(results.verdict);
+	return results;
 }
 
 if (import.meta.main) {

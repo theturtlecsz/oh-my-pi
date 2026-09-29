@@ -33,6 +33,7 @@ _READS = frozenset(
         "GET /v1/workspaces/{workspace_id}/research-sources/{source_id}/projects/{project_id}",
         "GET /v1/workspaces/{workspace_id}/research-datasets/{dataset_id}",
         "GET /v1/workspaces/{workspace_id}/research-datasets/{dataset_id}/projects/{project_id}",
+        "GET /v1/workspaces/{workspace_id}/stop",
         "GET /v1/health/live",
         "GET /v1/health/ready",
         "GET /v1/work-items/{key}/revisions/{selector}",
@@ -66,6 +67,7 @@ _ERROR_CODES = frozenset(
         "intake_admission_blocked",
         "intake_not_ready",
         "stale_intake",
+        "agent_stop_engaged",
     }
 )
 _SCOPES = frozenset(
@@ -78,6 +80,7 @@ _SCOPES = frozenset(
         "work.execute",
         "work.import",
         "work.operate",
+        "work.stop",
     }
 )
 _COMMAND_TYPES = frozenset(
@@ -135,6 +138,8 @@ _COMMAND_TYPES = frozenset(
         "set_research_campaign_state",
         "conclude_research_campaign",
         "record_alarm_signal",
+        "engage_stop",
+        "release_stop",
     }
 )
 
@@ -271,7 +276,8 @@ def validate_bundle(*, require_approval: bool = True) -> None:
         "work.approve",
         "work.close",
         "work.execute",
-    }:
+        "work.stop",
+    } or policy.stop_client_scopes != ("work.stop",):
         raise ValueError("capability separation failed")
     validate_examples(examples)
     validate_cutover_manifest(
