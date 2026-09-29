@@ -578,7 +578,7 @@ packages/metaharness/src/server.ts	shared	modified	0e310538853f	OMP-396-s02: bin
 packages/metaharness/src/web/app.tsx	shared	modified	ab92850e393e	OMP-396-s02: read the token from the URL into sessionStorage, strip it via replaceState, and send it as a Bearer header (query for SSE)	retained
 packages/metaharness/test/manager-auth.test.ts	fork-only	added	dd73935fbc91	OMP-396-s02: prove loopback binding, /api token gating (bearer + SSE query), and the CLI-printed token URL	retained
 packages/mnemopi/test/content-sanitizer.test.ts	shared	modified	e2911138453e	OMP-341: remove each mnemopi-blobs- temp dir in afterEach so the suite stops leaking it	retained
-packages/tsconfig.workspace.json	shared	modified	4c488ae314f3	OMP-391-s01: pin workspace package resolution to local checkout paths	retained
+packages/tsconfig.workspace.json	shared	modified	d23b595ae921	OMP-391-s01: pin workspace package resolution to local checkout paths	retained
 packages/tui/test/kitty-keyboard-da1-ordering.test.ts	shared	modified	241515e6ce4e	test: reconcile context-overflow, kitty DA1, and system-prompt-dedup tests after v17.3.2 merge	retained
 packages/utils/src/logger.ts	shared	modified	f5fea6f67317	fix: slim session workflow loadout and isolate test execution (OMP-166)	retained
 packages/utils/test/logger-contract.test.ts	shared	modified	f1f60f414bea	OMP-292: isolate child process cwd and HOME in logger contract tests to prevent host package.json duplicate-key stderr noise	retained
