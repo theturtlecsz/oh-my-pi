@@ -407,6 +407,56 @@ class ProjectStoreMixin:
             view["standing_budget"] = row_json(budget)
             return view
 
+    def project_context(
+        self, workspace_id: UUID, actor_id: UUID, project_id: UUID
+    ) -> dict[str, object]:
+        """The JSON project context the stage compiler consumes (OMP-419-s01)."""
+        with self._transaction(workspace_id, actor_id) as cur:
+            self._require_project(cur, workspace_id, project_id)
+
+            cur.execute(
+                "SELECT kind, ref, title FROM omp_work.project_refs"
+                " WHERE workspace_id=%s AND project_id=%s"
+                " AND kind IN ('decision', 'roadmap') ORDER BY kind, ref",
+                (workspace_id, project_id),
+            )
+            refs = [row_json(row) for row in cur.fetchall()]
+
+            cur.execute(
+                "SELECT mission_id, objective, status FROM omp_work.project_missions"
+                " WHERE workspace_id=%s AND project_id=%s"
+                " AND status IN ('completed', 'failed', 'abandoned')"
+                " ORDER BY mission_id",
+                (workspace_id, project_id),
+            )
+            missions = [row_json(row) for row in cur.fetchall()]
+
+            cur.execute(
+                "SELECT mission_id, kind, summary FROM omp_work.project_history"
+                " WHERE workspace_id=%s AND project_id=%s AND mission_id IS NOT NULL"
+                " ORDER BY at, history_id",
+                (workspace_id, project_id),
+            )
+            history = [row_json(row) for row in cur.fetchall()]
+
+            cur.execute(
+                "SELECT c.campaign_id, c.domain, c.outcome, c.outcome_reason"
+                " FROM omp_research.campaigns c"
+                " JOIN omp_work.work_items wi ON wi.workspace_id=c.workspace_id"
+                " AND wi.work_id=c.work_id"
+                " WHERE c.workspace_id=%s AND wi.project_id=%s AND c.concluded_at IS NOT NULL"
+                " ORDER BY c.concluded_at, c.campaign_id",
+                (workspace_id, project_id),
+            )
+            research = [row_json(row) for row in cur.fetchall()]
+
+            return {
+                "refs": refs,
+                "missions": missions,
+                "history": history,
+                "research": research,
+            }
+
     def set_standing_mandate(
         self,
         workspace_id: UUID,

@@ -4,7 +4,6 @@ import argparse
 import json
 import os
 import sys
-import tempfile
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
@@ -261,71 +260,12 @@ def _run_stop_command(args: argparse.Namespace) -> int:
         client.close()
 
 
-def _demo_scratch(raw: str | None) -> Path:
-    if raw:
-        path = Path(raw)
-        path.mkdir(parents=True, exist_ok=True)
-        return path
-    return Path(tempfile.mkdtemp(prefix="omp-work-demo-"))
-
-
-def _add_pipeline_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--job-id", required=True)
-    parser.add_argument("--query", required=True)
-    parser.add_argument("--objective", required=True)
-    parser.add_argument("--no-enola", action="store_true")
-    parser.add_argument("--no-ledger", action="store_true")
-    parser.add_argument("--scratch-dir")
-
-
-def _add_compile_bar_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--job-id", required=True)
-    parser.add_argument("--objective", required=True)
-    parser.add_argument("--finding", action="append", default=[])
-    parser.add_argument("--scratch-dir")
-
-
-def _run_demo(kind: str, args: argparse.Namespace) -> int:
-    """Run pipeline or compile-bar with every store path under one scratch directory."""
-    scratch = _demo_scratch(args.scratch_dir)
-    if kind == "pipeline":
-        from .engine_pipeline import run_retrieve_compile_campaign
-
-        result = run_retrieve_compile_campaign(
-            job_id=args.job_id,
-            query=args.query,
-            objective=args.objective,
-            enola_enabled=not args.no_enola,
-            ledger_attach=not args.no_ledger,
-            store_path=scratch / "cognee-store.json",
-            caps_path=scratch / "BUDGET-CAPS.json",
-            enola_store_path=scratch / "enola-store.json",
-            ledger_path=scratch / "ledger.json",
-        )
-        payload = result.to_dict()
-    elif kind == "compile-bar":
-        from .context_compile_bar import measure_compile
-
-        findings = args.finding or ["Prefer write-first"]
-        payload = measure_compile(
-            job_id=args.job_id,
-            findings=findings,
-            objective=args.objective,
-        )
-    else:
-        return 2
-    payload["demo"] = True
-    payload["scratch_dir"] = str(scratch)
-    print(json.dumps(payload, indent=2))
-    return 0
-
-
 def main(argv: list[str] | None = None) -> int | None:
     parser = argparse.ArgumentParser(prog="python -m omp_work")
     subcommands = parser.add_subparsers(
         dest="command",
         required=True,
-        metavar="{schema,hash,approve,validate,ops,serve,demo,headroom,stall-check,parallel-admit,budget-alerts,projects,stop,alarms,jobs}",
+        metavar="{schema,hash,approve,validate,ops,serve,headroom,stall-check,parallel-admit,budget-alerts,projects,stop,alarms,jobs}",
     )
 
     schema = subcommands.add_parser("schema")
@@ -344,18 +284,9 @@ def main(argv: list[str] | None = None) -> int | None:
     serve.add_argument("--capabilities-dir", required=True)
     operations_cli.add_parser(ops)
 
-    _add_pipeline_args(subcommands.add_parser("pipeline", help=argparse.SUPPRESS))
-
     subcommands.add_parser("headroom")
     st = subcommands.add_parser("stall-check")
     st.add_argument("--max-idle-minutes", type=float, default=20.0)
-
-    _add_compile_bar_args(subcommands.add_parser("compile-bar", help=argparse.SUPPRESS))
-
-    demo = subcommands.add_parser("demo")
-    demo_commands = demo.add_subparsers(dest="demo_command", required=True)
-    _add_pipeline_args(demo_commands.add_parser("pipeline"))
-    _add_compile_bar_args(demo_commands.add_parser("compile-bar"))
 
     pa = subcommands.add_parser("parallel-admit")
     pa.add_argument("action", choices=["tick", "status", "init", "enqueue"])
@@ -495,10 +426,6 @@ def main(argv: list[str] | None = None) -> int | None:
             raise SystemExit(str(error)) from error
         print(f"{CONTRACT_VERSION} {contract_sha256()} valid")
         return 0
-    if args.command == "demo":
-        return _run_demo(args.demo_command, args)
-    if args.command in {"pipeline", "compile-bar"}:
-        return _run_demo(args.command, args)
     if args.command == "headroom":
         active_dir = Path(
             os.environ.get("OMP_ECONOMY_ACTIVE_DIR")
