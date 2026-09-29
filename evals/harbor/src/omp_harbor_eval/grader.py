@@ -282,10 +282,11 @@ def _grade_or_invalid(
     *,
     run_id: str,
     nonce: str,
+    test_results: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if manifest_sha256 is None:
-        return grade(directory, "0" * 64, fixture, run_id=run_id, nonce=nonce)
-    return grade(directory, manifest_sha256, fixture, run_id=run_id, nonce=nonce)
+        return grade(directory, "0" * 64, fixture, run_id=run_id, nonce=nonce, test_results=test_results)
+    return grade(directory, manifest_sha256, fixture, run_id=run_id, nonce=nonce, test_results=test_results)
 
 
 def _copy_tree(src: Path, dst: Path) -> None:
@@ -321,12 +322,21 @@ def _derive_foreign(src: Path, dst: Path) -> str:
     return write_manifest(dst)
 
 
-def validate(fixture: Fixture, good_dir: str | Path, bad_dir: str | Path) -> dict[str, Any]:
+def validate(
+    fixture: Fixture,
+    good_dir: str | Path,
+    bad_dir: str | Path,
+    *,
+    good_tests: Sequence[Mapping[str, Any]] | None = None,
+    bad_tests: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Grade known-good and known-bad, plus tampered and foreign copies of good.
 
     ``ok`` is true only when the four verdicts are pass, fail,
     invalid_evidence, and invalid_evidence. A known-bad directory whose rules
-    pass makes ``ok`` false.
+    pass makes ``ok`` false. When ``good_tests`` or ``bad_tests`` is given,
+    that variant's ``independent_tests_pass`` reads those records instead of
+    ``independent-tests.json``.
     """
 
     good = Path(good_dir)
@@ -341,8 +351,12 @@ def validate(fixture: Fixture, good_dir: str | Path, bad_dir: str | Path) -> dic
     bad_nonce = bad_evidence.nonce if bad_evidence is not None else ""
 
     grades: dict[str, dict[str, Any]] = {
-        "known_good": _grade_or_invalid(good, good_hash, fixture, run_id=good_run, nonce=good_nonce),
-        "known_bad": _grade_or_invalid(bad, bad_hash, fixture, run_id=bad_run, nonce=bad_nonce),
+        "known_good": _grade_or_invalid(
+            good, good_hash, fixture, run_id=good_run, nonce=good_nonce, test_results=good_tests
+        ),
+        "known_bad": _grade_or_invalid(
+            bad, bad_hash, fixture, run_id=bad_run, nonce=bad_nonce, test_results=bad_tests
+        ),
     }
     with tempfile.TemporaryDirectory(prefix="omp-harbor-eval-") as tmp:
         root = Path(tmp)
@@ -378,6 +392,16 @@ def _print_json(document: dict[str, Any]) -> None:
     sys.stdout.write("\n")
 
 
+def _read_verify_tests(path: str) -> list[dict[str, Any]]:
+    """Return the ``tests`` list from a verify ``--out`` JSON object."""
+
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    tests = raw.get("tests") if isinstance(raw, dict) else None
+    if not isinstance(tests, list) or not all(isinstance(entry, dict) for entry in tests):
+        raise ValueError(f"{path}: expected a verify output object with a tests list")
+    return tests
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m omp_harbor_eval.grader")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -395,6 +419,14 @@ def main(argv: list[str] | None = None) -> int:
     validate_parser.add_argument("--fixtures-root")
     validate_parser.add_argument("--good", required=True)
     validate_parser.add_argument("--bad", required=True)
+    validate_parser.add_argument(
+        "--good-tests",
+        help="verify --out JSON whose tests list grades --good in place of independent-tests.json",
+    )
+    validate_parser.add_argument(
+        "--bad-tests",
+        help="verify --out JSON whose tests list grades --bad in place of independent-tests.json",
+    )
 
     args = parser.parse_args(argv)
     try:
@@ -408,7 +440,9 @@ def main(argv: list[str] | None = None) -> int:
                 nonce=args.nonce,
             )
         else:
-            result = validate(fixture, args.good, args.bad)
+            good_tests = _read_verify_tests(args.good_tests) if args.good_tests else None
+            bad_tests = _read_verify_tests(args.bad_tests) if args.bad_tests else None
+            result = validate(fixture, args.good, args.bad, good_tests=good_tests, bad_tests=bad_tests)
     except (OSError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
