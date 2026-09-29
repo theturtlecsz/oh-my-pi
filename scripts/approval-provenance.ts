@@ -4,8 +4,11 @@
 // The Work contract approval (`python/omp-work/src/omp_work/contracts/v1/
 // approval.json`) is the owner's hash attestation of the v1 contract digest.
 // Agents and automation must never mint or rewrite it: only commits authored by
-// `flood-owner` whose subject carries an owner marker (`owner step by flood` or
-// `flood rebase_repair`) may touch the file. This check walks `<base>..<head>`,
+// `flood-owner` whose subject carries an owner marker — `owner step by flood`
+// (flood applies the approval), `flood rebase_repair` (carried across a
+// rebase), or `owner step by owner session` (the owner's own session commits
+// via `scripts/commit-contract-approval.ts`) — may touch the file. This check
+// walks `<base>..<head>`,
 // skips those approval commits, and reports every other commit that introduces
 // or changes approval.json — directly for ordinary commits, or, for merge
 // commits, only when the merged blob differs from every parent (a conflict
@@ -20,7 +23,12 @@ import { $ } from "bun";
 
 export const APPROVAL_PATH = "python/omp-work/src/omp_work/contracts/v1/approval.json";
 export const APPROVAL_AUTHOR = "flood-owner";
-export const APPROVAL_SUBJECT_MARKERS = ["owner step by flood", "flood rebase_repair"] as const;
+export const APPROVAL_AUTHOR_EMAIL = "flood@localhost";
+export const APPROVAL_SUBJECT_MARKERS = [
+	"owner step by flood",
+	"flood rebase_repair",
+	"owner step by owner session",
+] as const;
 
 export const REVIEWED_OWNER_APPROVAL_COMMITS: readonly string[] = [
 	// OMP-405 contract approval by the owner, 2026-09-29, subject lacks the marker
