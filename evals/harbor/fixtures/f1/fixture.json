@@ -22,7 +22,7 @@
     },
     {
       "type": "readback_equals",
-      "pointer": "/work_item/current_candidate_id",
+      "pointer": "/work_item/candidate",
       "value": null
     },
     {

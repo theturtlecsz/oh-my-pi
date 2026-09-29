@@ -1,0 +1,136 @@
+{
+  "version": "routing-policy.v1",
+  "caller_model_fields": "refuse",
+  "ladder": [
+    "E0",
+    "E1",
+    "E2",
+    "E3",
+    "E4"
+  ],
+  "tiers": {
+    "E1": {
+      "provider": "gemini_flash",
+      "model": "gemini-3.8-flash-high",
+      "est_tokens": 40000
+    },
+    "E2": {
+      "provider": "anthropic_fable",
+      "model": "claude-opus-5-5",
+      "est_tokens": 80000
+    },
+    "E3": {
+      "provider": "kimi",
+      "model": "kimi-code/k3-256k",
+      "est_tokens": 120000
+    },
+    "E4": {
+      "provider": "chatgpt_astra",
+      "model": "gpt-6-sol",
+      "est_tokens": 200000
+    }
+  },
+  "concurrency": {
+    "in_flight_max": 10,
+    "providers": {
+      "gemini_flash": 6,
+      "ollama_cloud": 4,
+      "anthropic_fable": 2,
+      "kimi": 2,
+      "chatgpt_astra": 0,
+      "openai_codex": 1
+    }
+  },
+  "alternates": [
+    {
+      "rule": "gemini-flash-overflow",
+      "from": "gemini_flash",
+      "to": {
+        "provider": "ollama_cloud",
+        "model": "deepseek-v4.1-flash:cloud"
+      }
+    }
+  ],
+  "stages": {
+    "plan": {
+      "rule": "omp-241-plan",
+      "effort": "E2",
+      "provider": "openai_codex",
+      "model": "gpt-5.6-sol",
+      "max_retries": 0
+    },
+    "implement": {
+      "rule": "omp-241-implement",
+      "effort": "E1",
+      "provider": "gemini_flash",
+      "model": "gemini-3.8-flash-high",
+      "max_retries": 2
+    },
+    "verify": {
+      "rule": "omp-241-verify",
+      "effort": "E1",
+      "provider": "gemini_flash",
+      "model": "gemini-3.8-flash-high",
+      "max_retries": 2
+    },
+    "research": {
+      "rule": "research",
+      "effort": "E1",
+      "provider": "ollama_cloud",
+      "model": "deepseek-v4.1-flash:cloud",
+      "max_retries": 0,
+      "best_of_n": {
+        "n": 2,
+        "metric": "fact_coverage"
+      }
+    },
+    "audit": {
+      "rule": "audit",
+      "effort": "E3",
+      "provider": "kimi",
+      "model": "kimi-code/k3-256k",
+      "max_retries": 0,
+      "reviewers": [
+        "openai-codex/gpt-5.6-sol:medium"
+      ]
+    },
+    "acceptance_review": {
+      "rule": "acceptance_review",
+      "effort": "E3",
+      "provider": "kimi",
+      "model": "kimi-code/k3-256k",
+      "max_retries": 0,
+      "reviewers": [
+        "kimi-code/k3-256k"
+      ]
+    }
+  },
+  "missions": {
+    "engineering.execute": [
+      "plan",
+      "implement",
+      "verify",
+      "audit",
+      "acceptance_review"
+    ],
+    "research.run": [
+      "research",
+      "acceptance_review"
+    ]
+  },
+  "retry": {
+    "rule": "retry-same-tier"
+  },
+  "escalation": [
+    {
+      "rule": "escalate-after-retries",
+      "on": "failed_attempts",
+      "step": 1
+    },
+    {
+      "rule": "escalate-on-review-reject",
+      "on": "review_rejected",
+      "step": 1
+    }
+  ]
+}

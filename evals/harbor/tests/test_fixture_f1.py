@@ -144,7 +144,7 @@ def test_fixture_loads_with_a_stable_digest_and_pinned_rules() -> None:
     assert fixture.rules[0]["pointer"] == "/work_item/revision/acceptance_criteria"
     assert fixture.rules[0]["value"] == ["Amended AC 1", "Amended AC 2"]
     assert fixture.rules[1]["count"] == TRANSCRIPT_RECORDS
-    assert fixture.rules[2]["pointer"] == "/work_item/current_candidate_id"
+    assert fixture.rules[2]["pointer"] == "/work_item/candidate"
     assert fixture.rules[2]["value"] is None
 
     before = fixture.digest
@@ -161,10 +161,12 @@ def test_fixture_loads_with_a_stable_digest_and_pinned_rules() -> None:
 def test_scenario_scripts_match_their_authored_sidecars() -> None:
     fixture = load_fixture(FIXTURE_DIR.parent, "f1")
     ui_script = json.loads((FIXTURE_DIR / "ui-script.json").read_text(encoding="utf-8"))
+    model_script = json.loads((FIXTURE_DIR / "model-script.json").read_text(encoding="utf-8"))
 
-    # scenario.json is what the grader digests, so the authored ui sidecar must
-    # be the same rules the scenario carries or the fixture would drift silently.
+    # scenario.json is what the grader digests and what netns stages. The
+    # authored sidecars must be those same rules or the fixture would drift.
     assert ui_script == list(fixture.scenario.ui_script)
+    assert model_script == list(fixture.scenario.model_script)
 
     # The amendment, its confirmation, then the stale retry and its confirmation.
     calls = [
@@ -228,7 +230,7 @@ def _write_evidence(
             "execution": {"items": [{"work_id": WORK_ID}]},
             "work_item": {
                 "revision": {"revision_number": 2, "acceptance_criteria": criteria},
-                "current_candidate_id": candidate,
+                "candidate": candidate,
             },
         },
     )
@@ -286,6 +288,6 @@ def test_grading_separates_the_amendment_from_the_description_only_seed(tmp_path
     stale = grade(stale_candidate, stale_hash, fixture, run_id="run-stale", nonce="nonce-stale")
     assert stale["status"] == "fail"
     assert stale["reasons"] == [
-        "readback_equals: /work_item/current_candidate_id expected null got "
+        "readback_equals: /work_item/candidate expected null got "
         '"00000000-0000-7000-8000-000000000030"'
     ]

@@ -292,7 +292,7 @@ def test_fake_rpc_f1_stale_confirm_produces_one_refusal_record(tmp_path: Path) -
             "revision_number": 2,
             "acceptance_criteria": ["Amended AC 1", "Amended AC 2"],
         },
-        "current_candidate_id": None,
+        "candidate": None,
     }
 
     with FakeWorkService(

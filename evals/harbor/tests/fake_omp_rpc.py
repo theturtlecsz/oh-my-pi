@@ -127,6 +127,32 @@ def _record_invocation() -> None:
         handle.flush()
 
 
+def _wait_for_release(event: dict[str, Any]) -> None:
+    """Block the scripted stream until ``release`` exists.
+
+    ``waiting`` is written first so the test can observe that the events
+    before this marker have already been emitted. A missing path or a
+    deadline ends the wait without emitting the marker itself.
+    """
+
+    waiting = event.get("waiting")
+    release = event.get("release")
+    if not isinstance(waiting, str) or not isinstance(release, str):
+        return
+    timeout_s = event.get("timeout_s", 20)
+    if isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float)) or timeout_s <= 0:
+        timeout_s = 20
+    waiting_path = Path(waiting)
+    waiting_path.parent.mkdir(parents=True, exist_ok=True)
+    waiting_path.write_text("waiting\n", encoding="utf-8")
+    release_path = Path(release)
+    deadline = time.monotonic() + float(timeout_s)
+    while not release_path.is_file():
+        if time.monotonic() >= deadline:
+            return
+        time.sleep(0.01)
+
+
 def _handle(command: dict[str, Any], events: list[Any]) -> None:
     assert _args is not None
     kind = command.get("type")
@@ -165,6 +191,9 @@ def _handle(command: dict[str, Any], events: list[Any]) -> None:
             if isinstance(request, dict):
                 _emit(request)
         for event in events:
+            if isinstance(event, dict) and event.get("type") == "harbor_test_wait":
+                _wait_for_release(event)
+                continue
             if isinstance(event, dict):
                 _emit(event)
         return
