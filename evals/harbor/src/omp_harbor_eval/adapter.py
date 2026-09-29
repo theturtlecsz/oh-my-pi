@@ -1,6 +1,8 @@
 """Drive one Harbor scenario over the normal RPC ``/execute`` path.
 
-``ServiceProbe`` reads loopback WorkService routes. Every authenticated read
+``ServiceProbe`` reads loopback WorkService routes. The work item is read by
+its primary alias key, which the execution view's grant ``remote_ref`` names;
+a view without one falls back to the ``work_id`` it carries. Every authenticated read
 sends ``X-OMP-Contract-SHA256`` set to the ``WORK_CONTRACT_SHA256`` literal in
 the generated TypeScript work client contract, the digest the worker's omp
 sends. ``RpcAdapter.run`` waits for a ready frame and a good ``get_state``,
@@ -57,7 +59,7 @@ from typing import Any
 import omp_rpc
 
 from .evidence import EvidenceWriter
-from .fixtures import Scenario
+from .fixtures import Scenario, execution_work_item_key
 from .grader import OUTCOME, SERVICE_READBACK, TRANSCRIPT, resolve_pointer
 from .ui_script import UiScript
 
@@ -446,6 +448,15 @@ def _matches(value: Any, accepted: tuple[Any, ...]) -> bool:
 
 
 def _work_item_key(execution: Mapping[str, Any]) -> str:
+    """Primary alias key the execution view grants, or its ``work_id`` as a last resort.
+
+    The key is preferred because ``GET /v1/work-items/{key}`` resolves only a
+    primary alias; a ``work_id`` there answers 400 ``invalid_request``.
+    """
+
+    key = execution_work_item_key(execution)
+    if key is not None:
+        return key
     candidates: list[Any] = []
     active = execution.get("active_item")
     if isinstance(active, Mapping):

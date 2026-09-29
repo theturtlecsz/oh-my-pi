@@ -11,6 +11,7 @@ from typing import Any
 
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _FILE_RE = _ID_RE
+_EXECUTION_REF_RE = re.compile(r"^refs/heads/execution/([a-z0-9]+-[0-9]+)-[0-9a-f]+$")
 
 _FIXTURE_KEYS = {
     "id",
@@ -241,6 +242,26 @@ def _load_scenario(document: dict[str, Any], filename: str) -> Scenario:
         timeout_s=timeout_s,
         filename=filename,
     )
+
+
+def execution_work_item_key(execution: Mapping[str, Any]) -> str | None:
+    """Primary alias key carried by an execution view, or ``None`` when it carries none.
+
+    ``GET /v1/work-items/{key}`` resolves only a primary alias, and the grant's
+    ``remote_ref`` (``refs/heads/execution/<key>-<grant>``) is the view's only
+    field that names one: the grant items carry ``work_id`` alone.
+    """
+
+    if not isinstance(execution, Mapping):
+        return None
+    grant = execution.get("grant")
+    remote_ref = grant.get("remote_ref") if isinstance(grant, Mapping) else None
+    if not isinstance(remote_ref, str):
+        return None
+    match = _EXECUTION_REF_RE.fullmatch(remote_ref)
+    if match is None:
+        return None
+    return match.group(1).upper()
 
 
 def fixture_digest(fixture_dir: str | Path) -> str:
