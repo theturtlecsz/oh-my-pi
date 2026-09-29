@@ -53,3 +53,47 @@ From MANDATE-VALIDATION.md (2026-09-28). ADR 0004 is unchanged (D28). Under A10,
 | Acceptance semantics | Sealed criteria, evidence per criterion, independent reviewer PASS | OMP-417, OMP-420, OMP-421 | Close without PASS or with self-review refused |
 | Authoritative state | WorkService only; sessions and pending files are caches | OMP-413, OMP-417 | Restart test reads only WorkService |
 | Contract freeze | Mission and stop-control contract versions need Chris's approval (D30) | OMP-405, OMP-413 to OMP-416 | Version without approval record does not activate |
+
+## Unattended safety envelope (D35)
+
+> I would not make "unattended" synonymous with "fully autonomous." The right model is unattended operation inside a pre-approved safety envelope.
+
+### Tier 1: autonomous
+
+- read repository/project state
+- create isolated worktrees
+- modify files inside the approved repository/path envelope
+- run tests, linters, builds, static analysis
+- create commits on isolated branches
+- perform research
+- create/update internal artifacts
+- retry/recover workers
+- reroute models/providers
+- pause/resume work
+- update mission state
+- emit events
+- produce candidate changes for review
+
+### Tier 2: standing policy
+
+- push branches to approved repositories
+- create pull requests
+- update non-production external systems
+- spend beyond a defined mission/project budget threshold
+- perform bounded network access required by the mission
+- create or delete disposable cloud/dev resources
+
+### Tier 3: explicit high-risk authorization
+
+- merge to protected/default branches
+- production deployment
+- destructive infrastructure changes
+- credential/security-policy changes
+- deleting persistent data
+- modifying billing/payment/account ownership
+- publishing externally as you
+- broadening repository/project scope
+- accessing secrets outside the approved mission envelope
+- disabling safety, audit, or verification mechanisms
+
+D40: D35 supersedes D16's classes where they conflict; an action no tier lists is tier 3.
