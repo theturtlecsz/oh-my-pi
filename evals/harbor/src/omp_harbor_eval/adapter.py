@@ -25,7 +25,10 @@ directions is logged to ``rpc-transcript.jsonl``; the grader's
 call. Optional ``session_reader``
 and ``before_seal`` hooks read the session log and augment evidence before
 sealing; hook exceptions record ``harness_error`` (or ``session_read_error`` if
-the run already failed with ``harness_error``). When startup fails and stderr
+the run already failed with ``harness_error``). If reading the startup session
+file raises after a prompt was sent, ``_seal`` queries live session state and
+retries the read on the relocated file, recording both in ``session.json``. When
+startup fails and stderr
 names the worker omp log (``logs: <path>``), that file is copied to
 ``omp-startup.log`` before seal. The evidence directory is sealed before the
 RPC process stops.
@@ -889,7 +892,6 @@ class RpcAdapter:
             session_document: dict[str, Any] = {"id": session_id, "file": session_file}
             if self._restarts:
                 session_document["restarts"] = list(self._restarts)
-            self.evidence.write_json(SESSION_NAME, session_document)
             payload = b""
             hook_raised = False
             session_read_error: str | None = None
@@ -899,15 +901,40 @@ class RpcAdapter:
                     if not isinstance(read_bytes, bytes):
                         raise TypeError(f"session_reader must return bytes, got {type(read_bytes).__name__}")
                     payload = read_bytes
-                except Exception as exc:
-                    hook_raised = True
-                    msg = str(exc) or type(exc).__name__
-                    if outcome == "harness_error":
-                        session_read_error = f"session_reader: {msg}"
-                    else:
-                        outcome = "harness_error"
-                        reason = f"session_reader: {msg}"
-                    payload = b""
+                except Exception as exc:  # noqa: BLE001 - session read can fail for any I/O defect
+                    recovered = False
+                    last_exc: Exception = exc
+                    if prompts_sent > 0:
+                        self._follow_live_session()
+                        live_file = self._live_session_file
+                        if live_file and live_file != session_file:
+                            try:
+                                read_bytes = self.session_reader(live_file)
+                                if not isinstance(read_bytes, bytes):
+                                    raise TypeError(
+                                        f"session_reader must return bytes, got {type(read_bytes).__name__}"
+                                    )
+                                payload = read_bytes
+                                session_document = {
+                                    "id": self._live_session_id,
+                                    "file": live_file,
+                                    "startup": {"id": session_id, "file": session_file},
+                                }
+                                if self._restarts:
+                                    session_document["restarts"] = list(self._restarts)
+                                recovered = True
+                            except Exception as retry_exc:  # noqa: BLE001
+                                last_exc = retry_exc
+                    if not recovered:
+                        hook_raised = True
+                        msg = str(last_exc) or type(last_exc).__name__
+                        if outcome == "harness_error":
+                            session_read_error = f"session_reader: {msg}"
+                        else:
+                            outcome = "harness_error"
+                            reason = f"session_reader: {msg}"
+                        payload = b""
+            self.evidence.write_json(SESSION_NAME, session_document)
             self.evidence.add_file(SESSION_LOG, payload)
             if not hook_raised and self.before_seal is not None:
                 try:

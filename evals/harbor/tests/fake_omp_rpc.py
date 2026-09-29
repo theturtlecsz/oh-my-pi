@@ -146,6 +146,18 @@ def _handle(command: dict[str, Any], events: list[Any]) -> None:
         if _args.reject_prompt:
             _respond(request_id, "prompt", success=False, error="not accepted")
             return
+        if _args.relocate_session_file:
+            target_path = Path(_args.relocate_session_file)
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            relocate_id = _args.relocate_session_id or _args.session_id
+            payload = f'{{"type":"session","id":"{relocate_id}"}}\n{{"type":"note"}}\n'.encode()
+            target_path.write_bytes(payload)
+            old_session = Path(_args.session_file)
+            if old_session != target_path and old_session.is_file():
+                old_session.unlink()
+            _args.session_file = _args.relocate_session_file
+            if _args.relocate_session_id:
+                _args.session_id = _args.relocate_session_id
         _respond(request_id, "prompt", success=True, data={"agentInvoked": True})
         if _args.ack_flag:
             Path(_args.ack_flag).write_text(json.dumps({"at": time.time()}) + "\n", encoding="utf-8")
@@ -174,11 +186,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--session", default="")
     parser.add_argument("--resume-session-id", default="")
     parser.add_argument("--ui-requests", default="")
+    parser.add_argument("--relocate-session-file", default="")
+    parser.add_argument("--relocate-session-id", default="")
     _args = parser.parse_args(argv)
     record = Path(_args.record)
     record.mkdir(parents=True, exist_ok=True)
     _record_invocation()
     _apply_resume_identity()
+    if _args.session and _args.session != _args.session_file:
+        _args.session_file = _args.session
     session = Path(_args.session_file)
     session.parent.mkdir(parents=True, exist_ok=True)
     if not (_args.session and session.is_file()):
