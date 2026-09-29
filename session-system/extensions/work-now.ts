@@ -6,6 +6,8 @@
  * when ~/.config/omp-work/client.json is absent or malformed.
  */
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import { WorkClient } from "@oh-my-pi/pi-work-client";
+import { installAgentStopGate } from "./workflow/agent-stop";
 import { loadBearer, loadWorkConfig, type WorkClientConfig } from "./workflow/config";
 import { createWorkflowHost } from "./workflow/host";
 import { createWorkBackend } from "./workflow/work";
@@ -30,6 +32,8 @@ export default function workNow(pi: ExtensionAPI) {
 		return;
 	}
 	const cfg = config;
+	const client = new WorkClient(cfg.baseUrl, cfg.workspaceId, () => loadBearer(cfg));
+	installAgentStopGate(pi, client);
 	createWorkflowHost({
 		backend: createWorkBackend(cfg, () => loadBearer(cfg)),
 		allowCandidateServiceRefresh: !process.env.OMP_RUNTIME_RELEASE,
