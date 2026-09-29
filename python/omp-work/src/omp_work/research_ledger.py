@@ -2,11 +2,12 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 import json
 import time
 
-from omp_work.research_campaign import run_campaign, CampaignResult
+if TYPE_CHECKING:
+    from omp_work.research_campaign import CampaignResult
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,8 @@ def run_campaign_with_ledger(
     model: str = "gemini-3.8-flash-high",
     role: str = "researcher",
 ) -> LedgedCampaign:
+    from omp_work.research_campaign import run_campaign
+
     camp = run_campaign(
         campaign_id=campaign_id,
         question=question,
