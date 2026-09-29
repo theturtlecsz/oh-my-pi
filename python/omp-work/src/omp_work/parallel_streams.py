@@ -161,7 +161,7 @@ def partition_in_flight() -> dict[str, int]:
     placeholders = ",".join("?" for _ in ACTIVE_STATUSES)
     with _connect() as c:
         rows = c.execute(
-            f"SELECT provider_partition, COUNT(*) AS n FROM jobs "
+            f"SELECT provider_partition, COUNT(*) AS n FROM jobs "  # nosec B608 - placeholders are only '?' bind markers; active statuses are bound parameters
             f"WHERE status IN ({placeholders}) GROUP BY provider_partition",
             ACTIVE_STATUSES,
         ).fetchall()
