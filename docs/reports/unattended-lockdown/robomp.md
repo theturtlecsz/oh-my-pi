@@ -19,3 +19,13 @@ See [README.md](./README.md) for report scope, column definitions, and upstream 
 ## Can a slot user read agent-home credentials?
 
 Code answer: yes: `_stage_agent_home` ([worker.py](../../../python/robomp/src/worker.py)) makes files 0644, dirs 0755, except `.omp/run`; slots are uid 2001..2000+N ([entrypoint.sh](../../../python/robomp/entrypoint.sh)); staged: models.yml, AGENTS.md, rules ([docker-compose.yml](../../../python/robomp/docker-compose.yml)).
+
+### Live probe (OMP-399-s05)
+
+Verbatim output of `/home/thetu/master-report/evidence/omp-399-slot-probe.txt`:
+
+```
+robomp not deployed
+```
+
+Live answer: not deployed
