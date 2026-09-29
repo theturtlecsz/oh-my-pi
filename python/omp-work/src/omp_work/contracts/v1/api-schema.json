@@ -6260,6 +6260,31 @@
           "title": "CreatedWorkItem",
           "type": "object"
         },
+        "EngageStopResult": {
+          "additionalProperties": false,
+          "properties": {
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            },
+            "stopped": {
+              "title": "Stopped",
+              "type": "boolean"
+            },
+            "type": {
+              "const": "engage_stop",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "stopped",
+            "reason"
+          ],
+          "title": "EngageStopResult",
+          "type": "object"
+        },
         "EvidenceKind": {
           "enum": [
             "plan",
@@ -7488,6 +7513,31 @@
             "active"
           ],
           "title": "RelationResult",
+          "type": "object"
+        },
+        "ReleaseStopResult": {
+          "additionalProperties": false,
+          "properties": {
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            },
+            "stopped": {
+              "title": "Stopped",
+              "type": "boolean"
+            },
+            "type": {
+              "const": "release_stop",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "stopped",
+            "reason"
+          ],
+          "title": "ReleaseStopResult",
           "type": "object"
         },
         "ResearchAction": {
@@ -9240,6 +9290,7 @@
               "create_research_campaign": "#/$defs/CreateResearchCampaignResult",
               "create_same_session_child": "#/$defs/CreateSameSessionChildResult",
               "create_work_batch": "#/$defs/CreateWorkBatchResult",
+              "engage_stop": "#/$defs/EngageStopResult",
               "finalize_candidate": "#/$defs/FinalizeCandidateResult",
               "propose_research_trial": "#/$defs/ProposeResearchTrialResult",
               "publish_bounded_intake": "#/$defs/PublishBoundedIntakeResult",
@@ -9255,6 +9306,7 @@
               "register_research_component": "#/$defs/RegisterResearchComponentResult",
               "register_research_dataset": "#/$defs/RegisterResearchDatasetResult",
               "register_research_source": "#/$defs/RegisterResearchSourceResult",
+              "release_stop": "#/$defs/ReleaseStopResult",
               "remove_relation": "#/$defs/RelationResult",
               "reserve_auditor_launch": "#/$defs/CloseAttemptResult",
               "revise_work": "#/$defs/ReviseWorkResult",
@@ -9402,6 +9454,12 @@
             },
             {
               "$ref": "#/$defs/AlarmSignalResult"
+            },
+            {
+              "$ref": "#/$defs/EngageStopResult"
+            },
+            {
+              "$ref": "#/$defs/ReleaseStopResult"
             }
           ],
           "title": "Result"
@@ -11929,6 +11987,31 @@
         "has_more"
       ],
       "title": "DomainEventsPage",
+      "type": "object"
+    },
+    "EngageStopResult": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "stopped": {
+          "title": "Stopped",
+          "type": "boolean"
+        },
+        "type": {
+          "const": "engage_stop",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "stopped",
+        "reason"
+      ],
+      "title": "EngageStopResult",
       "type": "object"
     },
     "EvidenceReceipt": {
@@ -16178,6 +16261,31 @@
         "active"
       ],
       "title": "RelationResult",
+      "type": "object"
+    },
+    "ReleaseStopResult": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "stopped": {
+          "title": "Stopped",
+          "type": "boolean"
+        },
+        "type": {
+          "const": "release_stop",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "stopped",
+        "reason"
+      ],
+      "title": "ReleaseStopResult",
       "type": "object"
     },
     "ResearchArtifact": {
@@ -21770,6 +21878,63 @@
       "title": "StampExecutionPlanResult",
       "type": "object"
     },
+    "StopStatusView": {
+      "additionalProperties": false,
+      "properties": {
+        "changed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Changed At"
+        },
+        "changed_by_actor_kind": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Changed By Actor Kind"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "stopped": {
+          "title": "Stopped",
+          "type": "boolean"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "stopped"
+      ],
+      "title": "StopStatusView",
+      "type": "object"
+    },
     "StoredOperationView": {
       "$defs": {
         "ActivateCutoverResult": {
@@ -23355,6 +23520,31 @@
           "title": "CreatedWorkItem",
           "type": "object"
         },
+        "EngageStopResult": {
+          "additionalProperties": false,
+          "properties": {
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            },
+            "stopped": {
+              "title": "Stopped",
+              "type": "boolean"
+            },
+            "type": {
+              "const": "engage_stop",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "stopped",
+            "reason"
+          ],
+          "title": "EngageStopResult",
+          "type": "object"
+        },
         "EvidenceKind": {
           "enum": [
             "plan",
@@ -24583,6 +24773,31 @@
             "active"
           ],
           "title": "RelationResult",
+          "type": "object"
+        },
+        "ReleaseStopResult": {
+          "additionalProperties": false,
+          "properties": {
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            },
+            "stopped": {
+              "title": "Stopped",
+              "type": "boolean"
+            },
+            "type": {
+              "const": "release_stop",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "stopped",
+            "reason"
+          ],
+          "title": "ReleaseStopResult",
           "type": "object"
         },
         "ResearchAction": {
@@ -26351,6 +26566,7 @@
                   "create_research_campaign": "#/$defs/CreateResearchCampaignResult",
                   "create_same_session_child": "#/$defs/CreateSameSessionChildResult",
                   "create_work_batch": "#/$defs/CreateWorkBatchResult",
+                  "engage_stop": "#/$defs/EngageStopResult",
                   "finalize_candidate": "#/$defs/FinalizeCandidateResult",
                   "propose_research_trial": "#/$defs/ProposeResearchTrialResult",
                   "publish_bounded_intake": "#/$defs/PublishBoundedIntakeResult",
@@ -26366,6 +26582,7 @@
                   "register_research_component": "#/$defs/RegisterResearchComponentResult",
                   "register_research_dataset": "#/$defs/RegisterResearchDatasetResult",
                   "register_research_source": "#/$defs/RegisterResearchSourceResult",
+                  "release_stop": "#/$defs/ReleaseStopResult",
                   "remove_relation": "#/$defs/RelationResult",
                   "reserve_auditor_launch": "#/$defs/CloseAttemptResult",
                   "revise_work": "#/$defs/ReviseWorkResult",
@@ -26513,6 +26730,12 @@
                 },
                 {
                   "$ref": "#/$defs/AlarmSignalResult"
+                },
+                {
+                  "$ref": "#/$defs/EngageStopResult"
+                },
+                {
+                  "$ref": "#/$defs/ReleaseStopResult"
                 }
               ]
             },

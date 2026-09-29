@@ -248,6 +248,27 @@ def create_app(
     def execution(request: Request, workspace_id: UUID, grant_id: str = "") -> JSONResponse:
         return read_route(request, workspace_id, "execution", grant_id)
 
+    @app.get("/v1/workspaces/{workspace_id}/stop")
+    def stop(request: Request, workspace_id: UUID) -> JSONResponse:
+        try:
+            _require_contract(request, service_digest)
+            principal = _principal(request, capabilities_dir)
+            return JSONResponse(
+                jsonable_encoder(service.stop_status(principal, workspace_id))
+            )
+        except WorkError as error:
+            return JSONResponse(
+                {
+                    "error": {
+                        "code": error.code,
+                        "request_id": None,
+                        "correlation_id": None,
+                        "diagnostics": list(error.diagnostics[:8]),
+                    }
+                },
+                status_code=error.status,
+            )
+
     @app.get("/v1/workspaces/{workspace_id}/activity")
     def activity(
         request: Request,

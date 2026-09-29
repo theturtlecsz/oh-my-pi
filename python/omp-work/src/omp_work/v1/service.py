@@ -5,6 +5,7 @@ from datetime import datetime
 from uuid import UUID
 
 
+from .api_models import StopStatusView
 from .models import OWNER_APPROVAL_COMMAND_TYPES, CommandEnvelope
 from .store import WorkStore, WorkStoreError
 
@@ -81,6 +82,8 @@ class WorkService:
         "bind_research_deliverable": "work.execute",
         "set_research_campaign_state": "work.execute",
         "conclude_research_campaign": "work.approve",
+        "engage_stop": "work.stop",
+        "release_stop": "work.approve",
     }
 
     def __init__(self, store: WorkStore) -> None:
@@ -96,6 +99,8 @@ class WorkService:
             self._record_owner_approval_refusal(
                 principal, envelope, "forbidden", ()
             )
+            raise WorkError("forbidden", status=403)
+        if envelope.command.type == "release_stop" and principal.actor_kind != "owner":
             raise WorkError("forbidden", status=403)
         if envelope.command.type in {"stage_import_batch", "promote_import_batch"}:
             raise WorkError("unavailable", status=503)
@@ -303,6 +308,33 @@ class WorkService:
             return self._store.events(
                 workspace_id, principal.actor_id, after=effective_after, limit=limit
             )
+        except WorkStoreError as error:
+            statuses = {"invalid_request": 400, "forbidden": 403, "unavailable": 503}
+            raise WorkError(
+                error.code,
+                status=statuses.get(error.code, 409),
+                diagnostics=error.diagnostics,
+            ) from error
+
+    def stop_status(
+        self,
+        principal: Principal,
+        workspace_id: UUID,
+    ) -> dict[str, object]:
+        # work.read sees the stop state; the stop clients themselves (work.stop)
+        # must be able to read it to decide whether to halt (OMP-405).
+        if (
+            workspace_id not in principal.workspaces
+            or (
+                "work.read" not in principal.scopes
+                and "work.stop" not in principal.scopes
+            )
+        ):
+            raise WorkError("forbidden", status=403)
+        try:
+            return StopStatusView.model_validate(
+                self._store.stop_status(workspace_id, principal.actor_id)
+            ).model_dump(mode="json")
         except WorkStoreError as error:
             statuses = {"invalid_request": 400, "forbidden": 403, "unavailable": 503}
             raise WorkError(

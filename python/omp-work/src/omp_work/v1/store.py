@@ -314,6 +314,11 @@ class WorkStore(Protocol):
         after: int = 0,
         limit: int = 500,
     ) -> dict[str, object]: ...
+    def stop_status(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+    ) -> dict[str, object]: ...
 
 
 def _intake_classifications(
@@ -511,6 +516,8 @@ class PostgresWorkStore(ResearchStoreMixin):
             "bind_research_deliverable",
             "set_research_campaign_state",
             "conclude_research_campaign",
+            "engage_stop",
+            "release_stop",
         }
         conflict = False
         with self._transaction(
@@ -676,6 +683,10 @@ class PostgresWorkStore(ResearchStoreMixin):
                     result = self._answer_intake_decision(
                         cur, envelope, actor_id, actor_kind
                     )
+                elif command.type == "engage_stop":
+                    result = self._engage_stop(cur, envelope)
+                elif command.type == "release_stop":
+                    result = self._release_stop(cur, envelope)
                 else:
                     raise WorkStoreError("unavailable")
                 result_hash = sha256(result)
@@ -4048,6 +4059,68 @@ class PostgresWorkStore(ResearchStoreMixin):
             "detail": payload.detail,
         }
 
+    def _engage_stop(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        cur.execute(
+            "INSERT INTO omp_control.workspaces(workspace_id) VALUES(%s) ON CONFLICT DO NOTHING",
+            (envelope.workspace_id,),
+        )
+        return {
+            "type": "engage_stop",
+            "stopped": True,
+            "reason": envelope.command.payload.reason,
+        }
+
+    def _release_stop(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        cur.execute(
+            "INSERT INTO omp_control.workspaces(workspace_id) VALUES(%s) ON CONFLICT DO NOTHING",
+            (envelope.workspace_id,),
+        )
+        return {
+            "type": "release_stop",
+            "stopped": False,
+            "reason": envelope.command.payload.reason,
+        }
+
+    def _stop_status(
+        self, cur: psycopg.Cursor[dict[str, object]], workspace_id: UUID
+    ) -> dict[str, object]:
+        # Stop state is derived from the latest applied engage/release domain
+        # event on the workspace aggregate — durable across restarts with no
+        # migration (decision 0014).
+        cur.execute(
+            "SELECT event_type, actor_kind, payload, occurred_at "
+            "FROM omp_audit.domain_events "
+            "WHERE workspace_id=%s AND aggregate_type='workspace' "
+            "AND aggregate_id=%s AND event_type IN ('engage_stop','release_stop') "
+            "AND outcome='applied' "
+            "ORDER BY sequence DESC LIMIT 1",
+            (workspace_id, workspace_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return {
+                "workspace_id": str(workspace_id),
+                "stopped": False,
+                "reason": None,
+                "changed_at": None,
+                "changed_by_actor_kind": None,
+            }
+        payload = row["payload"]
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        occurred_at = row["occurred_at"]
+        return {
+            "workspace_id": str(workspace_id),
+            "stopped": row["event_type"] == "engage_stop",
+            "reason": payload.get("reason"),
+            "changed_at": occurred_at.isoformat(),
+            "changed_by_actor_kind": row["actor_kind"],
+        }
+
     def _activate_cutover(
         self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
     ) -> dict[str, object]:
@@ -6942,5 +7015,13 @@ class PostgresWorkStore(ResearchStoreMixin):
                 "next_after_sequence": next_after_sequence,
                 "has_more": has_more,
             }
+
+    def stop_status(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+    ) -> dict[str, object]:
+        with self._transaction(workspace_id, actor_id) as cur:
+            return self._stop_status(cur, workspace_id)
 
 

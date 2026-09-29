@@ -15,6 +15,7 @@
     "decisions/0011-research-artifact-custody.md",
     "decisions/0012-bot-filed-intake-hold.md",
     "decisions/0013-alarm-signals.md",
+    "decisions/0014-agent-stop-control.md",
     "examples.json",
     "manifest.json",
     "research-artifact-hash.json",

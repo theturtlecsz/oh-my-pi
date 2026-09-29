@@ -8166,6 +8166,25 @@
           "title": "CutoverManifest",
           "type": "object"
         },
+        "EngageStopCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/StopReasonPayload"
+            },
+            "type": {
+              "const": "engage_stop",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "EngageStopCommand",
+          "type": "object"
+        },
         "EvidenceKind": {
           "enum": [
             "plan",
@@ -9945,6 +9964,25 @@
           "title": "RelationKind",
           "type": "string"
         },
+        "ReleaseStopCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/StopReasonPayload"
+            },
+            "type": {
+              "const": "release_stop",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "ReleaseStopCommand",
+          "type": "object"
+        },
         "RemoveRelationCommand": {
           "additionalProperties": false,
           "properties": {
@@ -11361,6 +11399,22 @@
           "title": "StampExecutionPlanPayload",
           "type": "object"
         },
+        "StopReasonPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "reason": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Reason",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reason"
+          ],
+          "title": "StopReasonPayload",
+          "type": "object"
+        },
         "UnknownIntakeValue": {
           "additionalProperties": false,
           "properties": {
@@ -11476,6 +11530,7 @@
               "create_research_campaign": "#/$defs/CreateResearchCampaignCommand",
               "create_same_session_child": "#/$defs/CreateSameSessionChildCommand",
               "create_work_batch": "#/$defs/CreateWorkBatchCommand",
+              "engage_stop": "#/$defs/EngageStopCommand",
               "finalize_candidate": "#/$defs/FinalizeCandidateCommand",
               "promote_import_batch": "#/$defs/PromoteImportBatchCommand",
               "propose_research_trial": "#/$defs/ProposeResearchTrialCommand",
@@ -11492,6 +11547,7 @@
               "register_research_component": "#/$defs/RegisterResearchComponentCommand",
               "register_research_dataset": "#/$defs/RegisterResearchDatasetCommand",
               "register_research_source": "#/$defs/RegisterResearchSourceCommand",
+              "release_stop": "#/$defs/ReleaseStopCommand",
               "remove_relation": "#/$defs/RemoveRelationCommand",
               "reserve_auditor_launch": "#/$defs/ReserveAuditorLaunchCommand",
               "revise_work": "#/$defs/ReviseWorkCommand",
@@ -11667,6 +11723,12 @@
             },
             {
               "$ref": "#/$defs/RecordAlarmSignalCommand"
+            },
+            {
+              "$ref": "#/$defs/EngageStopCommand"
+            },
+            {
+              "$ref": "#/$defs/ReleaseStopCommand"
             }
           ],
           "title": "Command"
@@ -14572,6 +14634,14 @@
               "title": "Rls",
               "type": "string"
             },
+            "stop_client_scopes": {
+              "items": {
+                "const": "work.stop",
+                "type": "string"
+              },
+              "title": "Stop Client Scopes",
+              "type": "array"
+            },
             "task_agent_scopes": {
               "items": {
                 "const": "work.candidate.read",
@@ -14588,6 +14658,7 @@
             "auditor_scopes",
             "importer_scopes",
             "operator_scopes",
+            "stop_client_scopes",
             "rls",
             "credentials"
           ],
@@ -16804,6 +16875,43 @@
         "HOME-148"
       ],
       "title": "DependencyGraph",
+      "type": "object"
+    },
+    "EngageStopCommand": {
+      "$defs": {
+        "StopReasonPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "reason": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Reason",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reason"
+          ],
+          "title": "StopReasonPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/StopReasonPayload"
+        },
+        "type": {
+          "const": "engage_stop",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "EngageStopCommand",
       "type": "object"
     },
     "EvidenceReceipt": {
@@ -21727,6 +21835,43 @@
       "title": "RelationEdge",
       "type": "object"
     },
+    "ReleaseStopCommand": {
+      "$defs": {
+        "StopReasonPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "reason": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Reason",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reason"
+          ],
+          "title": "StopReasonPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/StopReasonPayload"
+        },
+        "type": {
+          "const": "release_stop",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "ReleaseStopCommand",
+      "type": "object"
+    },
     "RemoveRelationCommand": {
       "$defs": {
         "RelationEdge": {
@@ -24899,6 +25044,14 @@
           "title": "Rls",
           "type": "string"
         },
+        "stop_client_scopes": {
+          "items": {
+            "const": "work.stop",
+            "type": "string"
+          },
+          "title": "Stop Client Scopes",
+          "type": "array"
+        },
         "task_agent_scopes": {
           "items": {
             "const": "work.candidate.read",
@@ -24915,6 +25068,7 @@
         "auditor_scopes",
         "importer_scopes",
         "operator_scopes",
+        "stop_client_scopes",
         "rls",
         "credentials"
       ],
@@ -25993,6 +26147,22 @@
         "judge_sha256"
       ],
       "title": "StampExecutionPlanPayload",
+      "type": "object"
+    },
+    "StopReasonPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "title": "StopReasonPayload",
       "type": "object"
     },
     "StrictModel": {
