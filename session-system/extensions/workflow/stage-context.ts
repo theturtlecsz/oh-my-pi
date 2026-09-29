@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { payloadHash, type CloseAttempt, type WorkflowView } from "@oh-my-pi/pi-work-client";
 
 export interface StageContextInput {
@@ -19,45 +21,43 @@ export interface StageContextDeps {
 }
 
 const DEFAULT_TIMEOUT_MS = 60_000;
-const ENV_VAR_NAME = "OMP_KNOWLEDGE_CONTEXT_CMD";
-const MODULE_TOKEN = "omp_knowledge.context";
-// Flags that exist only on the `compile` subparser. `-m` is a python flag and must not match.
-const COMPILE_FLAGS = new Set([
-	"--state-dir",
-	"--token-cmd",
-	"--encoding",
-	"--token-budget",
-	"--structural-state-dir",
-	"--snapshot",
-	"--permit-repository",
-	"--learning-db",
-	"--engine",
-	"--reranker-url",
-	"--reranker-model",
-	"--structural-limit",
-	"--semantic-limit",
-	"--json",
-]);
+const NOT_PROVISIONED = "STAGE CONTEXT: unavailable (not provisioned)";
+const BAD_SETTINGS = "STAGE CONTEXT: unavailable (bad settings)";
 
-// The context CLI is `python -m omp_knowledge.context compile ...`. argparse accepts
-// `--state-dir` and the other compile flags only on the `compile` subparser, so the
-// subcommand is spliced ahead of whichever flags the operator folded into
-// OMP_KNOWLEDGE_CONTEXT_CMD — appending `compile` after those flags exits 2.
-function buildCompileArgv(baseCmd: string[]): string[] {
-	const existing = baseCmd.indexOf("compile");
-	if (existing >= 0) {
-		if (baseCmd.includes("--json")) return baseCmd;
-		return [...baseCmd.slice(0, existing + 1), "--json", ...baseCmd.slice(existing + 1)];
-	}
+// Directory variables come from deps.env only. process.env and os.homedir() would ignore the caller.
+function contextSettingsPath(env: Record<string, string | undefined>): string {
+	const configured = env.OMP_KNOWLEDGE_CONFIG_DIR;
+	if (configured) return join(configured, "context.json");
+	const xdg = env.XDG_CONFIG_HOME;
+	const configHome = xdg ? xdg : join(env.HOME ?? "", ".config");
+	return join(configHome, "omp-knowledge", "context.json");
+}
 
-	const moduleIndex = baseCmd.findIndex(token => token === MODULE_TOKEN || token.endsWith(`/${MODULE_TOKEN}`));
-	let insertAt = moduleIndex >= 0 ? moduleIndex + 1 : baseCmd.length;
-	if (moduleIndex < 0) {
-		const flagIndex = baseCmd.findIndex(token => COMPILE_FLAGS.has(token));
-		if (flagIndex >= 0) insertAt = flagIndex;
+function isMissingFile(err: unknown): boolean {
+	return typeof err === "object" && err !== null && "code" in err && (err as { code?: unknown }).code === "ENOENT";
+}
+
+// Installer settings. Other keys stay in the file for the Python `stage` command; they are not argv.
+function readStageCommand(settingsPath: string): { command: string[] } | { unavailable: string } {
+	let raw: string;
+	try {
+		raw = readFileSync(settingsPath, "utf8");
+	} catch (err) {
+		if (isMissingFile(err)) return { unavailable: NOT_PROVISIONED };
+		throw err;
 	}
-	const jsonFlag = baseCmd.includes("--json") ? [] : ["--json"];
-	return [...baseCmd.slice(0, insertAt), "compile", ...jsonFlag, ...baseCmd.slice(insertAt)];
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch {
+		return { unavailable: BAD_SETTINGS };
+	}
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { unavailable: BAD_SETTINGS };
+	const command = (parsed as { command?: unknown }).command;
+	if (!Array.isArray(command) || command.length === 0 || !command.every(item => typeof item === "string")) {
+		return { unavailable: BAD_SETTINGS };
+	}
+	return { command };
 }
 
 export async function defaultRun(
@@ -110,23 +110,12 @@ export async function stageContextLines(
 	deps: StageContextDeps,
 ): Promise<string[]> {
 	try {
-		const envVar = deps.env?.[ENV_VAR_NAME];
-		if (envVar === undefined) {
-			return [];
-		}
+		const settingsPath = contextSettingsPath(deps.env ?? {});
+		const loaded = readStageCommand(settingsPath);
+		if ("unavailable" in loaded) return [loaded.unavailable];
 
-		let cmd: unknown;
-		try {
-			cmd = JSON.parse(envVar);
-		} catch {
-			return ["STAGE CONTEXT: unavailable (bad JSON)"];
-		}
-
-		if (!Array.isArray(cmd) || cmd.length === 0 || !cmd.every(item => typeof item === "string")) {
-			return ["STAGE CONTEXT: unavailable (bad JSON)"];
-		}
-
-		const argv = buildCompileArgv(cmd);
+		// OMP_KNOWLEDGE_CONTEXT_CMD is not read. It was the only route that could pass --learning-db.
+		const argv = [...loaded.command, "stage", "--settings", settingsPath];
 
 		const view = await deps.workflow(input.key);
 		const attempt = deps.liveAttempt(view);
