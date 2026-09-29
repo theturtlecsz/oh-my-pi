@@ -20,8 +20,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import socket
+import sys
 import threading
+import time
 import urllib.parse
 from collections.abc import Mapping, Sequence
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -54,6 +57,17 @@ def _load_script(script_path: str | Path) -> tuple[dict[str, Any], ...]:
     for index, raw in enumerate(document):
         if not isinstance(raw, dict):
             raise ValueError(f"script step {index} must be a JSON object")
+        if "hold_s" in raw:
+            hold_s = raw["hold_s"]
+            if (
+                isinstance(hold_s, bool)
+                or not isinstance(hold_s, (int, float))
+                or hold_s < 0
+                or not math.isfinite(hold_s)
+            ):
+                raise ValueError(
+                    f"script step {index} hold_s must be a non-negative number, got {hold_s!r}"
+                )
         if "tool_calls" in raw:
             calls = raw["tool_calls"]
             if not isinstance(calls, list) or not calls:
@@ -199,6 +213,12 @@ class _ScriptedHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
     daemon_threads = True
 
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        _exc_type, exc_value, _ = sys.exc_info()
+        if isinstance(exc_value, (BrokenPipeError, ConnectionResetError, OSError)):
+            return
+        super().handle_error(request, client_address)
+
 
 def models_yml(base_url: str) -> str:
     """Provider ``scripted`` pointed at one keyless, zero-cost model."""
@@ -260,10 +280,16 @@ class ScriptedModelServer:
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:  # noqa: N802
-                service._handle(self)
+                try:
+                    service._handle(self)
+                except (BrokenPipeError, ConnectionResetError, socket.error, OSError):
+                    pass
 
             def do_GET(self) -> None:  # noqa: N802
-                service._handle(self)
+                try:
+                    service._handle(self)
+                except (BrokenPipeError, ConnectionResetError, socket.error, OSError):
+                    pass
 
             def log_message(self, format: str, *args: object) -> None:  # pylint: disable=redefined-builtin
                 return
@@ -313,16 +339,23 @@ class ScriptedModelServer:
                     json.dumps({"error": "script_exhausted"}).encode("utf-8"),
                     None,
                 )
+            step = self.steps[index]
             self._index = index + 1
+        hold_s = step.get("hold_s", 0)
+        if hold_s > 0:
+            time.sleep(hold_s)
         try:
-            frames = _frames(index, self.steps[index], _preceding_confirmation_id(body))
+            frames = _frames(index, step, _preceding_confirmation_id(body))
         except ValueError as exc:
             return ScriptedResponse(500, "application/json", json.dumps({"error": str(exc)}).encode("utf-8"), index)
         return ScriptedResponse(200, "text/event-stream", frames, index)
 
     def _handle(self, handler: BaseHTTPRequestHandler) -> None:
-        length = int(handler.headers.get("Content-Length") or 0)
-        raw = handler.rfile.read(length) if length > 0 else b""
+        try:
+            length = int(handler.headers.get("Content-Length") or 0)
+            raw = handler.rfile.read(length) if length > 0 else b""
+        except (BrokenPipeError, ConnectionResetError, socket.error, OSError):
+            return
         body = _decode_body(raw)
         path = urllib.parse.urlsplit(handler.path).path
         with self._lock:
@@ -333,11 +366,15 @@ class ScriptedModelServer:
         else:
             result = ScriptedResponse(404, "application/json", _NOT_FOUND, None)
         self._log(ordinal, path, body, result)
-        handler.send_response(result.status)
-        handler.send_header("Content-Type", result.content_type)
-        handler.send_header("Content-Length", str(len(result.payload)))
-        handler.end_headers()
-        handler.wfile.write(result.payload)
+        try:
+            handler.send_response(result.status)
+            handler.send_header("Content-Type", result.content_type)
+            handler.send_header("Content-Length", str(len(result.payload)))
+            handler.end_headers()
+            handler.wfile.write(result.payload)
+            handler.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, socket.error, OSError):
+            pass
 
     def _log(self, ordinal: int, path: str, body: Any, result: ScriptedResponse) -> None:
         record = {
