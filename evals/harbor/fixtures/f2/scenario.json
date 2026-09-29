@@ -55,7 +55,8 @@
     "match": {
       "type": "prompt",
       "message": "/execute OMP-246"
-    }
+    },
+    "boundary": "enqueue"
   },
   "timeout_s": 120
 }

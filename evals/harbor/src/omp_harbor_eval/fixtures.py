@@ -68,10 +68,16 @@ class Terminal:
 
 
 class KillAt:
-    """Subset of an outbound RPC frame. A match ends the RPC process."""
+    """Subset of an outbound RPC frame.
 
-    def __init__(self, match: dict[str, Any]) -> None:
+    ``boundary`` is ``None`` when a match ends the RPC process immediately.
+    ``enqueue`` arms on that frame and ends the process only after the
+    continuation has been queued.
+    """
+
+    def __init__(self, match: dict[str, Any], boundary: str | None = None) -> None:
         self.match = match
+        self.boundary = boundary
 
 
 class Scenario:
@@ -213,8 +219,13 @@ def _load_scenario(document: dict[str, Any], filename: str) -> Scenario:
     kill_at: KillAt | None = None
     if "kill_at" in document and document["kill_at"] is not None:
         raw_kill = _mapping(document["kill_at"], "scenario.kill_at")
-        _exact_keys(raw_kill, {"match"}, "scenario.kill_at")
-        kill_at = KillAt(_mapping(raw_kill["match"], "scenario.kill_at.match"))
+        _exact_keys_optional(raw_kill, {"match", "boundary"}, {"match"}, "scenario.kill_at")
+        boundary: str | None = None
+        if "boundary" in raw_kill:
+            boundary = _string(raw_kill["boundary"], "scenario.kill_at.boundary")
+            if boundary != "enqueue":
+                raise ValueError('scenario.kill_at.boundary must be "enqueue"')
+        kill_at = KillAt(_mapping(raw_kill["match"], "scenario.kill_at.match"), boundary)
     timeout_s: int | float | None = None
     if "timeout_s" in document and document["timeout_s"] is not None:
         raw_timeout = document["timeout_s"]
