@@ -346,6 +346,22 @@ def main(argv: list[str] | None = None) -> int | None:
     watch = alarm_commands.add_parser("watch-credentials", parents=[alarm_common])
     watch.add_argument("--root", action="append")
 
+    jobs_parser = subcommands.add_parser("jobs")
+    jobs_sub = jobs_parser.add_subparsers(dest="jobs_command", required=True)
+
+    worker_parser = jobs_sub.add_parser("worker")
+    worker_parser.add_argument("--config", required=True, type=Path)
+    worker_parser.add_argument("--once", action="store_true", default=False)
+
+    check_parser = jobs_sub.add_parser("check")
+    check_parser.add_argument("--config", required=True, type=Path)
+    check_parser.add_argument("--work-id", default=None)
+    check_parser.add_argument("--count", type=int, default=1)
+    check_parser.add_argument("--timeout", type=float, default=30.0)
+
+    reg_parser = jobs_sub.add_parser("register-component")
+    reg_parser.add_argument("--config", required=True, type=Path)
+
     args = parser.parse_args(argv)
     if args.command == "alarms":
         if args.client_config is None:
@@ -483,6 +499,24 @@ def main(argv: list[str] | None = None) -> int | None:
             return 0
     if args.command == "budget-alerts":
         return _budget_alerts(args.workspace, args.actor)
+    if args.command == "jobs":
+        from .jobs.process import check, register_component, run_worker
+
+        if args.jobs_command == "worker":
+            res = run_worker(args.config, once=args.once)
+            return 0 if res is None else res
+        if args.jobs_command == "register-component":
+            register_component(args.config)
+            return 0
+        if args.jobs_command == "check":
+            result = check(
+                args.config,
+                work_id=args.work_id,
+                count=args.count,
+                timeout=args.timeout,
+            )
+            print(json.dumps(result, indent=2))
+            return 0 if result.get("passed") else 1
     return 2
 
 
