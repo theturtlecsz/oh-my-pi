@@ -17,6 +17,7 @@ from .capabilities import (
     _write_secret,
     provision_automation,
     provision_candidate_reader,
+    provision_grokbot,
     provision_owner,
     write_client_config,
 )
@@ -142,6 +143,9 @@ def add_parser(parser: argparse.ArgumentParser) -> None:
     automation = capabilities.add_parser("automation")
     automation.add_argument("--workspace-id", required=True)
     automation.add_argument("--name", default="automation")
+    grokbot = capabilities.add_parser("grokbot")
+    grokbot.add_argument("--workspace-id", required=True)
+    grokbot.add_argument("--name", default="grokbot")
     client_config = capabilities.add_parser("client-config")
     client_config.add_argument("--workspace-id", required=True)
     client_config.add_argument("--owner-id", required=True)
@@ -220,6 +224,12 @@ def run(args: argparse.Namespace, config: OperationsConfig | None = None) -> Non
             )
         elif args.capabilities_command == "automation":
             path = provision_automation(
+                config,
+                workspace_id=UUID(args.workspace_id),
+                name=args.name,
+            )
+        elif args.capabilities_command == "grokbot":
+            path = provision_grokbot(
                 config,
                 workspace_id=UUID(args.workspace_id),
                 name=args.name,

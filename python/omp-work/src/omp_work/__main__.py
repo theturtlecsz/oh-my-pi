@@ -23,6 +23,7 @@ from . import (
     validate_bundle,
 )
 from .operations import cli as operations_cli
+from .operations import stop as stop_ops
 from .operations.config import OperationsConfig
 from .operations.database import collect_health
 from .v1.client import WorkClient
@@ -217,6 +218,35 @@ def _run_alarms_command(args: argparse.Namespace) -> int:
     return 2
 
 
+def _run_stop_command(args: argparse.Namespace) -> int:
+    client_config = args.client_config or str(_default_client_config())
+    try:
+        client, workspace_id = stop_ops.load_client(
+            Path(client_config), args.bearer_file
+        )
+    except Exception as error:
+        print(f"stop: {error}", file=sys.stderr)
+        return 255
+    try:
+        if args.stop_command == "check":
+            return stop_ops.check(client)
+        if args.stop_command == "status":
+            view = stop_ops.status(client)
+            print(json.dumps(view.model_dump(mode="json"), sort_keys=True))
+            return 0
+        if args.stop_command == "engage":
+            response = stop_ops.engage(client, workspace_id, args.reason)
+        else:
+            response = stop_ops.release(client, workspace_id, args.reason)
+        print(response.model_dump_json())
+        return 0
+    except Exception as error:
+        print(f"stop: {error}", file=sys.stderr)
+        return 255
+    finally:
+        client.close()
+
+
 def main(argv: list[str] | None = None) -> int | None:
     parser = argparse.ArgumentParser(prog="python -m omp_work")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -266,6 +296,18 @@ def main(argv: list[str] | None = None) -> int | None:
     alerts.add_argument("--workspace", required=True, type=UUID)
     alerts.add_argument("--actor", required=True, type=UUID)
 
+    stop = subcommands.add_parser("stop")
+    stop_commands = stop.add_subparsers(dest="stop_command", required=True)
+    stop_scope = argparse.ArgumentParser(add_help=False)
+    stop_scope.add_argument("--client-config")
+    stop_scope.add_argument("--bearer-file", type=Path)
+    stop_commands.add_parser("status", parents=[stop_scope])
+    stop_commands.add_parser("check", parents=[stop_scope])
+    engage = stop_commands.add_parser("engage", parents=[stop_scope])
+    engage.add_argument("--reason", required=True)
+    release = stop_commands.add_parser("release", parents=[stop_scope])
+    release.add_argument("--reason", required=True)
+
     alarms = subcommands.add_parser("alarms")
     alarm_common = argparse.ArgumentParser(add_help=False)
     alarm_common.add_argument("--state", required=True)
@@ -283,6 +325,8 @@ def main(argv: list[str] | None = None) -> int | None:
         if args.client_config is None:
             args.client_config = str(_default_client_config())
         return _run_alarms_command(args)
+    if args.command == "stop":
+        return _run_stop_command(args)
     if args.command == "serve":
         if args.host not in {"127.0.0.1", "::1", "localhost"}:
             raise SystemExit("non-loopback bind refused")

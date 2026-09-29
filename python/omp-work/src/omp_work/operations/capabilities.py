@@ -33,6 +33,9 @@ AUTOMATION_SCOPES = (
     "work.execute",
 )
 DEFAULT_BASE_URL = "http://127.0.0.1:54322"
+# OMP-405: the stop switch's monitoring principal — engage_stop and the stop
+# status read only; never a mutation scope.
+GROKBOT_SCOPES = ("work.stop",)
 
 
 def _write_secret(path: Path, value: str) -> None:
@@ -184,4 +187,23 @@ def provision_automation(
         actor_kind="automation",
         workspaces=(workspace_id,),
         scopes=AUTOMATION_SCOPES,
+    )
+
+
+def provision_grokbot(
+    config: OperationsConfig,
+    workspace_id: UUID,
+    name: str = "grokbot",
+) -> Path:
+    """OMP-405: mint the stop switch's monitoring principal — a distinct
+    actor_id and token with actor_kind "grokbot", one workspace, and
+    ``work.stop`` only, so it can engage the agent stop and read the stop
+    status but never mutate the ledger."""
+    return write_capability(
+        config,
+        name,
+        actor_id=uuid4(),
+        actor_kind="grokbot",
+        workspaces=(workspace_id,),
+        scopes=GROKBOT_SCOPES,
     )
