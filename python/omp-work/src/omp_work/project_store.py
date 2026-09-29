@@ -1,39 +1,52 @@
 """OMP-418: project records, profile, missions, history and standing authority.
 
 The store owns project_records/project_goals/project_questions/project_refs/
-project_repositories/project_missions/project_history (migration 0030) and
-standing_mandates/standing_policies/spend_budgets (migration 0031) on top of
-the existing omp_work.projects and omp_work.repositories rows. PostgresWorkStore
+project_repositories/project_missions/project_history (migration 0030),
+standing_mandates/standing_policies/spend_budgets (migration 0031) and the
+project_action_records/spend_records audit rows (migration 0032) on top of the
+existing omp_work.projects and omp_work.repositories rows. PostgresWorkStore
 mixes this in; the host supplies _transaction and the workspace/actor claims.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 import psycopg
 
-from omp_work.spend_budget import SpendBudget, budget_change_kind
+from omp_work.action_tiers import tier_of
+from omp_work.spend_budget import (
+    SpendBudget,
+    authorize_spend,
+    budget_change_kind,
+    effective_budgets,
+)
 from omp_work.standing_change import (
     ChangeAuthority,
     ChangeKind,
     StandingChangeRefused,
     authorize_standing_change,
+    owner_signed,
 )
 from omp_work.standing_mandate import (
     MandateRefused,
     MissionScopeDraft,
     StandingMandate,
+    encounter_tier3,
     mandate_change_kind,
     mission_scope,
     validate_mandate,
 )
 from omp_work.standing_policy import (
+    ActionRequest,
     PolicyRefused,
     RepositoryRecord,
     StandingPolicy,
+    covers,
     policy_change_kind,
     validate_policy,
 )
@@ -604,6 +617,138 @@ class ProjectStoreMixin:
                 mission_id=mission_id,
             )
 
+    def request_action(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        project_id: UUID,
+        mission_id: UUID | None,
+        action: ActionRequest,
+        authority: ChangeAuthority | None,
+        now: datetime,
+    ) -> None:
+        """Evaluate one action against its tier and record the verdict.
+
+        Tier 1 is allowed. Tier 2 is allowed only when an active standing policy
+        covers it over the project's repositories, and the record names that
+        policy. Tier 3 consults the active mandate and the mission status; an
+        allowed action names the owner decision, and an outside-mandate class
+        moves the mission to awaiting_confirmation. Every verdict appends a
+        project_action_records row and a history row; a refusal then raises
+        ProjectAuthorityRefused with the refusal code.
+        """
+        code: str | None = None
+        policy_id: UUID | None = None
+        decision_id: UUID | None = None
+        tier = tier_of(action.action_class)
+        with self._transaction(workspace_id, actor_id) as cur:
+            self._require_project(cur, workspace_id, project_id)
+            if tier == 1:
+                pass
+            elif tier == 2:
+                found = self._covering_policy(cur, workspace_id, project_id, action, now)
+                if found is None:
+                    code = "standing_policy_required"
+                else:
+                    policy_id = found
+            else:
+                status = self._mission_status(cur, workspace_id, project_id, mission_id)
+                mandate = self._load_mandate(cur, workspace_id, project_id)
+                new_status, tier3_outcome = encounter_tier3(
+                    mandate,
+                    status,
+                    action.action_class,
+                    authority is not None and owner_signed(authority),
+                )
+                if new_status != status and mission_id is not None:
+                    cur.execute(
+                        "UPDATE omp_work.project_missions SET status=%s"
+                        " WHERE workspace_id=%s AND mission_id=%s",
+                        (new_status, workspace_id, mission_id),
+                    )
+                if tier3_outcome == "allowed":
+                    decision_id = _authority_decision(authority)
+                else:
+                    code = "blocked_owner_signature"
+            outcome = "refused" if code else "allowed"
+            self._insert_action_record(
+                cur,
+                workspace_id,
+                project_id,
+                mission_id,
+                action,
+                tier,
+                outcome,
+                code,
+                policy_id,
+                decision_id,
+            )
+            self._write_history(
+                cur,
+                workspace_id,
+                project_id,
+                f"action_{outcome}",
+                f"{action.action_class} tier{tier}",
+                mission_id=mission_id,
+            )
+        if code is not None:
+            raise ProjectAuthorityRefused(code)
+
+    def record_spend(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        project_id: UUID,
+        mission_id: UUID | None,
+        amount_usd: Decimal,
+        now: datetime,
+    ) -> None:
+        """Authorize a spend against the mission and project budgets and record it.
+
+        The active budgets are locked FOR UPDATE, spent is summed from
+        spend_records per budget, and authorize_spend decides against the
+        effective budgets and the active spend_beyond_threshold policies. A
+        refusal writes nothing and raises ProjectAuthorityRefused; an allowed
+        spend appends a spend_records row naming its tier and policy.
+        """
+        with self._transaction(workspace_id, actor_id) as cur:
+            self._require_project(cur, workspace_id, project_id)
+            self._lock_mission(cur, workspace_id, project_id, mission_id)
+            mission_budget, _ = self._load_budget_locked(
+                cur, workspace_id, project_id, mission_id
+            )
+            project_budget, _ = self._load_budget_locked(
+                cur, workspace_id, project_id, None
+            )
+            budgets = effective_budgets(mission_budget, project_budget)
+            spent = self._spent_by_budget(
+                cur, workspace_id, project_id, mission_id, mission_budget, project_budget
+            )
+            decision = authorize_spend(
+                budgets,
+                spent,
+                amount_usd,
+                self._spend_policies(cur, workspace_id, project_id),
+                self._project_repos(cur, workspace_id, project_id),
+                now,
+            )
+            if not decision.allowed:
+                raise ProjectAuthorityRefused(decision.code or "spend_refused")
+            cur.execute(
+                "INSERT INTO omp_work.spend_records"
+                " (workspace_id, record_id, project_id, mission_id, amount_usd, tier, policy_id)"
+                " VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (
+                    workspace_id,
+                    uuid4(),
+                    project_id,
+                    mission_id,
+                    amount_usd,
+                    decision.tier,
+                    _optional_uuid(decision.policy_id),
+                ),
+            )
+
     def _existing_project_id(
         self, cur: psycopg.Cursor[dict[str, object]], workspace_id: UUID, key: str
     ) -> UUID | None:
@@ -724,17 +869,7 @@ class ProjectStoreMixin:
         row = cur.fetchone()
         if row is None:
             return None
-        return StandingPolicy(
-            policy_id=_row_uuid(row["policy_id"]),
-            action_class=str(row["action_class"]),
-            repositories=row["repositories"] or (),
-            destinations=row["destinations"] or (),
-            branch_patterns=row["branch_patterns"] or (),
-            resource_types=row["resource_types"] or (),
-            money_limit_usd=row["money_limit_usd"],
-            expires_at=row["expires_at"],
-            decision_id=_row_uuid(row["decision_id"]),
-        )
+        return self._policy_row(row)
 
     def _load_budget(
         self,
@@ -759,6 +894,210 @@ class ProjectStoreMixin:
                 threshold_usd=row["threshold_usd"],
             ),
             _row_uuid(row["decision_id"]),
+        )
+
+    def _load_budget_locked(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        project_id: UUID,
+        mission_id: UUID | None,
+    ) -> tuple[SpendBudget | None, UUID | None]:
+        """Load one active budget FOR UPDATE so a decide-then-record spend serializes."""
+        cur.execute(
+            f"SELECT {_BUDGET_FIELDS} FROM omp_work.spend_budgets"
+            " WHERE workspace_id=%s AND project_id=%s AND active"
+            " AND mission_id IS NOT DISTINCT FROM %s FOR UPDATE",
+            (workspace_id, project_id, mission_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None, None
+        return (
+            SpendBudget(
+                budget_id=str(row["budget_id"]),
+                ceiling_usd=row["ceiling_usd"],
+                threshold_usd=row["threshold_usd"],
+            ),
+            _row_uuid(row["decision_id"]),
+        )
+
+    def _lock_mission(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        project_id: UUID,
+        mission_id: UUID | None,
+    ) -> None:
+        """Lock the mission row that the budgets and spend records hang off."""
+        if mission_id is None:
+            return
+        cur.execute(
+            "SELECT mission_id FROM omp_work.project_missions"
+            " WHERE workspace_id=%s AND project_id=%s AND mission_id=%s FOR UPDATE",
+            (workspace_id, project_id, mission_id),
+        )
+
+    def _spent_by_budget(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        project_id: UUID,
+        mission_id: UUID | None,
+        mission_budget: SpendBudget | None,
+        project_budget: SpendBudget | None,
+    ) -> dict[str, Decimal]:
+        """Sum recorded spend per budget: the mission's own rows, then the project's.
+
+        The project budget's total is every spend record on the project (mission
+        rows included); the mission budget's total is only that mission's rows.
+        """
+        spent: dict[str, Decimal] = {}
+        if project_budget is not None:
+            spent[project_budget.budget_id] = self._sum_spend(
+                cur, workspace_id, project_id, None
+            )
+        if mission_budget is not None:
+            spent[mission_budget.budget_id] = self._sum_spend(
+                cur, workspace_id, project_id, mission_id
+            )
+        return spent
+
+    def _sum_spend(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        project_id: UUID,
+        mission_id: UUID | None,
+    ) -> Decimal:
+        if mission_id is None:
+            cur.execute(
+                "SELECT coalesce(sum(amount_usd), 0) FROM omp_work.spend_records"
+                " WHERE workspace_id=%s AND project_id=%s",
+                (workspace_id, project_id),
+            )
+        else:
+            cur.execute(
+                "SELECT coalesce(sum(amount_usd), 0) FROM omp_work.spend_records"
+                " WHERE workspace_id=%s AND project_id=%s AND mission_id=%s",
+                (workspace_id, project_id, mission_id),
+            )
+        row = cur.fetchone()
+        return _as_decimal(row["coalesce"] if row is not None else 0)
+
+    def _covering_policy(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        project_id: UUID,
+        action: ActionRequest,
+        now: datetime,
+    ) -> UUID | None:
+        """The id of the first active policy that covers the action, else None."""
+        repos = self._project_repos(cur, workspace_id, project_id)
+        for policy in self._load_policies(cur, workspace_id, project_id):
+            if covers(policy, action, repos, now):
+                return _as_uuid(policy.policy_id)
+        return None
+
+    def _load_policies(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        project_id: UUID,
+    ) -> list[StandingPolicy]:
+        """Every active policy on the project, in policy_id order."""
+        cur.execute(
+            f"SELECT {_POLICY_FIELDS} FROM omp_work.standing_policies"
+            " WHERE workspace_id=%s AND project_id=%s AND active ORDER BY policy_id",
+            (workspace_id, project_id),
+        )
+        return [self._policy_row(row) for row in cur.fetchall()]
+
+    def _spend_policies(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        project_id: UUID,
+    ) -> list[StandingPolicy]:
+        """The active spend_beyond_threshold policies, for authorize_spend."""
+        cur.execute(
+            f"SELECT {_POLICY_FIELDS} FROM omp_work.standing_policies"
+            " WHERE workspace_id=%s AND project_id=%s AND active"
+            " AND action_class='spend_beyond_threshold' ORDER BY policy_id",
+            (workspace_id, project_id),
+        )
+        return [self._policy_row(row) for row in cur.fetchall()]
+
+    def _policy_row(self, row: dict[str, object]) -> StandingPolicy:
+        return StandingPolicy(
+            policy_id=_row_uuid(row["policy_id"]),
+            action_class=str(row["action_class"]),
+            repositories=row["repositories"] or (),
+            destinations=row["destinations"] or (),
+            branch_patterns=row["branch_patterns"] or (),
+            resource_types=row["resource_types"] or (),
+            money_limit_usd=row["money_limit_usd"],
+            expires_at=row["expires_at"],
+            decision_id=_row_uuid(row["decision_id"]),
+        )
+
+    def _mission_status(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        project_id: UUID,
+        mission_id: UUID | None,
+    ) -> str:
+        """The mission's status, or 'approved' when no mission is named."""
+        if mission_id is None:
+            return "approved"
+        cur.execute(
+            "SELECT status FROM omp_work.project_missions"
+            " WHERE workspace_id=%s AND project_id=%s AND mission_id=%s",
+            (workspace_id, project_id, mission_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise ProjectAuthorityRefused("mission_not_found")
+        return str(row["status"])
+
+    def _insert_action_record(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        project_id: UUID,
+        mission_id: UUID | None,
+        action: ActionRequest,
+        tier: int,
+        outcome: str,
+        code: str | None,
+        policy_id: UUID | None,
+        decision_id: UUID | None,
+    ) -> None:
+        cur.execute(
+            "INSERT INTO omp_work.project_action_records"
+            " (workspace_id, record_id, project_id, mission_id, action_class,"
+            " repository, branch, destination, resource_type, amount_usd, tier,"
+            " outcome, code, policy_id, decision_id)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (
+                workspace_id,
+                uuid4(),
+                project_id,
+                mission_id,
+                action.action_class,
+                action.repository,
+                action.branch,
+                action.destination,
+                action.resource_type,
+                action.amount_usd,
+                tier,
+                outcome,
+                code,
+                policy_id,
+                decision_id,
+            ),
         )
 
     def _deactivate_mandate(
@@ -974,6 +1313,12 @@ def _row_uuid(value: object) -> UUID:
     if isinstance(value, UUID):
         return value
     return UUID(str(value))
+
+
+def _as_decimal(value: object) -> Decimal:
+    if isinstance(value, Decimal):
+        return value
+    return Decimal(str(value))
 
 
 def _strings(values: Iterable[object]) -> list[str]:
