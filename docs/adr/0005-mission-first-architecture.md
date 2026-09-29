@@ -97,3 +97,28 @@ From MANDATE-VALIDATION.md (2026-09-28). ADR 0004 is unchanged (D28). Under A10,
 - disabling safety, audit, or verification mechanisms
 
 D40: D35 supersedes D16's classes where they conflict; an action no tier lists is tier 3.
+
+## Locks
+
+| Lock | Enforced by | Test |
+| --- | --- | --- |
+| 1. Repository/path allowlist | OMP-417 | outside write refused |
+| 2. Isolated worktree/sandbox | OMP-417 | other worktrees unreadable |
+| 3. No source credentials in workers | OMP-417 | credentials unreadable |
+| 4. Single mutation authority | OMP-421, OMP-417 | worker write refused |
+| 5. Lease + idempotency enforcement | OMP-417, OMP-400 | no duplicate after crash |
+| 6. Independent verification | OMP-417, OMP-420 | unverified: not accepted |
+| 7. Budget caps | OMP-418, OMP-413, OMP-430 | spend past ceiling refused |
+| 8. Network egress policy | OMP-431 | unlisted destination refused |
+| 9. Protected-action gate | OMP-403, OMP-418 | unsigned tier 3 refused |
+| 10. Stop means pause | OMP-405, OMP-430, OMP-425, OMP-417 | stop: nothing dispatches |
+| 11. Audit trail | OMP-417, OMP-415 | edited event fails check |
+| 12. Fail closed | OMP-421, OMP-403 | ambiguity refused |
+
+## Merges to protected or default branches (D41)
+
+Merging into a protected or default branch is tier 3 for now. A mission may prepare, test, review, commit and push an approved candidate under the appropriate standing policy, but the merge waits for Chris's signed authorization, shown by the designated controller client as a normal decision. Not flood.
+
+## Scope: OMP runtime only (D36)
+
+> D35 governs OMP's own runtime and unattended execution behavior. Flood is a separate build/implementation system used to develop OMP. It is not part of the OMP product control plane and is not governed by D35. Do not retrofit OMP runtime approval, mission, standing-policy, merge, deployment, or safety-envelope rules onto flood unless I separately authorize that as a flood-specific policy. Flood may continue operating under its own controls while implementing OMP.
