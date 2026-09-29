@@ -7,12 +7,11 @@ from uuid import UUID, uuid4
 
 import psycopg
 import pytest
-
-from test_workflow_service import _grant
 from omp_work.v1.api_models import DecisionView
 from omp_work.v1.models import CommandEnvelope, CreateDecisionCommand, OperationState
 from omp_work.v1.store import PostgresWorkStore
 from omp_work.v1.store_shared import WorkStoreError
+from test_workflow_service import _grant
 
 pytest_plugins = ["test_workflow_service"]
 
