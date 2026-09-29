@@ -4,8 +4,11 @@ import argparse
 import json
 import os
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from functools import partial
 from pathlib import Path
+from typing import Any, Callable
+from uuid import UUID, uuid4
 
 import uvicorn
 
@@ -22,8 +25,12 @@ from . import (
 from .operations import cli as operations_cli
 from .operations.config import OperationsConfig
 from .operations.database import collect_health
+from .v1.client import WorkClient
 from .v1.models import Approval
 from .v1.server import create_app
+from .alarm_dispatch import AlarmStateMissing, init_alarms, run_alarms, run_digest
+from .credential_watch import DEFAULT_ROOTS, watch_credentials
+from .grokbot import send as grokbot_send
 from .engine_pipeline import run_retrieve_compile_campaign
 from .budget_headroom import compute_headroom
 from .always_running import check_stall
@@ -41,6 +48,53 @@ _SAFE_OPERATION_ERRORS = {
     "linear_import_blocked",
     "linear_import_drift",
 }
+
+
+def _budget_alerts(workspace_id: UUID, actor_id: UUID) -> int:
+    """Sweep item budgets, then deliver committed or failed budget_alert rows.
+
+    The URL is ``OMP_GROKBOT_ALERT_URL``. The bearer token is the stripped
+    contents of the file named by ``OMP_GROKBOT_ALERT_TOKEN_FILE``. Either
+    missing, unreadable, or empty exits 2. On success the process prints the
+    number of alerts sent as JSON.
+    """
+    url = os.environ.get("OMP_GROKBOT_ALERT_URL", "").strip()
+    token_file = os.environ.get("OMP_GROKBOT_ALERT_TOKEN_FILE", "").strip()
+    if not url:
+        print("budget-alerts: OMP_GROKBOT_ALERT_URL is not set", file=sys.stderr)
+        return 2
+    if not token_file:
+        print("budget-alerts: OMP_GROKBOT_ALERT_TOKEN_FILE is not set", file=sys.stderr)
+        return 2
+    try:
+        token = Path(token_file).read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError):
+        print("budget-alerts: token file is unreadable", file=sys.stderr)
+        return 2
+    if not token:
+        print("budget-alerts: token file is empty", file=sys.stderr)
+        return 2
+
+    from .jobs.budget import sweep_item_budgets
+    from .jobs.grokbot import deliver_budget_alerts
+    from .jobs.store import NativeJobStore
+
+    store = NativeJobStore(OperationsConfig.defaults())
+    sweep_item_budgets(
+        store,
+        operation_id=str(uuid4()),
+        workspace_id=workspace_id,
+        actor_id=actor_id,
+    )
+    sent = deliver_budget_alerts(
+        store,
+        workspace_id=workspace_id,
+        actor_id=actor_id,
+        url=url,
+        token=token,
+    )
+    print(json.dumps(sent))
+    return 0
 
 
 def _approve(issue: str) -> None:
@@ -95,6 +149,74 @@ def _approve(issue: str) -> None:
     print(f"approved {digest} for {issue}")
 
 
+def _default_client_config() -> Path:
+    base = os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config")
+    return Path(base) / "omp-work" / "client.json"
+
+
+def _alarm_client(path: str | Path) -> tuple[WorkClient, UUID]:
+    config = json.loads(Path(path).read_text(encoding="utf-8"))
+    workspace_id = UUID(str(config["workspace_id"]))
+    return (
+        WorkClient(
+            str(config["base_url"]),
+            workspace_id,
+            Path(str(config["bearer_file"])),
+        ),
+        workspace_id,
+    )
+
+
+def _alarm_sender() -> Callable[[str, dict[str, Any]], None] | None:
+    url = os.environ.get("OMP_GROKBOT_ALERT_URL")
+    token_file = os.environ.get("OMP_GROKBOT_ALERT_TOKEN_FILE")
+    if not url or not token_file:
+        return None
+    try:
+        token = Path(token_file).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not token:
+        return None
+    return partial(grokbot_send, url, token)
+
+
+def _run_alarms_command(args: argparse.Namespace) -> int:
+    client, workspace_id = _alarm_client(args.client_config)
+    state_path = Path(args.state)
+    if args.alarms_command == "init":
+        state = init_alarms(client, state_path)
+        print(json.dumps({"after_sequence": state.after_sequence}))
+        return 0
+    if args.alarms_command == "watch-credentials":
+        roots = tuple(Path(root) for root in args.root) if args.root else DEFAULT_ROOTS
+        signalled = watch_credentials(
+            client,
+            workspace_id=workspace_id,
+            state_path=state_path,
+            roots=roots,
+        )
+        print(json.dumps({"signalled": signalled}))
+        return 0
+    sender = _alarm_sender()
+    if sender is None:
+        return 2
+    if args.alarms_command == "run":
+        try:
+            sent = run_alarms(client, state_path, sender)
+        except AlarmStateMissing:
+            print("run `omp-work alarms init` first", file=sys.stderr)
+            return 2
+        print(json.dumps({"sent": sent}))
+        return 0
+    if args.alarms_command == "digest":
+        day = args.day or (datetime.now(UTC).date() - timedelta(days=1))
+        body = run_digest(client, workspace_id, day, sender)
+        print(json.dumps(body))
+        return 0
+    return 2
+
+
 def main(argv: list[str] | None = None) -> int | None:
     parser = argparse.ArgumentParser(prog="python -m omp_work")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -140,7 +262,27 @@ def main(argv: list[str] | None = None) -> int | None:
     pa.add_argument("--packet")
     pa.add_argument("--mission")
 
+    alerts = subcommands.add_parser("budget-alerts")
+    alerts.add_argument("--workspace", required=True, type=UUID)
+    alerts.add_argument("--actor", required=True, type=UUID)
+
+    alarms = subcommands.add_parser("alarms")
+    alarm_common = argparse.ArgumentParser(add_help=False)
+    alarm_common.add_argument("--state", required=True)
+    alarm_common.add_argument("--client-config", default=None)
+    alarm_commands = alarms.add_subparsers(dest="alarms_command", required=True)
+    alarm_commands.add_parser("init", parents=[alarm_common])
+    alarm_commands.add_parser("run", parents=[alarm_common])
+    digest = alarm_commands.add_parser("digest", parents=[alarm_common])
+    digest.add_argument("--day")
+    watch = alarm_commands.add_parser("watch-credentials", parents=[alarm_common])
+    watch.add_argument("--root", action="append")
+
     args = parser.parse_args(argv)
+    if args.command == "alarms":
+        if args.client_config is None:
+            args.client_config = str(_default_client_config())
+        return _run_alarms_command(args)
     if args.command == "serve":
         if args.host not in {"127.0.0.1", "::1", "localhost"}:
             raise SystemExit("non-loopback bind refused")
@@ -269,6 +411,8 @@ def main(argv: list[str] | None = None) -> int | None:
                 packet_path=args.packet,
             ), indent=2))
             return 0
+    if args.command == "budget-alerts":
+        return _budget_alerts(args.workspace, args.actor)
     return 2
 
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
-from uuid import NAMESPACE_URL, UUID, uuid5
+from uuid import NAMESPACE_URL, uuid5
 
 from omp_work.v1.models import BoundedIntakeDraft, ItemBudget
 
