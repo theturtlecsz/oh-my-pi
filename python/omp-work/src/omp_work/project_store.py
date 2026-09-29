@@ -1,7 +1,8 @@
-"""OMP-418: project records, profile, missions and history.
+"""OMP-418: project records, profile, missions, history and standing authority.
 
 The store owns project_records/project_goals/project_questions/project_refs/
-project_repositories/project_missions/project_history (migration 0030) on top of
+project_repositories/project_missions/project_history (migration 0030) and
+standing_mandates/standing_policies/spend_budgets (migration 0031) on top of
 the existing omp_work.projects and omp_work.repositories rows. PostgresWorkStore
 mixes this in; the host supplies _transaction and the workspace/actor claims.
 """
@@ -14,6 +15,28 @@ from uuid import UUID, uuid4
 
 import psycopg
 
+from omp_work.spend_budget import SpendBudget, budget_change_kind
+from omp_work.standing_change import (
+    ChangeAuthority,
+    ChangeKind,
+    StandingChangeRefused,
+    authorize_standing_change,
+)
+from omp_work.standing_mandate import (
+    MandateRefused,
+    MissionScopeDraft,
+    StandingMandate,
+    mandate_change_kind,
+    mission_scope,
+    validate_mandate,
+)
+from omp_work.standing_policy import (
+    PolicyRefused,
+    RepositoryRecord,
+    StandingPolicy,
+    policy_change_kind,
+    validate_policy,
+)
 from omp_work.v1.store_shared import WorkStoreError, row_json
 
 if TYPE_CHECKING:
@@ -33,6 +56,21 @@ _MISSION_FIELDS = (
     "basis_mandate_id,basis_decision_id"
 )
 _HISTORY_FIELDS = "workspace_id,history_id,project_id,mission_id,kind,summary,at"
+_MANDATE_FIELDS = (
+    "mandate_id,goals,repositories,capabilities,tier3_classes,decision_id,active"
+)
+_POLICY_FIELDS = (
+    "policy_id,action_class,repositories,destinations,branch_patterns,"
+    "resource_types,money_limit_usd,expires_at,decision_id,active,revoked_at"
+)
+_BUDGET_FIELDS = "budget_id,mission_id,ceiling_usd,threshold_usd,decision_id,active"
+
+
+class ProjectAuthorityRefused(WorkStoreError):
+    """Standing authority refused the change. Nothing was written."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code, (code,))
 
 
 class ProjectNotFound(WorkStoreError):
@@ -320,6 +358,27 @@ class ProjectStoreMixin:
             )
             history = [dict(row) for row in cur.fetchall()]
 
+            cur.execute(
+                f"SELECT {_MANDATE_FIELDS} FROM omp_work.standing_mandates"
+                " WHERE workspace_id=%s AND project_id=%s AND active",
+                (workspace_id, project_id),
+            )
+            mandate = cur.fetchone()
+
+            cur.execute(
+                f"SELECT {_POLICY_FIELDS} FROM omp_work.standing_policies"
+                " WHERE workspace_id=%s AND project_id=%s AND active ORDER BY policy_id",
+                (workspace_id, project_id),
+            )
+            policies = [dict(row) for row in cur.fetchall()]
+
+            cur.execute(
+                f"SELECT {_BUDGET_FIELDS} FROM omp_work.spend_budgets"
+                " WHERE workspace_id=%s AND project_id=%s AND active AND mission_id IS NULL",
+                (workspace_id, project_id),
+            )
+            budget = cur.fetchone()
+
             record_view = row_json(record)
             view = row_json(project) or {}
             view["purpose"] = record_view["purpose"] if record_view else None
@@ -330,7 +389,220 @@ class ProjectStoreMixin:
             view["repositories"] = [row_json(row) for row in repositories]
             view["missions"] = [row_json(row) for row in missions]
             view["history"] = [row_json(row) for row in history]
+            view["standing_mandate"] = row_json(mandate)
+            view["standing_policies"] = [row_json(row) for row in policies]
+            view["standing_budget"] = row_json(budget)
             return view
+
+    def set_standing_mandate(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        project_id: UUID,
+        mandate: StandingMandate,
+        authority: ChangeAuthority,
+    ) -> None:
+        """Replace the project's active mandate when the change is authorized."""
+        with self._transaction(workspace_id, actor_id) as cur:
+            self._require_project(cur, workspace_id, project_id)
+            old = self._load_mandate(cur, workspace_id, project_id)
+            kind = _gate(mandate_change_kind(old, mandate), authority)
+            self._validate_mandate(mandate)
+            mandate_id = _as_uuid(mandate.mandate_id)
+            decision_id = _decision_uuid(mandate.decision_id)
+            change_decision = _authority_decision(authority) if _opens_authority(kind) else None
+            self._deactivate_mandate(cur, workspace_id, project_id)
+            self._insert_mandate(cur, workspace_id, project_id, mandate_id, mandate, decision_id)
+            history_kind = f"mandate_{kind.value}"
+            if change_decision is not None:
+                self._write_decision_ref(
+                    cur, workspace_id, project_id, change_decision, history_kind
+                )
+            self._write_history(
+                cur,
+                workspace_id,
+                project_id,
+                history_kind,
+                f"{mandate_id} {kind.value}",
+            )
+
+    def revoke_standing_mandate(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        project_id: UUID,
+        authority: ChangeAuthority,
+    ) -> None:
+        """Clear the active mandate. Revoke records no decision."""
+        with self._transaction(workspace_id, actor_id) as cur:
+            self._require_project(cur, workspace_id, project_id)
+            _gate(ChangeKind.revoke, authority)
+            if self._load_mandate(cur, workspace_id, project_id) is None:
+                raise ProjectAuthorityRefused("no_active_mandate")
+            self._deactivate_mandate(cur, workspace_id, project_id)
+            self._write_history(
+                cur, workspace_id, project_id, "mandate_revoke", "revoke"
+            )
+
+    def put_standing_policy(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        project_id: UUID,
+        policy: StandingPolicy,
+        authority: ChangeAuthority,
+    ) -> None:
+        """Insert a policy version when the change against the active row is authorized."""
+        with self._transaction(workspace_id, actor_id) as cur:
+            self._require_project(cur, workspace_id, project_id)
+            policy_id = _as_uuid(policy.policy_id)
+            old = self._load_policy(cur, workspace_id, project_id, policy_id)
+            kind = _gate(policy_change_kind(old, policy), authority)
+            self._validate_policy(policy, self._project_repos(cur, workspace_id, project_id))
+            decision_id = _decision_uuid(policy.decision_id)
+            change_decision = _authority_decision(authority) if _opens_authority(kind) else None
+            self._deactivate_policy(cur, workspace_id, project_id, policy_id)
+            self._insert_policy(cur, workspace_id, project_id, policy_id, policy, decision_id)
+            history_kind = f"policy_{kind.value}"
+            if change_decision is not None:
+                self._write_decision_ref(
+                    cur, workspace_id, project_id, change_decision, history_kind
+                )
+            self._write_history(
+                cur,
+                workspace_id,
+                project_id,
+                history_kind,
+                f"{policy_id} {kind.value}",
+            )
+
+    def revoke_standing_policy(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        project_id: UUID,
+        policy_id: UUID | str,
+        authority: ChangeAuthority,
+    ) -> None:
+        """Clear one active policy. Revoke records no decision."""
+        with self._transaction(workspace_id, actor_id) as cur:
+            self._require_project(cur, workspace_id, project_id)
+            _gate(ChangeKind.revoke, authority)
+            parsed_id = _as_uuid(policy_id)
+            if self._load_policy(cur, workspace_id, project_id, parsed_id) is None:
+                raise ProjectAuthorityRefused("no_active_policy")
+            self._deactivate_policy(cur, workspace_id, project_id, parsed_id)
+            self._write_history(
+                cur,
+                workspace_id,
+                project_id,
+                "policy_revoke",
+                f"{parsed_id} revoke",
+            )
+
+    def set_spend_budget(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        project_id: UUID,
+        mission_id: UUID | None,
+        budget: SpendBudget,
+        authority: ChangeAuthority,
+    ) -> None:
+        """Replace the active budget for the project, or for one mission."""
+        with self._transaction(workspace_id, actor_id) as cur:
+            self._require_project(cur, workspace_id, project_id)
+            old, old_decision = self._load_budget(cur, workspace_id, project_id, mission_id)
+            kind = _gate(budget_change_kind(old, budget), authority)
+            if _opens_authority(kind):
+                decision_id = _authority_decision(authority)
+            elif old_decision is None:
+                raise ProjectAuthorityRefused("missing_decision")
+            else:
+                decision_id = old_decision
+            self._deactivate_budget(cur, workspace_id, project_id, mission_id)
+            self._insert_budget(
+                cur, workspace_id, project_id, mission_id, budget, decision_id
+            )
+            history_kind = f"budget_{kind.value}"
+            if _opens_authority(kind):
+                self._write_decision_ref(
+                    cur, workspace_id, project_id, decision_id, history_kind
+                )
+            self._write_history(
+                cur,
+                workspace_id,
+                project_id,
+                history_kind,
+                f"{budget.budget_id} {kind.value}",
+                mission_id=mission_id,
+            )
+
+    def admit_mission(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        project_id: UUID,
+        mission_id: UUID,
+        objective: str,
+        draft: MissionScopeDraft,
+    ) -> None:
+        """Admit a mission under the active mandate and the project's ceiling.
+
+        An approved draft that names its own ceiling also gets a spend_budgets
+        row citing the mandate's decision. That insert adds no decision ref.
+        """
+        with self._transaction(workspace_id, actor_id) as cur:
+            self._require_project(cur, workspace_id, project_id)
+            mandate = self._load_mandate(cur, workspace_id, project_id)
+            _budget, _decision = self._load_budget(cur, workspace_id, project_id, None)
+            ceiling = None if _budget is None else _budget.ceiling_usd
+            verdict = mission_scope(mandate, draft, ceiling)
+            cur.execute(
+                "INSERT INTO omp_work.project_missions"
+                "(workspace_id, mission_id, project_id, objective, status, basis_mandate_id, basis_decision_id)"
+                " VALUES (%s, %s, %s, %s, %s, %s, %s)"
+                " ON CONFLICT (workspace_id, mission_id) DO UPDATE SET"
+                " objective = EXCLUDED.objective,"
+                " status = EXCLUDED.status,"
+                " basis_mandate_id = EXCLUDED.basis_mandate_id,"
+                " basis_decision_id = EXCLUDED.basis_decision_id",
+                (
+                    workspace_id,
+                    mission_id,
+                    project_id,
+                    objective,
+                    verdict.status,
+                    _optional_uuid(verdict.basis_mandate_id),
+                    _optional_uuid(verdict.basis_decision_id),
+                ),
+            )
+            if (
+                verdict.status == "approved"
+                and draft.budget_ceiling_usd is not None
+                and mandate is not None
+            ):
+                self._deactivate_budget(cur, workspace_id, project_id, mission_id)
+                self._insert_budget(
+                    cur,
+                    workspace_id,
+                    project_id,
+                    mission_id,
+                    SpendBudget(
+                        budget_id=str(mission_id),
+                        ceiling_usd=draft.budget_ceiling_usd,
+                        threshold_usd=draft.budget_threshold_usd,
+                    ),
+                    _decision_uuid(mandate.decision_id),
+                )
+            self._write_history(
+                cur,
+                workspace_id,
+                project_id,
+                "mission_admitted",
+                f"{verdict.status} {objective}",
+                mission_id=mission_id,
+            )
 
     def _existing_project_id(
         self, cur: psycopg.Cursor[dict[str, object]], workspace_id: UUID, key: str
@@ -387,3 +659,322 @@ class ProjectStoreMixin:
             raise ValueError(f"repository upsert returned no row for key {key}")
         value = row["repository_id"]
         return value if isinstance(value, UUID) else UUID(str(value))
+
+    def _project_repos(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        project_id: UUID,
+    ) -> list[RepositoryRecord]:
+        cur.execute(
+            f"SELECT {_REPOSITORY_FIELDS} FROM omp_work.project_repositories pr"
+            " JOIN omp_work.repositories r ON r.workspace_id=pr.workspace_id"
+            " AND r.repository_id=pr.repository_id"
+            " WHERE pr.workspace_id=%s AND pr.project_id=%s ORDER BY r.key",
+            (workspace_id, project_id),
+        )
+        records: list[RepositoryRecord] = []
+        for row in cur.fetchall():
+            protected = row["protected_branches"] or ()
+            records.append(
+                RepositoryRecord(
+                    key=str(row["key"]),
+                    default_branch=str(row["default_branch"]),
+                    protected_branches=tuple(str(item) for item in protected),
+                    automation_ci_secret_free=bool(row["automation_ci_secret_free"]),
+                )
+            )
+        return records
+
+    def _load_mandate(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        project_id: UUID,
+    ) -> StandingMandate | None:
+        cur.execute(
+            f"SELECT {_MANDATE_FIELDS} FROM omp_work.standing_mandates"
+            " WHERE workspace_id=%s AND project_id=%s AND active",
+            (workspace_id, project_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return StandingMandate(
+            mandate_id=_row_uuid(row["mandate_id"]),
+            goals=row["goals"] or (),
+            repositories=row["repositories"] or (),
+            capabilities=row["capabilities"] or (),
+            tier3_classes=row["tier3_classes"] or (),
+            decision_id=_row_uuid(row["decision_id"]),
+        )
+
+    def _load_policy(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        project_id: UUID,
+        policy_id: UUID,
+    ) -> StandingPolicy | None:
+        cur.execute(
+            f"SELECT {_POLICY_FIELDS} FROM omp_work.standing_policies"
+            " WHERE workspace_id=%s AND project_id=%s AND policy_id=%s AND active",
+            (workspace_id, project_id, policy_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return StandingPolicy(
+            policy_id=_row_uuid(row["policy_id"]),
+            action_class=str(row["action_class"]),
+            repositories=row["repositories"] or (),
+            destinations=row["destinations"] or (),
+            branch_patterns=row["branch_patterns"] or (),
+            resource_types=row["resource_types"] or (),
+            money_limit_usd=row["money_limit_usd"],
+            expires_at=row["expires_at"],
+            decision_id=_row_uuid(row["decision_id"]),
+        )
+
+    def _load_budget(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        project_id: UUID,
+        mission_id: UUID | None,
+    ) -> tuple[SpendBudget | None, UUID | None]:
+        cur.execute(
+            f"SELECT {_BUDGET_FIELDS} FROM omp_work.spend_budgets"
+            " WHERE workspace_id=%s AND project_id=%s AND active"
+            " AND mission_id IS NOT DISTINCT FROM %s",
+            (workspace_id, project_id, mission_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None, None
+        return (
+            SpendBudget(
+                budget_id=str(row["budget_id"]),
+                ceiling_usd=row["ceiling_usd"],
+                threshold_usd=row["threshold_usd"],
+            ),
+            _row_uuid(row["decision_id"]),
+        )
+
+    def _deactivate_mandate(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        project_id: UUID,
+    ) -> None:
+        cur.execute(
+            "UPDATE omp_work.standing_mandates SET active = false"
+            " WHERE workspace_id=%s AND project_id=%s AND active",
+            (workspace_id, project_id),
+        )
+
+    def _deactivate_policy(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        project_id: UUID,
+        policy_id: UUID,
+    ) -> None:
+        cur.execute(
+            "UPDATE omp_work.standing_policies"
+            " SET active = false, revoked_at = clock_timestamp()"
+            " WHERE workspace_id=%s AND project_id=%s AND policy_id=%s AND active",
+            (workspace_id, project_id, policy_id),
+        )
+
+    def _deactivate_budget(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        project_id: UUID,
+        mission_id: UUID | None,
+    ) -> None:
+        cur.execute(
+            "UPDATE omp_work.spend_budgets SET active = false"
+            " WHERE workspace_id=%s AND project_id=%s AND active"
+            " AND mission_id IS NOT DISTINCT FROM %s",
+            (workspace_id, project_id, mission_id),
+        )
+
+    def _insert_mandate(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        project_id: UUID,
+        mandate_id: UUID,
+        mandate: StandingMandate,
+        decision_id: UUID,
+    ) -> None:
+        cur.execute(
+            "INSERT INTO omp_work.standing_mandates"
+            " (workspace_id, record_id, project_id, mandate_id, goals, repositories,"
+            " capabilities, tier3_classes, decision_id, active)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, true)",
+            (
+                workspace_id,
+                uuid4(),
+                project_id,
+                mandate_id,
+                _strings(mandate.goals),
+                _strings(mandate.repositories),
+                _strings(mandate.capabilities),
+                _strings(mandate.tier3_classes),
+                decision_id,
+            ),
+        )
+
+    def _insert_policy(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        project_id: UUID,
+        policy_id: UUID,
+        policy: StandingPolicy,
+        decision_id: UUID,
+    ) -> None:
+        cur.execute(
+            "INSERT INTO omp_work.standing_policies"
+            " (workspace_id, record_id, project_id, policy_id, action_class, repositories,"
+            " destinations, branch_patterns, resource_types, money_limit_usd, expires_at,"
+            " decision_id, active)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, true)",
+            (
+                workspace_id,
+                uuid4(),
+                project_id,
+                policy_id,
+                policy.action_class,
+                _strings(policy.repositories),
+                _strings(policy.destinations),
+                _strings(policy.branch_patterns),
+                _strings(policy.resource_types),
+                policy.money_limit_usd,
+                policy.expires_at,
+                decision_id,
+            ),
+        )
+
+    def _insert_budget(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        project_id: UUID,
+        mission_id: UUID | None,
+        budget: SpendBudget,
+        decision_id: UUID,
+    ) -> None:
+        cur.execute(
+            "INSERT INTO omp_work.spend_budgets"
+            " (workspace_id, record_id, project_id, budget_id, mission_id,"
+            " ceiling_usd, threshold_usd, decision_id, active)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, true)",
+            (
+                workspace_id,
+                uuid4(),
+                project_id,
+                budget.budget_id,
+                mission_id,
+                budget.ceiling_usd,
+                budget.threshold_usd,
+                decision_id,
+            ),
+        )
+
+    def _write_decision_ref(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        project_id: UUID,
+        decision_id: UUID,
+        title: str,
+    ) -> None:
+        cur.execute(
+            "INSERT INTO omp_work.project_refs(workspace_id, project_id, kind, ref, title)"
+            " VALUES (%s, %s, 'decision', %s, %s) ON CONFLICT DO NOTHING",
+            (workspace_id, project_id, str(decision_id), title),
+        )
+
+    def _write_history(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        project_id: UUID,
+        kind: str,
+        summary: str,
+        *,
+        mission_id: UUID | None = None,
+    ) -> None:
+        cur.execute(
+            "INSERT INTO omp_work.project_history"
+            "(workspace_id, history_id, project_id, mission_id, kind, summary)"
+            " VALUES (%s, %s, %s, %s, %s, %s)",
+            (workspace_id, uuid4(), project_id, mission_id, kind, summary),
+        )
+
+    def _validate_mandate(self, mandate: StandingMandate) -> None:
+        try:
+            validate_mandate(mandate)
+        except MandateRefused as exc:
+            raise ProjectAuthorityRefused(exc.code) from exc
+
+    def _validate_policy(self, policy: StandingPolicy, repos: list[RepositoryRecord]) -> None:
+        try:
+            validate_policy(policy, repos)
+        except PolicyRefused as exc:
+            raise ProjectAuthorityRefused(exc.code) from exc
+
+
+def _gate(kind: ChangeKind | str, authority: ChangeAuthority) -> ChangeKind:
+    try:
+        parsed = kind if isinstance(kind, ChangeKind) else ChangeKind(str(kind))
+    except ValueError as exc:
+        raise ProjectAuthorityRefused("unknown_kind") from exc
+    try:
+        authorize_standing_change(parsed, authority)
+    except StandingChangeRefused as exc:
+        raise ProjectAuthorityRefused(exc.code) from exc
+    return parsed
+
+
+def _opens_authority(kind: ChangeKind) -> bool:
+    return kind in (ChangeKind.create, ChangeKind.widen, ChangeKind.extend)
+
+
+def _as_uuid(value: UUID | str) -> UUID:
+    if isinstance(value, UUID):
+        return value
+    return UUID(str(value))
+
+
+def _optional_uuid(value: UUID | str | None) -> UUID | None:
+    if value is None or value == "":
+        return None
+    return _as_uuid(value)
+
+
+def _decision_uuid(value: UUID | str | None) -> UUID:
+    if value is None or value == "":
+        raise ProjectAuthorityRefused("missing_decision")
+    try:
+        return _as_uuid(value)
+    except ValueError as exc:
+        raise ProjectAuthorityRefused("missing_decision") from exc
+
+
+def _authority_decision(authority: ChangeAuthority) -> UUID:
+    return _decision_uuid(authority.decision_id)
+
+
+def _row_uuid(value: object) -> UUID:
+    if isinstance(value, UUID):
+        return value
+    return UUID(str(value))
+
+
+def _strings(values: Iterable[object]) -> list[str]:
+    return sorted(str(item) for item in values)
