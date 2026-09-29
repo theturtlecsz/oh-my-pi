@@ -4,6 +4,9 @@
 
 ### Added
 
+- Bounded intake publication requires an item budget (money, tokens, wall-clock, sub-agents).
+- Runtime stops an item and its sub-agents when its budget is spent; grokbot alerts at 50/80/100% (`omp-work budget-alerts`).
+- A mission without budget_policy is held with a decision record.
 - PostgreSQL operational bootstrap, migrations, health checks, and encrypted backup commands for the Work Ledger.
 - Authenticated loopback WorkService, typed clients, immutable work history, idempotent command handling, and closeout projections.
 - Idempotent Linear importer with hash-verified staging, restartable relation/focus validation, dry-run reconciliation with encrypted parity artifacts, and atomic promotion that preserves local edits, retires import-owned label joins, and fails closed on conflicts or canonical drift (`ops linear-import stage|reconcile|promote`).
