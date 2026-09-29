@@ -726,7 +726,7 @@ def test_decide_standing_bare_host_grants_https_443_only() -> None:
 
     allowed = decide(
         policy, _identity("repository"),
-        _req("POST", host="api.example.com", path="/"), now,
+        _req("POST", host="api.example.com", path="/v1/chat"), now,
     )
     assert allowed == Verdict(True, "standing", None, "pol-1")
 
@@ -772,7 +772,8 @@ def test_decide_standing_explicit_destination_bound(destination: str, scheme: st
     "destination",
     [
         "https://h/p",
-        "https://u @h",
+        "https://h?x=1",
+        "https://u@h",
         "ftp://h",
     ],
 )
@@ -818,17 +819,34 @@ def test_decide_standing_host_case_and_trailing_dot_match() -> None:
     assert verdict == Verdict(True, "standing", None, "pol-1")
 
 
-def test_decide_standing_requires_root_path_and_no_query() -> None:
+def test_decide_standing_grants_any_request_path_and_query() -> None:
     policy = _decide_policy(standing=(_net_standing("pol-1", ("api.example.com",)),))
     now = datetime.now(timezone.utc)
     assert decide(
         policy, _identity("repository"),
-        _req("GET", host="api.example.com", path="/deep"), now,
-    ) == Verdict(False, "none", "destination_not_allowed", None)
+        _req("POST", host="api.example.com", path="/v1/x"), now,
+    ) == Verdict(True, "standing", None, "pol-1")
     assert decide(
         policy, _identity("repository"),
-        _req("GET", host="api.example.com", path="/", query="a=1"), now,
-    ) == Verdict(False, "none", "destination_not_allowed", None)
+        _req("GET", host="api.example.com", path="/deep", query="a=1"), now,
+    ) == Verdict(True, "standing", None, "pol-1")
+
+
+@pytest.mark.parametrize(
+    ("destination", "host", "port"),
+    [
+        ("[2001:db8::1]", "2001:db8::1", None),
+        ("[::1]:8443", "[::1]", 8443),
+    ],
+)
+def test_decide_standing_bracketed_ipv6(destination: str, host: str, port: int | None) -> None:
+    policy = _decide_policy(standing=(_net_standing("pol-1", (destination,)),))
+    verdict = decide(
+        policy, _identity("repository"),
+        _req("GET", host=host, port=port, path="/v1/x"),
+        datetime.now(timezone.utc),
+    )
+    assert verdict == Verdict(True, "standing", None, "pol-1")
 
 
 def test_decide_standing_ip_literal_matches_only_itself() -> None:

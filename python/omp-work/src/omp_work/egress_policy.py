@@ -231,9 +231,11 @@ def _parse_remote(value: object) -> tuple[str, str, int, str] | None:
 def _parse_destination(value: object) -> tuple[str, str, int] | None:
     """Return ``(scheme, host, port)`` for a standing destination, else ``None``.
 
-    Accepts ``https://h[:p]``, ``http://h[:p]``, ``h:p`` (https) and ``h``
-    (https, port 443). A path other than ``/``, a query, a fragment, or
-    userinfo at any position grants nothing, as does another scheme.
+    Accepts ``https://h[:p]``, ``http://h[:p]``, ``h:p`` (https), ``h``
+    (https, port 443), and a bracketed IPv6 literal ``[v6]`` or ``[v6]:port``
+    (https). A path other than ``/``, a query, a fragment, or userinfo on the
+    destination grants nothing, as does another scheme. The request's own path
+    and query are not part of this parse.
     """
     if not isinstance(value, str):
         return None
@@ -281,8 +283,6 @@ def _parse_destination(value: object) -> tuple[str, str, int] | None:
         else:
             candidate = text
             explicit_port = None
-        if ":" in candidate and not candidate.startswith("["):
-            return None
     host = _norm_host(candidate)
     if not host:
         return None
@@ -530,11 +530,14 @@ def _request_port(req: Request) -> int:
 
 
 def _standing_verdict(policy: EgressPolicy, req: Request, now: datetime) -> Verdict | None:
+    """Allow when a standing destination grants this exact scheme, host, and port.
+
+    A non-root path, a query, userinfo, or another scheme rejects the
+    destination string. Those constraints do not apply to the request.
+    """
     host = _norm_host(req.host)
     scheme = req.scheme.lower()
     target = (scheme, host, _request_port(req))
-    if req.path not in ("", "/") or req.query:
-        return None
     for entry in policy.standing:
         if _is_expired(entry, now):
             continue
