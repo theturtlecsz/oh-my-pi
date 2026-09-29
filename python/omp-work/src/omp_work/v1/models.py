@@ -1740,6 +1740,137 @@ class ReleaseStopCommand(StrictModel):
     payload: StopReasonPayload
 
 
+class MissionStatus(StrEnum):
+    """D29 status set. WorkService enforces the transitions between these."""
+
+    DRAFT = "draft"
+    AWAITING_CONFIRMATION = "awaiting_confirmation"
+    APPROVED = "approved"
+    RUNNING = "running"
+    PAUSED = "paused"
+    BLOCKED = "blocked"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    ABANDONED = "abandoned"
+
+
+class MissionDraft(StrictModel):
+    """D29 mission record: the objective, its envelope, and the policies that
+    govern it. ``created_by``/``created_at`` are service-stamped, never sent.
+
+    ``risk_policy``, ``approval_policy``, and ``effort_policy`` are policy ids
+    (OMP-417/418); ``budget_policy`` is the mission's envelope, from which item
+    budgets (OMP-404) are drawn.
+    """
+
+    project_id: UUID
+    objective: str = Field(min_length=1, max_length=4000)
+    constraints: tuple[str, ...] = ()
+    acceptance_criteria: tuple[str, ...] = ()
+    context_refs: tuple[str, ...] = ()
+    artifact_expectations: tuple[str, ...] = ()
+    requested_capabilities: tuple[str, ...] = ()
+    repositories: tuple[str, ...] = ()
+    approval_classes: tuple[str, ...] = ()
+    risk_policy: str = Field(min_length=1, max_length=200)
+    approval_policy: str = Field(min_length=1, max_length=200)
+    effort_policy: str = Field(min_length=1, max_length=200)
+    budget_policy: ItemBudget | None = None
+    priority: int = Field(default=2, ge=0, le=3)
+    continuation_of: UUID | None = None
+    parent_mission: UUID | None = None
+
+
+class SubmitMissionPayload(StrictModel):
+    mission_id: UUID
+    draft: MissionDraft
+
+
+class ReviseMissionPayload(StrictModel):
+    """A revision is material only under the D29 rule; a model may propose a
+    classification, and anything the rule cannot decide is treated as material."""
+
+    mission_id: UUID
+    base_revision: int = Field(ge=1)
+    draft: MissionDraft
+    proposed_classification: Literal["material", "not_material"] | None = None
+
+
+class ApproveMissionPayload(StrictModel):
+    """Approval binds a revision to its basis: an answered decision record or
+    the project's standing mandate id (OMP-418). Recorded, not verified."""
+
+    mission_id: UUID
+    revision: int = Field(ge=1)
+    basis_kind: Literal["decision", "standing_mandate"]
+    basis_id: str = Field(min_length=1)
+
+
+MissionTransitionTarget = Literal[
+    "running",
+    "paused",
+    "blocked",
+    "completed",
+    "failed",
+    "abandoned",
+]
+
+
+class SetMissionStatusPayload(StrictModel):
+    """A status transition records its cause: a principal, a policy rule id, or
+    a decision id — the id belonging to its kind, and no other."""
+
+    mission_id: UUID
+    target_status: MissionTransitionTarget
+    cause_kind: Literal["principal", "policy_rule", "decision"]
+    policy_rule_id: str | None = Field(default=None, min_length=1)
+    decision_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def validate_cause(self) -> SetMissionStatusPayload:
+        if self.cause_kind == "principal":
+            if self.policy_rule_id is not None or self.decision_id is not None:
+                raise ValueError("a principal cause carries no policy rule or decision id")
+            return self
+        if self.cause_kind == "policy_rule":
+            if self.policy_rule_id is None or self.decision_id is not None:
+                raise ValueError("a policy_rule cause carries only its policy_rule_id")
+            return self
+        if self.decision_id is None or self.policy_rule_id is not None:
+            raise ValueError("a decision cause carries only its decision_id")
+        return self
+
+
+class LinkMissionWorkPayload(StrictModel):
+    mission_id: UUID
+    work_id: UUID
+
+
+class SubmitMissionCommand(StrictModel):
+    type: Literal["submit_mission"]
+    payload: SubmitMissionPayload
+
+
+class ReviseMissionCommand(StrictModel):
+    type: Literal["revise_mission"]
+    payload: ReviseMissionPayload
+
+
+class ApproveMissionCommand(StrictModel):
+    type: Literal["approve_mission"]
+    payload: ApproveMissionPayload
+
+
+class SetMissionStatusCommand(StrictModel):
+    type: Literal["set_mission_status"]
+    payload: SetMissionStatusPayload
+
+
+class LinkMissionWorkCommand(StrictModel):
+    type: Literal["link_mission_work"]
+    payload: LinkMissionWorkPayload
+
+
 Command = Annotated[
     CreateWorkBatchCommand
     | CreateSameSessionChildCommand
@@ -1795,7 +1926,12 @@ Command = Annotated[
     | ConcludeResearchCampaignCommand
     | RecordAlarmSignalCommand
     | EngageStopCommand
-    | ReleaseStopCommand,
+    | ReleaseStopCommand
+    | SubmitMissionCommand
+    | ReviseMissionCommand
+    | ApproveMissionCommand
+    | SetMissionStatusCommand
+    | LinkMissionWorkCommand,
     Field(discriminator="type"),
 ]
 
@@ -2035,6 +2171,7 @@ class Approval(StrictModel):
         "OMP-407",
         "OMP-406",
         "OMP-405",
+        "OMP-413",
     ]
     attestation: hex64 | None = None
 

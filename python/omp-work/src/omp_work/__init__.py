@@ -33,6 +33,7 @@ _READS = frozenset(
         "GET /v1/workspaces/{workspace_id}/research-sources/{source_id}/projects/{project_id}",
         "GET /v1/workspaces/{workspace_id}/research-datasets/{dataset_id}",
         "GET /v1/workspaces/{workspace_id}/research-datasets/{dataset_id}/projects/{project_id}",
+        "GET /v1/workspaces/{workspace_id}/missions/{mission_id}",
         "GET /v1/workspaces/{workspace_id}/stop",
         "GET /v1/health/live",
         "GET /v1/health/ready",
@@ -68,6 +69,8 @@ _ERROR_CODES = frozenset(
         "intake_not_ready",
         "stale_intake",
         "agent_stop_engaged",
+        "mission_transition_refused",
+        "mission_budget_exceeded",
     }
 )
 _SCOPES = frozenset(
@@ -140,6 +143,11 @@ _COMMAND_TYPES = frozenset(
         "record_alarm_signal",
         "engage_stop",
         "release_stop",
+        "submit_mission",
+        "revise_mission",
+        "approve_mission",
+        "set_mission_status",
+        "link_mission_work",
     }
 )
 

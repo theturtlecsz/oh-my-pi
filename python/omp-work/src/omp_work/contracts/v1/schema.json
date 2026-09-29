@@ -1785,7 +1785,8 @@
             "OMP-404",
             "OMP-407",
             "OMP-406",
-            "OMP-405"
+            "OMP-405",
+            "OMP-413"
           ],
           "title": "Issue",
           "type": "string"
@@ -1799,6 +1800,101 @@
         "issue"
       ],
       "title": "Approval",
+      "type": "object"
+    },
+    "ApproveMissionCommand": {
+      "$defs": {
+        "ApproveMissionPayload": {
+          "additionalProperties": false,
+          "description": "Approval binds a revision to its basis: an answered decision record or\nthe project's standing mandate id (OMP-418). Recorded, not verified.",
+          "properties": {
+            "basis_id": {
+              "minLength": 1,
+              "title": "Basis Id",
+              "type": "string"
+            },
+            "basis_kind": {
+              "enum": [
+                "decision",
+                "standing_mandate"
+              ],
+              "title": "Basis Kind",
+              "type": "string"
+            },
+            "mission_id": {
+              "format": "uuid",
+              "title": "Mission Id",
+              "type": "string"
+            },
+            "revision": {
+              "minimum": 1,
+              "title": "Revision",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "mission_id",
+            "revision",
+            "basis_kind",
+            "basis_id"
+          ],
+          "title": "ApproveMissionPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/ApproveMissionPayload"
+        },
+        "type": {
+          "const": "approve_mission",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "ApproveMissionCommand",
+      "type": "object"
+    },
+    "ApproveMissionPayload": {
+      "additionalProperties": false,
+      "description": "Approval binds a revision to its basis: an answered decision record or\nthe project's standing mandate id (OMP-418). Recorded, not verified.",
+      "properties": {
+        "basis_id": {
+          "minLength": 1,
+          "title": "Basis Id",
+          "type": "string"
+        },
+        "basis_kind": {
+          "enum": [
+            "decision",
+            "standing_mandate"
+          ],
+          "title": "Basis Kind",
+          "type": "string"
+        },
+        "mission_id": {
+          "format": "uuid",
+          "title": "Mission Id",
+          "type": "string"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "mission_id",
+        "revision",
+        "basis_kind",
+        "basis_id"
+      ],
+      "title": "ApproveMissionPayload",
       "type": "object"
     },
     "AssessBoundedIntakeCommand": {
@@ -6266,6 +6362,62 @@
           "title": "AppendEvidencePayload",
           "type": "object"
         },
+        "ApproveMissionCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/ApproveMissionPayload"
+            },
+            "type": {
+              "const": "approve_mission",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "ApproveMissionCommand",
+          "type": "object"
+        },
+        "ApproveMissionPayload": {
+          "additionalProperties": false,
+          "description": "Approval binds a revision to its basis: an answered decision record or\nthe project's standing mandate id (OMP-418). Recorded, not verified.",
+          "properties": {
+            "basis_id": {
+              "minLength": 1,
+              "title": "Basis Id",
+              "type": "string"
+            },
+            "basis_kind": {
+              "enum": [
+                "decision",
+                "standing_mandate"
+              ],
+              "title": "Basis Kind",
+              "type": "string"
+            },
+            "mission_id": {
+              "format": "uuid",
+              "title": "Mission Id",
+              "type": "string"
+            },
+            "revision": {
+              "minimum": 1,
+              "title": "Revision",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "mission_id",
+            "revision",
+            "basis_kind",
+            "basis_id"
+          ],
+          "title": "ApproveMissionPayload",
+          "type": "object"
+        },
         "AssessBoundedIntakeCommand": {
           "additionalProperties": false,
           "properties": {
@@ -8937,6 +9089,190 @@
           "title": "KnownIntakeValue",
           "type": "object"
         },
+        "LinkMissionWorkCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/LinkMissionWorkPayload"
+            },
+            "type": {
+              "const": "link_mission_work",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "LinkMissionWorkCommand",
+          "type": "object"
+        },
+        "LinkMissionWorkPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "mission_id": {
+              "format": "uuid",
+              "title": "Mission Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mission_id",
+            "work_id"
+          ],
+          "title": "LinkMissionWorkPayload",
+          "type": "object"
+        },
+        "MissionDraft": {
+          "additionalProperties": false,
+          "description": "D29 mission record: the objective, its envelope, and the policies that\ngovern it. ``created_by``/``created_at`` are service-stamped, never sent.\n\n``risk_policy``, ``approval_policy``, and ``effort_policy`` are policy ids\n(OMP-417/418); ``budget_policy`` is the mission's envelope, from which item\nbudgets (OMP-404) are drawn.",
+          "properties": {
+            "acceptance_criteria": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Acceptance Criteria",
+              "type": "array"
+            },
+            "approval_classes": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Approval Classes",
+              "type": "array"
+            },
+            "approval_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Approval Policy",
+              "type": "string"
+            },
+            "artifact_expectations": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Artifact Expectations",
+              "type": "array"
+            },
+            "budget_policy": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ItemBudget"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "constraints": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Constraints",
+              "type": "array"
+            },
+            "context_refs": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Context Refs",
+              "type": "array"
+            },
+            "continuation_of": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Continuation Of"
+            },
+            "effort_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Effort Policy",
+              "type": "string"
+            },
+            "objective": {
+              "maxLength": 4000,
+              "minLength": 1,
+              "title": "Objective",
+              "type": "string"
+            },
+            "parent_mission": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Mission"
+            },
+            "priority": {
+              "default": 2,
+              "maximum": 3,
+              "minimum": 0,
+              "title": "Priority",
+              "type": "integer"
+            },
+            "project_id": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            },
+            "repositories": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Repositories",
+              "type": "array"
+            },
+            "requested_capabilities": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Requested Capabilities",
+              "type": "array"
+            },
+            "risk_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Risk Policy",
+              "type": "string"
+            }
+          },
+          "required": [
+            "project_id",
+            "objective",
+            "risk_policy",
+            "approval_policy",
+            "effort_policy"
+          ],
+          "title": "MissionDraft",
+          "type": "object"
+        },
         "PromoteImportBatchCommand": {
           "additionalProperties": false,
           "properties": {
@@ -10710,6 +11046,67 @@
           "title": "ReserveAuditorLaunchPayload",
           "type": "object"
         },
+        "ReviseMissionCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/ReviseMissionPayload"
+            },
+            "type": {
+              "const": "revise_mission",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "ReviseMissionCommand",
+          "type": "object"
+        },
+        "ReviseMissionPayload": {
+          "additionalProperties": false,
+          "description": "A revision is material only under the D29 rule; a model may propose a\nclassification, and anything the rule cannot decide is treated as material.",
+          "properties": {
+            "base_revision": {
+              "minimum": 1,
+              "title": "Base Revision",
+              "type": "integer"
+            },
+            "draft": {
+              "$ref": "#/$defs/MissionDraft"
+            },
+            "mission_id": {
+              "format": "uuid",
+              "title": "Mission Id",
+              "type": "string"
+            },
+            "proposed_classification": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "material",
+                    "not_material"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Proposed Classification"
+            }
+          },
+          "required": [
+            "mission_id",
+            "base_revision",
+            "draft"
+          ],
+          "title": "ReviseMissionPayload",
+          "type": "object"
+        },
         "ReviseWorkCommand": {
           "additionalProperties": false,
           "properties": {
@@ -11002,6 +11399,90 @@
             "expected_version"
           ],
           "title": "SetFocusPayload",
+          "type": "object"
+        },
+        "SetMissionStatusCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/SetMissionStatusPayload"
+            },
+            "type": {
+              "const": "set_mission_status",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "SetMissionStatusCommand",
+          "type": "object"
+        },
+        "SetMissionStatusPayload": {
+          "additionalProperties": false,
+          "description": "A status transition records its cause: a principal, a policy rule id, or\na decision id \u2014 the id belonging to its kind, and no other.",
+          "properties": {
+            "cause_kind": {
+              "enum": [
+                "principal",
+                "policy_rule",
+                "decision"
+              ],
+              "title": "Cause Kind",
+              "type": "string"
+            },
+            "decision_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Decision Id"
+            },
+            "mission_id": {
+              "format": "uuid",
+              "title": "Mission Id",
+              "type": "string"
+            },
+            "policy_rule_id": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Policy Rule Id"
+            },
+            "target_status": {
+              "enum": [
+                "running",
+                "paused",
+                "blocked",
+                "completed",
+                "failed",
+                "abandoned"
+              ],
+              "title": "Target Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mission_id",
+            "target_status",
+            "cause_kind"
+          ],
+          "title": "SetMissionStatusPayload",
           "type": "object"
         },
         "SetResearchCampaignStateCommand": {
@@ -11416,6 +11897,44 @@
           "title": "StopReasonPayload",
           "type": "object"
         },
+        "SubmitMissionCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/SubmitMissionPayload"
+            },
+            "type": {
+              "const": "submit_mission",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "SubmitMissionCommand",
+          "type": "object"
+        },
+        "SubmitMissionPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "draft": {
+              "$ref": "#/$defs/MissionDraft"
+            },
+            "mission_id": {
+              "format": "uuid",
+              "title": "Mission Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mission_id",
+            "draft"
+          ],
+          "title": "SubmitMissionPayload",
+          "type": "object"
+        },
         "UnknownIntakeValue": {
           "additionalProperties": false,
           "properties": {
@@ -11512,6 +12031,7 @@
               "admit_research_campaign": "#/$defs/AdmitResearchCampaignCommand",
               "answer_intake_decision": "#/$defs/AnswerIntakeDecisionCommand",
               "append_evidence": "#/$defs/AppendEvidenceCommand",
+              "approve_mission": "#/$defs/ApproveMissionCommand",
               "assess_bounded_intake": "#/$defs/AssessBoundedIntakeCommand",
               "attest_checkpoint_delivery": "#/$defs/AttestCheckpointDeliveryCommand",
               "attest_cutover_plan": "#/$defs/AttestCutoverPlanCommand",
@@ -11533,6 +12053,7 @@
               "create_work_batch": "#/$defs/CreateWorkBatchCommand",
               "engage_stop": "#/$defs/EngageStopCommand",
               "finalize_candidate": "#/$defs/FinalizeCandidateCommand",
+              "link_mission_work": "#/$defs/LinkMissionWorkCommand",
               "promote_import_batch": "#/$defs/PromoteImportBatchCommand",
               "propose_research_trial": "#/$defs/ProposeResearchTrialCommand",
               "publish_bounded_intake": "#/$defs/PublishBoundedIntakeCommand",
@@ -11551,17 +12072,20 @@
               "release_stop": "#/$defs/ReleaseStopCommand",
               "remove_relation": "#/$defs/RemoveRelationCommand",
               "reserve_auditor_launch": "#/$defs/ReserveAuditorLaunchCommand",
+              "revise_mission": "#/$defs/ReviseMissionCommand",
               "revise_work": "#/$defs/ReviseWorkCommand",
               "seal_audit_manifest": "#/$defs/SealAuditManifestCommand",
               "seal_execution_criteria": "#/$defs/SealExecutionCriteriaCommand",
               "set_execution_state": "#/$defs/SetExecutionStateCommand",
               "set_focus": "#/$defs/SetFocusCommand",
+              "set_mission_status": "#/$defs/SetMissionStatusCommand",
               "set_research_campaign_state": "#/$defs/SetResearchCampaignStateCommand",
               "set_work_state": "#/$defs/SetWorkStateCommand",
               "settle_auditor_launch": "#/$defs/SettleAuditorLaunchCommand",
               "skip_active_item": "#/$defs/SkipActiveItemCommand",
               "stage_import_batch": "#/$defs/StageImportBatchCommand",
-              "stamp_execution_plan": "#/$defs/StampExecutionPlanCommand"
+              "stamp_execution_plan": "#/$defs/StampExecutionPlanCommand",
+              "submit_mission": "#/$defs/SubmitMissionCommand"
             },
             "propertyName": "type"
           },
@@ -11730,6 +12254,21 @@
             },
             {
               "$ref": "#/$defs/ReleaseStopCommand"
+            },
+            {
+              "$ref": "#/$defs/SubmitMissionCommand"
+            },
+            {
+              "$ref": "#/$defs/ReviseMissionCommand"
+            },
+            {
+              "$ref": "#/$defs/ApproveMissionCommand"
+            },
+            {
+              "$ref": "#/$defs/SetMissionStatusCommand"
+            },
+            {
+              "$ref": "#/$defs/LinkMissionWorkCommand"
             }
           ],
           "title": "Command"
@@ -18062,6 +18601,247 @@
       "title": "KnownIntakeValue",
       "type": "object"
     },
+    "LinkMissionWorkCommand": {
+      "$defs": {
+        "LinkMissionWorkPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "mission_id": {
+              "format": "uuid",
+              "title": "Mission Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mission_id",
+            "work_id"
+          ],
+          "title": "LinkMissionWorkPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/LinkMissionWorkPayload"
+        },
+        "type": {
+          "const": "link_mission_work",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "LinkMissionWorkCommand",
+      "type": "object"
+    },
+    "LinkMissionWorkPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "mission_id": {
+          "format": "uuid",
+          "title": "Mission Id",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mission_id",
+        "work_id"
+      ],
+      "title": "LinkMissionWorkPayload",
+      "type": "object"
+    },
+    "MissionDraft": {
+      "$defs": {
+        "ItemBudget": {
+          "additionalProperties": false,
+          "properties": {
+            "max_subagents": {
+              "minimum": 0,
+              "title": "Max Subagents",
+              "type": "integer"
+            },
+            "tokens": {
+              "exclusiveMinimum": 0,
+              "title": "Tokens",
+              "type": "integer"
+            },
+            "usd": {
+              "title": "Usd",
+              "type": "string"
+            },
+            "wall_clock_seconds": {
+              "exclusiveMinimum": 0,
+              "title": "Wall Clock Seconds",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "usd",
+            "tokens",
+            "wall_clock_seconds",
+            "max_subagents"
+          ],
+          "title": "ItemBudget",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "D29 mission record: the objective, its envelope, and the policies that\ngovern it. ``created_by``/``created_at`` are service-stamped, never sent.\n\n``risk_policy``, ``approval_policy``, and ``effort_policy`` are policy ids\n(OMP-417/418); ``budget_policy`` is the mission's envelope, from which item\nbudgets (OMP-404) are drawn.",
+      "properties": {
+        "acceptance_criteria": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Acceptance Criteria",
+          "type": "array"
+        },
+        "approval_classes": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Approval Classes",
+          "type": "array"
+        },
+        "approval_policy": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Approval Policy",
+          "type": "string"
+        },
+        "artifact_expectations": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Artifact Expectations",
+          "type": "array"
+        },
+        "budget_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemBudget"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "constraints": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Constraints",
+          "type": "array"
+        },
+        "context_refs": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Context Refs",
+          "type": "array"
+        },
+        "continuation_of": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Continuation Of"
+        },
+        "effort_policy": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Effort Policy",
+          "type": "string"
+        },
+        "objective": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Objective",
+          "type": "string"
+        },
+        "parent_mission": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Mission"
+        },
+        "priority": {
+          "default": 2,
+          "maximum": 3,
+          "minimum": 0,
+          "title": "Priority",
+          "type": "integer"
+        },
+        "project_id": {
+          "format": "uuid",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "repositories": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Repositories",
+          "type": "array"
+        },
+        "requested_capabilities": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Requested Capabilities",
+          "type": "array"
+        },
+        "risk_policy": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Risk Policy",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_id",
+        "objective",
+        "risk_policy",
+        "approval_policy",
+        "effort_policy"
+      ],
+      "title": "MissionDraft",
+      "type": "object"
+    },
     "OperationReceipt": {
       "$defs": {
         "OperationState": {
@@ -24389,6 +25169,465 @@
       "title": "ReserveAuditorLaunchPayload",
       "type": "object"
     },
+    "ReviseMissionCommand": {
+      "$defs": {
+        "ItemBudget": {
+          "additionalProperties": false,
+          "properties": {
+            "max_subagents": {
+              "minimum": 0,
+              "title": "Max Subagents",
+              "type": "integer"
+            },
+            "tokens": {
+              "exclusiveMinimum": 0,
+              "title": "Tokens",
+              "type": "integer"
+            },
+            "usd": {
+              "title": "Usd",
+              "type": "string"
+            },
+            "wall_clock_seconds": {
+              "exclusiveMinimum": 0,
+              "title": "Wall Clock Seconds",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "usd",
+            "tokens",
+            "wall_clock_seconds",
+            "max_subagents"
+          ],
+          "title": "ItemBudget",
+          "type": "object"
+        },
+        "MissionDraft": {
+          "additionalProperties": false,
+          "description": "D29 mission record: the objective, its envelope, and the policies that\ngovern it. ``created_by``/``created_at`` are service-stamped, never sent.\n\n``risk_policy``, ``approval_policy``, and ``effort_policy`` are policy ids\n(OMP-417/418); ``budget_policy`` is the mission's envelope, from which item\nbudgets (OMP-404) are drawn.",
+          "properties": {
+            "acceptance_criteria": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Acceptance Criteria",
+              "type": "array"
+            },
+            "approval_classes": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Approval Classes",
+              "type": "array"
+            },
+            "approval_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Approval Policy",
+              "type": "string"
+            },
+            "artifact_expectations": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Artifact Expectations",
+              "type": "array"
+            },
+            "budget_policy": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ItemBudget"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "constraints": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Constraints",
+              "type": "array"
+            },
+            "context_refs": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Context Refs",
+              "type": "array"
+            },
+            "continuation_of": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Continuation Of"
+            },
+            "effort_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Effort Policy",
+              "type": "string"
+            },
+            "objective": {
+              "maxLength": 4000,
+              "minLength": 1,
+              "title": "Objective",
+              "type": "string"
+            },
+            "parent_mission": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Mission"
+            },
+            "priority": {
+              "default": 2,
+              "maximum": 3,
+              "minimum": 0,
+              "title": "Priority",
+              "type": "integer"
+            },
+            "project_id": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            },
+            "repositories": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Repositories",
+              "type": "array"
+            },
+            "requested_capabilities": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Requested Capabilities",
+              "type": "array"
+            },
+            "risk_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Risk Policy",
+              "type": "string"
+            }
+          },
+          "required": [
+            "project_id",
+            "objective",
+            "risk_policy",
+            "approval_policy",
+            "effort_policy"
+          ],
+          "title": "MissionDraft",
+          "type": "object"
+        },
+        "ReviseMissionPayload": {
+          "additionalProperties": false,
+          "description": "A revision is material only under the D29 rule; a model may propose a\nclassification, and anything the rule cannot decide is treated as material.",
+          "properties": {
+            "base_revision": {
+              "minimum": 1,
+              "title": "Base Revision",
+              "type": "integer"
+            },
+            "draft": {
+              "$ref": "#/$defs/MissionDraft"
+            },
+            "mission_id": {
+              "format": "uuid",
+              "title": "Mission Id",
+              "type": "string"
+            },
+            "proposed_classification": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "material",
+                    "not_material"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Proposed Classification"
+            }
+          },
+          "required": [
+            "mission_id",
+            "base_revision",
+            "draft"
+          ],
+          "title": "ReviseMissionPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/ReviseMissionPayload"
+        },
+        "type": {
+          "const": "revise_mission",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "ReviseMissionCommand",
+      "type": "object"
+    },
+    "ReviseMissionPayload": {
+      "$defs": {
+        "ItemBudget": {
+          "additionalProperties": false,
+          "properties": {
+            "max_subagents": {
+              "minimum": 0,
+              "title": "Max Subagents",
+              "type": "integer"
+            },
+            "tokens": {
+              "exclusiveMinimum": 0,
+              "title": "Tokens",
+              "type": "integer"
+            },
+            "usd": {
+              "title": "Usd",
+              "type": "string"
+            },
+            "wall_clock_seconds": {
+              "exclusiveMinimum": 0,
+              "title": "Wall Clock Seconds",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "usd",
+            "tokens",
+            "wall_clock_seconds",
+            "max_subagents"
+          ],
+          "title": "ItemBudget",
+          "type": "object"
+        },
+        "MissionDraft": {
+          "additionalProperties": false,
+          "description": "D29 mission record: the objective, its envelope, and the policies that\ngovern it. ``created_by``/``created_at`` are service-stamped, never sent.\n\n``risk_policy``, ``approval_policy``, and ``effort_policy`` are policy ids\n(OMP-417/418); ``budget_policy`` is the mission's envelope, from which item\nbudgets (OMP-404) are drawn.",
+          "properties": {
+            "acceptance_criteria": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Acceptance Criteria",
+              "type": "array"
+            },
+            "approval_classes": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Approval Classes",
+              "type": "array"
+            },
+            "approval_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Approval Policy",
+              "type": "string"
+            },
+            "artifact_expectations": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Artifact Expectations",
+              "type": "array"
+            },
+            "budget_policy": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ItemBudget"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "constraints": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Constraints",
+              "type": "array"
+            },
+            "context_refs": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Context Refs",
+              "type": "array"
+            },
+            "continuation_of": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Continuation Of"
+            },
+            "effort_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Effort Policy",
+              "type": "string"
+            },
+            "objective": {
+              "maxLength": 4000,
+              "minLength": 1,
+              "title": "Objective",
+              "type": "string"
+            },
+            "parent_mission": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Mission"
+            },
+            "priority": {
+              "default": 2,
+              "maximum": 3,
+              "minimum": 0,
+              "title": "Priority",
+              "type": "integer"
+            },
+            "project_id": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            },
+            "repositories": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Repositories",
+              "type": "array"
+            },
+            "requested_capabilities": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Requested Capabilities",
+              "type": "array"
+            },
+            "risk_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Risk Policy",
+              "type": "string"
+            }
+          },
+          "required": [
+            "project_id",
+            "objective",
+            "risk_policy",
+            "approval_policy",
+            "effort_policy"
+          ],
+          "title": "MissionDraft",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "A revision is material only under the D29 rule; a model may propose a\nclassification, and anything the rule cannot decide is treated as material.",
+      "properties": {
+        "base_revision": {
+          "minimum": 1,
+          "title": "Base Revision",
+          "type": "integer"
+        },
+        "draft": {
+          "$ref": "#/$defs/MissionDraft"
+        },
+        "mission_id": {
+          "format": "uuid",
+          "title": "Mission Id",
+          "type": "string"
+        },
+        "proposed_classification": {
+          "anyOf": [
+            {
+              "enum": [
+                "material",
+                "not_material"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Proposed Classification"
+        }
+      },
+      "required": [
+        "mission_id",
+        "base_revision",
+        "draft"
+      ],
+      "title": "ReviseMissionPayload",
+      "type": "object"
+    },
     "ReviseWorkCommand": {
       "$defs": {
         "ReviseWorkPayload": {
@@ -25338,6 +26577,157 @@
       "title": "SetFocusPayload",
       "type": "object"
     },
+    "SetMissionStatusCommand": {
+      "$defs": {
+        "SetMissionStatusPayload": {
+          "additionalProperties": false,
+          "description": "A status transition records its cause: a principal, a policy rule id, or\na decision id \u2014 the id belonging to its kind, and no other.",
+          "properties": {
+            "cause_kind": {
+              "enum": [
+                "principal",
+                "policy_rule",
+                "decision"
+              ],
+              "title": "Cause Kind",
+              "type": "string"
+            },
+            "decision_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Decision Id"
+            },
+            "mission_id": {
+              "format": "uuid",
+              "title": "Mission Id",
+              "type": "string"
+            },
+            "policy_rule_id": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Policy Rule Id"
+            },
+            "target_status": {
+              "enum": [
+                "running",
+                "paused",
+                "blocked",
+                "completed",
+                "failed",
+                "abandoned"
+              ],
+              "title": "Target Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mission_id",
+            "target_status",
+            "cause_kind"
+          ],
+          "title": "SetMissionStatusPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/SetMissionStatusPayload"
+        },
+        "type": {
+          "const": "set_mission_status",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "SetMissionStatusCommand",
+      "type": "object"
+    },
+    "SetMissionStatusPayload": {
+      "additionalProperties": false,
+      "description": "A status transition records its cause: a principal, a policy rule id, or\na decision id \u2014 the id belonging to its kind, and no other.",
+      "properties": {
+        "cause_kind": {
+          "enum": [
+            "principal",
+            "policy_rule",
+            "decision"
+          ],
+          "title": "Cause Kind",
+          "type": "string"
+        },
+        "decision_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Decision Id"
+        },
+        "mission_id": {
+          "format": "uuid",
+          "title": "Mission Id",
+          "type": "string"
+        },
+        "policy_rule_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Policy Rule Id"
+        },
+        "target_status": {
+          "enum": [
+            "running",
+            "paused",
+            "blocked",
+            "completed",
+            "failed",
+            "abandoned"
+          ],
+          "title": "Target Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mission_id",
+        "target_status",
+        "cause_kind"
+      ],
+      "title": "SetMissionStatusPayload",
+      "type": "object"
+    },
     "SetResearchCampaignStateCommand": {
       "$defs": {
         "ResearchBlockedDependency": {
@@ -26170,6 +27560,419 @@
       "additionalProperties": false,
       "properties": {},
       "title": "StrictModel",
+      "type": "object"
+    },
+    "SubmitMissionCommand": {
+      "$defs": {
+        "ItemBudget": {
+          "additionalProperties": false,
+          "properties": {
+            "max_subagents": {
+              "minimum": 0,
+              "title": "Max Subagents",
+              "type": "integer"
+            },
+            "tokens": {
+              "exclusiveMinimum": 0,
+              "title": "Tokens",
+              "type": "integer"
+            },
+            "usd": {
+              "title": "Usd",
+              "type": "string"
+            },
+            "wall_clock_seconds": {
+              "exclusiveMinimum": 0,
+              "title": "Wall Clock Seconds",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "usd",
+            "tokens",
+            "wall_clock_seconds",
+            "max_subagents"
+          ],
+          "title": "ItemBudget",
+          "type": "object"
+        },
+        "MissionDraft": {
+          "additionalProperties": false,
+          "description": "D29 mission record: the objective, its envelope, and the policies that\ngovern it. ``created_by``/``created_at`` are service-stamped, never sent.\n\n``risk_policy``, ``approval_policy``, and ``effort_policy`` are policy ids\n(OMP-417/418); ``budget_policy`` is the mission's envelope, from which item\nbudgets (OMP-404) are drawn.",
+          "properties": {
+            "acceptance_criteria": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Acceptance Criteria",
+              "type": "array"
+            },
+            "approval_classes": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Approval Classes",
+              "type": "array"
+            },
+            "approval_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Approval Policy",
+              "type": "string"
+            },
+            "artifact_expectations": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Artifact Expectations",
+              "type": "array"
+            },
+            "budget_policy": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ItemBudget"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "constraints": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Constraints",
+              "type": "array"
+            },
+            "context_refs": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Context Refs",
+              "type": "array"
+            },
+            "continuation_of": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Continuation Of"
+            },
+            "effort_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Effort Policy",
+              "type": "string"
+            },
+            "objective": {
+              "maxLength": 4000,
+              "minLength": 1,
+              "title": "Objective",
+              "type": "string"
+            },
+            "parent_mission": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Mission"
+            },
+            "priority": {
+              "default": 2,
+              "maximum": 3,
+              "minimum": 0,
+              "title": "Priority",
+              "type": "integer"
+            },
+            "project_id": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            },
+            "repositories": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Repositories",
+              "type": "array"
+            },
+            "requested_capabilities": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Requested Capabilities",
+              "type": "array"
+            },
+            "risk_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Risk Policy",
+              "type": "string"
+            }
+          },
+          "required": [
+            "project_id",
+            "objective",
+            "risk_policy",
+            "approval_policy",
+            "effort_policy"
+          ],
+          "title": "MissionDraft",
+          "type": "object"
+        },
+        "SubmitMissionPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "draft": {
+              "$ref": "#/$defs/MissionDraft"
+            },
+            "mission_id": {
+              "format": "uuid",
+              "title": "Mission Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mission_id",
+            "draft"
+          ],
+          "title": "SubmitMissionPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/SubmitMissionPayload"
+        },
+        "type": {
+          "const": "submit_mission",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "SubmitMissionCommand",
+      "type": "object"
+    },
+    "SubmitMissionPayload": {
+      "$defs": {
+        "ItemBudget": {
+          "additionalProperties": false,
+          "properties": {
+            "max_subagents": {
+              "minimum": 0,
+              "title": "Max Subagents",
+              "type": "integer"
+            },
+            "tokens": {
+              "exclusiveMinimum": 0,
+              "title": "Tokens",
+              "type": "integer"
+            },
+            "usd": {
+              "title": "Usd",
+              "type": "string"
+            },
+            "wall_clock_seconds": {
+              "exclusiveMinimum": 0,
+              "title": "Wall Clock Seconds",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "usd",
+            "tokens",
+            "wall_clock_seconds",
+            "max_subagents"
+          ],
+          "title": "ItemBudget",
+          "type": "object"
+        },
+        "MissionDraft": {
+          "additionalProperties": false,
+          "description": "D29 mission record: the objective, its envelope, and the policies that\ngovern it. ``created_by``/``created_at`` are service-stamped, never sent.\n\n``risk_policy``, ``approval_policy``, and ``effort_policy`` are policy ids\n(OMP-417/418); ``budget_policy`` is the mission's envelope, from which item\nbudgets (OMP-404) are drawn.",
+          "properties": {
+            "acceptance_criteria": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Acceptance Criteria",
+              "type": "array"
+            },
+            "approval_classes": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Approval Classes",
+              "type": "array"
+            },
+            "approval_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Approval Policy",
+              "type": "string"
+            },
+            "artifact_expectations": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Artifact Expectations",
+              "type": "array"
+            },
+            "budget_policy": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ItemBudget"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "constraints": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Constraints",
+              "type": "array"
+            },
+            "context_refs": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Context Refs",
+              "type": "array"
+            },
+            "continuation_of": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Continuation Of"
+            },
+            "effort_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Effort Policy",
+              "type": "string"
+            },
+            "objective": {
+              "maxLength": 4000,
+              "minLength": 1,
+              "title": "Objective",
+              "type": "string"
+            },
+            "parent_mission": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Mission"
+            },
+            "priority": {
+              "default": 2,
+              "maximum": 3,
+              "minimum": 0,
+              "title": "Priority",
+              "type": "integer"
+            },
+            "project_id": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            },
+            "repositories": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Repositories",
+              "type": "array"
+            },
+            "requested_capabilities": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Requested Capabilities",
+              "type": "array"
+            },
+            "risk_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Risk Policy",
+              "type": "string"
+            }
+          },
+          "required": [
+            "project_id",
+            "objective",
+            "risk_policy",
+            "approval_policy",
+            "effort_policy"
+          ],
+          "title": "MissionDraft",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "draft": {
+          "$ref": "#/$defs/MissionDraft"
+        },
+        "mission_id": {
+          "format": "uuid",
+          "title": "Mission Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mission_id",
+        "draft"
+      ],
+      "title": "SubmitMissionPayload",
       "type": "object"
     },
     "UnknownIntakeValue": {
