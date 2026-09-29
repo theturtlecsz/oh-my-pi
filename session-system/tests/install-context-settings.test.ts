@@ -63,10 +63,27 @@ function createFilteredBinDir(exclude: string[]): string {
 	return binDir;
 }
 
+// install.sh writes context.json only when both uv and bun resolve on PATH.
+// Stub both in a temp dir so that write is the same on every host.
+function pathWithUvAndBunStubs(): string {
+	const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-uv-bun-stubs-"));
+	tempDirs.push(binDir);
+	for (const name of ["uv", "bun"]) {
+		const stub = path.join(binDir, name);
+		fs.writeFileSync(stub, "#!/bin/sh\nexit 0\n");
+		fs.chmodSync(stub, 0o755);
+	}
+	return `${binDir}:${process.env.PATH ?? ""}`;
+}
+
+function runInstallWithTools(home: string, customEnv: Record<string, string> = {}, ...args: string[]): RunResult {
+	return runInstall(home, { ...customEnv, PATH: pathWithUvAndBunStubs() }, ...args);
+}
+
 describe("install.sh context settings", () => {
 	test("fresh install writes exactly those keys, mode 0600, --project path and cli.ts inside this checkout", () => {
 		const home = fakeHome();
-		const result = runInstall(home);
+		const result = runInstallWithTools(home);
 		expect(result.exitCode, result.stderr).toBe(0);
 
 		const configPath = path.join(home, ".config", "omp-knowledge", "context.json");
@@ -123,7 +140,7 @@ describe("install.sh context settings", () => {
 	test("reranker URL/model, engine cognee and state dir set at install are recorded", () => {
 		const home = fakeHome();
 		const customStateDir = path.join(home, "custom-state-dir");
-		const result = runInstall(home, {
+		const result = runInstallWithTools(home, {
 			OMP_KNOWLEDGE_ENGINE: "cognee",
 			OMP_KNOWLEDGE_RERANKER_URL: "http://127.0.0.1:9099/rerank",
 			OMP_KNOWLEDGE_RERANKER_MODEL: "bge-reranker-large",
@@ -142,14 +159,14 @@ describe("install.sh context settings", () => {
 
 	test("a rerun keeps an edited file byte-identical", () => {
 		const home = fakeHome();
-		const firstResult = runInstall(home);
+		const firstResult = runInstallWithTools(home);
 		expect(firstResult.exitCode, firstResult.stderr).toBe(0);
 
 		const configPath = path.join(home, ".config", "omp-knowledge", "context.json");
 		const editedContent = '{\n  "custom": "edited content that must not be overwritten"\n}\n';
 		fs.writeFileSync(configPath, editedContent, "utf8");
 
-		const secondResult = runInstall(home, {
+		const secondResult = runInstallWithTools(home, {
 			OMP_KNOWLEDGE_ENGINE: "cognee",
 			OMP_KNOWLEDGE_RERANKER_URL: "http://example.com/rerank",
 		});
@@ -162,7 +179,7 @@ describe("install.sh context settings", () => {
 	test("OMP_KNOWLEDGE_CONFIG_DIR moves the file", () => {
 		const home = fakeHome();
 		const customConfigDir = path.join(fakeHome(), "my-custom-config-dir");
-		const result = runInstall(home, {
+		const result = runInstallWithTools(home, {
 			OMP_KNOWLEDGE_CONFIG_DIR: customConfigDir,
 		});
 		expect(result.exitCode, result.stderr).toBe(0);
