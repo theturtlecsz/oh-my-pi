@@ -4,8 +4,10 @@ The file is fixture data (``fixtures/<id>/ledger-seed.json``). The workservice
 entrypoint runs this script after ``python -m omp_work ops bootstrap`` and
 before ``python -m omp_work serve``. It connects with the service's own
 ``omp_work_app`` credential and writes the rows the public create command
-cannot pin: a predetermined alias and revision id. Re-applying the same seed
-is a no-op. A key that already exists at a different revision fails.
+cannot pin: a predetermined alias and revision id. It also creates the
+project named by the worker ``.work-project`` marker and puts each item in
+that project. Re-applying the same seed is a no-op. A key that already
+exists at a different revision, or in a different project, fails.
 
 Copied to ``/opt/harbor/ledger_seed.py`` in the workservice image, so this
 module has no package-relative imports.
@@ -21,6 +23,8 @@ from uuid import UUID, uuid4
 
 _KEY_RE = re.compile(r"^(HOME|OMP)-([1-9][0-9]*)$")
 _CLOSED = frozenset({"DONE", "CANCELED", "CANCELLED"})
+_PROJECT_KINDS = frozenset({"world", "surface", "promise"})
+_PROJECT_KEYS = frozenset({"project_id", "name", "kind"})
 _ITEM_KEYS = frozenset(
     {
         "key",
@@ -36,11 +40,14 @@ _ITEM_KEYS = frozenset(
 )
 
 
-def load_ledger_seed(path: Path) -> list[dict[str, object]]:
-    """Return the seed items. Raises ``ValueError`` when the file is not fixture data."""
+def load_ledger_seed(path: Path) -> dict[str, object]:
+    """Return the seed project and items. Raises ``ValueError`` when the file is not fixture data."""
 
     document = json.loads(path.read_text(encoding="utf-8"))
-    items = document.get("items") if isinstance(document, dict) else None
+    if not isinstance(document, dict) or set(document) != {"project", "items"}:
+        raise ValueError(f"ledger seed {path} must contain project and items")
+    project = _load_project(path, document["project"])
+    items = document["items"]
     if not isinstance(items, list) or not items:
         raise ValueError(f"ledger seed {path} must contain a non-empty items list")
     loaded: list[dict[str, object]] = []
@@ -79,7 +86,19 @@ def load_ledger_seed(path: Path) -> list[dict[str, object]]:
                 "state": state,
             }
         )
-    return loaded
+    return {"project": project, "items": loaded}
+
+
+def _load_project(path: Path, raw: object) -> dict[str, object]:
+    if not isinstance(raw, dict) or set(raw) != _PROJECT_KEYS:
+        raise ValueError(f"ledger seed {path} project must have project_id, name, and kind")
+    name = raw["name"]
+    kind = raw["kind"]
+    if not isinstance(name, str) or name == "" or name != name.strip():
+        raise ValueError(f"ledger seed {path} project name must be the marker text")
+    if kind not in _PROJECT_KINDS:
+        raise ValueError(f"ledger seed {path} project kind must be world, surface, or promise")
+    return {"project_id": UUID(str(raw["project_id"])), "name": name, "kind": kind}
 
 
 def apply_ledger_seed(path: Path) -> None:
@@ -92,7 +111,11 @@ def apply_ledger_seed(path: Path) -> None:
     from omp_work.operations.config import OperationsConfig
     from omp_work.v1.canonical import sha256
 
-    items = load_ledger_seed(path)
+    seed = load_ledger_seed(path)
+    items = seed["items"]
+    project = seed["project"]
+    if not isinstance(items, list) or not isinstance(project, dict):
+        raise ValueError(f"ledger seed {path} is not fixture data")
     config = OperationsConfig.defaults()
     workspace_id = config.workspace_id()
     actor_id = config.actor_id()
@@ -110,8 +133,9 @@ def apply_ledger_seed(path: Path) -> None:
                     (workspace_id,),
                 )
                 _ensure_authority(cur, workspace_id, Jsonb)
+                project_id = _ensure_project(cur, workspace_id, project)
                 for item in items:
-                    _insert_item(cur, workspace_id, item, sha256)
+                    _insert_item(cur, workspace_id, project_id, item, sha256)
                 cur.execute(
                     "UPDATE omp_control.workspaces SET next_alias = GREATEST(next_alias, %s) WHERE workspace_id = %s",
                     (next_alias, workspace_id),
@@ -138,9 +162,41 @@ def _ensure_authority(cur: object, workspace_id: UUID, jsonb: object) -> None:
     )
 
 
-def _insert_item(cur: object, workspace_id: UUID, item: dict[str, object], sha256: object) -> None:
+def _ensure_project(cur: object, workspace_id: UUID, project: dict[str, object]) -> UUID:
+    project_id = project["project_id"]
+    name = project["name"]
     cur.execute(
-        "SELECT i.current_revision_id FROM omp_work.work_aliases a "
+        "SELECT name FROM omp_work.projects WHERE workspace_id = %s AND project_id = %s",
+        (workspace_id, project_id),
+    )
+    existing = cur.fetchone()
+    if existing is not None:
+        if existing["name"] != name:
+            raise RuntimeError(
+                f"ledger seed project {project_id} is named {existing['name']!r}, fixture declares {name!r}"
+            )
+        return project_id
+    cur.execute(
+        "SELECT project_id FROM omp_work.projects WHERE workspace_id = %s AND name = %s",
+        (workspace_id, name),
+    )
+    by_name = cur.fetchone()
+    if by_name is not None:
+        raise RuntimeError(
+            f"ledger seed project {name!r} exists as {by_name['project_id']}, fixture declares {project_id}"
+        )
+    cur.execute(
+        "INSERT INTO omp_work.projects(project_id, workspace_id, name, kind) VALUES (%s, %s, %s, %s)",
+        (project_id, workspace_id, name, project["kind"]),
+    )
+    return project_id
+
+
+def _insert_item(
+    cur: object, workspace_id: UUID, project_id: UUID, item: dict[str, object], sha256: object
+) -> None:
+    cur.execute(
+        "SELECT i.current_revision_id, i.project_id FROM omp_work.work_aliases a "
         "JOIN omp_work.work_items i ON i.work_id = a.work_id AND i.workspace_id = a.workspace_id "
         "WHERE a.workspace_id = %s AND a.key = %s",
         (workspace_id, item["key"]),
@@ -152,6 +208,10 @@ def _insert_item(cur: object, workspace_id: UUID, item: dict[str, object], sha25
             raise RuntimeError(
                 f"ledger seed {item['key']} exists at revision {current}, fixture declares {item['revision_id']}"
             )
+        if existing["project_id"] != project_id:
+            raise RuntimeError(
+                f"ledger seed {item['key']} exists in project {existing['project_id']}, fixture declares {project_id}"
+            )
         return
     content_hash = sha256(
         {
@@ -162,9 +222,9 @@ def _insert_item(cur: object, workspace_id: UUID, item: dict[str, object], sha25
         }
     )
     cur.execute(
-        "INSERT INTO omp_work.work_items(work_id, workspace_id, state, current_revision_id) "
-        "VALUES (%s, %s, %s, %s)",
-        (item["work_id"], workspace_id, item["state"], item["revision_id"]),
+        "INSERT INTO omp_work.work_items(work_id, workspace_id, state, current_revision_id, project_id) "
+        "VALUES (%s, %s, %s, %s, %s)",
+        (item["work_id"], workspace_id, item["state"], item["revision_id"], project_id),
     )
     cur.execute(
         "INSERT INTO omp_work.work_aliases(work_id, workspace_id, key, origin) VALUES (%s, %s, %s, 'local')",
