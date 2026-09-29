@@ -5,7 +5,7 @@ import { REPORT_DIR, parseLockRows, unresolvedLinks } from "./fixtures/lockdown-
 
 const README_DOC = "README.md";
 const ROBOMP_DOC = "robomp.md";
-const PROBE_PATH = "/home/thetu/master-report/evidence/omp-399-slot-probe.txt";
+const PROBE_PATH = path.join(REPORT_DIR, "evidence/omp-399-slot-probe.txt");
 
 const SECTION_DOCS = [
 	"runtime-defaults.md",

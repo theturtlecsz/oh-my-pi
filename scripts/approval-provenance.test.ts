@@ -3,7 +3,12 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { $ } from "bun";
-import { APPROVAL_PATH, checkApprovalProvenance, UnknownRevisionError } from "./approval-provenance.ts";
+import {
+	APPROVAL_PATH,
+	checkApprovalProvenance,
+	REVIEWED_OWNER_APPROVAL_COMMITS,
+	UnknownRevisionError,
+} from "./approval-provenance.ts";
 
 const SCRIPT = path.join(import.meta.dir, "approval-provenance.ts");
 
@@ -125,6 +130,68 @@ describe("checkApprovalProvenance", () => {
 		// git log is newest-first, so the later impostor commit is reported first.
 		expect(violations.map(v => v.sha)).toEqual([impostor, ownerDrift]);
 		expect(violations.map(v => v.author)).toEqual(["zimmermanc", "flood-owner"]);
+	});
+
+	test("passes a listed SHA by flood-owner without subject marker", async () => {
+		const dir = await makeRepo();
+		await writeApproval(dir, "attestation A\n");
+		const base = await commit(dir, "base", HUMAN);
+
+		await writeApproval(dir, "attestation B\n");
+		const ownerUnmarked = await commit(dir, "OMP-405-s01-s02: owner step: manual approval", OWNER);
+
+		// Without being listed in allowedCommits, it is flagged as a violation
+		const violationsBefore = await checkApprovalProvenance({ cwd: dir, base, allowedCommits: [] });
+		expect(violationsBefore).toEqual([
+			{ sha: ownerUnmarked, author: "flood-owner", subject: "OMP-405-s01-s02: owner step: manual approval" },
+		]);
+
+		// When listed in allowedCommits, it passes
+		const violationsAfter = await checkApprovalProvenance({
+			cwd: dir,
+			base,
+			allowedCommits: [ownerUnmarked],
+		});
+		expect(violationsAfter).toEqual([]);
+	});
+
+	test("flags a commit with the same subject when its SHA is not in allowedCommits", async () => {
+		const dir = await makeRepo();
+		await writeApproval(dir, "attestation A\n");
+		const base = await commit(dir, "base", HUMAN);
+
+		await writeApproval(dir, "attestation B\n");
+		const ownerCommit = await commit(dir, "OMP-405-s01-s02: owner step: manual approval", OWNER);
+
+		// allowedCommits contains a different SHA
+		const unlistedSha = "0123456789abcdef0123456789abcdef01234567";
+		const violations = await checkApprovalProvenance({
+			cwd: dir,
+			base,
+			allowedCommits: [unlistedSha],
+		});
+		expect(violations).toEqual([
+			{ sha: ownerCommit, author: "flood-owner", subject: "OMP-405-s01-s02: owner step: manual approval" },
+		]);
+	});
+
+	test("flags a listed SHA when the commit author is not flood-owner", async () => {
+		const dir = await makeRepo();
+		await writeApproval(dir, "attestation A\n");
+		const base = await commit(dir, "base", HUMAN);
+
+		await writeApproval(dir, "attestation B\n");
+		const impostor = await commit(dir, "OMP-405-s01-s02: owner step: manual approval", AUTO);
+
+		// Even though impostor SHA is listed in allowedCommits, author is not flood-owner so it still fails
+		const violations = await checkApprovalProvenance({
+			cwd: dir,
+			base,
+			allowedCommits: [impostor],
+		});
+		expect(violations).toEqual([
+			{ sha: impostor, author: "zimmermanc", subject: "OMP-405-s01-s02: owner step: manual approval" },
+		]);
 	});
 
 	test("flags a merge that resolves approval.json to neither parent's content", async () => {

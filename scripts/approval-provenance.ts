@@ -22,6 +22,12 @@ export const APPROVAL_PATH = "python/omp-work/src/omp_work/contracts/v1/approval
 export const APPROVAL_AUTHOR = "flood-owner";
 export const APPROVAL_SUBJECT_MARKERS = ["owner step by flood", "flood rebase_repair"] as const;
 
+export const REVIEWED_OWNER_APPROVAL_COMMITS: readonly string[] = [
+	// OMP-405 contract approval by the owner, 2026-09-29, subject lacks the marker
+	"1fedc55ab4f032c41c908151e40c3a0814d71019",
+];
+export const ALLOWED_APPROVAL_COMMITS = REVIEWED_OWNER_APPROVAL_COMMITS;
+
 export interface ApprovalViolation {
 	sha: string;
 	author: string;
@@ -32,6 +38,7 @@ export interface ApprovalProvenanceOptions {
 	cwd: string;
 	base: string;
 	head?: string;
+	allowedCommits?: readonly string[] | ReadonlySet<string>;
 }
 
 /** A requested revision did not resolve to a commit (CLI exit 2). */
@@ -106,7 +113,11 @@ export async function checkApprovalProvenance(options: ApprovalProvenanceOptions
 	if (exitCode !== 0) throw new Error(`git log ${baseSha}..${headSha} failed`);
 
 	// Approval commits are the sanctioned owner attestations; they are never violations.
-	const commits = parseLog(out).filter(commit => !isApprovalCommit(commit.author, commit.subject));
+	const allowed = new Set(options.allowedCommits ?? REVIEWED_OWNER_APPROVAL_COMMITS);
+	const commits = parseLog(out).filter(
+		commit =>
+			!(isApprovalCommit(commit.author, commit.subject) || (commit.author === APPROVAL_AUTHOR && allowed.has(commit.sha))),
+	);
 
 	const violations: ApprovalViolation[] = [];
 	for (const commit of commits) {

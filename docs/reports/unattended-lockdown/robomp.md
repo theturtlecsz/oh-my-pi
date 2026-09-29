@@ -22,7 +22,7 @@ Code answer: yes: `_stage_agent_home` ([worker.py](../../../python/robomp/src/wo
 
 ### Live probe (OMP-399-s05)
 
-Verbatim output of `/home/thetu/master-report/evidence/omp-399-slot-probe.txt`:
+Verbatim output of [evidence/omp-399-slot-probe.txt](evidence/omp-399-slot-probe.txt):
 
 ```
 robomp not deployed
