@@ -11,24 +11,28 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import get_args
 from uuid import UUID, uuid4
 
-import omp_work
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
+
+import omp_work
 from omp_work import contract_sha256, load_contract
+from omp_work.action_tiers import TIER3, tier_of
 from omp_work.operations.config import OperationsConfig
 from omp_work.v1.api_models import DecisionsPage
 from omp_work.v1.models import (
     AnswerDecisionCommand,
     CommandEnvelope,
     CreateDecisionCommand,
+    DecisionActionClass,
     OperationReceipt,
     OperationState,
 )
 from omp_work.v1.server import create_app
 from omp_work.v1.service import Principal, WorkError, WorkService
-from pydantic import ValidationError
 
 WORKSPACE = UUID("00000000-0000-7000-8000-000000000010")
 DECISION = UUID("00000000-0000-7000-8000-000000000101")
@@ -162,11 +166,15 @@ def test_contract_closures_name_the_decision_read_and_commands() -> None:
     read = "GET /v1/workspaces/{workspace_id}/decisions"
     assert read in omp_work._READS
     assert read in contract.reads
-    # Declared before the stop read, so the FK-1 tail stays pinned.
-    assert contract.reads[contract.reads.index(read) :][:3] == (
-        read,
-        "GET /v1/workspaces/{workspace_id}/stop",
-        "GET /v1/health/live",
+    # Declared before the mission/stop tail, so the FK-1 tail stays pinned.
+    assert contract.reads.index(read) < contract.reads.index(
+        "GET /v1/workspaces/{workspace_id}/missions/{mission_id}"
+    )
+    assert contract.reads[-4:] == (
+        "GET /v1/work-items/{key}/revisions/{selector}",
+        "GET /v1/receipts/{receipt_id}",
+        "GET /v1/workspaces/{workspace_id}/work-items",
+        "GET /v1/workspaces/{workspace_id}/events",
     )
     for command in ("create_decision", "answer_decision"):
         assert command in omp_work._COMMAND_TYPES
@@ -176,6 +184,27 @@ def test_contract_closures_name_the_decision_read_and_commands() -> None:
 def test_decision_scope_mapping_and_owner_only_answer_constant() -> None:
     assert WorkService._scopes["create_decision"] == "work.mutate"
     assert WorkService._scopes["answer_decision"] == "work.approve"
+
+
+def test_decision_action_classes_are_the_d35_tier3_ids() -> None:
+    classes = set(get_args(DecisionActionClass))
+    # The ten named classes are exactly the tier table's tier-3 ids.
+    assert classes - {"contract_hash", "unlisted"} == set(TIER3)
+    assert all(tier_of(action_class) == 3 for action_class in classes)
+    # A non-null action_class names a real tier-3 class, so it must validate.
+    payload = _payload(action_class="production_deploy")
+    command = CreateDecisionCommand.model_validate(
+        {"type": "create_decision", "payload": payload}
+    )
+    assert command.payload.action_class == "production_deploy"
+    # A renamed class the tier table does not know is refused, not silently unlisted.
+    with pytest.raises(ValidationError):
+        CreateDecisionCommand.model_validate(
+            {
+                "type": "create_decision",
+                "payload": _payload(action_class="production_deployment"),
+            }
+        )
 
 
 def test_envelope_discriminates_decision_commands() -> None:
