@@ -3,11 +3,12 @@
 ``OmpRpcAgent`` resolves the fixture from ``environment.environment_dir``,
 stages the worker tree (seed always, plus the solution when
 ``OMP_HARBOR_VARIANT`` is ``known_good``), points the worker's omp at a
-keyless scripted model through ``models_yml`` and a netns-shared model
-sidecar, then runs ``RpcAdapter`` on a worker thread with a pidfile killer and
-a repository-bundle hook. Every docker argv goes through ``docker_ops`` /
-``netns`` with the injectable ``docker`` kwarg, and ``run`` seals the evidence
-directory under ``OMP_HARBOR_EVIDENCE_ROOT`` before the sidecar stops.
+keyless scripted model through ``models_yml`` and ``worker_settings_yml``
+plus a netns-shared model sidecar, then runs ``RpcAdapter`` on a worker thread
+with a pidfile killer and a repository-bundle hook. Every docker argv goes
+through ``docker_ops`` / ``netns`` with the injectable ``docker`` kwarg, and
+``run`` seals the evidence directory under ``OMP_HARBOR_EVIDENCE_ROOT`` before
+the sidecar stops.
 """
 
 from __future__ import annotations
@@ -53,6 +54,7 @@ _KNOWN_VARIANTS: tuple[str, ...] = ("known_good", "known_bad")
 _WORKER_SERVICE = "worker"
 _WORKSERVICE_SERVICE = "workservice"
 _MODELS_PATH = ".omp/agent/models.yml"
+_CONFIG_PATH = ".omp/agent/config.yml"
 _SESSION_DIR = "omp-sessions"
 _BUNDLE_NAME = "worker-repo.bundle"
 
@@ -95,6 +97,17 @@ def _bundle_hook(worker: str, workdir: str, bundle: Path, docker: str) -> Callab
 
 def _omp_args(task_home: str) -> list[str]:
     return ["--mode", "rpc", "--model", "scripted/scripted", "--session-dir", f"{task_home}/{_SESSION_DIR}"]
+
+
+def worker_settings_yml() -> str:
+    """Worker settings that point ``modelRoles.audit`` at the scripted model.
+
+    ``scripted_model.models_yml`` defines the keyless ``scripted/scripted``
+    provider/model, so the native auditor runner can resolve ``@audit``
+    instead of failing with "Could not resolve @audit role".
+    """
+
+    return "modelRoles:\n  audit: scripted/scripted\n"
 
 
 def _credentials_dir() -> Path:
@@ -233,6 +246,14 @@ class OmpRpcAgent(BaseAgent):
                 worker,
                 f"{task.home}/{_MODELS_PATH}",
                 models_yml(task.model_url).encode("utf-8"),
+                docker=self.docker,
+            )
+            # session-system/install.sh writes no config.yml, so this is a
+            # plain write: the worker's omp resolves @audit from it.
+            write_file(
+                worker,
+                f"{task.home}/{_CONFIG_PATH}",
+                worker_settings_yml().encode("utf-8"),
                 docker=self.docker,
             )
             stage_worker_environment(
