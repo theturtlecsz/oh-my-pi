@@ -5446,6 +5446,7 @@
         "session-system/extensions/workflow/checkpoint-delivery.ts",
         "session-system/extensions/workflow/config.ts",
         "session-system/extensions/workflow/confirm.ts",
+        "session-system/extensions/workflow/dependency-tree.ts",
         "session-system/extensions/workflow/digest-prompt.md",
         "session-system/extensions/workflow/execute-prompt.md",
         "session-system/extensions/workflow/git.ts",
