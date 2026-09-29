@@ -105,13 +105,22 @@ describe("unattended lockdown report - robomp", () => {
 		expect(row02!.Breaks.toLowerCase()).toContain("edits still run");
 	});
 
-	test("worker.py has no inventory row in upstream-fork-inventory.tsv", async () => {
+	test("python/robomp/src/worker.py has no inventory row in upstream-fork-inventory.tsv", async () => {
+		const robompWorker = "python/robomp/src/worker.py";
+		const rowIsRobompWorker = (line: string) => line.split("\t")[0]?.trim() === robompWorker;
+
 		const inventoryText = await Bun.file(inventoryPath).text();
 		for (const line of inventoryText.split("\n")) {
 			const filePath = line.split("\t")[0]?.trim();
 			if (!filePath) continue;
-			expect(filePath.endsWith("worker.py")).toBe(false);
+			expect(rowIsRobompWorker(line)).toBe(false);
 		}
+
+		const otherWorkerLine = "python/omp-work/src/omp_work/jobs/worker.py\tfork-only\tadded";
+		expect(rowIsRobompWorker(otherWorkerLine)).toBe(false);
+
+		const robompWorkerLine = `${robompWorker}\tfork-only\tadded`;
+		expect(rowIsRobompWorker(robompWorkerLine)).toBe(true);
 	});
 
 	test("Section ## Can a slot user read agent-home credentials? 1st line starts Code answer: yes", async () => {
