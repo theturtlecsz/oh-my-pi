@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from .models import (
     AuditManifest,
@@ -16,6 +17,9 @@ from .models import (
     DecisionActionClass,
     EvidenceReceipt,
     IntakeBlockingQuestion,
+    ItemBudget,
+    MissionDraft,
+    MissionStatus,
     OperationReceipt,
     RelationEdge,
     ResearchArtifact,
@@ -561,6 +565,85 @@ class DecisionsPage(StrictModel):
     next_decision_id: UUID | None = None
 
 
+class MissionTransition(StrictModel):
+    from_status: MissionStatus | None = None
+    to_status: MissionStatus
+    cause_kind: Literal["principal", "policy_rule", "decision"]
+    cause_id: str
+    actor_id: UUID
+    actor_kind: str
+    at: datetime
+    revision: int
+
+
+class MissionApprovedScope(StrictModel):
+    revision: int
+    basis_kind: Literal["decision", "standing_mandate"]
+    basis_id: str
+    approved_by: UUID
+    approved_by_actor_kind: str
+    approved_at: datetime
+    envelope: MissionDraft
+
+
+class MissionLink(StrictModel):
+    work_id: UUID
+    budget: ItemBudget
+    linked_at: datetime
+
+
+class MissionDrawn(StrictModel):
+    usd: str
+    tokens: int = Field(ge=0)
+    wall_clock_seconds: int = Field(ge=0)
+
+    @field_validator("usd")
+    @classmethod
+    def validate_usd(cls, v: str) -> str:
+        if isinstance(v, bool) or not isinstance(v, str):
+            raise ValueError("usd must be a decimal string")
+        try:
+            val = Decimal(v)
+        except (InvalidOperation, TypeError):
+            raise ValueError("usd must be a valid decimal string")
+        if not val.is_finite() or val < 0:
+            raise ValueError("usd must be a non-negative decimal string")
+        return v
+
+    @field_validator("tokens", "wall_clock_seconds", mode="before")
+    @classmethod
+    def validate_int_type(cls, v: Any) -> Any:
+        if isinstance(v, bool) or not isinstance(v, int):
+            raise ValueError("must be an integer, not a boolean or string")
+        return v
+
+
+class MissionView(MissionDraft):
+    mission_id: UUID
+    created_by: UUID
+    created_at: datetime
+    revision: int
+    status: MissionStatus
+    budget: ItemBudget | None = None
+    budget_source: Literal["mission", "project"] | None = None
+    hold_decision: dict[str, Any] | None = None
+    approved_scope: MissionApprovedScope | None = None
+    transitions: tuple[MissionTransition, ...] = ()
+    links: tuple[MissionLink, ...] = ()
+    drawn: MissionDrawn
+
+
+class MissionResult(StrictModel):
+    type: Literal[
+        "submit_mission",
+        "revise_mission",
+        "approve_mission",
+        "set_mission_status",
+        "link_mission_work",
+    ]
+    mission: MissionView
+
+
 CommandResult = Annotated[
     CreateWorkBatchResult
     | CreateSameSessionChildResult
@@ -609,7 +692,8 @@ CommandResult = Annotated[
     | EngageStopResult
     | ReleaseStopResult
     | CreateDecisionResult
-    | AnswerDecisionResult,
+    | AnswerDecisionResult
+    | MissionResult,
     Field(discriminator="type"),
 ]
 

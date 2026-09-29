@@ -88,6 +88,11 @@ class WorkService:
         "release_stop": "work.approve",
         "create_decision": "work.mutate",
         "answer_decision": "work.approve",
+        "submit_mission": "work.mutate",
+        "revise_mission": "work.mutate",
+        "link_mission_work": "work.mutate",
+        "approve_mission": "work.approve",
+        "set_mission_status": "work.execute",
     }
 
     def __init__(self, store: WorkStore) -> None:
