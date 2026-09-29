@@ -163,6 +163,11 @@ export interface RouterRouteDeps {
 	/** Sleep seam for generation-record backoff; tests inject an instant one. */
 	sleep?: (ms: number) => Promise<void>;
 	/**
+	 * How many generation-record reads may be in flight while later router
+	 * calls continue. Defaults to {@link GENERATION_RECORD_CONCURRENCY}.
+	 */
+	generationRecordConcurrency?: number;
+	/**
 	 * Names the route in usage entries and abort errors. Callers that share the
 	 * OpenRouter transport deps (where this field is optional) may omit it;
 	 * those calls are recorded as `router_measurement`.
@@ -187,6 +192,8 @@ export interface RouterMeasurementOptions {
 	generationRecordRetryDelayMs?: number;
 	/** Sleep seam for generation-record backoff; tests inject an instant one. */
 	sleep?: (ms: number) => Promise<void>;
+	/** How many generation-record reads may be in flight. Defaults to {@link GENERATION_RECORD_CONCURRENCY}. */
+	generationRecordConcurrency?: number;
 	/** Injected current-side settings/registry. Absent means the current side is not measured. */
 	current?: CurrentSmolHarness;
 	/** Test-only current-side handler, mirroring OMP-298's `--fake-smol`. */
@@ -213,7 +220,35 @@ interface RouterCall {
 	latencies: number[];
 }
 
-/** Run one routed single-label decision per item. */
+/** Generation-record reads in flight during a route. The rest wait their turn. */
+export const GENERATION_RECORD_CONCURRENCY = 8;
+
+function withConcurrencyLimit(limit: number): <T>(task: () => Promise<T>) => Promise<T> {
+	let active = 0;
+	const waiting: Array<() => void> = [];
+	return function run<T>(task: () => Promise<T>): Promise<T> {
+		return new Promise<T>((resolve, reject) => {
+			const start = () => {
+				active += 1;
+				Promise.resolve()
+					.then(task)
+					.then(resolve, reject)
+					.finally(() => {
+						active -= 1;
+						waiting.shift()?.();
+					});
+			};
+			if (active < limit) start();
+			else waiting.push(start);
+		});
+	};
+}
+
+/**
+ * Run one routed single-label decision per item. Router calls stay serial.
+ * Generation-record reads run beside later calls, and this function waits for
+ * every read before it returns the entries the report is built from.
+ */
 async function runRoute<T extends string>(
 	items: { prompt: string; expected: T }[],
 	deps: RouterRouteDeps,
@@ -222,6 +257,8 @@ async function runRoute<T extends string>(
 	const entries: RouterUsageEntry[] = [];
 	const values: (string | undefined)[] = [];
 	const latencies: number[] = [];
+	const recordReads: Promise<void>[] = [];
+	const runRecord = withConcurrencyLimit(deps.generationRecordConcurrency ?? GENERATION_RECORD_CONCURRENCY);
 	const feature = deps.feature ?? "router_measurement";
 	for (const item of items) {
 		const started = performance.now();
@@ -233,6 +270,12 @@ async function runRoute<T extends string>(
 			generationRecordWaitMs: deps.generationRecordWaitMs,
 			generationRecordRetryDelayMs: deps.generationRecordRetryDelayMs,
 			sleep: deps.sleep,
+			// Record reads start here and run beside later calls. latencyMs on
+			// the usage entry was already taken, and the window below ends
+			// when this completion returns.
+			scheduleGenerationRecord: read => {
+				recordReads.push(runRecord(read));
+			},
 			recordUsage: entry => {
 				entries.push(entry);
 				deps.recordUsage?.(entry);
@@ -242,6 +285,7 @@ async function runRoute<T extends string>(
 		const value = decision.text === undefined ? undefined : parse(decision.text);
 		values.push(value);
 	}
+	await Promise.all(recordReads);
 	assertTransportHealthy(entries, feature);
 	return { entries, values, latencies };
 }
@@ -531,6 +575,7 @@ export async function runRouterMeasurement(options: RouterMeasurementOptions): P
 		generationRecords: options.generationRecords,
 		generationRecordWaitMs: options.generationRecordWaitMs,
 		generationRecordRetryDelayMs: options.generationRecordRetryDelayMs,
+		generationRecordConcurrency: options.generationRecordConcurrency,
 		sleep: options.sleep,
 		feature,
 	});
