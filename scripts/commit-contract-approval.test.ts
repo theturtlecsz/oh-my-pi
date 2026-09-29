@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { $ } from "bun";
 import { APPROVAL_PATH, checkApprovalProvenance } from "./approval-provenance.ts";
-import { commitContractApproval, ContractApprovalError } from "./commit-contract-approval.ts";
+import { ContractApprovalError, commitContractApproval } from "./commit-contract-approval.ts";
 
 interface Author {
 	name: string;
@@ -26,7 +26,11 @@ async function makeRepo(): Promise<string> {
 	return dir;
 }
 
-async function run(dir: string, args: string[], author: Author = HUMAN): Promise<{ exitCode: number; out: string; err: string }> {
+async function run(
+	dir: string,
+	args: string[],
+	author: Author = HUMAN,
+): Promise<{ exitCode: number; out: string; err: string }> {
 	const proc = await $`git ${args}`
 		.cwd(dir)
 		.quiet()
@@ -140,9 +144,9 @@ describe("commitContractApproval", () => {
 			path.join(dir, APPROVAL_PATH),
 			`${JSON.stringify({ contract_sha256: "c".repeat(64), issue: "OMP-452" })}\n`,
 		);
-		await expect(commitContractApproval({ cwd: dir, issue: "OMP-452", digest: "e".repeat(64) })).rejects.toBeInstanceOf(
-			ContractApprovalError,
-		);
+		await expect(
+			commitContractApproval({ cwd: dir, issue: "OMP-452", digest: "e".repeat(64) }),
+		).rejects.toBeInstanceOf(ContractApprovalError);
 		expect((await ok(dir, ["rev-parse", "HEAD"])).trim()).toBe(sha);
 		expect(await checkApprovalProvenance({ cwd: dir, base })).toEqual([]);
 	});
@@ -152,7 +156,9 @@ describe("commitContractApproval", () => {
 		const base = (await ok(dir, ["rev-parse", "HEAD"])).trim();
 		await fs.rm(path.join(dir, APPROVAL_PATH));
 
-		await expect(commitContractApproval({ cwd: dir, issue: "OMP-452" })).rejects.toBeInstanceOf(ContractApprovalError);
+		await expect(commitContractApproval({ cwd: dir, issue: "OMP-452" })).rejects.toBeInstanceOf(
+			ContractApprovalError,
+		);
 		expect((await ok(dir, ["rev-parse", "HEAD"])).trim()).toBe(base);
 	});
 });
