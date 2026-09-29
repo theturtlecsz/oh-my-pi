@@ -109,9 +109,11 @@ export interface RouterRouteMetrics {
 	p50LatencyMs: number;
 	p95LatencyMs: number;
 	/**
-	 * Cost of 1000 calls in USD, from costs the router actually reported. `null`
-	 * when no call yielded a cost — the report renders it as not measured rather
-	 * than a fabricated zero.
+	 * Cost of 1000 calls in USD: the mean of the calls that reported a cost,
+	 * times 1000. An unread call is left out of that mean, not counted as zero.
+	 * `null` when no call yielded a cost — the report renders it as not measured
+	 * rather than a fabricated zero. A current side that ran reports `0` when
+	 * the provider charged nothing; `null` there means that side did not run.
 	 */
 	costPer1000Usd: number | null;
 	/**
@@ -119,7 +121,8 @@ export interface RouterRouteMetrics {
 	 * `usage.cost` (`completion-usage`) or the OpenRouter generation record's
 	 * `total_cost` (`generation-record`); the current side reads the
 	 * provider-reported completion cost (`provider-usage`). `unavailable` means
-	 * the row ran and read no cost, so costPer1000Usd is null.
+	 * the row ran and read no cost: a router row then has costPer1000Usd null,
+	 * and a current side that ran and was charged nothing has 0.
 	 */
 	costSource: "completion-usage" | "generation-record" | "provider-usage" | "unavailable";
 	/** Routed answers that carried no allowed label. There is no separate off-list bucket in router mode. */
@@ -281,7 +284,9 @@ function summarise(
 				: fromGenerationRecord
 					? "generation-record"
 					: "unavailable";
-	const costPer1000Usd = measuredCalls === 0 ? null : (measuredCost / total) * 1000;
+	// Mean of the calls that reported a cost. Dividing by the full sample would
+	// count every unread call as $0 inside an otherwise measured row.
+	const costPer1000Usd = measuredCalls === 0 ? null : (measuredCost / measuredCalls) * 1000;
 
 	return {
 		sampleSize: call.latencies.length,
@@ -470,7 +475,9 @@ async function measureCurrent(
 		recall,
 		p50LatencyMs: percentile(latencies, 0.5),
 		p95LatencyMs: percentile(latencies, 0.95),
-		costPer1000Usd: costTotal > 0 ? (costTotal / total) * 1000 : null,
+		// A side that ran and was charged nothing is a real zero. `null` is reserved
+		// for a side that did not run, which this function signals by returning null.
+		costPer1000Usd: (costTotal / total) * 1000,
 		costSource: costTotal > 0 ? "provider-usage" : "unavailable",
 		unparseableRate: unparseable / total,
 		transportFailureRate: 0,

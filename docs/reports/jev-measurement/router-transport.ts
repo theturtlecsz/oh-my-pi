@@ -413,6 +413,10 @@ export interface GenerationRecord {
  * exponential backoff until the record appears or the wait runs out. Returns
  * `undefined` when the record never appeared; the caller then reports what it
  * could not read.
+ *
+ * The last sleep is shortened to whatever time is left in the window. Stopping
+ * when the next full step would pass the deadline used to return at 7.75 s of
+ * a 15 s budget, before a record published at ~10 s existed.
  */
 export async function fetchGenerationRecord(
 	generationId: string,
@@ -431,6 +435,10 @@ export async function fetchGenerationRecord(
 	const waitMs = deps.generationRecordWaitMs ?? 0;
 	const deadline = now() + waitMs;
 	let delayMs = deps.generationRecordRetryDelayMs ?? GENERATION_RECORD_RETRY_DELAY_MS;
+	// Set once the sleep reaches the deadline, so the fetch after that sleep is
+	// the last one. A no-op sleep (tests) would otherwise spin while `now`
+	// stays put.
+	let sleptToDeadline = false;
 
 	for (;;) {
 		try {
@@ -453,8 +461,13 @@ export async function fetchGenerationRecord(
 		} catch {
 			return undefined;
 		}
-		if (now() + delayMs > deadline) return undefined;
-		await sleep(delayMs);
+		if (sleptToDeadline) return undefined;
+		const remaining = deadline - now();
+		if (remaining <= 0) return undefined;
+		const sleepFor = Math.min(delayMs, remaining);
+		if (sleepFor <= 0) return undefined;
+		if (sleepFor < delayMs) sleptToDeadline = true;
+		await sleep(sleepFor);
 		delayMs *= 2;
 	}
 }
