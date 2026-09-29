@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+from datetime import datetime, timezone
 from ipaddress import IPv4Address, IPv6Address
 
 import pytest
 
-from omp_work.egress_policy import blocked_address
+from omp_work.egress_policy import (
+    EgressRecord,
+    EgressRecorder,
+    Identity,
+    MemoryRecorder,
+    blocked_address,
+    research_refusal,
+)
 
 
 @pytest.mark.parametrize(
@@ -67,3 +76,218 @@ def test_blocked_address_accepts_address_objects(
     reason: str,
 ) -> None:
     assert blocked_address(address) == reason
+
+
+def test_identity_dataclass() -> None:
+    identity = Identity(
+        workspace_id="ws-1",
+        project_id="proj-1",
+        mission_id="m-1",
+        worker_id="w-1",
+        stage="research",
+    )
+    assert identity.workspace_id == "ws-1"
+    assert identity.project_id == "proj-1"
+    assert identity.mission_id == "m-1"
+    assert identity.worker_id == "w-1"
+    assert identity.stage == "research"
+
+    identity_no_mission = Identity(
+        workspace_id="ws-1",
+        project_id="proj-1",
+        mission_id=None,
+        worker_id="w-1",
+        stage="repository",
+    )
+    assert identity_no_mission.mission_id is None
+    assert identity_no_mission.stage == "repository"
+
+    with pytest.raises(FrozenInstanceError):
+        identity.worker_id = "w-2"  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    ("method", "url", "headers", "has_body", "expected"),
+    [
+        # Each code alone: PUT, POST, GET+body, authorization / COOKIE header,
+        # https://u:p@h/, ?API_KEY=x, ?Access%5Ftoken=x.
+        ("PUT", "https://example.com/resource", {}, False, "method_not_allowed"),
+        ("POST", "https://example.com/resource", {}, False, "method_not_allowed"),
+        ("DELETE", "https://example.com/resource", {}, False, "method_not_allowed"),
+        ("GET", "https://example.com/resource", {}, True, "request_body"),
+        ("HEAD", "https://example.com/resource", {}, True, "request_body"),
+        ("GET", "https://example.com/resource", {"authorization": "Bearer token"}, False, "auth_header"),
+        ("GET", "https://example.com/resource", {"Authorization": "Bearer token"}, False, "auth_header"),
+        ("GET", "https://example.com/resource", {"COOKIE": "session=123"}, False, "auth_header"),
+        ("GET", "https://example.com/resource", {"cookie": "session=123"}, False, "auth_header"),
+        ("GET", "https://example.com/resource", {"Proxy-Authorization": "Basic xyz"}, False, "auth_header"),
+        ("GET", "https://example.com/resource", [("Authorization", "token")], False, "auth_header"),
+        ("GET", "https://u:p@h/", {}, False, "url_credentials"),
+        ("GET", "https://u@h/", {}, False, "url_credentials"),
+        ("GET", "https://:p@h/", {}, False, "url_credentials"),
+        ("GET", "https://@h/", {}, False, "url_credentials"),
+        ("GET", "https://example.com/?API_KEY=x", {}, False, "query_credential"),
+        ("GET", "https://example.com/?Access%5Ftoken=x", {}, False, "query_credential"),
+        ("GET", "https://example.com/?apikey=x", {}, False, "query_credential"),
+        ("GET", "https://example.com/?api_key", {}, False, "query_credential"),
+        ("GET", "https://example.com/?api_key=", {}, False, "query_credential"),
+        ("GET", "https://example.com/?access_token=", {}, False, "query_credential"),
+        ("GET", "https://example.com/?foo=1&access_token=bar", {}, False, "query_credential"),
+    ],
+)
+def test_research_refusal_individual_codes(
+    method: str,
+    url: str,
+    headers: dict[str, str] | list[tuple[str, str]],
+    has_body: bool,
+    expected: str,
+) -> None:
+    assert research_refusal(method, url, headers, has_body) == expected
+
+
+@pytest.mark.parametrize(
+    ("method", "url", "headers", "has_body", "expected"),
+    [
+        # Order precedence:
+        # POST+body+Authorization -> method_not_allowed
+        ("POST", "https://u:p@h/?api_key=x", {"Authorization": "Bearer x"}, True, "method_not_allowed"),
+        # GET+body+Cookie -> request_body
+        ("GET", "https://u:p@h/?api_key=x", {"Cookie": "s=1"}, True, "request_body"),
+        # header+userinfo -> auth_header
+        ("GET", "https://u:p@h/?api_key=x", {"Authorization": "Bearer x"}, False, "auth_header"),
+        # userinfo+query -> url_credentials
+        ("GET", "https://u:p@h/?api_key=x", {}, False, "url_credentials"),
+        # Allowed clean GET -> None
+        ("GET", "https://example.com/a?q=1", {}, False, None),
+        # Allowed clean HEAD -> None
+        ("HEAD", "https://example.com/a?q=1", {"User-Agent": "test"}, False, None),
+        # Unrelated query param -> None
+        ("GET", "https://example.com/a?token=123", {}, False, None),
+    ],
+)
+def test_research_refusal_precedence(
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    has_body: bool,
+    expected: str | None,
+) -> None:
+    assert research_refusal(method, url, headers, has_body) == expected
+
+
+def test_egress_record_dataclass() -> None:
+    now = datetime.now(timezone.utc)
+    rec = EgressRecord(
+        workspace_id="ws-1",
+        project_id="proj-1",
+        mission_id="m-1",
+        worker_id="w-1",
+        stage="research",
+        channel="http",
+        protocol="https",
+        host="example.com",
+        ip="93.184.216.34",
+        port=443,
+        method="GET",
+        url="https://example.com/data",
+        klass="research",
+        outcome="allowed",
+        code=None,
+        policy_id=None,
+        at=now,
+    )
+    assert rec.workspace_id == "ws-1"
+    assert rec.project_id == "proj-1"
+    assert rec.mission_id == "m-1"
+    assert rec.worker_id == "w-1"
+    assert rec.stage == "research"
+    assert rec.channel == "http"
+    assert rec.protocol == "https"
+    assert rec.host == "example.com"
+    assert rec.ip == "93.184.216.34"
+    assert rec.port == 443
+    assert rec.method == "GET"
+    assert rec.url == "https://example.com/data"
+    assert rec.klass == "research"
+    assert rec.outcome == "allowed"
+    assert rec.code is None
+    assert rec.policy_id is None
+    assert rec.at == now
+
+    with pytest.raises(FrozenInstanceError):
+        rec.outcome = "refused"  # type: ignore[misc]
+
+
+def test_memory_recorder_protocol_and_call_order() -> None:
+    recorder = MemoryRecorder()
+    assert isinstance(recorder, EgressRecorder)
+    assert recorder.records == []
+
+    def dispatch(sink: EgressRecorder, record: EgressRecord) -> None:
+        sink.record(record)
+
+    now = datetime.now(timezone.utc)
+    r1 = EgressRecord(
+        workspace_id="ws-1",
+        project_id="proj-1",
+        mission_id="m-1",
+        worker_id="w-1",
+        stage="research",
+        channel="http",
+        protocol="https",
+        host="example.com",
+        ip="93.184.216.34",
+        port=443,
+        method="GET",
+        url="https://example.com/1",
+        klass="research",
+        outcome="allowed",
+        code=None,
+        policy_id=None,
+        at=now,
+    )
+    r2 = EgressRecord(
+        workspace_id="ws-1",
+        project_id="proj-1",
+        mission_id="m-1",
+        worker_id="w-1",
+        stage="research",
+        channel="http",
+        protocol="https",
+        host="example.com",
+        ip="93.184.216.34",
+        port=443,
+        method="POST",
+        url="https://example.com/2",
+        klass="none",
+        outcome="refused",
+        code="method_not_allowed",
+        policy_id=None,
+        at=now,
+    )
+    r3 = EgressRecord(
+        workspace_id="ws-2",
+        project_id="proj-2",
+        mission_id=None,
+        worker_id="w-2",
+        stage="repository",
+        channel="git",
+        protocol="https",
+        host="github.com",
+        ip=None,
+        port=443,
+        method="GET",
+        url="https://github.com/repo.git",
+        klass="remote",
+        outcome="allowed",
+        code=None,
+        policy_id="pol-1",
+        at=now,
+    )
+
+    dispatch(recorder, r1)
+    dispatch(recorder, r2)
+    dispatch(recorder, r3)
+
+    assert recorder.records == [r1, r2, r3]
+

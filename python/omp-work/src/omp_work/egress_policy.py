@@ -11,10 +11,21 @@ u-octet), and ``not_global`` (not globally routable, or multicast).
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
+from datetime import datetime
 from ipaddress import IPv4Address, IPv6Address, IPv6Network, ip_address
+from typing import Literal, Protocol, runtime_checkable
+from urllib.parse import parse_qsl, urlsplit
 
 __all__ = [
+    "EgressRecord",
+    "EgressRecorder",
+    "Identity",
+    "MemoryRecorder",
+    "Stage",
     "blocked_address",
+    "research_refusal",
 ]
 
 _METADATA: frozenset[IPv4Address | IPv6Address] = frozenset(
@@ -93,3 +104,105 @@ def blocked_address(ip: str | IPv4Address | IPv6Address) -> str | None:
     if address.is_global and not address.is_multicast:
         return None
     return "not_global"
+
+
+Stage = Literal["repository", "research"]
+
+
+@dataclass(frozen=True)
+class Identity:
+    """Execution identity for an egress request."""
+
+    workspace_id: str
+    project_id: str
+    mission_id: str | None
+    worker_id: str
+    stage: Stage
+
+
+_AUTH_HEADERS: frozenset[str] = frozenset(
+    {"authorization", "proxy-authorization", "cookie"}
+)
+_QUERY_CREDENTIAL_NAMES: frozenset[str] = frozenset(
+    {"access_token", "api_key", "apikey"}
+)
+
+
+def research_refusal(
+    method: str,
+    url: str,
+    headers: Mapping[str, str] | Iterable[tuple[str, str]],
+    has_body: bool,
+) -> str | None:
+    """Return a research refusal code if the request is not allowed, else None."""
+    if method.upper() not in {"GET", "HEAD"}:
+        return "method_not_allowed"
+
+    if has_body:
+        return "request_body"
+
+    if isinstance(headers, Mapping):
+        for name in headers:
+            if str(name).lower() in _AUTH_HEADERS:
+                return "auth_header"
+    else:
+        for item in headers:
+            if item and str(item[0]).lower() in _AUTH_HEADERS:
+                return "auth_header"
+
+    parsed = urlsplit(url)
+    if parsed.username is not None or parsed.password is not None or "@" in parsed.netloc:
+        return "url_credentials"
+
+    for key, _ in parse_qsl(parsed.query, keep_blank_values=True):
+        if key.lower() in _QUERY_CREDENTIAL_NAMES:
+            return "query_credential"
+
+    return None
+
+
+Outcome = Literal["allowed", "refused"]
+
+
+@dataclass(frozen=True)
+class EgressRecord:
+    """Structured record of an egress verdict and execution context."""
+
+    workspace_id: str
+    project_id: str
+    mission_id: str | None
+    worker_id: str
+    stage: Literal["repository", "research"]
+    channel: str
+    protocol: str
+    host: str
+    ip: str | None
+    port: int
+    method: str
+    url: str
+    klass: str
+    outcome: Outcome
+    code: str | None
+    policy_id: str | None
+    at: datetime
+
+
+@runtime_checkable
+class EgressRecorder(Protocol):
+    """Protocol for egress audit recorders."""
+
+    def record(self, rec: EgressRecord) -> None:
+        ...
+
+
+class MemoryRecorder(EgressRecorder):
+    """In-memory egress recorder that retains records in call order."""
+
+    records: list[EgressRecord]
+
+    def __init__(self, records: list[EgressRecord] | None = None) -> None:
+        self.records = [] if records is None else records
+
+    def record(self, rec: EgressRecord) -> None:
+        self.records.append(rec)
+
