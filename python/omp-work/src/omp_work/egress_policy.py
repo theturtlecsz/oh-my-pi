@@ -12,6 +12,9 @@ u-octet), and ``not_global`` (not globally routable, or multicast).
 the active ``network_access`` standing policies and the model proxy into an
 :class:`EgressPolicy`: registries and remotes are normalized to origins only,
 and malformed or non-https/http entries are dropped.
+
+:func:`egress_change_kind` classifies changes between two egress records as
+``create``, ``narrow``, or ``widen``.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from ipaddress import IPv4Address, IPv6Address, IPv6Network, ip_address
 from typing import Literal, Protocol, runtime_checkable
 from urllib.parse import parse_qsl, unquote, urlsplit
 
+from omp_work.standing_change import ChangeKind
 from omp_work.standing_policy import StandingPolicy
 
 __all__ = [
@@ -35,6 +39,7 @@ __all__ = [
     "Stage",
     "blocked_address",
     "build_policy",
+    "egress_change_kind",
     "research_refusal",
 ]
 
@@ -224,6 +229,22 @@ def _is_expired(policy: StandingPolicy, now: datetime) -> bool:
     return expires <= now
 
 
+def _parse_egress_targets(
+    egress: ProjectEgress,
+) -> tuple[set[tuple[str, int]], set[tuple[str, str, int, str]]]:
+    registries: set[tuple[str, int]] = set()
+    remotes: set[tuple[str, str, int, str]] = set()
+    for raw in egress.registries:
+        parsed = _parse_registry(raw)
+        if parsed is not None:
+            registries.add(parsed)
+    for raw in egress.remotes:
+        parsed = _parse_remote(raw)
+        if parsed is not None:
+            remotes.add(parsed)
+    return registries, remotes
+
+
 def build_policy(
     egress: ProjectEgress | None,
     standing: Iterable[StandingPolicy],
@@ -241,17 +262,10 @@ def build_policy(
         raise ValueError(f"model_proxy requires host:port, got {model_proxy!r}")
     proxy_host, proxy_port = parsed_proxy
 
-    registries: set[tuple[str, int]] = set()
-    remotes: set[tuple[str, str, int, str]] = set()
     if egress is not None:
-        for raw in egress.registries:
-            parsed = _parse_registry(raw)
-            if parsed is not None:
-                registries.add(parsed)
-        for raw in egress.remotes:
-            parsed = _parse_remote(raw)
-            if parsed is not None:
-                remotes.add(parsed)
+        registries, remotes = _parse_egress_targets(egress)
+    else:
+        registries, remotes = set(), set()
 
     now = datetime.now(UTC)
     kept: list[StandingPolicy] = []
@@ -281,6 +295,29 @@ class ProjectEgress:
     registries: tuple[str, ...]
     remotes: tuple[str, ...]
     decision_id: str | None
+
+
+def egress_change_kind(
+    old: ProjectEgress | None,
+    new: ProjectEgress,
+) -> ChangeKind:
+    """Classify the change between an old and a new project egress record.
+
+    Returns ``ChangeKind.create`` if ``old`` is ``None``. Otherwise, parses both
+    records' registries and remotes using the same normalization rules as
+    :func:`build_policy`. If ``new``'s parsed registry and remote sets are both
+    subsets of ``old``'s (including equal), returns ``ChangeKind.narrow``.
+    Otherwise, returns ``ChangeKind.widen``.
+    """
+    if old is None:
+        return ChangeKind.create
+
+    old_registries, old_remotes = _parse_egress_targets(old)
+    new_registries, new_remotes = _parse_egress_targets(new)
+
+    if new_registries <= old_registries and new_remotes <= old_remotes:
+        return ChangeKind.narrow
+    return ChangeKind.widen
 
 
 @dataclass(frozen=True)

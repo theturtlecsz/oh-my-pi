@@ -17,8 +17,10 @@ from omp_work.egress_policy import (
     ProjectEgress,
     blocked_address,
     build_policy,
+    egress_change_kind,
     research_refusal,
 )
+from omp_work.standing_change import ChangeKind
 from omp_work.standing_policy import StandingPolicy
 
 
@@ -441,5 +443,98 @@ def test_egress_policy_holds_only_normalized_origins() -> None:
     assert policy.remotes == frozenset()
     assert policy.standing == ()
     assert policy.decision_id is None
+
+
+def test_egress_change_kind_old_none() -> None:
+    new = ProjectEgress(
+        registries=("https://reg.example.com",),
+        remotes=("https://github.com/org/repo",),
+        decision_id="dec-1",
+    )
+    assert egress_change_kind(None, new) == ChangeKind.create
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        # Identical records.
+        (
+            ProjectEgress(registries=("https://reg.example.com",), remotes=("https://h/o/r",), decision_id="d1"),
+            ProjectEgress(registries=("https://reg.example.com",), remotes=("https://h/o/r",), decision_id="d1"),
+        ),
+        # One remote dropped.
+        (
+            ProjectEgress(registries=(), remotes=("https://h/o/r1", "https://h/o/r2"), decision_id=None),
+            ProjectEgress(registries=(), remotes=("https://h/o/r1",), decision_id=None),
+        ),
+        # One registry dropped.
+        (
+            ProjectEgress(registries=("https://reg1.example.com", "https://reg2.example.com"), remotes=(), decision_id=None),
+            ProjectEgress(registries=("https://reg1.example.com",), remotes=(), decision_id=None),
+        ),
+        # Normalized origin equivalence ("HTTPS://Reg.example.com:443" vs "https://reg.example.com").
+        (
+            ProjectEgress(registries=("HTTPS://Reg.example.com:443",), remotes=(), decision_id=None),
+            ProjectEgress(registries=("https://reg.example.com",), remotes=(), decision_id=None),
+        ),
+        # Adding only an ssh:// remote (grants nothing and is dropped).
+        (
+            ProjectEgress(registries=(), remotes=("https://h/o/r",), decision_id=None),
+            ProjectEgress(registries=(), remotes=("https://h/o/r", "ssh://git@h/o/r"), decision_id=None),
+        ),
+        # Adding only a non-https registry (grants nothing and is dropped).
+        (
+            ProjectEgress(registries=("https://reg.example.com",), remotes=(), decision_id=None),
+            ProjectEgress(registries=("https://reg.example.com", "http://unencrypted.com"), remotes=(), decision_id=None),
+        ),
+        # Decision ID change is not compared.
+        (
+            ProjectEgress(registries=(), remotes=(), decision_id="old-dec"),
+            ProjectEgress(registries=(), remotes=(), decision_id="new-dec"),
+        ),
+    ],
+)
+def test_egress_change_kind_narrow(old: ProjectEgress, new: ProjectEgress) -> None:
+    assert egress_change_kind(old, new) == ChangeKind.narrow
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        # A new remote added.
+        (
+            ProjectEgress(registries=(), remotes=("https://h/o/r1",), decision_id=None),
+            ProjectEgress(registries=(), remotes=("https://h/o/r1", "https://h/o/r2"), decision_id=None),
+        ),
+        # A new registry added.
+        (
+            ProjectEgress(registries=("https://reg1.example.com",), remotes=(), decision_id=None),
+            ProjectEgress(registries=("https://reg1.example.com", "https://reg2.example.com"), remotes=(), decision_id=None),
+        ),
+        # Remote https://h/o/r replaced by https://h/o.
+        (
+            ProjectEgress(registries=(), remotes=("https://h/o/r",), decision_id=None),
+            ProjectEgress(registries=(), remotes=("https://h/o",), decision_id=None),
+        ),
+        # Remote scheme changed (e.g. http to https).
+        (
+            ProjectEgress(registries=(), remotes=("https://h/o/r",), decision_id=None),
+            ProjectEgress(registries=(), remotes=("http://h/o/r",), decision_id=None),
+        ),
+        # Remote port changed.
+        (
+            ProjectEgress(registries=(), remotes=("https://h/o/r",), decision_id=None),
+            ProjectEgress(registries=(), remotes=("https://h:8443/o/r",), decision_id=None),
+        ),
+        # Registry port changed.
+        (
+            ProjectEgress(registries=("https://reg.example.com",), remotes=(), decision_id=None),
+            ProjectEgress(registries=("https://reg.example.com:8443",), remotes=(), decision_id=None),
+        ),
+    ],
+)
+def test_egress_change_kind_widen(old: ProjectEgress, new: ProjectEgress) -> None:
+    assert egress_change_kind(old, new) == ChangeKind.widen
+
 
 
