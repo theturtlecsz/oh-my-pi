@@ -211,6 +211,38 @@ PASS. [Checkpoint](/home/thetu/.codex/workflows/economy/artifacts/full-programme
 R02/R04, shared R03, runners/evaluation and installed/native acceptance remain incomplete. No
 merge, push, migration, approval, live data or Q36 effect.
 
+## Architecture mandate — September 28, 2026 (specification)
+
+OMP is the durable execution platform behind the human-facing client; its commands become an internal/debug/expert interface. No OMP plumbing in normal use: Chris never types `/summary`, `/execute`, `/done`, `/intake`, `/plan` or other lifecycle commands. OMP owns machine execution; the client owns human interaction; the project/context system owns project knowledge.
+
+Principle: sophisticated inside, invisible outside.
+
+### Requirements
+
+1. Mission interface — Callers submit what should be accomplished as a structured mission, and that mission replaces command sequencing as the normal integration point.
+2. Automatic lifecycle — OMP validates, enriches, intakes, plans, executes, evaluates, repairs, verifies and persists a mission on its own, and the caller does not orchestrate those stages.
+3. Commands become internal operations — `/intake`, `/plan`, `/execute`, `/summary` and `/done` stay for debugging, development and expert control, and a submitted mission runs those stages without the caller naming them.
+4. OMP owns authoritative work state — Mission, operation, worker, lease, checkpoint, cancellation, retry, budget, usage, result, test, artifact and evidence state stays in OMP and is persisted outside the client's conversation memory.
+5. Durable execution — A submitted mission survives client restart, conversation loss, disconnect, worker failure, service restart, provider failure and network interruption, and it resumes from durable checkpoints with stable operation identities and no uncontrolled duplicate side effects.
+6. Capability layer — The client calls high-level operations such as project status, mission submit and research run, and OMP decides how each capability is implemented.
+7. Worker routing inside OMP — The client asks for an outcome such as engineering implementation, and OMP chooses provider, model, effort, concurrency, Best-of-N, maker/checker separation, retries and escalation.
+8. Context compilation — Given a project, a mission and the current request, OMP compiles bounded task-specific context from project sources, and the client is not assumed to supply the complete task context.
+9. Project as a first-class object — A project is a durable object, independent of any conversation or agent session, that owns its identity, purpose, goals, repositories, decisions, roadmap, missions, artifacts, evidence and history.
+10. Human-decision events — When execution cannot continue without the owner, OMP records a durable decision with the question, why it matters, the options, the evidence and the risk of each choice, and it resumes from saved state once the decision is answered.
+11. Events and notifications — OMP emits mission and decision events the client can follow, and the client does not infer what happened from raw worker logs.
+12. Internal machinery invisible by default — A normal response leads with outcome, current state, evidence, blockers, required decisions and artifacts, and worker identities, queues and operation identifiers stay available for diagnostics.
+13. Fewer persistent agent roles — Programme Design, Loop Auditor, Status Desk, Deep Research and other standing roles become a capability, evaluator, scheduled job, temporary worker, report or query unless persistence has a concrete architectural reason.
+14. Run Owner refactor — LLM reasoning proposes, deterministic control-plane software validates and authorizes, and Run Owner remains a role rather than a persistent LLM agent.
+15. Preserve advanced capabilities — Neurosymbolic intake, engineering capability, autonomous engineering, adaptive research, orchestration, routing, Best-of-N, context compilation, durable execution, evaluation and bounded workers stay, exposed as platform capabilities behind the mission interface.
+16. UX acceptance test — A plain request to resume a project, review its architecture, update the plan and implement the next safe milestone runs through resolve, context, research, planning, execution, evaluation and persistence, and stops only at a material approval boundary or an unrecoverable blocker, without Chris typing a lifecycle command.
+17. Recovery acceptance test — After the client disconnects, its conversation disappears and OMP services restart, the platform answers where the mission stands from durable state alone.
+18. Replacement acceptance test — A different client can list projects, retrieve context, submit missions, answer decisions, inspect progress and receive results, and replacing the client does not require rewriting the execution platform.
+19. Roadmap reconciliation — Every existing component is assigned a target responsibility, the authoritative state it owns, and a keep, refactor, collapse or delete outcome, together with the migration and its dependencies.
+
+Decisions: [ADR 0005](docs/adr/0005-mission-first-architecture.md).
+
+Status: Progress is in the Work Ledger under OMP-411.
+
 ## Programme decision amendment — September 18, 2026 (G1–G12)
 
 Owner responses in the programme-wide grill settle the following directions. G1 is explicitly provisional; G2–G12 are accepted policy directions with the qualifications below. These labels are interview references, not work IDs. They amend conflicting historical guidance only to the stated extent; all unaffected accepted requirements remain.
