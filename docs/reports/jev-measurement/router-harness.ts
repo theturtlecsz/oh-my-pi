@@ -226,8 +226,8 @@ export const GENERATION_RECORD_CONCURRENCY = 8;
 function withConcurrencyLimit(limit: number): <T>(task: () => Promise<T>) => Promise<T> {
 	let active = 0;
 	const waiting: Array<() => void> = [];
-	return task =>
-		new Promise<T>((resolve, reject) => {
+	return function run<T>(task: () => Promise<T>): Promise<T> {
+		return new Promise<T>((resolve, reject) => {
 			const start = () => {
 				active += 1;
 				Promise.resolve()
@@ -241,6 +241,7 @@ function withConcurrencyLimit(limit: number): <T>(task: () => Promise<T>) => Pro
 			if (active < limit) start();
 			else waiting.push(start);
 		});
+	};
 }
 
 /**
