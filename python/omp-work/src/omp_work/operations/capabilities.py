@@ -17,12 +17,21 @@ OWNER_SCOPES = (
     "work.approve",
     "work.close",
     "work.execute",
+    "work.stop",
 )
-# OMP-402: the automation principal keeps the owner's five scopes — flood writes
-# items and /execute appends evidence and runs execution commands. Intake
-# publication stays owner-only through the existing actor_kind check in the
-# store; finer per-command limits belong to OMP-403 (finding E0481).
-AUTOMATION_SCOPES = OWNER_SCOPES
+# OMP-402: the automation principal keeps the owner's original five scopes —
+# flood writes items and /execute appends evidence and runs execution
+# commands. Intake publication stays owner-only through the existing
+# actor_kind check in the store; finer per-command limits belong to OMP-403
+# (finding E0481). The stop scope is for the owner and grokbot only (OMP-405),
+# so this tuple is not an alias of OWNER_SCOPES.
+AUTOMATION_SCOPES = (
+    "work.read",
+    "work.mutate",
+    "work.approve",
+    "work.close",
+    "work.execute",
+)
 DEFAULT_BASE_URL = "http://127.0.0.1:54322"
 
 
