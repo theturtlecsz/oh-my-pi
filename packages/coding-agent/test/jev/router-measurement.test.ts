@@ -375,4 +375,134 @@ describe("Jev Router report runner", () => {
 		expect(results.sampleSizes).toEqual({ auto_thinking: 1, unexpected_stop: 1, robomp: 0 });
 		expect(await Bun.file(outPath).text()).toContain(OPENROUTER_JEV_ROUTER_MODEL);
 	});
+
+	it("takes the cost from a completion that reports usage.cost, without pricing tokens", async () => {
+		const transport = new FakeOpenRouterTransport({
+			reply: { text: "low", id: "gen-completion-cost", cost: 0.00038 },
+			// A record that reports a different cost: the completion's own charged
+			// cost wins, and the record only supplies the reasoning metadata.
+			generations: { "gen-completion-cost": { total_cost: 0.0009, reasoning: "high" } },
+		});
+		const { deps: routeDeps, entries } = deps(transport, {
+			generationRecords: true,
+			generationRecordWaitMs: 15_000,
+			generationRecordRetryDelayMs: 10,
+			sleep: async () => {},
+		});
+		await routeCompletion("classify", routeDeps);
+
+		expect(entries[0].costUsd).toBeCloseTo(0.00038, 8);
+		expect(entries[0].costSource).toBe("completion-usage");
+		expect(entries[0].routedReasoningEffort).toBe("high");
+
+		const harnessTransport = new FakeOpenRouterTransport({ reply: { text: "low", cost: 0.00038 } });
+		const { deps: harnessDeps } = deps(harnessTransport);
+		const metrics = await measureRouterEffort([{ prompt: "rename x", effort: "low" }], harnessDeps);
+		expect(metrics.costSource).toBe("completion-usage");
+		expect(metrics.costPer1000Usd).toBeCloseTo(0.38, 6);
+	});
+
+	it("falls back to cost_details.upstream_inference_cost when the completion reports no usage.cost", async () => {
+		const transport = new FakeOpenRouterTransport({
+			reply: { text: "low", upstreamInferenceCost: 0.00021 },
+		});
+		const { deps: routeDeps, entries } = deps(transport);
+		await routeCompletion("classify", routeDeps);
+
+		expect(entries[0].costUsd).toBeCloseTo(0.00021, 8);
+		expect(entries[0].costSource).toBe("completion-usage");
+	});
+
+	it("polls a generation record that 404s twice before it appears, then reads its cost and reasoning", async () => {
+		const transport = new FakeOpenRouterTransport({
+			reply: { text: "medium", id: "gen-late" },
+			generations: { "gen-late": { total_cost: 0.0005, model: "x-ai/grok-4", reasoning: "high" } },
+			generation404Count: 2,
+		});
+		const { deps: routeDeps, entries } = deps(transport, {
+			generationRecords: true,
+			generationRecordWaitMs: 15_000,
+			generationRecordRetryDelayMs: 10,
+			sleep: async () => {},
+		});
+		await routeCompletion("classify", routeDeps);
+
+		// Two 404s prove the reader backed off instead of giving up on the first read.
+		expect(transport.generationRequests).toEqual(["gen-late", "gen-late", "gen-late"]);
+		expect(entries[0].costUsd).toBeCloseTo(0.0005, 8);
+		expect(entries[0].costSource).toBe("generation-record");
+		expect(entries[0].routedReasoningEffort).toBe("high");
+		expect(entries[0].routedModel).toBe("x-ai/grok-4");
+	});
+
+	it("gives up on a generation record after the bounded wait and reports no cost", async () => {
+		const transport = new FakeOpenRouterTransport({
+			reply: { text: "low", id: "gen-never" },
+			generation404Count: 1000,
+		});
+		const { deps: routeDeps, entries } = deps(transport, {
+			generationRecords: true,
+			generationRecordWaitMs: 5,
+			generationRecordRetryDelayMs: 1,
+			sleep: async () => {},
+		});
+		const metrics = await measureRouterEffort([{ prompt: "rename x", effort: "low" }], routeDeps);
+
+		expect(entries[0].costUsd).toBeUndefined();
+		expect(entries[0].costSource).toBeUndefined();
+		expect(metrics.costPer1000Usd).toBeNull();
+		expect(metrics.costSource).toBe("unavailable");
+		// A bounded number of reads, not an unbounded poll.
+		expect(transport.generationRequests.length).toBeLessThan(20);
+	});
+
+	it("never reports a price it did not read: a costless run renders 'not measured', not zero", async () => {
+		const transport = new FakeOpenRouterTransport({ reply: { text: "low", routedModel: "openai/gpt-5-mini" } });
+		const outPath = path.join(tempDir.path(), "costless-report.md");
+		const results = await runRouter({
+			prompts: [{ prompt: "rename x", effort: "low" }],
+			turnEnds: [{ text: "I will act now", label: "continue" }],
+			apiKey: "sk-or-test-key",
+			fetch: transport.fetch,
+			outPath,
+		});
+
+		expect(results.features.auto_thinking_route.costPer1000Usd).toBeNull();
+		expect(results.features.auto_thinking_route.costSource).toBe("unavailable");
+		const report = await Bun.file(outPath).text();
+		expect(report).toContain("| Cost per 1000 calls ($) | not measured | not measured |");
+		expect(report).not.toContain("$0.0000");
+	});
+});
+
+describe("Jev Router scoring form", () => {
+	it("scores a router answer and a current-side answer equal to the dataset label as correct", async () => {
+		const transport = new FakeOpenRouterTransport({ reply: { text: "high" } });
+		const { deps: routeDeps } = deps(transport);
+		const results = await runRouterMeasurement({
+			prompts: [{ prompt: "rename x", effort: "HIGH" }],
+			apiKey: routeDeps.apiKey,
+			fetch: transport.fetch,
+			// The current side answers the same label in a different case; both
+			// sides normalize case before comparing, so neither is miscounted.
+			fakeCurrent: { classifyDifficulty: async () => ({ effort: "High" }) },
+		});
+
+		expect(results.features.auto_thinking_route.accuracy).toBe(1);
+		expect(results.current.auto_thinking?.accuracy).toBe(1);
+	});
+
+	it("scores a router answer that names a different label as incorrect, not unparseable", async () => {
+		const transport = new FakeOpenRouterTransport({ reply: { text: "low" } });
+		const { deps: routeDeps } = deps(transport);
+		const results = await runRouterMeasurement({
+			prompts: [{ prompt: "rename x", effort: "high" }],
+			apiKey: routeDeps.apiKey,
+			fetch: transport.fetch,
+		});
+
+		expect(results.features.auto_thinking_route.accuracy).toBe(0);
+		expect(results.features.auto_thinking_route.answerRate).toBe(1);
+		expect(results.features.auto_thinking_route.unparseableRate).toBe(0);
+	});
 });

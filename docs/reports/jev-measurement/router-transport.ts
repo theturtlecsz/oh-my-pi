@@ -40,6 +40,13 @@ export const ROUTER_ENV_FILE = "jev.env";
 
 export type RouterOutcome = "ok" | "http_error" | "network_error" | "timeout" | "malformed";
 
+/**
+ * Where a call's USD cost was read. `completion-usage` is the chat completion's
+ * own `usage.cost` (OpenRouter's charged cost); `generation-record` is the
+ * generation record's `total_cost`. Cost is never inferred from tokens.
+ */
+export type RouterCostSource = "completion-usage" | "generation-record";
+
 /** One terminal attempt, in the shape `JevUsageEntry` already has. */
 export interface RouterUsageEntry {
 	requestId: string;
@@ -58,15 +65,18 @@ export interface RouterUsageEntry {
 	routedModel?: string;
 	/**
 	 * Reasoning effort the router picked, read from the OpenRouter generation
-	 * record. `undefined` when the record was not fetched.
+	 * record. `undefined` when the record was not read.
 	 */
 	routedReasoningEffort?: string;
 	/**
-	 * Actual USD charged for this call, read from the OpenRouter generation
-	 * record (`total_cost`). `undefined` when the record was not fetched, in
-	 * which case cost is reported from tokens and the routed model's price.
+	 * Actual USD charged for this call. Read from the chat completion's own
+	 * `usage.cost`, or from the generation record's `total_cost` when the
+	 * completion carried none. `undefined` when neither surface reported a cost;
+	 * the harness then reports cost as not measured rather than pricing tokens.
 	 */
 	costUsd?: number;
+	/** Which surface `costUsd` came from. */
+	costSource?: RouterCostSource;
 }
 
 export class RouterTransportError extends Error {
@@ -87,18 +97,34 @@ export interface OpenRouterRouteDeps {
 	model?: string;
 	maxAttempts?: number;
 	/**
-	 * Fetch the OpenRouter generation record for a completed call, to read the
-	 * actual charged cost and the router's reasoning metadata. Off by default:
-	 * the owner slice enables it (one extra GET per call), and tests drive it
-	 * against the fake transport.
+	 * Read the OpenRouter generation record for a completed call, to read the
+	 * router's reasoning metadata and — when the completion carried no cost —
+	 * the charged cost. Off by default: the owner slice enables it (one GET per
+	 * call, retried while OpenRouter's record is still being written), and tests
+	 * drive it against the fake transport.
 	 */
 	generationRecords?: boolean;
+	/**
+	 * How long to keep polling a generation record that has not appeared yet.
+	 * OpenRouter answers 404 for roughly ten seconds after a completion, so the
+	 * reader backs off within this window instead of reading once and giving up.
+	 * Ignored when {@link generationRecords} is off.
+	 */
+	generationRecordWaitMs?: number;
+	/** Delay before the first generation-record retry. Doubles each attempt. */
+	generationRecordRetryDelayMs?: number;
+	/** Sleep seam for generation-record backoff; tests inject an instant one. */
+	sleep?: (ms: number) => Promise<void>;
 }
 
 /** Whole-call budget shared across attempts. */
 export const ROUTER_BUDGET_MS = 30_000;
 /** At most one retry per call. */
 export const ROUTER_MAX_ATTEMPTS = 2;
+/** Default wait for a generation record: OpenRouter needs ~10 s after a completion. */
+export const GENERATION_RECORD_WAIT_MS = 15_000;
+/** Default first retry delay for generation-record backoff. */
+export const GENERATION_RECORD_RETRY_DELAY_MS = 250;
 
 export interface RouterDecision {
 	text?: string;
@@ -179,6 +205,19 @@ function stringField(obj: unknown, key: string): string | undefined {
 	if (!obj || typeof obj !== "object") return undefined;
 	const value = (obj as Record<string, unknown>)[key];
 	return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * The USD OpenRouter charged for one completion, read from the response's own
+ * `usage`. `usage.cost` is the charged total; some responses report only
+ * `usage.cost_details.upstream_inference_cost`, which is read as a fallback.
+ * Returns `undefined` when neither is a finite number — a completion that
+ * reported no cost must stay unmeasured rather than be priced at zero.
+ */
+function completionCostUsd(usage: unknown): number | undefined {
+	const cost = numberField(usage, "cost");
+	if (cost !== undefined) return cost;
+	return numberField((usage as { cost_details?: unknown } | undefined)?.cost_details, "upstream_inference_cost");
 }
 
 /**
@@ -280,14 +319,33 @@ export async function routeCompletion(prompt: string, deps: OpenRouterRouteDeps)
 			completionTokens: numberField(usage, "completion_tokens"),
 			routedModel,
 		};
+		// The completion itself carries the charged cost; read it before the
+		// record, which OpenRouter writes asynchronously.
+		const completionCost = completionCostUsd(usage);
+		if (completionCost !== undefined) {
+			lastEntry.costUsd = completionCost;
+			lastEntry.costSource = "completion-usage";
+		}
 		deps.recordUsage(lastEntry);
 
 		if (outcome === "ok") {
 			if (deps.generationRecords && serverId) {
-				const record = await fetchGenerationRecord(serverId, deps);
+				// The record lags the completion, so give the reader the route's
+				// bounded wait instead of a single read that 404s on a fresh call.
+				const record = await fetchGenerationRecord(serverId, {
+					apiKey,
+					fetch: fetchImpl,
+					now,
+					generationRecordWaitMs: deps.generationRecordWaitMs ?? GENERATION_RECORD_WAIT_MS,
+					generationRecordRetryDelayMs: deps.generationRecordRetryDelayMs,
+					sleep: deps.sleep,
+				});
 				if (record) {
-					lastEntry.costUsd = record.totalCostUsd;
 					lastEntry.routedReasoningEffort = record.reasoning;
+					if (lastEntry.costUsd === undefined && record.totalCostUsd !== undefined) {
+						lastEntry.costUsd = record.totalCostUsd;
+						lastEntry.costSource = "generation-record";
+					}
 					if (record.model) {
 						lastEntry.routedModel = record.model;
 						routedModel = record.model;
@@ -340,32 +398,63 @@ export function parseYesNo(text: string): boolean | undefined {
 	return undefined;
 }
 
+/** A generation record's reasoning metadata and its charged cost, when present. */
+export interface GenerationRecord {
+	totalCostUsd?: number;
+	model?: string;
+	reasoning?: string;
+}
+
 /**
- * Read an OpenRouter generation record: the actual charged cost and the model
- * and reasoning effort the router picked. Returns `undefined` on any failure —
- * cost then falls back to tokens x price, and the report says so.
+ * Read an OpenRouter generation record: the model and reasoning effort the
+ * router picked, and the charged cost. OpenRouter writes the record several
+ * seconds after the completion answers (a fresh id 404s for ~10 s), so callers
+ * that need it pass {@link GENERATION_RECORD_WAIT_MS} and the read polls with
+ * exponential backoff until the record appears or the wait runs out. Returns
+ * `undefined` when the record never appeared; the caller then reports what it
+ * could not read.
  */
 export async function fetchGenerationRecord(
 	generationId: string,
-	deps: Pick<OpenRouterRouteDeps, "apiKey" | "fetch" | "now">,
-): Promise<{ totalCostUsd?: number; model?: string; reasoning?: string } | undefined> {
+	deps: Pick<
+		OpenRouterRouteDeps,
+		"apiKey" | "fetch" | "now" | "generationRecordWaitMs" | "generationRecordRetryDelayMs" | "sleep"
+	>,
+): Promise<GenerationRecord | undefined> {
 	const fetchImpl: FetchImpl = deps.fetch ?? globalThis.fetch;
 	const apiKey = deps.apiKey;
 	if (!apiKey || !generationId) return undefined;
-	try {
-		const response = await fetchImpl(`${OPENROUTER_BASE_URL}${OPENROUTER_GENERATION_PATH}?id=${generationId}`, {
-			method: "GET",
-			headers: { Authorization: `Bearer ${apiKey}` },
-		});
-		if (!response.ok) return undefined;
-		const json: unknown = await response.json();
-		const data = (json as { data?: unknown }).data ?? json;
-		return {
-			totalCostUsd: numberField(data, "total_cost"),
-			model: stringField(data, "model"),
-			reasoning: stringField(data, "reasoning"),
-		};
-	} catch {
-		return undefined;
+	const now = deps.now ?? Date.now;
+	const sleep = deps.sleep ?? Bun.sleep;
+	// No wait by default: a bare read is a single GET. The route path supplies
+	// GENERATION_RECORD_WAIT_MS, because that is where the publish delay bites.
+	const waitMs = deps.generationRecordWaitMs ?? 0;
+	const deadline = now() + waitMs;
+	let delayMs = deps.generationRecordRetryDelayMs ?? GENERATION_RECORD_RETRY_DELAY_MS;
+
+	for (;;) {
+		try {
+			const response = await fetchImpl(`${OPENROUTER_BASE_URL}${OPENROUTER_GENERATION_PATH}?id=${generationId}`, {
+				method: "GET",
+				headers: { Authorization: `Bearer ${apiKey}` },
+			});
+			if (response.ok) {
+				const json: unknown = await response.json();
+				const data = (json as { data?: unknown }).data ?? json;
+				return {
+					totalCostUsd: numberField(data, "total_cost"),
+					model: stringField(data, "model"),
+					reasoning: stringField(data, "reasoning"),
+				};
+			}
+			// 404 means the record is not written yet; any other status is
+			// terminal, so stop rather than wait out the whole window.
+			if (response.status !== 404) return undefined;
+		} catch {
+			return undefined;
+		}
+		if (now() + delayMs > deadline) return undefined;
+		await sleep(delayMs);
+		delayMs *= 2;
 	}
 }

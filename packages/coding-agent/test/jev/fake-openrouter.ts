@@ -21,6 +21,10 @@ export interface FakeRouterReply {
 	completionTokens?: number;
 	/** `id` used to look up the generation record. */
 	id?: string;
+	/** `usage.cost` OpenRouter reports on the completion (the charged total). */
+	cost?: number;
+	/** `usage.cost_details.upstream_inference_cost`, when a reply reports only that. */
+	upstreamInferenceCost?: number;
 }
 
 export interface RecordedRouterRequest {
@@ -38,6 +42,12 @@ export interface FakeOpenRouterOptions {
 	sequenceReply?: FakeRouterReply;
 	/** Generation-record payload keyed by generation id. */
 	generations?: Record<string, { total_cost?: number; model?: string; reasoning?: string }>;
+	/**
+	 * First N generation-record reads answer 404 even though the record exists,
+	 * modelling OpenRouter's publish delay (the record appears a few seconds
+	 * after the completion). Later reads return the record.
+	 */
+	generation404Count?: number;
 }
 
 export class FakeOpenRouterTransport {
@@ -48,6 +58,7 @@ export class FakeOpenRouterTransport {
 	#generations: Record<string, { total_cost?: number; model?: string; reasoning?: string }>;
 	#requests: RecordedRouterRequest[] = [];
 	#generationRequests: string[] = [];
+	#generation404Remaining: number;
 
 	constructor(options?: FakeOpenRouterOptions) {
 		this.#mode = options?.mode ?? "ok";
@@ -61,6 +72,7 @@ export class FakeOpenRouterTransport {
 		};
 		this.#sequenceReply = options?.sequenceReply ?? this.#reply;
 		this.#generations = options?.generations ?? {};
+		this.#generation404Remaining = options?.generation404Count ?? 0;
 	}
 
 	get requests(): readonly RecordedRouterRequest[] {
@@ -81,6 +93,12 @@ export class FakeOpenRouterTransport {
 			if (url.includes("/api/v1/generation")) {
 				const id = new URL(url).searchParams.get("id") ?? "";
 				this.#generationRequests.push(id);
+				// Model OpenRouter's publish delay: answer 404 for the first N
+				// reads even though the record will exist.
+				if (this.#generation404Remaining > 0) {
+					this.#generation404Remaining -= 1;
+					return new Response("not found", { status: 404 });
+				}
 				const record = this.#generations[id];
 				if (!record) return new Response("not found", { status: 404 });
 				return Response.json({ data: record });
@@ -126,15 +144,20 @@ export class FakeOpenRouterTransport {
 				}
 				default: {
 					const reply = this.#sequence ? this.#sequenceReply : this.#reply;
+					const usage: Record<string, unknown> = {
+						prompt_tokens: reply.promptTokens ?? 0,
+						completion_tokens: reply.completionTokens ?? 0,
+						total_tokens: (reply.promptTokens ?? 0) + (reply.completionTokens ?? 0),
+					};
+					if (reply.cost !== undefined) usage.cost = reply.cost;
+					if (reply.upstreamInferenceCost !== undefined) {
+						usage.cost_details = { upstream_inference_cost: reply.upstreamInferenceCost };
+					}
 					return Response.json({
 						id: reply.id ?? "gen-1",
 						model: reply.routedModel ?? "openai/gpt-5-mini",
 						choices: [{ message: { role: "assistant", content: reply.text ?? "medium" } }],
-						usage: {
-							prompt_tokens: reply.promptTokens ?? 0,
-							completion_tokens: reply.completionTokens ?? 0,
-							total_tokens: (reply.promptTokens ?? 0) + (reply.completionTokens ?? 0),
-						},
+						usage,
 					});
 				}
 			}

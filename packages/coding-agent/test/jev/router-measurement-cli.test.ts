@@ -49,7 +49,7 @@ describe("run-router CLI and current harness construction", () => {
 			id: "gen-fake-cli",
 			model: "typesafe/jev-router",
 			choices: [{ message: { content: "low" } }],
-			usage: { prompt_tokens: 50, completion_tokens: 2, total_tokens: 52 },
+			usage: { prompt_tokens: 50, completion_tokens: 2, total_tokens: 52, cost: 0.0001 },
 		}), { status: 200, headers: { "Content-Type": "application/json" } });
 	}
 	return new Response("{}", { status: 200 });

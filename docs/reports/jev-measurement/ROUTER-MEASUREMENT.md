@@ -22,9 +22,9 @@ Everything downstream of "probability" therefore does not survive the move. What
 
 **What Jev Router measures.** The routed label for "how much reasoning effort does this request need?", chosen from `low | medium | high | xhigh`, scored against the same dataset effort label the OMP-298 harness scores. With the generation record enabled, also the routed model and the routed reasoning effort the router picked for that request.
 
-**How.** One chat completion per prompt, pinned to `typesafe/jev-router`, with `docs/reports/jev-measurement/prompts/router-effort.md` as the instruction. The prompt is the dataset prompt. The routed model id is read from the response `model` field; the reasoning effort and actual cost are read from `GET /api/v1/generation?id=<response id>`. `parseFirstLabel(text, ROUTER_EFFORT_LABELS)` reads the first allowed label; anything else counts as unparseable.
+**How.** One chat completion per prompt, pinned to `typesafe/jev-router`, with `docs/reports/jev-measurement/prompts/router-effort.md` as the instruction. The prompt is the dataset prompt. The routed model id is read from the response `model` field; the charged cost is read from the response's own `usage.cost`, and the routed reasoning effort (plus the record's `total_cost` when the completion carried none) from `GET /api/v1/generation?id=<response id>`, polled with backoff because OpenRouter publishes the record several seconds after the completion. `parseFirstLabel(text, ROUTER_EFFORT_LABELS)` reads the first allowed label; anything else counts as unparseable.
 
-**Comparable metrics.** Effort accuracy vs the current smol classifier; p50/p95 latency; cost per 1000 calls from actual OpenRouter usage (`total_cost` on the generation record); the distribution of routed models and routed reasoning efforts.
+**Comparable metrics.** Effort accuracy vs the current smol classifier; p50/p95 latency; cost per 1000 calls from the charged cost OpenRouter reported (the completion's `usage.cost`, or `total_cost` on the generation record); the distribution of routed models and routed reasoning efforts.
 
 **Reported as not measured.** The typed API's Choice probabilities and the `no_repro` / `irreversible` / `live_cutover` Noul questions that combine into the `max` tier. The router answers the effort question only, so the `max`-tier composite is unmeasurable here.
 
@@ -52,7 +52,7 @@ Everything downstream of "probability" therefore does not survive the move. What
 
 - **Accuracy vs current.** Same datasets, same labels, same scoring; the current-side numbers come from the OMP-298 path (the configured classifier with the Jev decision path forced off), so the column comparison holds. The current side uses the model described in [Current-side smol model and harness resolution](#current-side-smol-model-and-harness-resolution).
 - **p50 / p95 latency.** Per-call wall time, measured the same way on both sides.
-- **Cost per 1000 calls.** Jev-side from actual OpenRouter usage (the generation record's `total_cost`); current-side from provider-reported completion usage. The report and `results.json` use the same cost-source label: `generation-record` or `tokens-x-catalogue-price` on the Jev side, and `provider-usage` on the current side when that side reported a non-zero completion cost (`unavailable` when it ran and reported none). A current-side cell is `not measured` only when that side did not run.
+- **Cost per 1000 calls.** Jev-side from the charged cost OpenRouter reported for each call: the completion's own `usage.cost` (`completion-usage`), or the generation record's `total_cost` (`generation-record`) when the completion carried none. The generation record is published several seconds after the completion, so `fetchGenerationRecord` polls it with backoff rather than reading once. The current side uses provider-reported completion usage (`provider-usage`). The report and `results.json` use those cost-source labels, and `unavailable` means the row ran and read no cost, in which case the cost cell is `not measured` — never a zero or a tokens-times-price estimate. A current-side cell is `not measured` only when that side did not run.
 
 ## Current-side smol model and harness resolution
 
@@ -108,7 +108,7 @@ bun docs/reports/jev-measurement/run-router.ts \
   --generation-records
 ```
 
-`--generation-records` adds one `GET /api/v1/generation` per call so the cost column is actual OpenRouter usage (and the routed reasoning effort lands in the report). Without it, cost falls back to tokens times the routed model's catalogue price and the cost-source column says so.
+`--generation-records` adds one `GET /api/v1/generation` per call (retried with backoff while OpenRouter is still writing the record) so the routed reasoning effort lands in the report and the cost column falls back to the record's `total_cost` when the completion carried none. Without it, cost comes only from the completion's own `usage.cost` and the routed reasoning effort is unavailable; a call whose cost was read from neither surface is reported as `not measured`, never as zero.
 
 Safeguards exercised by the run:
 
