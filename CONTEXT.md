@@ -165,3 +165,21 @@ _Avoid_: Completion receipt, silent deferral, status correction
 **Programme Baseline**:
 The finite accepted set of programme obligations, including their inherited criteria and necessary corrections, against which a goal's completion is judged. Explicit accepted amendments revise this baseline; discovered opportunities alone do not.
 _Avoid_: Row count, unlimited backlog, moving wish list
+
+### Mission Architecture
+
+**Mission**:
+A durable request to reach an objective in a project, with constraints, acceptance criteria, and budget, risk, and approval policies; OMP runs its lifecycle (intake, plan, execute, review, close) itself.
+_Avoid_: A sequence of commands the caller must issue
+
+**Decision record**:
+A durable question from OMP to the owner, with why it matters, the options and the risk of each, evidence, and any default; execution resumes from saved state once it is answered.
+_Avoid_: Asking in free chat
+
+**Client contract**:
+The one documented, versioned interface every client uses to list projects, read context and status, submit and cancel missions, answer decision records and follow events; no client gets its own path.
+_Avoid_: A client reading worker logs or internal tables
+
+**Capability layer**:
+The high-level operations offered through the client contract (project status, mission submit, research run); OMP decides how each one runs.
+_Avoid_: A client choosing providers, models or workers
