@@ -5439,6 +5439,7 @@
       "extensions": [
         "session-system/extensions/model-bookends.ts",
         "session-system/extensions/work-now.ts",
+        "session-system/extensions/workflow/agent-stop.ts",
         "session-system/extensions/workflow/audit-tcb.ts",
         "session-system/extensions/workflow/auditor-runner.ts",
         "session-system/extensions/workflow/backend.ts",

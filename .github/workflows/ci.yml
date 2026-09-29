@@ -292,6 +292,12 @@ jobs:
               # cache is warm, which is why main stayed green. Fetch first.
               cargo fetch --locked
               cargo deny --locked --offline check licenses sources
+         # OMP-451: a test reading a file that exists only on the dev host
+         # passed locally and failed on the runner.
+         - name: Guard tests against external absolute-path reads
+           run: |
+              bun test scripts/check-test-external-reads.test.ts
+              bun scripts/check-test-external-reads.ts
          - name: Type check workspace
            run: bun run ci:check:full
          - name: Build collab web
