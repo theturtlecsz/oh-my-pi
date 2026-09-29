@@ -882,4 +882,186 @@ def test_request_and_verdict_are_frozen() -> None:
         Verdict(True, "model", None, None).allowed = False  # type: ignore[misc]
 
 
+def _remote_policy(
+    *remotes: str,
+    decision_id: str | None = "dec-remote",
+    registries: tuple[str, ...] = (),
+    standing: tuple[StandingPolicy, ...] = (),
+) -> EgressPolicy:
+    return build_policy(
+        ProjectEgress(registries=registries, remotes=remotes, decision_id=decision_id),
+        standing,
+        "proxy.example.com:8443",
+    )
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "query"),
+    [
+        ("GET", "/o/r.git/info/refs", "service=git-upload-pack"),
+        ("HEAD", "/o/r/info/refs", ""),
+        ("POST", "/o/r.git/git-upload-pack", ""),
+        ("POST", "/o/r/git-upload-pack", ""),
+    ],
+)
+def test_decide_remote_allowed_operations(method: str, path: str, query: str) -> None:
+    policy = _remote_policy("https://git.example.com/o/r", decision_id="dec-remote")
+    verdict = decide(
+        policy,
+        _identity("repository"),
+        _req(method, host="git.example.com", path=path, query=query),
+        datetime.now(timezone.utc),
+    )
+    assert verdict == Verdict(True, "remote", None, "dec-remote")
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "tunnel"),
+    [
+        ("POST", "/o/r/x/git-upload-pack", False),
+        ("PUT", "/o/r", False),
+        ("DELETE", "/o/r/info/refs", False),
+        ("GET", "/o/r/info/refs", True),
+        ("POST", "/o/r/git-upload-pack", True),
+    ],
+)
+def test_decide_remote_method_and_tunnel_refused(method: str, path: str, tunnel: bool) -> None:
+    policy = _remote_policy("https://git.example.com/o/r", decision_id="dec-remote")
+    verdict = decide(
+        policy,
+        _identity("repository"),
+        _req(method, host="git.example.com", path=path, tunnel=tunnel),
+        datetime.now(timezone.utc),
+    )
+    assert verdict == Verdict(False, "remote", "method_not_allowed", "dec-remote")
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "query"),
+    [
+        ("GET", "/o/r/info/refs", "service=git-receive-pack"),
+        ("GET", "/o/r/info/refs", "SERVICE=GIT-RECEIVE-PACK"),
+        ("GET", "/o/r/info/refs", "service=Git-Receive-Pack"),
+        ("GET", "/o/r/info/refs", "other=1&service=git-receive-pack"),
+        ("POST", "/o/r.git/git-receive-pack", ""),
+        ("POST", "/o/r/git-receive-pack", ""),
+        ("POST", "/o/r/x/git-receive-pack", ""),
+    ],
+)
+def test_decide_remote_git_receive_pack_refused(method: str, path: str, query: str) -> None:
+    policy = _remote_policy("https://git.example.com/o/r", decision_id="dec-remote")
+    verdict = decide(
+        policy,
+        _identity("repository"),
+        _req(method, host="git.example.com", path=path, query=query),
+        datetime.now(timezone.utc),
+    )
+    assert verdict == Verdict(False, "remote", "git_receive_pack", "dec-remote")
+
+
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+def test_decide_remote_get_or_head_with_body_refused(method: str) -> None:
+    policy = _remote_policy("https://git.example.com/o/r", decision_id="dec-remote")
+    verdict = decide(
+        policy,
+        _identity("repository"),
+        _req(method, host="git.example.com", path="/o/r/info/refs", has_body=True),
+        datetime.now(timezone.utc),
+    )
+    assert verdict == Verdict(False, "remote", "request_body", "dec-remote")
+
+
+def test_decide_remote_post_upload_pack_with_body_allowed() -> None:
+    policy = _remote_policy("https://git.example.com/o/r", decision_id="dec-remote")
+    verdict = decide(
+        policy,
+        _identity("repository"),
+        _req("POST", host="git.example.com", path="/o/r/git-upload-pack", has_body=True),
+        datetime.now(timezone.utc),
+    )
+    assert verdict == Verdict(True, "remote", None, "dec-remote")
+
+
+@pytest.mark.parametrize(
+    ("scheme", "host", "port", "path"),
+    [
+        ("https", "git.example.com", None, "/o/r/../x"),
+        ("https", "git.example.com", None, "/o/r/%2e%2e/x"),
+        ("https", "git.example.com", None, "/o/r%252f..%252fx"),
+        ("https", "git.example.com", None, "/o/r/./x"),
+        ("https", "git.example.com", None, "/o/r/%2e/x"),
+        ("https", "git.example.com", None, "/o/r//x"),
+        ("https", "git.example.com", None, "/o/r/"),
+        ("https", "git.example.com", None, "/o/r\\x"),
+        ("https", "git.example.com", None, "/o/r%5cx"),
+        ("https", "git.example.com", None, "/o/r%255cx"),
+        ("https", "git.example.com", None, "/o/rx"),
+        ("https", "git.example.com", None, "/o/rx/git-upload-pack"),
+        ("https", "git.example.com", None, "/o/r.github"),
+        ("https", "git.example.com", 8443, "/o/r/info/refs"),
+        ("http", "git.example.com", None, "/o/r/info/refs"),
+        ("https", "other.example.com", None, "/o/r/info/refs"),
+    ],
+)
+def test_decide_remote_path_safety_and_mismatches_refused_destination_not_allowed(
+    scheme: str,
+    host: str,
+    port: int | None,
+    path: str,
+) -> None:
+    policy = _remote_policy("https://git.example.com/o/r", decision_id="dec-remote")
+    verdict = decide(
+        policy,
+        _identity("repository"),
+        _req("GET", scheme=scheme, host=host, port=port, path=path),
+        datetime.now(timezone.utc),
+    )
+    assert verdict == Verdict(False, "none", "destination_not_allowed", None)
+
+
+def test_decide_remote_host_normalization_and_nested_repos() -> None:
+    policy = _remote_policy(
+        "https://Git.Example.Com./o/r",
+        "https://git.example.com/o/r/nested",
+        decision_id="dec-remote",
+    )
+    now = datetime.now(timezone.utc)
+    verdict = decide(
+        policy,
+        _identity("repository"),
+        _req("GET", host="GIT.EXAMPLE.COM.", path="/o/r/info/refs"),
+        now,
+    )
+    assert verdict == Verdict(True, "remote", None, "dec-remote")
+
+    nested = decide(
+        policy,
+        _identity("repository"),
+        _req("POST", host="git.example.com", path="/o/r/nested/git-upload-pack"),
+        now,
+    )
+    assert nested == Verdict(True, "remote", None, "dec-remote")
+
+
+def test_decide_remote_http_scheme_remote() -> None:
+    policy = _remote_policy("http://git.local:8080/o/r", decision_id="dec-http")
+    now = datetime.now(timezone.utc)
+    allowed = decide(
+        policy,
+        _identity("repository"),
+        _req("GET", scheme="http", host="git.local", port=8080, path="/o/r/info/refs"),
+        now,
+    )
+    assert allowed == Verdict(True, "remote", None, "dec-http")
+
+    wrong_scheme = decide(
+        policy,
+        _identity("repository"),
+        _req("GET", scheme="https", host="git.local", port=8080, path="/o/r/info/refs"),
+        now,
+    )
+    assert wrong_scheme == Verdict(False, "none", "destination_not_allowed", None)
+
+
+
 
