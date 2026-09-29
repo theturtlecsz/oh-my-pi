@@ -34,7 +34,7 @@ An owner session that commits the approval itself produces the `owner step by ow
 bun scripts/commit-contract-approval.ts --issue <work-key> [--digest <sha256>]
 ```
 
-The helper stages `approval.json` and `packages/work-client/src/contract.ts` and commits them as author `flood-owner <flood@localhost>` with that subject marker, so a session commit passes the same check the flood-applied `owner step by flood` commit does. It never writes, rewrites, or regenerates the approval bytes — `omp-work approve` owns the file, and the helper only stages what that command already wrote. A bare `git commit` of the approval is rejected by CI; this helper is the required commit form.
+The helper stages `approval.json` and `packages/work-client/src/contract.ts` and commits them with author and committer `flood-owner <flood@localhost>` and that subject marker, so a session commit passes the same check the flood-applied `owner step by flood` commit does. The commit identity comes from the helper, not from the session's git config. It never writes, rewrites, or regenerates the approval bytes — `omp-work approve` owns the file, and the helper only stages what that command already wrote. A bare `git commit` of the approval is rejected by CI; this helper is the required commit form.
 
 Implementers never write `approval.json` or the `WORK_CONTRACT_SHA256` digest in `packages/work-client/src/contract.ts`, including when resolving a rebase conflict.
 

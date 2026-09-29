@@ -55,6 +55,32 @@ async function commitAll(dir: string, subject: string, author?: Author): Promise
 	return (await ok(dir, ["rev-parse", "HEAD"])).trim();
 }
 
+/** Run scripts/approval-provenance.ts against a temporary repo. */
+async function provenanceCli(
+	dir: string,
+	args: string[],
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+	const script = path.join(import.meta.dir, "approval-provenance.ts");
+	const proc = await $`bun ${script} ${args}`.cwd(dir).quiet().nothrow();
+	return { exitCode: proc.exitCode, stdout: proc.text(), stderr: proc.stderr.toString() };
+}
+
+/** Call `fn` with no global or system git config, then restore the parent env. */
+async function withoutGitConfig<T>(fn: () => Promise<T>): Promise<T> {
+	const savedGlobal = process.env.GIT_CONFIG_GLOBAL;
+	const savedSystem = process.env.GIT_CONFIG_SYSTEM;
+	process.env.GIT_CONFIG_GLOBAL = "/dev/null";
+	process.env.GIT_CONFIG_SYSTEM = "/dev/null";
+	try {
+		return await fn();
+	} finally {
+		if (savedGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+		else process.env.GIT_CONFIG_GLOBAL = savedGlobal;
+		if (savedSystem === undefined) delete process.env.GIT_CONFIG_SYSTEM;
+		else process.env.GIT_CONFIG_SYSTEM = savedSystem;
+	}
+}
+
 afterEach(async () => {
 	while (dirs.length) await fs.rm(dirs.pop() as string, { recursive: true, force: true });
 });
@@ -71,18 +97,27 @@ describe("commitContractApproval", () => {
 		await ok(dir, ["reset", "--hard", base]);
 
 		await Bun.write(path.join(dir, APPROVAL_PATH), "attestation B\n");
-		const sha = await commitContractApproval({ cwd: dir, issue: "OMP-452" });
+		// No git identity is configured. The helper has to supply author and committer itself.
+		const sha = await withoutGitConfig(() => commitContractApproval({ cwd: dir, issue: "OMP-452" }));
 
 		expect(sha).toBe((await ok(dir, ["rev-parse", "HEAD"])).trim());
-		const log = (await ok(dir, ["log", "-1", "--format=%an <%ae>%n%s"])).trim().split("\n");
+		const log = (await ok(dir, ["log", "-1", "--format=%an <%ae>%n%cn <%ce>%n%s"])).trim().split("\n");
 		expect(log[0]).toBe("flood-owner <flood@localhost>");
-		expect(log[1]).toContain("owner step by owner session");
-		expect(log[1]).toContain("OMP-452");
+		expect(log[1]).toBe("flood-owner <flood@localhost>");
+		expect(log[2]).toContain("owner step by owner session");
+		expect(log[2]).toContain("OMP-452");
 
 		expect(await checkApprovalProvenance({ cwd: dir, base })).toEqual([]);
+		const accepted = await provenanceCli(dir, ["--base", base]);
+		expect(accepted.exitCode).toBe(0);
+		expect(accepted.stdout).toBe("");
 
 		const otherViolations = await checkApprovalProvenance({ cwd: dir, base: base, head: other });
 		expect(otherViolations.map(v => v.subject)).toEqual(["tweak approval"]);
+		const rejected = await provenanceCli(dir, ["--base", base, "--head", other]);
+		expect(rejected.exitCode).toBe(1);
+		expect(rejected.stdout).toContain("someone-else");
+		expect(rejected.stdout).toContain("tweak approval");
 	});
 
 	test("verifies a supplied digest against the approval file and stages only the approval paths", async () => {

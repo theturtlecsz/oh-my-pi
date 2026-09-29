@@ -8,8 +8,9 @@
 // session authors the commit as the session user with an ordinary subject, which
 // the provenance check rejects (this is exactly how OMP-405's owner-session
 // commit broke a batch). This helper stages the approval artifacts and writes
-// the sanctioned commit instead: the `flood-owner` author and the
-// `owner step by owner session` subject marker.
+// the sanctioned commit instead: author and committer are `flood-owner`, so the
+// commit does not depend on the session's git identity, and the subject carries
+// the `owner step by owner session` marker.
 //
 // It never mints or rewrites the approval bytes — `omp-work approve` owns that
 // file. The helper only stages what is already on disk and commits it.
@@ -37,6 +38,14 @@ export interface ContractApprovalCommitOptions {
 
 /** Paths the approval commit stages; other working-tree changes stay untouched. */
 export const APPROVAL_COMMIT_PATHS = [APPROVAL_PATH, CONTRACT_PATH] as const;
+
+/** Author and committer for the approval commit. Git requires both, and the provenance check reads the author. */
+const APPROVAL_GIT_IDENTITY = {
+	GIT_AUTHOR_NAME: APPROVAL_AUTHOR,
+	GIT_AUTHOR_EMAIL: APPROVAL_AUTHOR_EMAIL,
+	GIT_COMMITTER_NAME: APPROVAL_AUTHOR,
+	GIT_COMMITTER_EMAIL: APPROVAL_AUTHOR_EMAIL,
+} as const;
 
 export class ContractApprovalError extends Error {}
 
@@ -85,11 +94,7 @@ export async function commitContractApproval(options: ContractApprovalCommitOpti
 	const subject = digest
 		? `chore(contract): owner step by owner session — approve v1 digest ${digest} (${issue})`
 		: `chore(contract): owner step by owner session — approve the v1 contract (${issue})`;
-	await git(
-		cwd,
-		["commit", "-m", subject, "--", ...APPROVAL_COMMIT_PATHS],
-		{ GIT_AUTHOR_NAME: APPROVAL_AUTHOR, GIT_AUTHOR_EMAIL: APPROVAL_AUTHOR_EMAIL },
-	);
+	await git(cwd, ["commit", "-m", subject, "--", ...APPROVAL_COMMIT_PATHS], { ...APPROVAL_GIT_IDENTITY });
 	return (await git(cwd, ["rev-parse", "HEAD"])).trim();
 }
 

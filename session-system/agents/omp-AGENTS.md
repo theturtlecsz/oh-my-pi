@@ -114,9 +114,10 @@ Three-part rule:
    future contract change) lands only when Chris approves the exact staged
    `contract_sha256`; approval.json is his attestation and is never minted
    from chat scope. A session that commits that approval itself uses
-   `bun scripts/commit-contract-approval.ts --issue <key>` so the commit is
-   authored `flood-owner` with the `owner step by owner session` marker;
-   `bun scripts/approval-provenance.ts` rejects any other author or subject.
+   `bun scripts/commit-contract-approval.ts --issue <key>` so the commit's
+   author and committer are `flood-owner` and the subject carries
+   `owner step by owner session`. `bun scripts/approval-provenance.ts` rejects
+   any other author, and a subject that carries none of the owner markers.
 
 ## Autonomous execution authority (/execute, owner ruling 2026-08-28)
 
