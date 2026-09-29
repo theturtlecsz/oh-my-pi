@@ -15,10 +15,15 @@ from omp_work.egress_policy import (
     Identity,
     MemoryRecorder,
     ProjectEgress,
+    Request,
+    Verdict,
     blocked_address,
     build_policy,
+    decide,
+    egress_change_kind,
     research_refusal,
 )
+from omp_work.standing_change import ChangeKind
 from omp_work.standing_policy import StandingPolicy
 
 
@@ -441,5 +446,440 @@ def test_egress_policy_holds_only_normalized_origins() -> None:
     assert policy.remotes == frozenset()
     assert policy.standing == ()
     assert policy.decision_id is None
+
+
+def test_egress_change_kind_old_none() -> None:
+    new = ProjectEgress(
+        registries=("https://reg.example.com",),
+        remotes=("https://github.com/org/repo",),
+        decision_id="dec-1",
+    )
+    assert egress_change_kind(None, new) == ChangeKind.create
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        # Identical records.
+        (
+            ProjectEgress(registries=("https://reg.example.com",), remotes=("https://h/o/r",), decision_id="d1"),
+            ProjectEgress(registries=("https://reg.example.com",), remotes=("https://h/o/r",), decision_id="d1"),
+        ),
+        # One remote dropped.
+        (
+            ProjectEgress(registries=(), remotes=("https://h/o/r1", "https://h/o/r2"), decision_id=None),
+            ProjectEgress(registries=(), remotes=("https://h/o/r1",), decision_id=None),
+        ),
+        # One registry dropped.
+        (
+            ProjectEgress(registries=("https://reg1.example.com", "https://reg2.example.com"), remotes=(), decision_id=None),
+            ProjectEgress(registries=("https://reg1.example.com",), remotes=(), decision_id=None),
+        ),
+        # Normalized origin equivalence ("HTTPS://Reg.example.com:443" vs "https://reg.example.com").
+        (
+            ProjectEgress(registries=("HTTPS://Reg.example.com:443",), remotes=(), decision_id=None),
+            ProjectEgress(registries=("https://reg.example.com",), remotes=(), decision_id=None),
+        ),
+        # Adding only an ssh:// remote (grants nothing and is dropped).
+        (
+            ProjectEgress(registries=(), remotes=("https://h/o/r",), decision_id=None),
+            ProjectEgress(registries=(), remotes=("https://h/o/r", "ssh://git@h/o/r"), decision_id=None),
+        ),
+        # Adding only a non-https registry (grants nothing and is dropped).
+        (
+            ProjectEgress(registries=("https://reg.example.com",), remotes=(), decision_id=None),
+            ProjectEgress(registries=("https://reg.example.com", "http://unencrypted.com"), remotes=(), decision_id=None),
+        ),
+        # Decision ID change is not compared.
+        (
+            ProjectEgress(registries=(), remotes=(), decision_id="old-dec"),
+            ProjectEgress(registries=(), remotes=(), decision_id="new-dec"),
+        ),
+    ],
+)
+def test_egress_change_kind_narrow(old: ProjectEgress, new: ProjectEgress) -> None:
+    assert egress_change_kind(old, new) == ChangeKind.narrow
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        # A new remote added.
+        (
+            ProjectEgress(registries=(), remotes=("https://h/o/r1",), decision_id=None),
+            ProjectEgress(registries=(), remotes=("https://h/o/r1", "https://h/o/r2"), decision_id=None),
+        ),
+        # A new registry added.
+        (
+            ProjectEgress(registries=("https://reg1.example.com",), remotes=(), decision_id=None),
+            ProjectEgress(registries=("https://reg1.example.com", "https://reg2.example.com"), remotes=(), decision_id=None),
+        ),
+        # Remote https://h/o/r replaced by https://h/o.
+        (
+            ProjectEgress(registries=(), remotes=("https://h/o/r",), decision_id=None),
+            ProjectEgress(registries=(), remotes=("https://h/o",), decision_id=None),
+        ),
+        # Remote scheme changed (e.g. http to https).
+        (
+            ProjectEgress(registries=(), remotes=("https://h/o/r",), decision_id=None),
+            ProjectEgress(registries=(), remotes=("http://h/o/r",), decision_id=None),
+        ),
+        # Remote port changed.
+        (
+            ProjectEgress(registries=(), remotes=("https://h/o/r",), decision_id=None),
+            ProjectEgress(registries=(), remotes=("https://h:8443/o/r",), decision_id=None),
+        ),
+        # Registry port changed.
+        (
+            ProjectEgress(registries=("https://reg.example.com",), remotes=(), decision_id=None),
+            ProjectEgress(registries=("https://reg.example.com:8443",), remotes=(), decision_id=None),
+        ),
+    ],
+)
+def test_egress_change_kind_widen(old: ProjectEgress, new: ProjectEgress) -> None:
+    assert egress_change_kind(old, new) == ChangeKind.widen
+
+
+def _req(
+    method: str = "GET",
+    *,
+    scheme: str = "https",
+    host: str = "example.com",
+    port: int | None = None,
+    path: str = "/",
+    query: str = "",
+    headers: dict[str, str] | None = None,
+    has_body: bool = False,
+    tunnel: bool = False,
+) -> Request:
+    return Request(
+        scheme=scheme,
+        host=host,
+        port=port,
+        method=method,
+        path=path,
+        query=query,
+        headers={} if headers is None else headers,
+        has_body=has_body,
+        tunnel=tunnel,
+    )
+
+
+def _identity(stage: str) -> Identity:
+    return Identity(
+        workspace_id="ws-1",
+        project_id="proj-1",
+        mission_id="m-1",
+        worker_id="w-1",
+        stage=stage,
+    )
+
+
+def _decide_policy(
+    *,
+    model_proxy: str = "proxy.example.com:8443",
+    registries: tuple[str, ...] = (),
+    standing: tuple[StandingPolicy, ...] = (),
+    decision_id: str | None = "dec-egress",
+) -> EgressPolicy:
+    return build_policy(
+        ProjectEgress(registries=registries, remotes=(), decision_id=decision_id),
+        standing,
+        model_proxy,
+    )
+
+
+@pytest.mark.parametrize("stage", ["repository", "research"])
+def test_decide_model_proxy_allowed_in_both_stages(stage: str) -> None:
+    policy = _decide_policy(model_proxy="proxy.example.com:8443")
+    verdict = decide(
+        policy,
+        _identity(stage),
+        _req("POST", host="proxy.example.com", port=8443, path="/v1/chat"),
+        datetime.now(timezone.utc),
+    )
+    assert verdict == Verdict(True, "model", None, None)
+
+
+def test_decide_model_proxy_other_port_refused() -> None:
+    policy = _decide_policy(model_proxy="proxy.example.com:8443")
+    verdict = decide(
+        policy,
+        _identity("repository"),
+        _req("POST", host="proxy.example.com", port=443, path="/v1/chat"),
+        datetime.now(timezone.utc),
+    )
+    assert verdict == Verdict(False, "none", "destination_not_allowed", None)
+
+
+def test_decide_research_clean_get_allowed() -> None:
+    policy = _decide_policy()
+    verdict = decide(
+        policy,
+        _identity("research"),
+        _req("GET", host="news.example.com", path="/feed"),
+        datetime.now(timezone.utc),
+    )
+    assert verdict == Verdict(True, "research", None, None)
+
+
+@pytest.mark.parametrize(
+    ("method", "tunnel"),
+    [
+        ("POST", False),
+        ("GET", True),
+    ],
+)
+def test_decide_research_method_and_tunnel_refused(method: str, tunnel: bool) -> None:
+    policy = _decide_policy()
+    verdict = decide(
+        policy,
+        _identity("research"),
+        _req(method, host="news.example.com", path="/feed", tunnel=tunnel),
+        datetime.now(timezone.utc),
+    )
+    assert verdict == Verdict(False, "research", "method_not_allowed", None)
+
+
+def test_decide_research_auth_header_refused() -> None:
+    policy = _decide_policy()
+    verdict = decide(
+        policy,
+        _identity("research"),
+        _req("GET", host="news.example.com", path="/feed", headers={"Authorization": "Bearer t"}),
+        datetime.now(timezone.utc),
+    )
+    assert verdict == Verdict(False, "research", "auth_header", None)
+
+
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+def test_decide_registry_reads_allowed_with_decision_id(method: str) -> None:
+    policy = _decide_policy(registries=("https://reg.example.com",), decision_id="dec-reg")
+    verdict = decide(
+        policy,
+        _identity("repository"),
+        _req(method, host="reg.example.com", path="/v2/lib"),
+        datetime.now(timezone.utc),
+    )
+    assert verdict == Verdict(True, "registry", None, "dec-reg")
+
+
+@pytest.mark.parametrize(
+    ("method", "tunnel"),
+    [
+        ("POST", False),
+        ("GET", True),
+    ],
+)
+def test_decide_registry_write_and_tunnel_refused(method: str, tunnel: bool) -> None:
+    policy = _decide_policy(registries=("https://reg.example.com",), decision_id="dec-reg")
+    verdict = decide(
+        policy,
+        _identity("repository"),
+        _req(method, host="reg.example.com", path="/v2/lib", tunnel=tunnel),
+        datetime.now(timezone.utc),
+    )
+    assert verdict == Verdict(False, "registry", "method_not_allowed", "dec-reg")
+
+
+def test_decide_registry_body_refused() -> None:
+    policy = _decide_policy(registries=("https://reg.example.com",), decision_id="dec-reg")
+    verdict = decide(
+        policy,
+        _identity("repository"),
+        _req("GET", host="reg.example.com", path="/v2/lib", has_body=True),
+        datetime.now(timezone.utc),
+    )
+    assert verdict == Verdict(False, "registry", "request_body", "dec-reg")
+
+
+@pytest.mark.parametrize(
+    ("scheme", "port"),
+    [
+        ("http", None),
+        ("https", 8443),
+    ],
+)
+def test_decide_registry_other_scheme_or_port_refused(scheme: str, port: int | None) -> None:
+    policy = _decide_policy(registries=("https://reg.example.com",), decision_id="dec-reg")
+    verdict = decide(
+        policy,
+        _identity("repository"),
+        _req("GET", scheme=scheme, host="reg.example.com", port=port, path="/v2/lib"),
+        datetime.now(timezone.utc),
+    )
+    assert verdict == Verdict(False, "none", "destination_not_allowed", None)
+
+
+def _net_standing(policy_id: str, destinations: tuple[str, ...]) -> StandingPolicy:
+    return StandingPolicy(
+        policy_id=policy_id,
+        action_class="network_access",
+        destinations=destinations,
+        decision_id="dec-1",
+    )
+
+
+def test_decide_standing_bare_host_grants_https_443_only() -> None:
+    policy = _decide_policy(standing=(_net_standing("pol-1", ("api.example.com",)),))
+    now = datetime.now(timezone.utc)
+
+    allowed = decide(
+        policy, _identity("repository"),
+        _req("POST", host="api.example.com", path="/v1/chat"), now,
+    )
+    assert allowed == Verdict(True, "standing", None, "pol-1")
+
+    http = decide(
+        policy, _identity("repository"),
+        _req("GET", scheme="http", host="api.example.com", path="/"), now,
+    )
+    assert http == Verdict(False, "none", "destination_not_allowed", None)
+
+    other_port = decide(
+        policy, _identity("repository"),
+        _req("GET", host="api.example.com", port=8443, path="/"), now,
+    )
+    assert other_port == Verdict(False, "none", "destination_not_allowed", None)
+
+
+@pytest.mark.parametrize(
+    ("destination", "scheme", "port"),
+    [
+        ("h:8443", "https", 8443),
+        ("http://h:8080", "http", 8080),
+    ],
+)
+def test_decide_standing_explicit_destination_bound(destination: str, scheme: str, port: int) -> None:
+    policy = _decide_policy(standing=(_net_standing("pol-1", (destination,)),))
+    now = datetime.now(timezone.utc)
+
+    allowed = decide(
+        policy, _identity("repository"),
+        _req("GET", scheme=scheme, host="h", port=port, path="/"), now,
+    )
+    assert allowed == Verdict(True, "standing", None, "pol-1")
+
+    wrong_scheme = "http" if scheme == "https" else "https"
+    denied = decide(
+        policy, _identity("repository"),
+        _req("GET", scheme=wrong_scheme, host="h", port=port, path="/"), now,
+    )
+    assert denied == Verdict(False, "none", "destination_not_allowed", None)
+
+
+@pytest.mark.parametrize(
+    "destination",
+    [
+        "https://h/p",
+        "https://h?x=1",
+        "https://u@h",
+        "ftp://h",
+    ],
+)
+def test_decide_standing_malformed_destination_grants_nothing(destination: str) -> None:
+    policy = _decide_policy(standing=(_net_standing("pol-1", (destination,)),))
+    verdict = decide(
+        policy, _identity("repository"),
+        _req("GET", host="h", path="/"), datetime.now(timezone.utc),
+    )
+    assert verdict == Verdict(False, "none", "destination_not_allowed", None)
+
+
+def test_decide_standing_expired_after_build_grants_nothing() -> None:
+    built_at = datetime.now(timezone.utc)
+    expiring = StandingPolicy(
+        policy_id="pol-old",
+        action_class="network_access",
+        destinations=("api.example.com",),
+        expires_at=built_at + timedelta(minutes=5),
+        decision_id="dec-1",
+    )
+    policy = build_policy(
+        ProjectEgress(registries=(), remotes=(), decision_id="dec-egress"),
+        [expiring],
+        "proxy.example.com:8443",
+    )
+    # Kept at build time, but expired by the time of the decision.
+    assert policy.standing == (expiring,)
+    verdict = decide(
+        policy, _identity("repository"),
+        _req("GET", host="api.example.com", path="/"),
+        built_at + timedelta(hours=1),
+    )
+    assert verdict == Verdict(False, "none", "destination_not_allowed", None)
+
+
+def test_decide_standing_host_case_and_trailing_dot_match() -> None:
+    policy = _decide_policy(standing=(_net_standing("pol-1", ("api.example.com",)),))
+    verdict = decide(
+        policy, _identity("repository"),
+        _req("GET", host="API.Example.com.", path="/"), datetime.now(timezone.utc),
+    )
+    assert verdict == Verdict(True, "standing", None, "pol-1")
+
+
+def test_decide_standing_grants_any_request_path_and_query() -> None:
+    policy = _decide_policy(standing=(_net_standing("pol-1", ("api.example.com",)),))
+    now = datetime.now(timezone.utc)
+    assert decide(
+        policy, _identity("repository"),
+        _req("POST", host="api.example.com", path="/v1/x"), now,
+    ) == Verdict(True, "standing", None, "pol-1")
+    assert decide(
+        policy, _identity("repository"),
+        _req("GET", host="api.example.com", path="/deep", query="a=1"), now,
+    ) == Verdict(True, "standing", None, "pol-1")
+
+
+@pytest.mark.parametrize(
+    ("destination", "host", "port"),
+    [
+        ("[2001:db8::1]", "2001:db8::1", None),
+        ("[::1]:8443", "[::1]", 8443),
+    ],
+)
+def test_decide_standing_bracketed_ipv6(destination: str, host: str, port: int | None) -> None:
+    policy = _decide_policy(standing=(_net_standing("pol-1", (destination,)),))
+    verdict = decide(
+        policy, _identity("repository"),
+        _req("GET", host=host, port=port, path="/v1/x"),
+        datetime.now(timezone.utc),
+    )
+    assert verdict == Verdict(True, "standing", None, "pol-1")
+
+
+def test_decide_standing_ip_literal_matches_only_itself() -> None:
+    policy = _decide_policy(standing=(_net_standing("pol-1", ("https://1.2.3.4",)),))
+    now = datetime.now(timezone.utc)
+    assert decide(
+        policy, _identity("repository"),
+        _req("GET", host="1.2.3.4", path="/"), now,
+    ) == Verdict(True, "standing", None, "pol-1")
+    assert decide(
+        policy, _identity("repository"),
+        _req("GET", host="1.2.3.5", path="/"), now,
+    ) == Verdict(False, "none", "destination_not_allowed", None)
+
+
+def test_decide_refusal_after_match_keeps_klass() -> None:
+    policy = _decide_policy(registries=("https://reg.example.com",), decision_id="dec-reg")
+    verdict = decide(
+        policy, _identity("repository"),
+        _req("POST", host="reg.example.com", path="/v2/lib"),
+        datetime.now(timezone.utc),
+    )
+    assert verdict.klass == "registry"
+    assert verdict.code == "method_not_allowed"
+    assert verdict.policy_id == "dec-reg"
+    assert verdict.allowed is False
+
+
+def test_request_and_verdict_are_frozen() -> None:
+    with pytest.raises(FrozenInstanceError):
+        _req().host = "other"  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        Verdict(True, "model", None, None).allowed = False  # type: ignore[misc]
+
 
 
