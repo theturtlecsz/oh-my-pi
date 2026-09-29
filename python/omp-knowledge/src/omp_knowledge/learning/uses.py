@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator, Sequence
+from collections.abc import Collection, Iterator, Sequence
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
@@ -159,6 +159,7 @@ def supply(
     work_key: str,
     context: dict[str, str] | None = None,
     limit: int = 3,
+    allowed: set[tuple[str, int]] | Collection[tuple[str, int]] | None = None,
 ) -> SupplyResult:
     """Reads procedures live from SQLite (status active, current_version).
     A version applies when every eq precondition matches the context and no ne precondition does.
@@ -189,6 +190,12 @@ def supply(
 
         matching: list[dict[str, Any]] = []
         for r in rows:
+            if allowed is not None:
+                pid = str(r["procedure_id"])
+                ver = int(r["current_version"])
+                if (pid, ver) not in allowed and (pid, str(ver)) not in allowed:
+                    continue
+
             try:
                 preconditions = json.loads(r["preconditions_json"])
             except Exception:

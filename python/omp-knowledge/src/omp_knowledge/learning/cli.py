@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from omp_work.v1.client import WorkClient
+from omp_work.v1.client import WorkClient, WorkError
 from pydantic import ValidationError
 
 from .capture import NativeEvents, NativeRecords, RunRecord, drain, retry
@@ -55,6 +55,7 @@ def _build_parser() -> argparse.ArgumentParser:
     supply_parser.add_argument("--project-id", default=None)
     supply_parser.add_argument("--cwd", default=".")
     supply_parser.add_argument("--limit", type=int, default=3)
+    supply_parser.add_argument("--promoted-only", action="store_true")
     supply_parser.add_argument("--json", action="store_true")
 
     use_parser = subcommands.add_parser("use")
@@ -115,6 +116,29 @@ def _build_parser() -> argparse.ArgumentParser:
         help="maximum pending cleanup rows processed in this run",
     )
     cleanup_parser.add_argument("--json", action="store_true")
+
+    request_parser = subcommands.add_parser("promotion-request")
+    request_parser.add_argument("--state-dir", required=True)
+    request_parser.add_argument("--workspace", default=None)
+    request_parser.add_argument("--project-id", default=None)
+    request_parser.add_argument("--json", action="store_true")
+
+    answer_parser = subcommands.add_parser("promotion-answer")
+    answer_parser.add_argument("--state-dir", required=True)
+    answer_parser.add_argument("--decision-id", required=True)
+    group = answer_parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--approve", action="store_true")
+    group.add_argument("--reject", action="store_true")
+    answer_parser.add_argument("--answer-ref", required=True)
+    answer_parser.add_argument("--json", action="store_true")
+
+    journey_parser = subcommands.add_parser("journey-check")
+    journey_parser.add_argument("--state-dir", required=True)
+    journey_parser.add_argument("--work-url", required=True)
+    journey_parser.add_argument("--bearer-file", required=True)
+    journey_parser.add_argument("--workspace", required=True)
+    journey_parser.add_argument("--work-key", required=True)
+    journey_parser.add_argument("--json", action="store_true")
 
     return parser
 
@@ -177,13 +201,14 @@ def main(
     generator: LessonGenerator | None = None,
     records: NativeRecords | None = None,
     target: CleanupTarget | None = None,
+    client: WorkClient | None = None,
 ) -> int:
     args = _build_parser().parse_args(argv)
 
     owned_store = store is None
+    owned_client = client is None
     active_store = store or LearningStore(args.state_dir)
 
-    client: WorkClient | None = None
     active_generator = generator
     try:
         if args.command in ("drain", "retry"):
@@ -237,12 +262,22 @@ def main(
             if repo_url:
                 context["repository"] = repo_url
 
+            if args.promoted_only:
+                from .promotion import get_promoted_procedures
+
+                allowed = get_promoted_procedures(
+                    active_store, workspace_id=args.workspace
+                )
+            else:
+                allowed = None
+
             result = supply(
                 active_store,
                 workspace_id=args.workspace,
                 work_key=args.work_key,
                 context=context,
                 limit=args.limit,
+                allowed=allowed,
             )
             if args.json:
                 print(json.dumps(list(result.lines), indent=2))
@@ -349,9 +384,108 @@ def main(
                     )
             return EXIT_OK if run.failed == 0 else EXIT_RUN_FAILED
 
+        if args.command == "promotion-request":
+            from .promotion import request_promotion
+
+            record = request_promotion(
+                active_store,
+                workspace_id=args.workspace or "default",
+                project_id=args.project_id,
+            )
+            if record is None:
+                if args.json:
+                    print(json.dumps(None))
+                else:
+                    print("No eligible procedures for promotion.")
+                return EXIT_OK
+
+            if args.json:
+                print(json.dumps(record, indent=2, sort_keys=True))
+            else:
+                print(
+                    f"PROMOTION REQUEST decision_id={record['decision_id']} "
+                    f"procedures={len(record['batch'])}"
+                )
+                for item in record["batch"]:
+                    print(
+                        f"  {item['procedure_id']}@v{item['version']}: {item['title']}"
+                    )
+            return EXIT_OK
+
+        if args.command == "promotion-answer":
+            from .promotion import answer_promotion
+
+            result = answer_promotion(
+                active_store,
+                decision_id=args.decision_id,
+                approve=args.approve,
+                answer_ref=args.answer_ref,
+            )
+            if args.json:
+                print(json.dumps(result, indent=2, sort_keys=True))
+            else:
+                print(
+                    f"PROMOTION ANSWER {args.decision_id} {result['status']} "
+                    f"ref={args.answer_ref}"
+                )
+            return EXIT_OK
+
+        if args.command == "journey-check":
+            if client is None:
+                client = WorkClient(
+                    args.work_url,
+                    UUID(str(args.workspace)),
+                    Path(args.bearer_file),
+                )
+
+            passed = False
+            work_id_str: str | None = None
+            try:
+                item = client.work_item(args.work_key)
+                if item.state.upper() == "DONE":
+                    work_id_str = str(item.work_id)
+                    res_data = client._get(f"/v1/work-items/{args.work_key}/research")
+                    campaigns = res_data.get("campaigns", [])
+                    if campaigns and any(c.get("state") == "concluded" for c in campaigns):
+                        with active_store.transaction() as conn:
+                            rows = conn.execute(
+                                """
+                                SELECT p.procedure_id, pr.source_json
+                                FROM procedures p
+                                JOIN proposals pr ON p.procedure_id = pr.procedure_id
+                                WHERE p.status = 'active'
+                                """
+                            ).fetchall()
+                            for r in rows:
+                                try:
+                                    src = json.loads(r["source_json"])
+                                except (json.JSONDecodeError, TypeError):
+                                    src = {}
+                                if isinstance(src, dict) and str(src.get("aggregate_id")) == work_id_str:
+                                    passed = True
+                                    break
+            except (WorkError, ValueError, KeyError, OSError, RuntimeError):
+                passed = False
+
+            if passed:
+                from .promotion import record_journey_pass
+
+                record_journey_pass(
+                    active_store,
+                    workspace_id=args.workspace,
+                    capability="research_to_learning",
+                    work_key=args.work_key,
+                    work_id=work_id_str,
+                )
+                print(json.dumps({"capability": "research_to_learning", "passed": True}))
+                return EXIT_OK
+            else:
+                print(json.dumps({"capability": "research_to_learning", "passed": False}))
+                return EXIT_RUN_FAILED
+
         raise SystemExit(2)
     finally:
-        if client is not None:
+        if client is not None and owned_client:
             client.close()
         if owned_store:
             active_store.close()
