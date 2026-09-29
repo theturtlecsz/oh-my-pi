@@ -10,10 +10,15 @@ type Call = { url: string; init?: RequestInit };
 
 function capture(body: unknown, status = 200) {
 	const calls: Call[] = [];
-	const client = new WorkClient(BASE, WORKSPACE, () => TOKEN, async (input, init) => {
-		calls.push({ url: String(input), init });
-		return Response.json(body, { status });
-	});
+	const client = new WorkClient(
+		BASE,
+		WORKSPACE,
+		() => TOKEN,
+		async (input, init) => {
+			calls.push({ url: String(input), init });
+			return Response.json(body, { status });
+		},
+	);
 	return { client, calls };
 }
 
