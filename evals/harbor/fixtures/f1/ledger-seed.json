@@ -1,4 +1,9 @@
 {
+  "project": {
+    "project_id": "00000000-0000-7000-8000-0000000000b1",
+    "name": "The Bookends",
+    "kind": "surface"
+  },
   "items": [
     {
       "key": "OMP-1",

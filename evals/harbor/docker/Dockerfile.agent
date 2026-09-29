@@ -44,9 +44,13 @@ RUN git config --global user.name "omp-harbor" \
 
 RUN bun install && bun add zod@3.25.76
 
+# .git is not in the build context. Commit the seeded tree, then point origin
+# at a local bare repo of that commit so /execute can fetch origin main with
+# no network remote. See docker/worker-origin.sh.
 RUN if [ ! -d .git ]; then \
         git init && git add -A && git commit -m "initial harbor worker tree"; \
-    fi
+    fi \
+    && sh /workspace/evals/harbor/docker/worker-origin.sh /workspace /opt/harbor/origin.git
 
 RUN printf '%s\n' \
         '#!/bin/sh' \
@@ -58,7 +62,7 @@ RUN HOME=/home/agent bash /workspace/session-system/install.sh --copy
 
 RUN printf 'The Bookends\n' > /workspace/.work-project
 
-RUN chown -R agent:agent /workspace /home/agent
+RUN chown -R agent:agent /workspace /home/agent /opt/harbor/origin.git
 
 USER agent
 

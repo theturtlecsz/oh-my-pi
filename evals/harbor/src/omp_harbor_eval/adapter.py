@@ -8,10 +8,11 @@ records the last probe failure on the outcome reason.
 Scripted UI rules answer ``select``, ``confirm``, ``input``, and ``editor``
 requests. A request with no rule is cancelled and the run ends ``blocked``.
 An outbound frame matching ``scenario.kill_at.match`` is SIGKILLed once and
-resumed with ``--session`` and no second prompt. An ``extension_error``, or
-any error event, before the first ``agent_start`` or ``turn_start`` ends the
-trial at once as ``harness_error`` with that error text, ahead of a crash
-restart. Every frame in both
+resumed with ``--session`` and no second prompt. An ``extension_error``, any
+error event, or an ``extension_ui_request`` notify whose ``notifyType`` is
+``error``, before the first ``agent_start`` or ``turn_start`` ends the trial
+at once as ``harness_error`` with that text, ahead of a crash restart. Every
+frame in both
 directions is logged to ``rpc-transcript.jsonl``; the grader's
 ``transcript.jsonl`` instead holds one semantic record per refused ``work``
 call. Optional ``session_reader``
@@ -125,6 +126,20 @@ def _inbound_error_text(frame: Mapping[str, Any], kind: str) -> str:
         if isinstance(value, str) and value.strip() != "":
             return value
     return kind
+
+
+def _notify_error_text(frame: Mapping[str, Any]) -> str | None:
+    """The text of a ``notify`` whose ``notifyType`` is ``error``, else None."""
+
+    if frame.get("method") != "notify" or frame.get("notifyType") != "error":
+        return None
+    message = frame.get("message")
+    if isinstance(message, str) and message.strip() != "":
+        return message
+    title = frame.get("title")
+    if isinstance(title, str) and title.strip() != "":
+        return title
+    return "notify"
 
 
 class _Transcript:
@@ -395,8 +410,9 @@ def _startup_log_path(reason: str) -> str | None:
 class RpcAdapter:
     """One scenario, one ``prompt``, then the authoritative service readback.
 
-    An error event before the first agent turn is the trial result: outcome
-    ``harness_error`` and the error text as the reason.
+    An error event, or a notify whose notifyType is error, before the first
+    agent turn is the trial result: outcome ``harness_error`` and that text
+    as the reason.
     """
 
     def __init__(
@@ -462,10 +478,14 @@ class RpcAdapter:
                 if ready_reason is not None:
                     reason = ready_reason
                 else:
-                    prompts_sent = 1
-                    self._send_prompt(client)
-                    outcome, reason, readback = self._after_prompt()
-                    client = self._client
+                    early = self._pre_turn_failure()
+                    if early is not None:
+                        outcome, reason, readback = early
+                    else:
+                        prompts_sent = 1
+                        self._send_prompt(client)
+                        outcome, reason, readback = self._after_prompt()
+                        client = self._client
         except Exception as exc:
             outcome = "harness_error"
             reason = str(exc) or type(exc).__name__
@@ -525,6 +545,9 @@ class RpcAdapter:
         deadline = time.monotonic() + self.ready_timeout_s
         reason = "service not ready"
         while True:
+            early = self._pre_turn_failure()
+            if early is not None:
+                return early[1]
             attempt = self._ready_attempt()
             if attempt is None:
                 return None
@@ -568,9 +591,14 @@ class RpcAdapter:
                 return
             if self._agent_turn_seen or self._early_error is not None:
                 return
-            if kind != "error" and not kind.endswith("_error"):
+            if kind == "extension_ui_request":
+                text = _notify_error_text(frame)
+                if text is None:
+                    return
+            elif kind != "error" and not kind.endswith("_error"):
                 return
-            text = _inbound_error_text(frame, kind)
+            else:
+                text = _inbound_error_text(frame, kind)
             self._early_error = text
         if text is not None:
             self._early_error_event.set()
