@@ -6,7 +6,22 @@ from uuid import UUID
 if TYPE_CHECKING:
     import psycopg
 
-from .models import CommandEnvelope
+from .models import Command, CommandEnvelope
+
+
+def allowed_while_stopped(command: Command) -> bool:
+    """OMP-405: the only commands an engaged workspace still accepts.
+
+    Stop control itself (so the owner can always release) and a grant's
+    pause/stop/cancel transitions (so a running agent halts instead of wedging).
+    Everything else is refused before any handler runs.
+    """
+    if command.type in {"engage_stop", "release_stop"}:
+        return True
+    return (
+        command.type == "set_execution_state"
+        and command.payload.target_state in {"paused", "stopped", "canceled"}
+    )
 
 
 def stop_result(envelope: CommandEnvelope) -> dict[str, object]:

@@ -67,7 +67,7 @@ from .models import (
 from omp_work.research.store import ResearchStoreMixin
 from .store_shared import WorkStoreError
 from .store_shared import row_json as _row_json
-from .agent_stop import read_stop_state, stop_result
+from .agent_stop import allowed_while_stopped, read_stop_state, stop_result
 from .semantics import (
     BOUNDED_INTAKE_RULE_BUNDLE_SHA256,
     bounded_intake_semantic_sha256,
@@ -555,6 +555,7 @@ class PostgresWorkStore(ResearchStoreMixin):
                         diagnostics=tuple(stored["diagnostics"]),
                     ), result
             if not conflict:
+                self._require_not_stopped(cur, envelope)
                 if command.type != "activate_cutover":
                     cur.execute(
                         "SELECT first_work_mutation_at, expected_first_request_id FROM omp_control.workspace_authority WHERE workspace_id=%s",
@@ -4299,6 +4300,25 @@ class PostgresWorkStore(ResearchStoreMixin):
         if expired is not None:
             raise WorkStoreError("execution_grant_stale", (
                 f"execution grant expired: {expired['grant_id']}; reconcile in-flight effects, then stop or cancel before new admission",
+            ))
+
+    def _require_not_stopped(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> None:
+        """OMP-405: an engaged stop refuses agent work until the owner releases.
+
+        Inside the command transaction, after replay of a stored operation has
+        returned (an operation applied before the stop keeps its receipt) and
+        before any handler runs. Stop control and a grant's pause/stop/cancel
+        transitions stay permitted; nothing is written for a refused command.
+        """
+        if allowed_while_stopped(envelope.command):
+            return
+        state = read_stop_state(cur, envelope.workspace_id)
+        if state["stopped"]:
+            raise WorkStoreError("agent_stop_engaged", (
+                f"agent stop engaged at {state['changed_at']}: {state['reason']}",
+                "only the owner can release it: omp-work stop release",
             ))
 
     def _begin_execution(
