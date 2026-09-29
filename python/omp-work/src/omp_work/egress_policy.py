@@ -19,7 +19,7 @@ and malformed or non-https/http entries are dropped.
 :func:`decide` evaluates a :class:`Request` against an :class:`EgressPolicy`
 and an :class:`Identity`, returning a :class:`Verdict`: the model proxy first,
 then the research stage, then standing destinations, then project registries,
-otherwise ``destination_not_allowed``.
+then project remotes, otherwise ``destination_not_allowed``.
 """
 
 from __future__ import annotations
@@ -547,6 +547,100 @@ def _standing_verdict(policy: EgressPolicy, req: Request, now: datetime) -> Verd
     return None
 
 
+def _safe_request_path(path: str, max_rounds: int = 16) -> str | None:
+    """Percent-decode path repeatedly until stable; refuse unsafe paths."""
+    current = path
+    for _ in range(max_rounds):
+        decoded = unquote(current)
+        if decoded == current:
+            break
+        current = decoded
+    else:
+        return None
+
+    if "\\" in current:
+        return None
+    if not current.startswith("/"):
+        return None
+    for segment in current[1:].split("/"):
+        if segment in ("", ".", ".."):
+            return None
+    return current
+
+
+def _path_matches_repo(path: str, repo: str) -> bool:
+    """Return True if path equals repo (with optional .git) or lies under it."""
+    if path == repo or path == f"{repo}.git":
+        return True
+    if path.startswith(f"{repo}/") or path.startswith(f"{repo}.git/"):
+        return True
+    return False
+
+
+def _has_git_receive_pack(query: str, path: str) -> bool:
+    """Return True if query requests git-receive-pack or path ends with /git-receive-pack."""
+    if path.lower().endswith("/git-receive-pack"):
+        return True
+    if not query:
+        return False
+    for k, v in parse_qsl(query.lstrip("?"), keep_blank_values=True):
+        if k.lower() == "service" and v.lower() == "git-receive-pack":
+            return True
+    return False
+
+
+def _remote_verdict(
+    policy: EgressPolicy,
+    req: Request,
+    scheme: str,
+    host: str,
+    port: int,
+    method: str,
+) -> Verdict | None:
+    """Evaluate matched remotes and apply read-only rules."""
+    candidates = [
+        r
+        for r in policy.remotes
+        if scheme == r[0] and host == r[1] and port == r[2]
+    ]
+    if not candidates:
+        return None
+
+    safe_path = _safe_request_path(req.path)
+    if safe_path is None:
+        return None
+
+    matching_remotes = [
+        r for r in candidates if _path_matches_repo(safe_path, r[3])
+    ]
+    if not matching_remotes:
+        return None
+
+    matching_remotes.sort(key=lambda r: len(r[3]), reverse=True)
+
+    # 1. query service=git-receive-pack (any case) or path ending /git-receive-pack
+    if _has_git_receive_pack(req.query, safe_path):
+        return Verdict(False, "remote", "git_receive_pack", policy.decision_id)
+
+    # 2. POST: allowed only when the path is exactly <repo>/git-upload-pack or <repo>.git/git-upload-pack
+    if method.upper() == "POST":
+        for _, _, _, repo in matching_remotes:
+            if safe_path in (f"{repo}/git-upload-pack", f"{repo}.git/git-upload-pack"):
+                return Verdict(True, "remote", None, policy.decision_id)
+        return Verdict(False, "remote", "method_not_allowed", policy.decision_id)
+
+    # 3. tunnel or any method other than GET/HEAD -> method_not_allowed
+    if req.tunnel or method.upper() not in {"GET", "HEAD"}:
+        return Verdict(False, "remote", "method_not_allowed", policy.decision_id)
+
+    # 4. GET/HEAD with body -> request_body
+    if req.has_body:
+        return Verdict(False, "remote", "request_body", policy.decision_id)
+
+    # 5. else allowed remote
+    return Verdict(True, "remote", None, policy.decision_id)
+
+
 def decide(
     policy: EgressPolicy,
     identity: Identity,
@@ -556,8 +650,8 @@ def decide(
     """Decide an egress request against a compiled policy.
 
     Ordered rules: the model proxy, then the research stage, then standing
-    destinations, then project registries, otherwise a refusal. A refusal
-    raised after a match keeps that match's class.
+    destinations, then project registries, then project remotes, otherwise a
+    refusal. A refusal raised after a match keeps that match's class.
     """
     scheme = req.scheme.lower()
     host = _norm_host(req.host)
@@ -583,6 +677,10 @@ def decide(
         if req.has_body:
             return Verdict(False, "registry", "request_body", policy.decision_id)
         return Verdict(True, "registry", None, policy.decision_id)
+
+    remote = _remote_verdict(policy, req, scheme, host, port, method)
+    if remote is not None:
+        return remote
 
     return Verdict(False, "none", "destination_not_allowed", None)
 
