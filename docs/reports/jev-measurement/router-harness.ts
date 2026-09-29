@@ -142,7 +142,12 @@ export interface RouterRouteDeps {
 	apiKey: string;
 	fetch: FetchImpl;
 	generationRecords?: boolean;
-	feature: string;
+	/**
+	 * Names the route in usage entries and abort errors. Callers that share the
+	 * OpenRouter transport deps (where this field is optional) may omit it;
+	 * those calls are recorded as `router_measurement`.
+	 */
+	feature?: string;
 	recordUsage?: (entry: RouterUsageEntry) => void;
 }
 
@@ -194,12 +199,13 @@ async function runRoute<T extends string>(
 	const entries: RouterUsageEntry[] = [];
 	const values: (string | undefined)[] = [];
 	const latencies: number[] = [];
+	const feature = deps.feature ?? "router_measurement";
 	for (const item of items) {
 		const started = performance.now();
 		const decision = await routeCompletion(item.prompt, {
 			apiKey: deps.apiKey,
 			fetch: deps.fetch,
-			feature: deps.feature,
+			feature,
 			generationRecords: deps.generationRecords,
 			recordUsage: entry => {
 				entries.push(entry);
@@ -210,7 +216,7 @@ async function runRoute<T extends string>(
 		const value = decision.text === undefined ? undefined : parse(decision.text);
 		values.push(value);
 	}
-	assertTransportHealthy(entries, deps.feature);
+	assertTransportHealthy(entries, feature);
 	return { entries, values, latencies };
 }
 
