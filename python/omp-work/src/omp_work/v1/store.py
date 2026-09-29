@@ -64,6 +64,7 @@ from .models import (
     RiderProof,
     SameSessionFoundFixedPayload,
 )
+from omp_work.project_store import ProjectStoreMixin
 from omp_work.research.store import ResearchStoreMixin
 from .store_shared import WorkStoreError
 from .store_shared import row_json as _row_json
@@ -389,7 +390,7 @@ def _intake_classifications(
     return {wid: classified[wid] for wid in target_ids if wid in classified}
 
 
-class PostgresWorkStore(ResearchStoreMixin):
+class PostgresWorkStore(ProjectStoreMixin, ResearchStoreMixin):
     def __init__(self, config: OperationsConfig) -> None:
         self._config = config
 
