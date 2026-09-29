@@ -14,7 +14,7 @@ import argparse
 import json
 import math
 import re
-import subprocess
+import subprocess  # nosec B404 - runs the fixed ("bash", "autoresearch.sh") argv; no shell
 import tempfile
 import time
 from collections.abc import Callable
@@ -327,7 +327,7 @@ class ResearchTrialHandler:
             (Path(workdir) / HARNESS_FILENAME).write_bytes(harness)
             started = time.monotonic()
             try:
-                completed = subprocess.run(
+                completed = subprocess.run(  # nosec B603 - constant argv ("bash", "autoresearch.sh"), no shell; harness bytes are hash-checked before write
                     list(HARNESS_COMMAND),
                     cwd=workdir,
                     capture_output=True,

@@ -193,7 +193,7 @@ def request_promotion(
         proc_ids = [item["procedure_id"] for item in batch]
         placeholders = ",".join("?" for _ in proc_ids)
         support_rows = conn.execute(
-            f"SELECT DISTINCT receipt_id FROM procedure_support WHERE procedure_id IN ({placeholders}) ORDER BY receipt_id ASC",
+            f"SELECT DISTINCT receipt_id FROM procedure_support WHERE procedure_id IN ({placeholders}) ORDER BY receipt_id ASC",  # nosec B608 - placeholders are only '?' bind markers; procedure ids are bound parameters
             proc_ids,
         ).fetchall()
         evidence_refs = [sr["receipt_id"] for sr in support_rows]

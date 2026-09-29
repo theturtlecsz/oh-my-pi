@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
+import subprocess  # nosec B404 - systemctl is invoked as an argv list; no shell
 import sys
 import time
 from collections.abc import Callable, Sequence
@@ -109,7 +109,7 @@ def _envelope(
 
 
 def _default_run_cmd(cmd: list[str]) -> int:
-    result = subprocess.run(cmd, capture_output=True)
+    result = subprocess.run(cmd, capture_output=True)  # nosec B603 - argv list, no shell; executable is the literal "systemctl" and the unit name is one argument
     return result.returncode
 
 
