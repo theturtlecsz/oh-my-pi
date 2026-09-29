@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
+import re
 import shutil
 import socket
 import tempfile
@@ -35,7 +37,21 @@ def _aws(config: OperationsConfig, arguments: list[str]) -> bytes:
 
 def _verify_uploaded(config: OperationsConfig, key: str, digest: str, size: int) -> None:
     try:
-        metadata = json.loads(_aws(config, ["s3api", "head-object", "--bucket", config.bucket, "--key", key]))
+        metadata = json.loads(
+            _aws(
+                config,
+                [
+                    "s3api",
+                    "head-object",
+                    "--bucket",
+                    config.bucket,
+                    "--key",
+                    key,
+                    "--output",
+                    "json",
+                ],
+            )
+        )
     except (json.JSONDecodeError, TypeError) as error:
         raise RuntimeError("backup object verification failed") from error
     if not isinstance(metadata, dict) or metadata.get("Metadata", {}).get("sha256") != digest or metadata.get("ContentLength") != size:
@@ -246,43 +262,88 @@ def create(config: OperationsConfig) -> str:
         shutil.rmtree(staging, ignore_errors=True)
 
 
+_SCRATCH_PATTERN = re.compile(r"^\..+\.[0-9a-fA-F]+\.gpg$")
+
+
 def upload_wal(config: OperationsConfig) -> int:
     spool = config.data_dir / "wal"
     started, began = datetime.now(UTC), time.monotonic()
     verified: list[Path] = []
+    errors: list[Exception] = []
     byte_count = 0
     prefix = f"{config.prefix}/wal/unknown"
+
+    config.state_dir.mkdir(parents=True, exist_ok=True)
+    lock_file = (config.state_dir / "wal_upload.lock").open("a+")
+    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
     try:
-        for segment in sorted(spool.iterdir()) if spool.exists() else []:
-            if not segment.is_file() or segment.suffix == ".gpg":
-                continue
-            # A crash's encrypted scratch file must not block a fresh retry.
-            encrypted = spool / f".{segment.name}.{uuid4().hex}.gpg"
+        try:
+            if spool.exists():
+                for item in spool.iterdir():
+                    if item.is_file() and _SCRATCH_PATTERN.match(item.name):
+                        item.unlink(missing_ok=True)
+
+            for segment in sorted(spool.iterdir()) if spool.exists() else []:
+                if not segment.is_file() or segment.suffix == ".gpg" or segment.name.startswith("."):
+                    continue
+                # A crash's encrypted scratch file must not block a fresh retry.
+                encrypted = spool / f".{segment.name}.{uuid4().hex}.gpg"
+                try:
+                    digest = encrypt_file(segment, encrypted, config.secret_path("gpg-passphrase"))
+                    key = f"{prefix}/{segment.name}.gpg"
+                    _aws(config, ["s3api", "put-object", "--bucket", config.bucket, "--key", key,
+                                  "--body", str(encrypted), "--metadata", f"sha256={digest}"])
+                    _verify_uploaded(config, key, digest, encrypted.stat().st_size)
+                    verified.append(segment)
+                    byte_count += segment.stat().st_size
+                except Exception as error:
+                    errors.append(error)
+                finally:
+                    encrypted.unlink(missing_ok=True)
+        except Exception as error:
+            errors.append(error)
+
+        if errors:
+            evidence_recorded = False
             try:
-                digest = encrypt_file(segment, encrypted, config.secret_path("gpg-passphrase"))
-                key = f"{prefix}/{segment.name}.gpg"
-                _aws(config, ["s3api", "put-object", "--bucket", config.bucket, "--key", key,
-                              "--body", str(encrypted), "--metadata", f"sha256={digest}"])
-                _verify_uploaded(config, key, digest, encrypted.stat().st_size)
-                verified.append(segment)
-                byte_count += segment.stat().st_size
-            finally:
-                encrypted.unlink(missing_ok=True)
+                _record_evidence(
+                    config,
+                    kind="wal_upload",
+                    started=started,
+                    backup_id=None,
+                    prefix=prefix,
+                    outcome="failed",
+                    duration=time.monotonic() - began,
+                    byte_count=byte_count,
+                )
+                evidence_recorded = True
+            except Exception:
+                pass
+            if evidence_recorded:
+                for segment in verified:
+                    segment.unlink()
+            raise errors[0]
+
         # Retain the local spool until both object checks and durable evidence succeed.
-        _record_evidence(config, kind="wal_upload", started=started, backup_id=None,
-                         prefix=prefix, outcome="passed" if verified else "idle",
-                         duration=time.monotonic() - began, byte_count=byte_count)
+        _record_evidence(
+            config,
+            kind="wal_upload",
+            started=started,
+            backup_id=None,
+            prefix=prefix,
+            outcome="passed" if verified else "idle",
+            duration=time.monotonic() - began,
+            byte_count=byte_count,
+        )
         for segment in verified:
             segment.unlink()
         return len(verified)
-    except Exception:
+    finally:
         try:
-            _record_evidence(config, kind="wal_upload", started=started, backup_id=None,
-                             prefix=prefix, outcome="failed", duration=time.monotonic() - began,
-                             byte_count=byte_count)
-        except Exception:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        except OSError:
             pass
-        raise
+        lock_file.close()
 
 
 def _free_port() -> int:

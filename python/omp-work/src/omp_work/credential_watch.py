@@ -60,21 +60,21 @@ def scan(roots: Iterable[Path]) -> dict[str, str]:
         try:
             entries = sorted(Path(root).iterdir())
         except OSError:
-            logger.debug("credential watch: unreadable root %s", root)
+            logger.debug("watch: unreadable root %s", root)
             continue
         for entry in entries:
             try:
                 if not entry.is_file():
                     continue
             except OSError:
-                logger.debug("credential watch: unreadable entry %s", entry)
+                logger.debug("watch: unreadable entry %s", entry)
                 continue
             if entry.name in IGNORED_NAMES:
                 continue
             try:
                 data = entry.read_bytes()
             except OSError:
-                logger.debug("credential watch: unreadable file %s", entry)
+                logger.debug("watch: unreadable file %s", entry)
                 continue
             if entry.name == AUTHORIZED_KEYS_NAME:
                 _scan_authorized_keys(str(entry), data, found)
