@@ -164,6 +164,9 @@ def stage_worker_environment(
     write_file(worker, f"{task.working_dir}/.work-project", b"The Bookends\n", docker=docker)
 
     install_script = (
+        f"if [ -d {shlex.quote(task.working_dir)}/node_modules ] && "
+        f"[ ! -e {shlex.quote(task.home)}/node_modules ]; then "
+        f"ln -sf {shlex.quote(task.working_dir)}/node_modules {shlex.quote(task.home)}/node_modules; fi && "
         f"if [ -f {shlex.quote(task.working_dir)}/session-system/install.sh ] && "
         f"[ ! -f {shlex.quote(task.home)}/.omp/agent/extensions/work-now.ts ]; then "
         f"HOME={shlex.quote(task.home)} bash {shlex.quote(task.working_dir)}/session-system/install.sh --copy; fi"

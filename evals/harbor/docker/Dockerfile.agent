@@ -61,7 +61,8 @@ RUN printf '%s\n' \
 RUN cp /workspace/evals/harbor/docker/worker-gh.sh /usr/local/bin/gh \
     && chmod +x /usr/local/bin/gh
 
-RUN HOME=/home/agent bash /workspace/session-system/install.sh --copy
+RUN HOME=/home/agent bash /workspace/session-system/install.sh --copy \
+    && ln -s /workspace/node_modules /home/agent/node_modules
 
 RUN printf 'The Bookends\n' > /workspace/.work-project
 
