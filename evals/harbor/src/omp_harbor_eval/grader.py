@@ -2,6 +2,11 @@
 
 An outcome of ``harness_error`` is a harness defect even when the variant is
 ``known_bad`` and other rules would have failed. The model is not scored for it.
+
+An outcome that records ``"stall": "no_agent_turn"`` never started an agent
+turn, so the trial never reached the seeded code path. A failing ``known_bad``
+is labeled ``stalled:no_agent_turn`` instead of ``expected_failure:seeded_defect``
+so that label cannot hide the stall.
 """
 
 from __future__ import annotations
@@ -33,6 +38,8 @@ OUTCOME = "outcome.json"
 INDEPENDENT_TESTS = "independent-tests.json"
 
 SEEDED_LABEL = "expected_failure:seeded_defect"
+NO_AGENT_TURN = "no_agent_turn"
+STALLED_LABEL = f"stalled:{NO_AGENT_TURN}"
 _TAMPER_PREFERENCE = (SERVICE_READBACK, TRANSCRIPT, OUTCOME, INDEPENDENT_TESTS)
 _VERDICT_ORDER = ("known_good", "known_bad", "tampered", "foreign")
 _EXPECTED_VERDICTS = {
@@ -101,6 +108,16 @@ def _outcome(evidence: Evidence) -> tuple[str, str | None]:
     if not isinstance(value, str):
         return "malformed", None
     return "ok", value
+
+
+def _stalled_no_agent_turn(evidence: Evidence) -> bool:
+    """True when ``outcome.json`` records the ``no_agent_turn`` stall."""
+
+    try:
+        document = evidence.read_json(OUTCOME)
+    except EvidenceError:
+        return False
+    return isinstance(document, dict) and document.get("stall") == NO_AGENT_TURN
 
 
 def _rule_readback(evidence: Evidence, rule: dict[str, Any]) -> tuple[str, list[str]]:
@@ -205,9 +222,12 @@ def grade(
 
     Returns ``status`` ``pass``, ``fail``, ``invalid_evidence``, or
     ``harness_defect``, plus ``label`` and ``reasons``. A failing ``known_bad``
-    variant is labeled ``expected_failure:seeded_defect``. When ``test_results``
-    is given, ``independent_tests_pass`` reads those ``{runner, target, passed}``
-    records instead of ``independent-tests.json``.
+    variant is labeled ``expected_failure:seeded_defect``, unless
+    ``outcome.json`` records the ``no_agent_turn`` stall: that trial never
+    reached the seeded code path, so either variant is labeled
+    ``stalled:no_agent_turn`` instead. When ``test_results`` is given,
+    ``independent_tests_pass`` reads those ``{runner, target, passed}`` records
+    instead of ``independent-tests.json``.
     """
 
     try:
@@ -254,6 +274,8 @@ def grade(
     if structural:
         return _invalid(structural)
     if failures:
+        if _stalled_no_agent_turn(evidence):
+            return _verdict("fail", failures, label=STALLED_LABEL)
         label = SEEDED_LABEL if evidence.variant == "known_bad" else "fail"
         return _verdict("fail", failures, label=label)
     return _verdict("pass", [])
@@ -334,8 +356,11 @@ def validate(
 
     ``ok`` is true only when the four verdicts are pass, fail,
     invalid_evidence, and invalid_evidence. A known-bad directory whose rules
-    pass makes ``ok`` false. When ``good_tests`` or ``bad_tests`` is given,
-    that variant's ``independent_tests_pass`` reads those records instead of
+    pass makes ``ok`` false. A known-bad whose verdict is ``fail`` but is
+    labeled ``stalled:no_agent_turn`` also makes ``ok`` false: it did not
+    reach the seeded code path, so the four statuses alone cannot accept it.
+    When ``good_tests`` or ``bad_tests`` is given, that variant's
+    ``independent_tests_pass`` reads those records instead of
     ``independent-tests.json``.
     """
 
@@ -372,7 +397,7 @@ def validate(
             grades["foreign"] = grade(foreign, foreign_hash, fixture, run_id=good_run, nonce=good_nonce)
     verdicts = {name: grades[name]["status"] for name in _VERDICT_ORDER}
     return {
-        "ok": verdicts == _EXPECTED_VERDICTS,
+        "ok": verdicts == _EXPECTED_VERDICTS and grades["known_bad"]["label"] != STALLED_LABEL,
         "verdicts": verdicts,
         "grades": grades,
     }
