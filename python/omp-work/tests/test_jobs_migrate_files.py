@@ -26,8 +26,8 @@ def test_jobs_migrations_returns_expected_files_in_ordinal_order() -> None:
 
 def test_main_migrations_ledger_intact_and_isolated_from_jobs_migrations() -> None:
     main_migs = database.migrations()
-    assert len(main_migs) == 29
-    assert [ordinal for ordinal, _ in main_migs] == list(range(1, 30))
+    assert len(main_migs) == 30
+    assert [ordinal for ordinal, _ in main_migs] == list(range(1, 31))
 
     jobs_names = {p.name for p in jobs_migrations()}
     assert jobs_names == {
