@@ -77,6 +77,12 @@ const ctx = {
 		setStatus: (_key: string, text: string) => statuses.push(text),
 		notify: () => {},
 	},
+	// The agent-stop gate's session_start handler arms its managed interval and may abort;
+	// keep the runner's context surface present.
+	isIdle: () => true,
+	abort: () => {},
+	setInterval: () => ({}),
+	clearTimer: () => {},
 } as unknown as ExtensionContext;
 
 const sessionStarts = ext.handlers.get("session_start") ?? [];

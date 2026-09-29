@@ -73,10 +73,16 @@ const uiCalls: string[] = [];
 
 if (mode === "legacy-host") {
 	// Old omp: ExtensionContext has no taskDepth. Fail closed — nothing may unlock.
+	// Managed timers predate taskDepth, so a real legacy ctx still has the timer/session
+	// surface; the gate's session_start handler uses it.
 	const bareCtx = {
 		models: undefined,
 		sessionManager: { getBranch: () => [] },
 		ui: { theme: { fg: (_c: string, t: string) => t }, setStatus: () => {}, notify: () => {} },
+		isIdle: () => true,
+		abort: () => {},
+		setInterval: () => ({}),
+		clearTimer: () => {},
 	} as unknown as ExtensionContext;
 	await ext.handlers.get("session_start")?.[0]?.({}, bareCtx);
 	await attempt("before", bareCtx);
