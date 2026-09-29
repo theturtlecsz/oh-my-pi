@@ -1,10 +1,15 @@
 """Drive one Harbor scenario over the normal RPC ``/execute`` path.
 
-``ServiceProbe`` reads loopback WorkService routes. ``RpcAdapter.run`` waits
-for a ready frame and a good ``get_state``, then polls the ready probe until
-it reports ready or a bounded deadline passes. It sends ``scenario.command``
-once and polls until the readback pointer is terminal. A deadline that passes
-records the last probe failure on the outcome reason.
+``ServiceProbe`` reads loopback WorkService routes. Every authenticated read
+sends ``X-OMP-Contract-SHA256`` set to the ``WORK_CONTRACT_SHA256`` literal in
+the generated TypeScript work client contract, the digest the worker's omp
+sends. ``RpcAdapter.run`` waits for a ready frame and a good ``get_state``,
+then polls the ready probe until it reports ready or a bounded deadline
+passes. It sends ``scenario.command`` once and polls until the readback
+pointer is terminal. A deadline that passes while the last read raised
+``ProbeError`` appends ``; last probe error: `` and that text to the outcome
+reason.
+
 Scripted UI rules answer ``select``, ``confirm``, ``input``, and ``editor``
 requests. A request with no rule is cancelled and the run ends ``blocked``.
 An outbound frame matching ``scenario.kill_at.match`` is SIGKILLed once and
@@ -18,11 +23,10 @@ startup. A readback that is already terminal, with the grant visible and no
 queued outbox, still takes that one restart. An ``extension_error``, any
 error event, or an ``extension_ui_request`` notify whose ``notifyType`` is
 ``error``, before the first ``agent_start`` or ``turn_start`` ends the trial
-at once as ``harness_error`` with that text, ahead of a crash restart. Every
-frame in both
+at once as ``harness_error`` with that text, ahead of a crash restart. Every frame in both
 directions is logged to ``rpc-transcript.jsonl``; the grader's
-``transcript.jsonl`` instead holds one semantic record per refused ``work``
-call. Optional ``session_reader``
+``transcript.jsonl`` is created for every trial (possibly empty) and holds one
+semantic record per refused ``work`` call. Optional ``session_reader``
 and ``before_seal`` hooks read the session log and augment evidence before
 sealing; hook exceptions record ``harness_error`` (or ``session_read_error`` if
 the run already failed with ``harness_error``). If reading the startup session
@@ -75,6 +79,10 @@ _WORK_TOOL = "work"
 _STARTUP_LOG_NAME = "omp-startup.log"
 # omp's startup watchdog prints `logs: ~/.omp/logs/omp.YYYY-MM-DD.<pid>.log`.
 _STARTUP_LOG_RE = re.compile(r"logs:\s+(\S*omp\.\d{4}-\d{2}-\d{2}\.\d+\.log)")
+# Published by `python -m omp_work hash` into the work client the worker omp loads.
+_WORK_CONTRACT_SHA256_RE = re.compile(r'export const WORK_CONTRACT_SHA256 = "([0-9a-f]{64})"')
+_ERROR_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_CONTRACT_HEADER = "X-OMP-Contract-SHA256"
 
 
 def kill_process_group(process: subprocess.Popen[str]) -> None:
@@ -171,6 +179,46 @@ class ProbeError(Exception):
     """A loopback WorkService read failed."""
 
 
+def generated_contract_sha256() -> str:
+    """Digest the TypeScript work client sends, from its generated contract."""
+
+    parents = Path(__file__).resolve().parents
+    if len(parents) <= 4:
+        raise ProbeError("generated work-client contract is outside this install")
+    path = parents[4] / "packages" / "work-client" / "src" / "contract.ts"
+    match = _WORK_CONTRACT_SHA256_RE.search(path.read_text(encoding="utf-8"))
+    if match is None:
+        raise ProbeError(f"generated contract has no WORK_CONTRACT_SHA256: {path}")
+    return match.group(1)
+
+
+def _error_code(body: Any) -> str | None:
+    parsed = body
+    if isinstance(body, (bytes, bytearray, str)):
+        try:
+            parsed = json.loads(body)
+        except (UnicodeError, json.JSONDecodeError):
+            return None
+    if not isinstance(parsed, dict):
+        return None
+    found: list[Any] = []
+    error = parsed.get("error")
+    if isinstance(error, dict):
+        found.append(error.get("code"))
+    found.append(parsed.get("code"))
+    for code in found:
+        if isinstance(code, str) and _ERROR_CODE_RE.fullmatch(code):
+            return code
+    return None
+
+
+def _status_failure(path: str, status: int, body: Any) -> ProbeError:
+    code = _error_code(body)
+    if code is None:
+        return ProbeError(f"{path} returned {status}")
+    return ProbeError(f"{path} returned {status} {code}")
+
+
 _TURN_TYPES = frozenset({"agent_start", "turn_start"})
 
 
@@ -200,10 +248,11 @@ class _Transcript:
     """Log every RPC frame, and derive the grader's semantic decision records.
 
     ``rpc-transcript.jsonl`` holds every frame in both directions. The grader
-    reads ``transcript.jsonl`` instead: for each ``work`` tool result the host
-    refused it appends one ``{"decision": <action>, "refused": true,
-    "expected_revision_id": <id or null>, "text": <tool text>}`` record, so
-    f1's ``transcript_count`` rule counts refusals, not frames.
+    reads ``transcript.jsonl`` instead: created for every trial (possibly empty),
+    for each ``work`` tool result the host refused it appends one
+    ``{"decision": <action>, "refused": true, "expected_revision_id": <id or null>,
+    "text": <tool text>}`` record, so f1's ``transcript_count`` rule counts
+    refusals, not frames.
     """
 
     def __init__(
@@ -216,6 +265,12 @@ class _Transcript:
         self._lock = threading.Lock()
         self._closed = False
         self._work_actions: dict[str, Any] = {}
+        with self._lock:
+            self._ensure_transcript_file()
+
+    def _ensure_transcript_file(self) -> None:
+        if not (self._evidence.directory / TRANSCRIPT).is_file():
+            self._evidence.add_file(TRANSCRIPT, b"")
 
     def write(self, direction: str, frame: Any) -> None:
         callback: Callable[[Any], None] | None = None
@@ -250,6 +305,7 @@ class _Transcript:
     def close(self) -> None:
         with self._lock:
             self._closed = True
+            self._ensure_transcript_file()
 
 
 def _tool_text(result: Any) -> str:
@@ -433,17 +489,23 @@ class ServiceProbe:
         work_item = self._get(f"/v1/work-items/{urllib.parse.quote(key, safe='')}", auth=True)
         return {"health": health, "execution": execution, "work_item": work_item}
 
-    def _get(self, path: str, *, auth: bool) -> dict[str, Any]:
+    def _request_headers(self, *, auth: bool) -> dict[str, str]:
         headers = {"Accept": "application/json"}
         if auth:
             headers["Authorization"] = f"Bearer {self.bearer}"
             headers["X-OMP-Workspace-ID"] = self.workspace_id
-        request = urllib.request.Request(self.base_url + path, headers=headers, method="GET")
+            headers[_CONTRACT_HEADER] = generated_contract_sha256()
+        return headers
+
+    def _get(self, path: str, *, auth: bool) -> dict[str, Any]:
+        request = urllib.request.Request(
+            self.base_url + path, headers=self._request_headers(auth=auth), method="GET"
+        )
         try:
             with _HTTP_OPENER.open(request, timeout=_HTTP_TIMEOUT_S) as response:
                 raw = response.read()
         except urllib.error.HTTPError as exc:
-            raise ProbeError(f"{path} returned {exc.code}") from exc
+            raise _status_failure(path, exc.code, exc.read()) from exc
         except urllib.error.URLError as exc:
             raise ProbeError(f"{path} unavailable: {exc.reason}") from exc
         try:
@@ -831,6 +893,7 @@ class RpcAdapter:
             self._deadline = time.monotonic() + self._timeout_s
         pointer = self.scenario.terminal.pointer
         accepted = self.scenario.terminal.accepted
+        last_probe_error: str | None = None
         while True:
             early = self._pre_turn_failure()
             if early is not None:
@@ -841,8 +904,11 @@ class RpcAdapter:
                 return self._restart_and_wait()
             try:
                 document = self.probe.read()
-            except ProbeError:
+            except ProbeError as exc:
                 document = None
+                last_probe_error = str(exc).strip() or type(exc).__name__
+            else:
+                last_probe_error = None
             if self._enqueue_ready(document):
                 self._fire_kill()
             if self._killed.is_set() and not self._restarted:
@@ -868,7 +934,10 @@ class RpcAdapter:
                     return outcome, "terminal", self._last
             remaining = self._deadline - time.monotonic()
             if remaining <= 0:
-                return "timeout", f"timed out after {self._timeout_s}s waiting for {pointer}", self._last
+                reason = f"timed out after {self._timeout_s}s waiting for {pointer}"
+                if last_probe_error:
+                    reason = f"{reason}; last probe error: {last_probe_error}"
+                return "timeout", reason, self._last
             self._early_error_event.wait(min(_POLL_INTERVAL_S, remaining))
 
     def _seal(
@@ -889,6 +958,8 @@ class RpcAdapter:
         try:
             self._capture_startup_log(reason)
             self.evidence.write_json(SERVICE_READBACK, readback if readback is not None else {})
+            if not (self.evidence.directory / TRANSCRIPT).is_file():
+                self.evidence.add_file(TRANSCRIPT, b"")
             session_document: dict[str, Any] = {"id": session_id, "file": session_file}
             if self._restarts:
                 session_document["restarts"] = list(self._restarts)

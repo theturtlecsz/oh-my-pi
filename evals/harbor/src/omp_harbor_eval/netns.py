@@ -2,12 +2,12 @@
 
 ``ExecProbe`` implements ``ServiceProbe`` by running ``SCRIPT`` (a stdlib
 urllib GET) through ``docker exec -i`` on the worker container, so the same
-loopback URL the worker sees is the one the host reads. The bearer and
-workspace headers travel on stdin, never in an argv. ``model_port`` extracts
-the port of a loopback model URL. ``start_model_sidecar`` writes the script to
-a staging volume and starts the scripted model in a container that shares the
-worker's network namespace, then polls ``GET /`` until the 404 the server
-returns for every non-chat path proves it is listening.
+loopback URL the worker sees is the one the host reads. The bearer,
+workspace, and contract-digest headers travel on stdin, never in an argv.
+``model_port`` extracts the port of a loopback model URL. ``start_model_sidecar``
+writes the script to a staging volume and starts the scripted model in a
+container that shares the worker's network namespace, then polls ``GET /``
+until the 404 the server returns for every non-chat path proves it is listening.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from . import docker_ops
-from .adapter import _LOOPBACK_HOSTS, ProbeError, ServiceProbe
+from .adapter import _LOOPBACK_HOSTS, ProbeError, ServiceProbe, _status_failure
 from .docker_ops import DockerError
 
 HARBOR_SRC = Path(__file__).resolve().parents[1]
@@ -89,16 +89,14 @@ class ExecProbe(ServiceProbe):
         self.docker = docker
 
     def _get(self, path: str, *, auth: bool) -> dict[str, Any]:
-        headers = {"Accept": "application/json"}
-        if auth:
-            headers["Authorization"] = f"Bearer {self.bearer}"
-            headers["X-OMP-Workspace-ID"] = self.workspace_id
         try:
-            status, body = _script_get(self.container, self.base_url + path, headers, self.docker)
+            status, body = _script_get(
+                self.container, self.base_url + path, self._request_headers(auth=auth), self.docker
+            )
         except DockerError as exc:
             raise ProbeError(f"{path} unavailable: {exc}") from exc
         if status != 200:
-            raise ProbeError(f"{path} returned {status}")
+            raise _status_failure(path, status, body)
         if not isinstance(body, dict):
             raise ProbeError(f"{path} was not a JSON object")
         return body

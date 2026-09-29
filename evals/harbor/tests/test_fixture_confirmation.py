@@ -192,3 +192,51 @@ def test_scripted_confirm_is_accepted_by_the_real_confirm_gate(tmp_path: Path) -
         accepted = handshake.confirm(resolved["confirmation_id"], params=resolved)
 
     assert accepted["approved"] is True
+
+
+def test_scripted_provider_fills_confirmation_ids_for_both_f1_confirm_steps(tmp_path: Path) -> None:
+    """The provider fills confirmation_id for amend confirm and stale retry confirm in turn."""
+    server = ScriptedModelServer(FIXTURE_DIR / "model-script.json", tmp_path / "requests.jsonl")
+
+    # Step 0: amend preview
+    p1 = server.respond(_chat([]))
+    assert p1.status == 200
+    assert "confirm" not in _frame_arguments(p1)
+
+    # Step 1: amend confirm (resolves to cf-aaaa11)
+    p1_tool_result = (
+        "CONFIRM REQUIRED — nothing written.\n\nModel wants to revise this work in place\n\n"
+        "confirmation_id: cf-aaaa11\n"
+    )
+    c1 = server.respond(
+        _chat([{"role": "tool", "tool_call_id": "revise-amend-preview", "content": p1_tool_result}])
+    )
+    assert c1.status == 200
+    assert _frame_arguments(c1)["confirmation_id"] == "cf-aaaa11"
+
+    # Step 2: stale retry preview
+    p2_tool_result = "OMP-1 revised to revision 2"
+    p2 = server.respond(
+        _chat([
+            {"role": "tool", "tool_call_id": "revise-amend-preview", "content": p1_tool_result},
+            {"role": "tool", "tool_call_id": "revise-amend-confirm", "content": p2_tool_result},
+        ])
+    )
+    assert p2.status == 200
+    assert "confirm" not in _frame_arguments(p2)
+
+    # Step 3: stale retry confirm (resolves to cf-bbbb22)
+    stale_tool_result = (
+        "CONFIRM REQUIRED — nothing written.\n\nModel wants to revise this work in place\n\n"
+        "confirmation_id: cf-bbbb22\n"
+    )
+    c2 = server.respond(
+        _chat([
+            {"role": "tool", "tool_call_id": "revise-amend-preview", "content": p1_tool_result},
+            {"role": "tool", "tool_call_id": "revise-amend-confirm", "content": p2_tool_result},
+            {"role": "tool", "tool_call_id": "revise-stale-retry", "content": stale_tool_result},
+        ])
+    )
+    assert c2.status == 200
+    assert _frame_arguments(c2)["confirmation_id"] == "cf-bbbb22"
+    assert _frame_arguments(c2)["confirm"] is True
