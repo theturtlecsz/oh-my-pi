@@ -127,6 +127,10 @@
       "types": "./src/autoresearch/tools/*.ts",
       "import": "./src/autoresearch/tools/*.ts"
     },
+    "./autoresearch/tournament/*": {
+      "types": "./src/autoresearch/tournament/*.ts",
+      "import": "./src/autoresearch/tournament/*.ts"
+    },
     "./capability": {
       "types": "./src/capability/index.ts",
       "import": "./src/capability/index.ts"
