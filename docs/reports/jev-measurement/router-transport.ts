@@ -115,6 +115,13 @@ export interface OpenRouterRouteDeps {
 	generationRecordRetryDelayMs?: number;
 	/** Sleep seam for generation-record backoff; tests inject an instant one. */
 	sleep?: (ms: number) => Promise<void>;
+	/**
+	 * Run the generation-record read off this call. The harness passes a
+	 * bounded pool and waits for every scheduled read before it reads cost or
+	 * reasoning off the usage entry. Absent, the read is awaited before this
+	 * function returns.
+	 */
+	scheduleGenerationRecord?: (read: () => Promise<void>) => void;
 }
 
 /** Whole-call budget shared across attempts. */
@@ -330,27 +337,31 @@ export async function routeCompletion(prompt: string, deps: OpenRouterRouteDeps)
 
 		if (outcome === "ok") {
 			if (deps.generationRecords && serverId) {
-				// The record lags the completion, so give the reader the route's
-				// bounded wait instead of a single read that 404s on a fresh call.
-				const record = await fetchGenerationRecord(serverId, {
-					apiKey,
-					fetch: fetchImpl,
-					now,
-					generationRecordWaitMs: deps.generationRecordWaitMs ?? GENERATION_RECORD_WAIT_MS,
-					generationRecordRetryDelayMs: deps.generationRecordRetryDelayMs,
-					sleep: deps.sleep,
-				});
-				if (record) {
-					lastEntry.routedReasoningEffort = record.reasoning;
-					if (lastEntry.costUsd === undefined && record.totalCostUsd !== undefined) {
-						lastEntry.costUsd = record.totalCostUsd;
-						lastEntry.costSource = "generation-record";
+				// The record lags the completion. A caller that schedules the read
+				// keeps that wait off this call; otherwise the read is awaited here.
+				const entry = lastEntry;
+				const readRecord = async () => {
+					const record = await fetchGenerationRecord(serverId, {
+						apiKey,
+						fetch: fetchImpl,
+						now,
+						generationRecordWaitMs: deps.generationRecordWaitMs ?? GENERATION_RECORD_WAIT_MS,
+						generationRecordRetryDelayMs: deps.generationRecordRetryDelayMs,
+						sleep: deps.sleep,
+					});
+					if (!record) return;
+					entry.routedReasoningEffort = record.reasoning;
+					if (entry.costUsd === undefined && record.totalCostUsd !== undefined) {
+						entry.costUsd = record.totalCostUsd;
+						entry.costSource = "generation-record";
 					}
 					if (record.model) {
-						lastEntry.routedModel = record.model;
+						entry.routedModel = record.model;
 						routedModel = record.model;
 					}
-				}
+				};
+				if (deps.scheduleGenerationRecord) deps.scheduleGenerationRecord(readRecord);
+				else await readRecord();
 			}
 			return { text, routedModel, usage, transport: lastEntry };
 		}
