@@ -63,7 +63,7 @@ Status is derived from each section row: `applied: <ref>` when the row carries a
 | L-FL-03 | [Flood](./flood.md) | none | open |
 | L-FL-04 | [Flood](./flood.md) | none | open |
 
-Tallies: 5 applied/decided — L-RT-05 applied (OMP-396-s02); decided OMP-404 (L-CB-01, L-CB-02, L-CB-04, L-FL-02) and OMP-402 (L-FL-01). 11 open — L-RT-01..04, L-RB-01..03, L-CB-03, L-FL-03, L-FL-04.
+Tallies: 6 applied/decided — L-RT-05 applied (OMP-396-s02); decided OMP-404 (L-CB-01, L-CB-02, L-CB-04, L-FL-02) and OMP-402 (L-FL-01). 10 open — L-RT-01..04, L-RB-01..03, L-CB-03, L-FL-03, L-FL-04.
 
 ## Ties to Q4
 

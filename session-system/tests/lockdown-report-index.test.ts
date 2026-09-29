@@ -274,7 +274,7 @@ describe("unattended lockdown report - robomp live probe", () => {
 	});
 
 	test("the quoted probe matches the recorded evidence file verbatim", () => {
-		if (!fs.existsSync(PROBE_PATH)) return;
+		expect(fs.existsSync(PROBE_PATH)).toBe(true);
 		const robomp = fs.readFileSync(path.join(REPORT_DIR, ROBOMP_DOC), "utf8");
 		const section = headingBody(robomp, "### Live probe (OMP-399-s05)");
 		const quoted = section.match(/```[^\n]*\n([\s\S]*?)```/);
