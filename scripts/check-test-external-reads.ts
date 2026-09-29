@@ -273,12 +273,7 @@ function collectBindings(tokens: Token[], dialect: Dialect): Map<string, string>
 				prev.value === ")" ||
 				prev.value === ":" ||
 				prev.line !== token.line;
-			if (
-				token.kind === "ident" &&
-				statementStart &&
-				tokens[i + 1]?.value === "=" &&
-				tokens[i + 2]?.value !== "="
-			) {
+			if (token.kind === "ident" && statementStart && tokens[i + 1]?.value === "=" && tokens[i + 2]?.value !== "=") {
 				name = token;
 				eq = i + 1;
 			}
