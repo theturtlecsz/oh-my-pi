@@ -36,6 +36,7 @@
 - Research artifact custody: content-addressed byte registration and verified reads, contained collection, source and dataset manifests with retention and project ACL, cache-versus-replicate accounting, and receipt manifest binding (OMP-323).
 - native research jobs on the shared omp_jobs substrate (worker handshake/drain, capability routing, leases, fencing, descendant cancellation, stable usage ids, outbox delivery, settled-trial gating) (OMP-324).
 - bot-filed new-scope work items are held from flood export until the owner approves them by answering their intake decision (answer_intake_decision); bot-filed follow-ups linked to approved work are not held; the tree read shows scope_class, intake_hold and intake_decision (OMP-407).
+- Per-stage provider, model, and effort from a written routing policy, with per-provider concurrency, retries, and automatic escalation within the item budget.
 
 ### Changed
 
@@ -45,6 +46,8 @@
 - Receipt storage now keeps the canonical caller payload body in `payload` with issuer/verdict/binding metadata in dedicated columns (migration 0008, additive).
 - Restored the app role's readiness-gate grants (migration 0009, additive): 0005's omp_control revocation broke `python -m omp_work serve` startup — the health gate needs `schema_migrations`/`runtime_compatibility`/`operations_evidence` reads and the `readiness_probe` upsert (including SELECT for the ON CONFLICT arbiter).
 - Contract approval moved to HOME-147 (`approval.json`); `work.omp.dev/v1` remains pre-cutover and non-authoritative until HOME-148.
+- Stage admission now refuses a policy-routed stage job whose effort is missing or invalid, before any store access or enqueue.
+- Research Best-of-N now scores each generated candidate by its harness metrics instead of a hardcoded number.
 
 ### Fixed
 
