@@ -15,6 +15,11 @@ and malformed or non-https/http entries are dropped.
 
 :func:`egress_change_kind` classifies changes between two egress records as
 ``create``, ``narrow``, or ``widen``.
+
+:func:`decide` evaluates a :class:`Request` against an :class:`EgressPolicy`
+and an :class:`Identity`, returning a :class:`Verdict`: the model proxy first,
+then the research stage, then standing destinations, then project registries,
+otherwise ``destination_not_allowed``.
 """
 
 from __future__ import annotations
@@ -36,9 +41,12 @@ __all__ = [
     "Identity",
     "MemoryRecorder",
     "ProjectEgress",
+    "Request",
     "Stage",
+    "Verdict",
     "blocked_address",
     "build_policy",
+    "decide",
     "egress_change_kind",
     "research_refusal",
 ]
@@ -220,6 +228,67 @@ def _parse_remote(value: object) -> tuple[str, str, int, str] | None:
     return (scheme, _norm_host(host), port or _DEFAULT_PORTS[scheme], path)
 
 
+def _parse_destination(value: object) -> tuple[str, str, int] | None:
+    """Return ``(scheme, host, port)`` for a standing destination, else ``None``.
+
+    Accepts ``https://h[:p]``, ``http://h[:p]``, ``h:p`` (https) and ``h``
+    (https, port 443). A path other than ``/``, a query, a fragment, or
+    userinfo at any position grants nothing, as does another scheme.
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or any(ch.isspace() for ch in text):
+        return None
+    if "//" in text:
+        parts = urlsplit(text)
+        scheme = parts.scheme.lower()
+        if scheme not in _HANDLED_SCHEMES:
+            return None
+        if parts.username is not None or parts.password is not None:
+            return None
+        if parts.query or parts.fragment or parts.path not in ("", "/"):
+            return None
+        try:
+            host = parts.hostname
+            port = parts.port
+        except ValueError:
+            return None
+        if not host:
+            return None
+        candidate = host
+        explicit_port = port
+    else:
+        scheme = "https"
+        if text.startswith("["):
+            end = text.find("]")
+            if end == -1:
+                return None
+            candidate = text[1:end]
+            rest = text[end + 1 :]
+            if not rest:
+                explicit_port = None
+            elif rest.startswith(":") and rest[1:].isdigit():
+                explicit_port = int(rest[1:])
+            else:
+                return None
+        elif ":" in text:
+            head, _, tail = text.rpartition(":")
+            if not tail.isdigit() or ":" in head or not head:
+                return None
+            candidate = head
+            explicit_port = int(tail)
+        else:
+            candidate = text
+            explicit_port = None
+        if ":" in candidate and not candidate.startswith("["):
+            return None
+    host = _norm_host(candidate)
+    if not host:
+        return None
+    return (scheme, host, explicit_port if explicit_port is not None else 443)
+
+
 def _is_expired(policy: StandingPolicy, now: datetime) -> bool:
     expires = policy.expires_at
     if expires is None:
@@ -342,6 +411,31 @@ class Identity:
     stage: Stage
 
 
+@dataclass(frozen=True)
+class Request:
+    """A normalized egress request to be decided against a policy."""
+
+    scheme: str
+    host: str
+    port: int | None
+    method: str
+    path: str
+    query: str
+    headers: Mapping[str, str] | Iterable[tuple[str, str]]
+    has_body: bool
+    tunnel: bool
+
+
+@dataclass(frozen=True)
+class Verdict:
+    """The outcome of an egress decision."""
+
+    allowed: bool
+    klass: Literal["model", "registry", "remote", "standing", "research", "none"]
+    code: str | None
+    policy_id: str | None
+
+
 _AUTH_HEADERS: frozenset[str] = frozenset(
     {"authorization", "proxy-authorization", "cookie"}
 )
@@ -427,4 +521,75 @@ class MemoryRecorder(EgressRecorder):
 
     def record(self, rec: EgressRecord) -> None:
         self.records.append(rec)
+
+
+def _request_port(req: Request) -> int:
+    if req.port is not None:
+        return req.port
+    return _DEFAULT_PORTS.get(req.scheme.lower(), 443)
+
+
+def _standing_verdict(policy: EgressPolicy, req: Request, now: datetime) -> Verdict | None:
+    host = _norm_host(req.host)
+    scheme = req.scheme.lower()
+    target = (scheme, host, _request_port(req))
+    if req.path not in ("", "/") or req.query:
+        return None
+    for entry in policy.standing:
+        if _is_expired(entry, now):
+            continue
+        for raw in entry.destinations:
+            if _parse_destination(raw) == target:
+                return Verdict(True, "standing", None, str(entry.policy_id))
+    return None
+
+
+def decide(
+    policy: EgressPolicy,
+    identity: Identity,
+    req: Request,
+    now: datetime,
+) -> Verdict:
+    """Decide an egress request against a compiled policy.
+
+    Ordered rules: the model proxy, then the research stage, then standing
+    destinations, then project registries, otherwise a refusal. A refusal
+    raised after a match keeps that match's class.
+    """
+    scheme = req.scheme.lower()
+    host = _norm_host(req.host)
+    port = _request_port(req)
+    method = "CONNECT" if req.tunnel else req.method
+
+    if (host, port) == policy.model_proxy:
+        return Verdict(True, "model", None, None)
+
+    if identity.stage == "research":
+        refusal = research_refusal(method, _request_url(req, scheme), req.headers, req.has_body)
+        if refusal is not None:
+            return Verdict(False, "research", refusal, None)
+        return Verdict(True, "research", None, None)
+
+    standing = _standing_verdict(policy, req, now)
+    if standing is not None:
+        return standing
+
+    if scheme == "https" and (host, port) in policy.registries:
+        if req.tunnel or method.upper() not in {"GET", "HEAD"}:
+            return Verdict(False, "registry", "method_not_allowed", policy.decision_id)
+        if req.has_body:
+            return Verdict(False, "registry", "request_body", policy.decision_id)
+        return Verdict(True, "registry", None, policy.decision_id)
+
+    return Verdict(False, "none", "destination_not_allowed", None)
+
+
+def _request_url(req: Request, scheme: str) -> str:
+    netloc = req.host
+    if req.port is not None:
+        netloc = f"{netloc}:{req.port}"
+    url = f"{scheme}://{netloc}{req.path}"
+    if req.query:
+        url = f"{url}?{req.query}"
+    return url
 
