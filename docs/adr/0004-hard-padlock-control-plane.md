@@ -33,8 +33,8 @@ Blast-radius paths (ACTIVE-POLICY, ledger, auth, economy workflows, deploy/relea
 In-process harnesses in this repository demonstrate the A/B slices; the `ACTIVE/PIVOT-*.md` records cited below are not in this repository.
 - A1 durability: [`durability_a1.py`](../../python/omp-work/src/omp_work/durability_a1.py) (in-memory, fixed zero-loss subset).
 - A2/A3 cockpit verbs: [`cockpit_verbs.py`](../../python/omp-work/src/omp_work/cockpit_verbs.py) (in-memory demo, not a Grok Bot integration).
-- B1 finding reuse ×2: [`knowledge_b1.py`](../../python/omp-work/src/omp_work/knowledge_b1.py).
-- B1 keyword demo: [`cognee_adapter.py`](../../python/omp-work/src/omp_work/cognee_adapter.py).
+- B1 finding reuse ×2: `knowledge_b1.py` — OMP-419 removed it from the product.
+- B1 keyword demo: `cognee_adapter.py` — OMP-419 removed it from the product.
 - Referenced but absent from this repository: `ACTIVE/PIVOT-HORIZON-A-PASS.md`, `ACTIVE/PIVOT-HORIZON-B-PASS.md`, `ACTIVE/PIVOT-DAY30-PASS.md`, `ACTIVE/FULL-PROGRAM-LOCK.json` (`lock-full-program-v1.1-20260920`).
 
 ## Soft leftovers (explicit — not padlocked yet)
