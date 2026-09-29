@@ -55,8 +55,8 @@ function formatNumber(value?: number, decimals = 1): string {
 	return value.toFixed(decimals);
 }
 
-function formatUsd(value?: number): string {
-	if (value === undefined || Number.isNaN(value)) return "$0.0000";
+function formatUsd(value?: number | null): string {
+	if (value === undefined || value === null || Number.isNaN(value)) return "not measured";
 	return `$${value.toFixed(4)}`;
 }
 
@@ -151,6 +151,12 @@ export interface RunRouterOptions {
 	fetch: FetchImpl;
 	outPath: string;
 	generationRecords?: boolean;
+	/** Bounded wait for a generation record that has not appeared yet. */
+	generationRecordWaitMs?: number;
+	/** First backoff delay for generation-record polling. */
+	generationRecordRetryDelayMs?: number;
+	/** Sleep seam for generation-record backoff; tests inject an instant one. */
+	sleep?: (ms: number) => Promise<void>;
 	templatePath?: string;
 	jsonPath?: string;
 	prompts?: RouterPromptItem[];
@@ -180,6 +186,9 @@ export async function runRouter(options: RunRouterOptions): Promise<RouterMeasur
 		apiKey: options.apiKey,
 		fetch: options.fetch,
 		generationRecords: options.generationRecords,
+		generationRecordWaitMs: options.generationRecordWaitMs,
+		generationRecordRetryDelayMs: options.generationRecordRetryDelayMs,
+		sleep: options.sleep,
 		current: options.current,
 		fakeCurrent: options.fakeCurrent,
 	});

@@ -108,13 +108,23 @@ export interface RouterRouteMetrics {
 	recall?: number;
 	p50LatencyMs: number;
 	p95LatencyMs: number;
-	costPer1000Usd: number;
 	/**
-	 * Where costPer1000Usd came from. Router rows use an OpenRouter generation
-	 * record or tokens times catalogue price. The current side uses the
-	 * provider-reported completion cost (`provider-usage`).
+	 * Cost of 1000 calls in USD: the mean of the calls that reported a cost,
+	 * times 1000. An unread call is left out of that mean, not counted as zero.
+	 * `null` when no call yielded a cost — the report renders it as not measured
+	 * rather than a fabricated zero. A current side that ran reports `0` when
+	 * the provider charged nothing; `null` there means that side did not run.
 	 */
-	costSource: "generation-record" | "tokens-x-catalogue-price" | "provider-usage" | "unavailable";
+	costPer1000Usd: number | null;
+	/**
+	 * Where costPer1000Usd came from. Router rows read the completion's own
+	 * `usage.cost` (`completion-usage`) or the OpenRouter generation record's
+	 * `total_cost` (`generation-record`); the current side reads the
+	 * provider-reported completion cost (`provider-usage`). `unavailable` means
+	 * the row ran and read no cost: a router row then has costPer1000Usd null,
+	 * and a current side that ran and was charged nothing has 0.
+	 */
+	costSource: "completion-usage" | "generation-record" | "provider-usage" | "unavailable";
 	/** Routed answers that carried no allowed label. There is no separate off-list bucket in router mode. */
 	unparseableRate: number;
 	transportFailureRate: number;
@@ -146,6 +156,12 @@ export interface RouterRouteDeps {
 	apiKey: string;
 	fetch: FetchImpl;
 	generationRecords?: boolean;
+	/** Bounded wait for a generation record that has not appeared yet. */
+	generationRecordWaitMs?: number;
+	/** First backoff delay for generation-record polling. */
+	generationRecordRetryDelayMs?: number;
+	/** Sleep seam for generation-record backoff; tests inject an instant one. */
+	sleep?: (ms: number) => Promise<void>;
 	/**
 	 * Names the route in usage entries and abort errors. Callers that share the
 	 * OpenRouter transport deps (where this field is optional) may omit it;
@@ -165,6 +181,12 @@ export interface RouterMeasurementOptions {
 	fetch: FetchImpl;
 	/** Read the OpenRouter generation record for each call (actual cost and routed reasoning). */
 	generationRecords?: boolean;
+	/** Bounded wait for a generation record that has not appeared yet. */
+	generationRecordWaitMs?: number;
+	/** First backoff delay for generation-record polling. */
+	generationRecordRetryDelayMs?: number;
+	/** Sleep seam for generation-record backoff; tests inject an instant one. */
+	sleep?: (ms: number) => Promise<void>;
 	/** Injected current-side settings/registry. Absent means the current side is not measured. */
 	current?: CurrentSmolHarness;
 	/** Test-only current-side handler, mirroring OMP-298's `--fake-smol`. */
@@ -177,9 +199,6 @@ export interface RouterCurrentHandler {
 	classifyDifficulty?: (prompt: string) => Promise<{ effort?: string; cost?: number; latencyMs?: number }>;
 	classifyUnexpectedStop?: (text: string) => Promise<{ unexpectedStop?: boolean; cost?: number; latencyMs?: number }>;
 }
-
-/** Per-call catalogue fallback price when no generation record was read. */
-export const ROUTER_FALLBACK_COST_PER_MTOK_USD = 0;
 
 function percentile(values: number[], p: number): number {
 	if (values.length === 0) return 0;
@@ -211,6 +230,9 @@ async function runRoute<T extends string>(
 			fetch: deps.fetch,
 			feature,
 			generationRecords: deps.generationRecords,
+			generationRecordWaitMs: deps.generationRecordWaitMs,
+			generationRecordRetryDelayMs: deps.generationRecordRetryDelayMs,
+			sleep: deps.sleep,
 			recordUsage: entry => {
 				entries.push(entry);
 				deps.recordUsage?.(entry);
@@ -237,26 +259,34 @@ function summarise(
 	const answered = call.values.filter(v => v !== undefined).length;
 	const routedModels: Record<string, number> = {};
 	const routedEffort: Record<string, number> = {};
-	let recordCost = 0;
-	let pricedCost = 0;
-	let pricedCalls = 0;
+	let measuredCost = 0;
+	let measuredCalls = 0;
+	// Which surface supplied the measured cost: the completion's own usage.cost,
+	// or the generation record. Only costs actually read are summed.
+	let fromCompletionUsage = false;
+	let fromGenerationRecord = false;
 	for (const entry of call.entries) {
 		if (entry.routedModel) routedModels[entry.routedModel] = (routedModels[entry.routedModel] ?? 0) + 1;
 		if (entry.routedReasoningEffort) {
 			routedEffort[entry.routedReasoningEffort] = (routedEffort[entry.routedReasoningEffort] ?? 0) + 1;
 		}
-		if (entry.costUsd !== undefined) {
-			recordCost += entry.costUsd;
-			pricedCalls += 1;
-		} else if (entry.promptTokens !== undefined || entry.completionTokens !== undefined) {
-			const tokens = (entry.promptTokens ?? 0) + (entry.completionTokens ?? 0);
-			pricedCost += (tokens * ROUTER_FALLBACK_COST_PER_MTOK_USD) / 1_000_000;
-			pricedCalls += 1;
-		}
+		if (entry.costUsd === undefined) continue;
+		measuredCost += entry.costUsd;
+		measuredCalls += 1;
+		if (entry.costSource === "completion-usage") fromCompletionUsage = true;
+		else fromGenerationRecord = true;
 	}
 	const costSource: RouterRouteMetrics["costSource"] =
-		recordCost > 0 ? "generation-record" : pricedCalls > 0 ? "tokens-x-catalogue-price" : "unavailable";
-	const costPer1000Usd = costSource === "generation-record" ? (recordCost / total) * 1000 : 0;
+		measuredCalls === 0
+			? "unavailable"
+			: fromCompletionUsage
+				? "completion-usage"
+				: fromGenerationRecord
+					? "generation-record"
+					: "unavailable";
+	// Mean of the calls that reported a cost. Dividing by the full sample would
+	// count every unread call as $0 inside an otherwise measured row.
+	const costPer1000Usd = measuredCalls === 0 ? null : (measuredCost / measuredCalls) * 1000;
 
 	return {
 		sampleSize: call.latencies.length,
@@ -445,6 +475,8 @@ async function measureCurrent(
 		recall,
 		p50LatencyMs: percentile(latencies, 0.5),
 		p95LatencyMs: percentile(latencies, 0.95),
+		// A side that ran and was charged nothing is a real zero. `null` is reserved
+		// for a side that did not run, which this function signals by returning null.
 		costPer1000Usd: (costTotal / total) * 1000,
 		costSource: costTotal > 0 ? "provider-usage" : "unavailable",
 		unparseableRate: unparseable / total,
@@ -479,7 +511,7 @@ function emptyRouteMetrics(sampleSize: number): RouterRouteMetrics {
 		accuracy: 0,
 		p50LatencyMs: 0,
 		p95LatencyMs: 0,
-		costPer1000Usd: 0,
+		costPer1000Usd: null,
 		costSource: "unavailable",
 		unparseableRate: 0,
 		transportFailureRate: 0,
@@ -497,6 +529,9 @@ export async function runRouterMeasurement(options: RouterMeasurementOptions): P
 		apiKey: options.apiKey,
 		fetch: options.fetch,
 		generationRecords: options.generationRecords,
+		generationRecordWaitMs: options.generationRecordWaitMs,
+		generationRecordRetryDelayMs: options.generationRecordRetryDelayMs,
+		sleep: options.sleep,
 		feature,
 	});
 

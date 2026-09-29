@@ -35,6 +35,7 @@
 - Research contracts for campaigns, trials, observations, deliverable bindings, lifecycle states, the action vocabulary, component identity, and compatibility manifests, with generated work-client bindings (OMP-322).
 - Research artifact custody: content-addressed byte registration and verified reads, contained collection, source and dataset manifests with retention and project ACL, cache-versus-replicate accounting, and receipt manifest binding (OMP-323).
 - native research jobs on the shared omp_jobs substrate (worker handshake/drain, capability routing, leases, fencing, descendant cancellation, stable usage ids, outbox delivery, settled-trial gating) (OMP-324).
+- bot-filed new-scope work items are held from flood export until the owner approves them by answering their intake decision (answer_intake_decision); bot-filed follow-ups linked to approved work are not held; the tree read shows scope_class, intake_hold and intake_decision (OMP-407).
 
 ### Changed
 

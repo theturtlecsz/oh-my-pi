@@ -12,6 +12,8 @@ import {
 } from "../../../../docs/reports/jev-measurement/router-harness";
 import {
 	fetchGenerationRecord,
+	GENERATION_RECORD_RETRY_DELAY_MS,
+	GENERATION_RECORD_WAIT_MS,
 	jevEnvPath,
 	makeOpenRouterFetch,
 	OPENROUTER_JEV_ROUTER_MODEL,
@@ -163,6 +165,64 @@ describe("Jev Router transport", () => {
 		expect(record).toBeUndefined();
 	});
 
+	it("reads a generation record that is still 404 at 10s by using the whole 15s wait", async () => {
+		// OpenRouter 404s a fresh id immediately and at ~3s, and answers ~10s
+		// after the completion. A clock that advances only when the reader
+		// sleeps is what shows the old 7.75s give-up: the record is absent
+		// until 10s, so a poll that stops early never sees it.
+		let clock = 0;
+		const fetchedAt: number[] = [];
+		const record = await fetchGenerationRecord("gen-slow", {
+			apiKey: "sk-or-test-key",
+			now: () => clock,
+			sleep: async ms => {
+				clock += ms;
+			},
+			generationRecordWaitMs: GENERATION_RECORD_WAIT_MS,
+			generationRecordRetryDelayMs: GENERATION_RECORD_RETRY_DELAY_MS,
+			fetch: async () => {
+				fetchedAt.push(clock);
+				if (clock < 10_000) return new Response("not found", { status: 404 });
+				return Response.json({
+					data: { total_cost: 0.00077, model: "x-ai/grok-4", reasoning: "high" },
+				});
+			},
+		});
+
+		expect(record?.totalCostUsd).toBeCloseTo(0.00077, 8);
+		expect(record?.reasoning).toBe("high");
+		expect(record?.model).toBe("x-ai/grok-4");
+		expect(fetchedAt.some(t => t < 10_000)).toBe(true);
+		expect(fetchedAt.some(t => t >= 10_000)).toBe(true);
+		// Past the 7.75s the doubling schedule used to abandon.
+		expect(Math.max(...fetchedAt)).toBeGreaterThan(7_750);
+		expect(clock).toBeGreaterThanOrEqual(10_000);
+		expect(clock).toBeLessThanOrEqual(GENERATION_RECORD_WAIT_MS);
+	});
+
+	it("waits out the full generation-record budget before giving up", async () => {
+		let clock = 0;
+		let gets = 0;
+		const record = await fetchGenerationRecord("gen-never", {
+			apiKey: "sk-or-test-key",
+			now: () => clock,
+			sleep: async ms => {
+				clock += ms;
+			},
+			generationRecordWaitMs: GENERATION_RECORD_WAIT_MS,
+			generationRecordRetryDelayMs: GENERATION_RECORD_RETRY_DELAY_MS,
+			fetch: async () => {
+				gets += 1;
+				return new Response("not found", { status: 404 });
+			},
+		});
+
+		expect(record).toBeUndefined();
+		expect(clock).toBe(GENERATION_RECORD_WAIT_MS);
+		expect(gets).toBeGreaterThan(1);
+		expect(gets).toBeLessThan(20);
+	});
+
 	it("names the key source as a config path outside the repo", () => {
 		expect(keySourceLabel("/tmp/home/.config")).toBe("/tmp/home/.config/omp/jev.env (omp/jev.env)");
 		expect(keySourceLabel("/tmp/home/.config")).not.toContain(REPO_ROOT);
@@ -190,6 +250,36 @@ describe("Jev Router harness per decision", () => {
 		expect(metrics.routedEffort).toEqual({ medium: 2 });
 		expect(metrics.costSource).toBe("generation-record");
 		expect(metrics.costPer1000Usd).toBeCloseTo(0.1, 6);
+	});
+
+	it("auto-thinking: leaves an unread call out of cost per 1000 instead of counting it as zero", async () => {
+		let n = 0;
+		const metrics = await measureRouterEffort(
+			[
+				{ prompt: "rename a variable", effort: "low" },
+				{ prompt: "fix a null deref", effort: "low" },
+			],
+			{
+				apiKey: "sk-or-test-key",
+				feature: "router_auto_thinking",
+				fetch: async () => {
+					n += 1;
+					const usage: Record<string, unknown> = { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 };
+					// One call reported a charge; the other reported none. The
+					// per-1000 figure is the mean of the call that did.
+					if (n === 1) usage.cost = 0.0002;
+					return Response.json({
+						id: `gen-${n}`,
+						model: "openai/gpt-5-mini",
+						choices: [{ message: { content: "low" } }],
+						usage,
+					});
+				},
+			},
+		);
+
+		expect(metrics.costSource).toBe("completion-usage");
+		expect(metrics.costPer1000Usd).toBeCloseTo(0.2, 6);
 	});
 
 	it("auto-thinking: counts an off-list routed word as unparseable, not as a wrong answer", async () => {
@@ -374,5 +464,195 @@ describe("Jev Router report runner", () => {
 		const results = (await Bun.file(jsonPath).json()) as { sampleSizes: Record<string, number> };
 		expect(results.sampleSizes).toEqual({ auto_thinking: 1, unexpected_stop: 1, robomp: 0 });
 		expect(await Bun.file(outPath).text()).toContain(OPENROUTER_JEV_ROUTER_MODEL);
+	});
+
+	it("takes the cost from a completion that reports usage.cost, without pricing tokens", async () => {
+		const transport = new FakeOpenRouterTransport({
+			reply: { text: "low", id: "gen-completion-cost", cost: 0.00038 },
+			// A record that reports a different cost: the completion's own charged
+			// cost wins, and the record only supplies the reasoning metadata.
+			generations: { "gen-completion-cost": { total_cost: 0.0009, reasoning: "high" } },
+		});
+		const { deps: routeDeps, entries } = deps(transport, {
+			generationRecords: true,
+			generationRecordWaitMs: 15_000,
+			generationRecordRetryDelayMs: 10,
+			sleep: async () => {},
+		});
+		await routeCompletion("classify", routeDeps);
+
+		expect(entries[0].costUsd).toBeCloseTo(0.00038, 8);
+		expect(entries[0].costSource).toBe("completion-usage");
+		expect(entries[0].routedReasoningEffort).toBe("high");
+
+		const harnessTransport = new FakeOpenRouterTransport({ reply: { text: "low", cost: 0.00038 } });
+		const { deps: harnessDeps } = deps(harnessTransport);
+		const metrics = await measureRouterEffort([{ prompt: "rename x", effort: "low" }], harnessDeps);
+		expect(metrics.costSource).toBe("completion-usage");
+		expect(metrics.costPer1000Usd).toBeCloseTo(0.38, 6);
+	});
+
+	it("falls back to cost_details.upstream_inference_cost when the completion reports no usage.cost", async () => {
+		const transport = new FakeOpenRouterTransport({
+			reply: { text: "low", upstreamInferenceCost: 0.00021 },
+		});
+		const { deps: routeDeps, entries } = deps(transport);
+		await routeCompletion("classify", routeDeps);
+
+		expect(entries[0].costUsd).toBeCloseTo(0.00021, 8);
+		expect(entries[0].costSource).toBe("completion-usage");
+	});
+
+	it("routeCompletion's default wait reads a record that appears at 10s and was absent before", async () => {
+		let clock = 0;
+		const { deps: routeDeps, entries } = deps(new FakeOpenRouterTransport(), {
+			generationRecords: true,
+			now: () => clock,
+			sleep: async ms => {
+				clock += ms;
+			},
+			fetch: async input => {
+				const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+				if (url.includes("/api/v1/generation")) {
+					if (clock < 10_000) return new Response("not found", { status: 404 });
+					return Response.json({ data: { total_cost: 0.00055, reasoning: "low" } });
+				}
+				return Response.json({
+					id: "gen-default-wait",
+					model: "openai/gpt-5-mini",
+					choices: [{ message: { content: "low" } }],
+					usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 },
+				});
+			},
+		});
+		await routeCompletion("classify", routeDeps);
+
+		expect(entries[0].costUsd).toBeCloseTo(0.00055, 8);
+		expect(entries[0].costSource).toBe("generation-record");
+		expect(entries[0].routedReasoningEffort).toBe("low");
+		expect(clock).toBeGreaterThanOrEqual(10_000);
+		expect(clock).toBeLessThanOrEqual(GENERATION_RECORD_WAIT_MS);
+	});
+
+	it("polls a generation record that 404s twice before it appears, then reads its cost and reasoning", async () => {
+		const transport = new FakeOpenRouterTransport({
+			reply: { text: "medium", id: "gen-late" },
+			generations: { "gen-late": { total_cost: 0.0005, model: "x-ai/grok-4", reasoning: "high" } },
+			generation404Count: 2,
+		});
+		const { deps: routeDeps, entries } = deps(transport, {
+			generationRecords: true,
+			generationRecordWaitMs: 15_000,
+			generationRecordRetryDelayMs: 10,
+			sleep: async () => {},
+		});
+		await routeCompletion("classify", routeDeps);
+
+		// Two 404s prove the reader backed off instead of giving up on the first read.
+		expect(transport.generationRequests).toEqual(["gen-late", "gen-late", "gen-late"]);
+		expect(entries[0].costUsd).toBeCloseTo(0.0005, 8);
+		expect(entries[0].costSource).toBe("generation-record");
+		expect(entries[0].routedReasoningEffort).toBe("high");
+		expect(entries[0].routedModel).toBe("x-ai/grok-4");
+	});
+
+	it("gives up on a generation record after the bounded wait and reports no cost", async () => {
+		const transport = new FakeOpenRouterTransport({
+			reply: { text: "low", id: "gen-never" },
+			generation404Count: 1000,
+		});
+		const { deps: routeDeps, entries } = deps(transport, {
+			generationRecords: true,
+			generationRecordWaitMs: 5,
+			generationRecordRetryDelayMs: 1,
+			sleep: async () => {},
+		});
+		const metrics = await measureRouterEffort([{ prompt: "rename x", effort: "low" }], routeDeps);
+
+		expect(entries[0].costUsd).toBeUndefined();
+		expect(entries[0].costSource).toBeUndefined();
+		expect(metrics.costPer1000Usd).toBeNull();
+		expect(metrics.costSource).toBe("unavailable");
+		// A bounded number of reads, not an unbounded poll.
+		expect(transport.generationRequests.length).toBeLessThan(20);
+	});
+
+	it("renders a current side that was charged nothing as $0.0000, and a side that did not run as not measured", async () => {
+		const transport = new FakeOpenRouterTransport({ reply: { text: "low", cost: 0.0001 } });
+		const outPath = path.join(tempDir.path(), "zero-current.md");
+		const chargedNothing = await runRouter({
+			prompts: [{ prompt: "rename x", effort: "low" }],
+			apiKey: "sk-or-test-key",
+			fetch: transport.fetch,
+			fakeCurrent: { classifyDifficulty: async () => ({ effort: "low", cost: 0 }) },
+			outPath,
+		});
+
+		expect(chargedNothing.current.auto_thinking?.costPer1000Usd).toBe(0);
+		expect(chargedNothing.current.auto_thinking?.costSource).toBe("unavailable");
+		const chargedReport = await Bun.file(outPath).text();
+		expect(chargedReport).toContain("| Cost per 1000 calls ($) | $0.0000 | $0.1000 |");
+		expect(chargedReport).toContain("| Cost source | unavailable | completion-usage |");
+
+		const absentPath = path.join(tempDir.path(), "absent-current.md");
+		const didNotRun = await runRouter({
+			prompts: [{ prompt: "rename x", effort: "low" }],
+			apiKey: "sk-or-test-key",
+			fetch: transport.fetch,
+			outPath: absentPath,
+		});
+		expect(didNotRun.current.auto_thinking).toBeNull();
+		const absentReport = await Bun.file(absentPath).text();
+		expect(absentReport).toContain("| Cost per 1000 calls ($) | not measured | $0.1000 |");
+	});
+
+	it("never reports a price it did not read: a costless run renders 'not measured', not zero", async () => {
+		const transport = new FakeOpenRouterTransport({ reply: { text: "low", routedModel: "openai/gpt-5-mini" } });
+		const outPath = path.join(tempDir.path(), "costless-report.md");
+		const results = await runRouter({
+			prompts: [{ prompt: "rename x", effort: "low" }],
+			turnEnds: [{ text: "I will act now", label: "continue" }],
+			apiKey: "sk-or-test-key",
+			fetch: transport.fetch,
+			outPath,
+		});
+
+		expect(results.features.auto_thinking_route.costPer1000Usd).toBeNull();
+		expect(results.features.auto_thinking_route.costSource).toBe("unavailable");
+		const report = await Bun.file(outPath).text();
+		expect(report).toContain("| Cost per 1000 calls ($) | not measured | not measured |");
+		expect(report).not.toContain("$0.0000");
+	});
+});
+
+describe("Jev Router scoring form", () => {
+	it("scores a router answer and a current-side answer equal to the dataset label as correct", async () => {
+		const transport = new FakeOpenRouterTransport({ reply: { text: "high" } });
+		const { deps: routeDeps } = deps(transport);
+		const results = await runRouterMeasurement({
+			prompts: [{ prompt: "rename x", effort: "HIGH" }],
+			apiKey: routeDeps.apiKey,
+			fetch: transport.fetch,
+			// The current side answers the same label in a different case; both
+			// sides normalize case before comparing, so neither is miscounted.
+			fakeCurrent: { classifyDifficulty: async () => ({ effort: "High" }) },
+		});
+
+		expect(results.features.auto_thinking_route.accuracy).toBe(1);
+		expect(results.current.auto_thinking?.accuracy).toBe(1);
+	});
+
+	it("scores a router answer that names a different label as incorrect, not unparseable", async () => {
+		const transport = new FakeOpenRouterTransport({ reply: { text: "low" } });
+		const { deps: routeDeps } = deps(transport);
+		const results = await runRouterMeasurement({
+			prompts: [{ prompt: "rename x", effort: "high" }],
+			apiKey: routeDeps.apiKey,
+			fetch: transport.fetch,
+		});
+
+		expect(results.features.auto_thinking_route.accuracy).toBe(0);
+		expect(results.features.auto_thinking_route.answerRate).toBe(1);
+		expect(results.features.auto_thinking_route.unparseableRate).toBe(0);
 	});
 });
