@@ -8,16 +8,27 @@ lease or insert a second time.
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
 from psycopg.types.json import Jsonb
 
+from omp_work.jobs.budget import (
+    alert_subagents_exceeded,
+    check_item_budget,
+    item_budget,
+    item_spend,
+    root_work_id,
+)
+from omp_work.jobs.cancel import cancel_item_tree
 from omp_work.jobs.store import JobError, NativeJobStore, OperationOutcome
 
 _RESOURCE_KEYS = ("cpu", "memory_mib", "gpu", "model_calls")
 _KINDS = frozenset({"model", "compute"})
 _TRIAL_CAMPAIGN_STATES = frozenset({"admitted", "running"})
+_BUDGET_CODE = "budget_exceeded"
+_BUDGET_REASON = "budget_exceeded"
 _JOB_IDENTITY = (
     "source, workspace_id, work_id, kind, parent_job_id, trial_id, "
     "required_capabilities, resources, lease_seconds"
@@ -96,6 +107,21 @@ def enqueue_job(
                 _require_live_parent(store, cur, workspace_id, parent_job_id)
             if trial_id is not None:
                 _require_trial(cur, workspace_id, work_id, trial_id)
+            budget_work_id = (
+                root_work_id(cur, workspace_id, parent_job_id)
+                if parent_job_id is not None
+                else work_id
+            )
+            if budget_work_id is not None and _budget_refuses(
+                store,
+                cur,
+                workspace_id=workspace_id,
+                actor_id=actor_id,
+                operation_id=operation_id,
+                budget_work_id=budget_work_id,
+                parent_job_id=parent_job_id,
+            ):
+                return {"status": "refused", "code": _BUDGET_CODE}
             cur.execute(
                 """
                 INSERT INTO omp_jobs.jobs(
@@ -139,6 +165,15 @@ def enqueue_job(
                 operation_id=operation_id,
                 payload={"kind": kind, "lease_seconds": lease_seconds},
             )
+            if parent_job_id is not None and budget_work_id is not None:
+                check_item_budget(
+                    store,
+                    cur,
+                    workspace_id=workspace_id,
+                    actor_id=actor_id,
+                    work_id=budget_work_id,
+                    operation_id=operation_id,
+                )
             return {
                 "status": "applied",
                 "job": store.job_view(cur, workspace_id, job_id),
@@ -147,7 +182,77 @@ def enqueue_job(
         outcome = store.run_operation(
             cur, operation_id, workspace_id, "job_enqueue", request, apply
         )
+    if outcome.result.get("code") == _BUDGET_CODE:
+        raise JobError(
+            _BUDGET_CODE,
+            ("item budget is exhausted",),
+        )
     return _public(operation_id, outcome)
+
+
+def _budget_refuses(
+    store: NativeJobStore,
+    cur: Any,
+    *,
+    workspace_id: UUID,
+    actor_id: UUID,
+    operation_id: str,
+    budget_work_id: UUID,
+    parent_job_id: str | None,
+) -> bool:
+    """True when this enqueue must be refused, after stopping the item tree.
+
+    The item's budget is checked first: an exhausted dimension stops the whole
+    tree and refuses. Otherwise a child (a job with a ``parent_job_id``) is
+    refused when the tree already holds ``max_subagents`` jobs with a parent —
+    the tree is stopped, and the 100 subagents alert is written beside the
+    other budget alerts before the refusal. A child that only crosses a
+    subagents threshold is admitted: ``check_item_budget`` writes the 50 or 80
+    row after the insert.
+    """
+    budget = item_budget(cur, workspace_id, budget_work_id)
+    if budget is None:
+        return False
+    spend = item_spend(cur, workspace_id, budget_work_id)
+    if (
+        spend.usd >= Decimal(budget.usd)
+        or spend.tokens >= budget.tokens
+        or spend.wall_clock_seconds >= budget.wall_clock_seconds
+    ):
+        cancel_item_tree(
+            store,
+            cur,
+            workspace_id=workspace_id,
+            actor_id=actor_id,
+            operation_id=operation_id,
+            work_id=budget_work_id,
+            reason=_BUDGET_REASON,
+        )
+        return True
+    if (
+        parent_job_id is not None
+        and budget.max_subagents > 0
+        and spend.subagents >= budget.max_subagents
+    ):
+        alert_subagents_exceeded(
+            cur,
+            workspace_id=workspace_id,
+            work_id=budget_work_id,
+            operation_id=operation_id,
+            maximum=budget.max_subagents,
+            count=spend.subagents + 1,
+        )
+        cancel_item_tree(
+            store,
+            cur,
+            workspace_id=workspace_id,
+            actor_id=actor_id,
+            operation_id=operation_id,
+            work_id=budget_work_id,
+            reason=_BUDGET_REASON,
+        )
+        return True
+    return False
 
 
 def claim_job(
@@ -227,6 +332,10 @@ def claim_job(
                     store, cur, workspace_id, locked, held, free, component
                 ):
                     continue
+                if _root_budget_exhausted(
+                    store, cur, workspace_id, str(locked["job_id"])
+                ):
+                    return {"status": "applied", "job": None}
                 admitted = _admit(
                     store,
                     cur,
@@ -436,6 +545,29 @@ def _reserved_weight(cur: Any, workspace_id: UUID, worker_id: str) -> int:
         if weight is not None:
             total += weight
     return total
+
+
+def _root_budget_exhausted(
+    store: NativeJobStore, cur: Any, workspace_id: UUID, job_id: str
+) -> bool:
+    """True when ``job_id``'s root item is budgeted and one dimension is spent out.
+
+    The claim path calls this before leasing a candidate. An item with no
+    published budget, or an unknown or parentless job, is never exhausted; a
+    refused candidate is left ``backlog`` for the cancel path to stop.
+    """
+    work_id = root_work_id(cur, workspace_id, job_id)
+    if work_id is None:
+        return False
+    budget = item_budget(cur, workspace_id, work_id)
+    if budget is None:
+        return False
+    spend = item_spend(cur, workspace_id, work_id)
+    return bool(
+        spend.usd >= Decimal(budget.usd)
+        or spend.tokens >= budget.tokens
+        or spend.wall_clock_seconds >= budget.wall_clock_seconds
+    )
 
 
 def _claimable(

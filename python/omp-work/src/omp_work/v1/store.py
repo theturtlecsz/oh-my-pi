@@ -55,6 +55,7 @@ from .models import (
     EvidenceReceipt,
     FableAdvicePayload,
     IntakeAdmissionReceiptPayload,
+    OWNER_APPROVAL_REFUSED_EVENT,
     OperationReceipt,
     OperationState,
     RecordResearchObservationPayload,
@@ -233,6 +234,15 @@ class WorkStore(Protocol):
         actor_kind: str,
         required_scope: str,
     ) -> tuple[OperationReceipt, dict[str, object]]: ...
+    def record_refused_attempt(
+        self,
+        envelope: CommandEnvelope,
+        *,
+        actor_id: UUID,
+        actor_kind: str,
+        code: str,
+        diagnostics: tuple[str, ...],
+    ) -> None: ...
     def read(
         self,
         workspace_id: UUID,
@@ -403,6 +413,32 @@ class PostgresWorkStore(ResearchStoreMixin):
                 if attempt == 3:
                     raise WorkStoreError("unavailable", ("retry_exhausted",)) from error
         raise AssertionError("unreachable")
+
+    def record_refused_attempt(
+        self,
+        envelope: CommandEnvelope,
+        *,
+        actor_id: UUID,
+        actor_kind: str,
+        code: str,
+        diagnostics: tuple[str, ...],
+    ) -> None:
+        result = {
+            "type": OWNER_APPROVAL_REFUSED_EVENT,
+            "status": "refused",
+            "command_type": envelope.command.type,
+            "code": code,
+            "diagnostics": list(diagnostics),
+        }
+        with self._transaction(envelope.workspace_id, actor_id) as cur:
+            self._record_event(
+                cur,
+                envelope,
+                actor_id,
+                actor_kind,
+                result,
+                event_type=OWNER_APPROVAL_REFUSED_EVENT,
+            )
 
     def _execute(
         self,

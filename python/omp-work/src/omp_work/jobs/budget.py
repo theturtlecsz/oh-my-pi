@@ -23,22 +23,26 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from omp_work.contracts.v1.recovery import CloseoutRecord, apply_commit
+from omp_work.jobs.cancel import cancel_item_tree
 from omp_work.jobs.store import NativeJobStore
 from omp_work.v1.canonical import sha256
 from omp_work.v1.models import ItemBudget
 
 __all__ = [
     "ItemSpend",
+    "alert_subagents_exceeded",
     "check_item_budget",
     "item_budget",
     "item_spend",
     "root_work_id",
+    "sweep_item_budgets",
 ]
 
 _THRESHOLD_PERCENTS = (50, 80)
 _EXCEEDED_PERCENT = 100
 _THRESHOLD_EVENT = "budget.threshold_reached"
 _EXCEEDED_EVENT = "budget.exceeded"
+_BUDGET_REASON = "budget_exceeded"
 
 
 @dataclass(frozen=True)
@@ -194,6 +198,11 @@ def check_item_budget(
     of ``max_subagents`` only, and never reports the dimension exhausted. Each
     alert is keyed by (workspace, work, dimension, threshold) and inserted with
     ON CONFLICT DO NOTHING, so a repeated check writes nothing.
+
+    When a dimension is exhausted the item's job tree is stopped in the same
+    transaction (``cancel_item_tree``, reason ``budget_exceeded``); the alert
+    rows and the cancellation commit together. An alert-only dimension does not
+    stop anything.
     """
     budget = item_budget(cur, workspace_id, work_id)
     if budget is None:
@@ -248,7 +257,96 @@ def check_item_budget(
                     limit=budget.max_subagents,
                 )
 
+    if exhausted:
+        cancel_item_tree(
+            store,
+            cur,
+            workspace_id=workspace_id,
+            actor_id=actor_id,
+            operation_id=operation_id,
+            work_id=work_id,
+            reason=_BUDGET_REASON,
+        )
+
     return tuple(exhausted)
+
+
+def sweep_item_budgets(
+    store: NativeJobStore,
+    *,
+    operation_id: str,
+    workspace_id: UUID,
+    actor_id: UUID,
+) -> list[UUID]:
+    """Check the workspace's budgeted items that have live jobs; return stopped work ids.
+
+    Wall-clock is the dimension a sweep exists for: it rises with no new usage
+    row to trigger a check. Only work items that carry an ``intake_publication``
+    budget and have at least one non-terminal job are visited, each in its own
+    transaction. An item whose budget is exhausted has its tree cancelled by
+    ``check_item_budget``; its work id is returned, in work id order. Items that
+    are unbudgeted, already fully settled, or merely alerting are not returned.
+    """
+    with store.transaction(workspace_id, actor_id) as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT j.work_id
+            FROM omp_jobs.jobs j
+            WHERE j.workspace_id=%s AND j.source='native' AND j.work_id IS NOT NULL
+              AND j.status IN ('backlog', 'admitted', 'in_flight', 'returned', 'checking')
+              AND EXISTS (
+                SELECT 1 FROM omp_evidence.receipts r
+                WHERE r.workspace_id=j.workspace_id AND r.work_id=j.work_id
+                  AND r.kind='intake_publication'
+              )
+            ORDER BY j.work_id
+            """,
+            (workspace_id,),
+        )
+        work_ids = [UUID(str(row["work_id"])) for row in cur.fetchall()]
+
+    stopped: list[UUID] = []
+    for work_id in work_ids:
+        with store.transaction(workspace_id, actor_id) as cur:
+            if check_item_budget(
+                store,
+                cur,
+                workspace_id=workspace_id,
+                actor_id=actor_id,
+                work_id=work_id,
+                operation_id=operation_id,
+            ):
+                stopped.append(work_id)
+    return stopped
+
+
+def alert_subagents_exceeded(
+    cur: psycopg.Cursor[dict[str, Any]],
+    *,
+    workspace_id: UUID,
+    work_id: UUID,
+    operation_id: str,
+    maximum: int,
+    count: int,
+) -> None:
+    """Write the ``budget.exceeded`` subagents alert for an item at its cap.
+
+    ``check_item_budget`` never reports subagents exhausted, because the count
+    only rises at enqueue and the refuser writes that row itself. Like every
+    other budget alert it is keyed by (workspace, work, dimension, threshold),
+    so a second refusal writes nothing.
+    """
+    _alert(
+        cur,
+        workspace_id=workspace_id,
+        work_id=work_id,
+        operation_id=operation_id,
+        event=_EXCEEDED_EVENT,
+        dimension="subagents",
+        threshold=_EXCEEDED_PERCENT,
+        spent=count,
+        limit=maximum,
+    )
 
 
 def _reached(spent: object, limit: object, threshold: int) -> bool:
