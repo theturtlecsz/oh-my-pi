@@ -3,12 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { $ } from "bun";
-import {
-	APPROVAL_PATH,
-	checkApprovalProvenance,
-	REVIEWED_OWNER_APPROVAL_COMMITS,
-	UnknownRevisionError,
-} from "./approval-provenance.ts";
+import { APPROVAL_PATH, checkApprovalProvenance, UnknownRevisionError } from "./approval-provenance.ts";
 
 const SCRIPT = path.join(import.meta.dir, "approval-provenance.ts");
 

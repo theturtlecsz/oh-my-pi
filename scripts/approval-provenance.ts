@@ -116,7 +116,10 @@ export async function checkApprovalProvenance(options: ApprovalProvenanceOptions
 	const allowed = new Set(options.allowedCommits ?? REVIEWED_OWNER_APPROVAL_COMMITS);
 	const commits = parseLog(out).filter(
 		commit =>
-			!(isApprovalCommit(commit.author, commit.subject) || (commit.author === APPROVAL_AUTHOR && allowed.has(commit.sha))),
+			!(
+				isApprovalCommit(commit.author, commit.subject) ||
+				(commit.author === APPROVAL_AUTHOR && allowed.has(commit.sha))
+			),
 	);
 
 	const violations: ApprovalViolation[] = [];
