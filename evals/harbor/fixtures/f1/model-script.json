@@ -19,6 +19,7 @@
 			{
 				"id": "revise-amend-confirm",
 				"name": "work",
+				"resolved": "confirmation_id",
 				"arguments": {
 					"action": "revise_work",
 					"work": "OMP-1",
@@ -26,7 +27,7 @@
 					"acceptance_criteria": ["Amended AC 1", "Amended AC 2"],
 					"expected_revision_id": "00000000-0000-7000-8000-000000000010",
 					"confirm": true,
-					"confirmation_id": "cf-fixture-amend"
+					"confirmation_id": "$confirmation_id"
 				}
 			}
 		]

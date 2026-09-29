@@ -3,9 +3,17 @@
 Serves one scripted turn per ``POST /v1/chat/completions`` request on a
 loopback host, so an eval can drive the agent with a fixed model transcript.
 The script is a JSON array of steps, each ``{"text": str}`` or
-``{"tool_calls": [{"name", "arguments", "id"?}]}``. Every request appends one
-JSONL line to the log; a request after the last step gets HTTP 500
+``{"tool_calls": [{"name", "arguments", "id"?, "resolved"?}]}``. Every request
+appends one JSONL line to the log; a request after the last step gets HTTP 500
 ``{"error": "script_exhausted"}`` and any other path gets 404.
+
+A call may declare ``"resolved": "confirmation_id"``: its ``arguments`` then
+carry the ``$confirmation_id`` placeholder, and the server substitutes the id
+from the confirmation preview the host minted in the immediately preceding
+turn (the last ``confirmation_id:`` in a ``tool`` message). The workflow host
+mints confirmation ids as random single-use values, so a scripted model can
+only confirm a write with the id its own preview returned — never a fixed
+string.
 """
 
 from __future__ import annotations
@@ -24,6 +32,11 @@ from .adapter import _LOOPBACK_HOSTS
 
 _CHAT_PATH = "/v1/chat/completions"
 _NOT_FOUND = json.dumps({"error": "not_found"}).encode("utf-8")
+# Value a scripted confirm call carries until the preceding preview's id fills it.
+CONFIRMATION_ID_PLACEHOLDER = "$confirmation_id"
+_RESOLVED_CONFIRMATION_ID = "confirmation_id"
+_PREVIEW_MARKER = "confirmation_id:"
+_ID_CHARS = frozenset("0123456789abcdef-")
 
 
 class ScriptedResponse(NamedTuple):
@@ -52,13 +65,85 @@ def _load_script(script_path: str | Path) -> tuple[dict[str, Any], ...]:
                     raise ValueError(f"script step {index} tool_calls[{call_index}] needs arguments")
                 if "id" in call and not isinstance(call["id"], str):
                     raise ValueError(f"script step {index} tool_calls[{call_index}] id must be a string")
+                if "resolved" in call and call["resolved"] != _RESOLVED_CONFIRMATION_ID:
+                    raise ValueError(
+                        f"script step {index} tool_calls[{call_index}] resolved must be "
+                        f'"{_RESOLVED_CONFIRMATION_ID}"'
+                    )
         elif not isinstance(raw.get("text"), str):
             raise ValueError(f"script step {index} must have text or tool_calls")
         steps.append(raw)
     return tuple(steps)
 
 
-def _delta(step_index: int, step: Mapping[str, Any]) -> dict[str, Any]:
+def _text_content(content: Any) -> str | None:
+    """Plain text of a chat message body: a string, or text blocks joined."""
+
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return None
+    parts = [
+        block["text"]
+        for block in content
+        if isinstance(block, Mapping) and isinstance(block.get("text"), str)
+    ]
+    return "\n".join(parts) if parts else None
+
+
+def _preceding_confirmation_id(body: Any) -> str | None:
+    """The confirmation id the host minted in the turn just before this request.
+
+    Walks the request's ``messages`` and returns the last ``confirmation_id:``
+    value in a tool result, which is the preview the agent just executed.
+    """
+
+    if not isinstance(body, Mapping):
+        return None
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return None
+    found: str | None = None
+    for message in messages:
+        if not isinstance(message, Mapping) or message.get("role") != "tool":
+            continue
+        content = _text_content(message.get("content"))
+        if not content or _PREVIEW_MARKER not in content:
+            continue
+        for segment in content.split(_PREVIEW_MARKER)[1:]:
+            token = segment.lstrip().split(maxsplit=1)[0] if segment.strip() else ""
+            candidate = token.rstrip(".,;:\"'")
+            if candidate and all(char in _ID_CHARS for char in candidate):
+                found = candidate
+    return found
+
+
+def _resolve_arguments(arguments: Any, resolved: Any, confirmation_id: str | None) -> Any:
+    """Replace the ``$confirmation_id`` token when a call declares resolution.
+
+    A call that declares ``"resolved": "confirmation_id"`` and reaches this
+    point with no preceding preview is an error: the fixture would otherwise
+    emit the placeholder verbatim and silently confirm nothing.
+    """
+
+    if resolved != _RESOLVED_CONFIRMATION_ID:
+        return arguments
+    if confirmation_id is None:
+        raise ValueError(
+            "scripted call declares resolved confirmation_id but the request carries no preceding confirmation preview"
+        )
+    if isinstance(arguments, str):
+        return arguments.replace(CONFIRMATION_ID_PLACEHOLDER, confirmation_id)
+    if isinstance(arguments, Mapping):
+        return json.loads(json.dumps(arguments).replace(CONFIRMATION_ID_PLACEHOLDER, confirmation_id))
+    return arguments
+
+
+def _arguments_json(arguments: Any) -> str:
+    return arguments if isinstance(arguments, str) else json.dumps(arguments)
+
+
+def _delta(step_index: int, step: Mapping[str, Any], confirmation_id: str | None = None) -> dict[str, Any]:
     if "tool_calls" in step:
         return {
             "tool_calls": [
@@ -68,9 +153,9 @@ def _delta(step_index: int, step: Mapping[str, Any]) -> dict[str, Any]:
                     "type": "function",
                     "function": {
                         "name": call["name"],
-                        "arguments": call["arguments"]
-                        if isinstance(call["arguments"], str)
-                        else json.dumps(call["arguments"]),
+                        "arguments": _arguments_json(
+                            _resolve_arguments(call["arguments"], call.get("resolved"), confirmation_id)
+                        ),
                     },
                 }
                 for index, call in enumerate(step["tool_calls"])
@@ -79,8 +164,8 @@ def _delta(step_index: int, step: Mapping[str, Any]) -> dict[str, Any]:
     return {"content": step["text"]}
 
 
-def _frames(step_index: int, step: Mapping[str, Any]) -> bytes:
-    delta = _delta(step_index, step)
+def _frames(step_index: int, step: Mapping[str, Any], confirmation_id: str | None = None) -> bytes:
+    delta = _delta(step_index, step, confirmation_id)
     packet = {
         "id": "scripted-response",
         "object": "chat.completion.chunk",
@@ -229,7 +314,11 @@ class ScriptedModelServer:
                     None,
                 )
             self._index = index + 1
-        return ScriptedResponse(200, "text/event-stream", _frames(index, self.steps[index]), index)
+        try:
+            frames = _frames(index, self.steps[index], _preceding_confirmation_id(body))
+        except ValueError as exc:
+            return ScriptedResponse(500, "application/json", json.dumps({"error": str(exc)}).encode("utf-8"), index)
+        return ScriptedResponse(200, "text/event-stream", frames, index)
 
     def _handle(self, handler: BaseHTTPRequestHandler) -> None:
         length = int(handler.headers.get("Content-Length") or 0)

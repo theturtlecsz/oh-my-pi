@@ -3,6 +3,10 @@
 ``ops migrate`` now applies this set inline (``operations.database.migrate``);
 ``apply_jobs_migrations`` remains the standalone applier and skips the ordinals
 the inline path already recorded in ``omp_jobs.schema_migrations``.
+
+DDL runs under ``SET LOCAL ROLE omp_work_owner``, the same role ``migrate``
+uses, so objects created here are owned by ``omp_work_owner`` rather than
+the login role ``omp_work_migrator``.
 """
 from __future__ import annotations
 
@@ -76,10 +80,10 @@ def _load_ops():
 
 
 def apply_jobs_migrations(config=None) -> dict:
-    """Apply pending jobs_migrations/*.sql via migrator role.
+    """Apply pending jobs_migrations/*.sql via the migrator login.
 
-    Records each applied file in omp_jobs.schema_migrations.
-    Does not touch work.omp.dev/v1 migration bookkeeping.
+    DDL runs as omp_work_owner. Records each applied file in
+    omp_jobs.schema_migrations. Does not touch work.omp.dev/v1 bookkeeping.
     """
     cfg_cls, connect, _mig = _load_ops()
     if config is None:
@@ -132,6 +136,10 @@ def apply_jobs_migrations(config=None) -> dict:
                         raise RuntimeError(f"jobs migration drift at ordinal {ordinal}")
                     skipped.append(path.name)
                     continue
+                # Login role is omp_work_migrator. Without this, created
+                # objects are owned by the migrator and the owner role
+                # cannot read them on the next ops migrate.
+                cur.execute("SET LOCAL ROLE omp_work_owner")
                 sql = path.read_text()
                 cur.execute(sql)
                 cur.execute(

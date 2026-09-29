@@ -179,6 +179,45 @@ def check_migrations(
     return {"pending": pending, "drift": drift}
 
 
+def _reassign_migrator_owned_jobs_objects(cur: psycopg.Cursor[Any]) -> None:
+    """Give omp_jobs tables and sequences still owned by omp_work_migrator
+    to omp_work_owner.
+
+    The standalone applier used to run DDL as its login role, so those
+    objects are owned by omp_work_migrator. migrate reads
+    omp_jobs.schema_migrations after SET ROLE, and the owner role has no
+    privilege on objects it does not own. No-op when the schema is absent
+    or nothing is still owned by the migrator. Caller must be the migrator:
+    only an object's owner can ALTER it to the owner role.
+    """
+    cur.execute("SELECT to_regnamespace('omp_jobs')")
+    if cur.fetchone()[0] is None:
+        return
+    for relkinds, kind in ((("r", "p"), "TABLE"), (("S",), "SEQUENCE")):
+        cur.execute(
+            """
+            SELECT c.relname
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            JOIN pg_roles r ON r.oid = c.relowner
+            WHERE n.nspname = 'omp_jobs'
+              AND r.rolname = 'omp_work_migrator'
+              AND c.relkind::text = ANY(%s)
+            ORDER BY c.relname
+            """,
+            (list(relkinds),),
+        )
+        for (name,) in cur.fetchall():
+            cur.execute(
+                sql.SQL("ALTER {} {}.{} OWNER TO {}").format(
+                    sql.SQL(kind),
+                    sql.Identifier("omp_jobs"),
+                    sql.Identifier(name),
+                    sql.Identifier("omp_work_owner"),
+                )
+            )
+
+
 def migrate(
     config: OperationsConfig,
     target: int | None = None,
@@ -194,7 +233,6 @@ def migrate(
                         "SELECT set_config('lock_timeout', %s, true)",
                         (f"{lock_timeout}s",),
                     )
-                    cur.execute("SET LOCAL ROLE omp_work_owner")
                     try:
                         cur.execute(
                             "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
@@ -202,6 +240,11 @@ def migrate(
                         )
                     except psycopg.errors.LockNotAvailable as error:
                         raise ValueError("migration_lock_timeout") from error
+                    # Still omp_work_migrator. SET ROLE cannot ALTER objects
+                    # that role does not own, and the read of
+                    # omp_jobs.schema_migrations below needs the new owner.
+                    _reassign_migrator_owned_jobs_objects(cur)
+                    cur.execute("SET LOCAL ROLE omp_work_owner")
                     cur.execute("SELECT to_regclass('omp_control.schema_migrations')")
                     if cur.fetchone()[0] is None:
                         state = {
