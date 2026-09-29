@@ -102,6 +102,33 @@ def normalize_title(title: str) -> str:
     return " ".join(title.casefold().split())
 
 
+_WORK_ITEM_ID_FIELDS = frozenset({"work_id", "source_work_id", "target_work_id"})
+
+
+def _collect_work_item_ids(value: Any) -> list[UUID]:
+    """Every work-item id a command payload references, at any depth.
+
+    The execution-grant fence must see nested carriers too (relation edges under
+    `relation`, focus slots under `slot`, receipts, batch inputs). Enumerating
+    top-level keys silently misses the next payload that nests its item id one
+    level deeper, so walk the whole payload for these field names. Only typed
+    UUID values are collected; untyped payloads cannot smuggle a non-uuid here.
+    """
+    found: list[UUID] = []
+    stack: list[Any] = [value]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, dict):
+            for key, nested in current.items():
+                if key in _WORK_ITEM_ID_FIELDS and isinstance(nested, UUID):
+                    found.append(nested)
+                if isinstance(nested, (dict, list, tuple)):
+                    stack.append(nested)
+        elif isinstance(current, (list, tuple)):
+            stack.extend(current)
+    return found
+
+
 def _extract_findings_hash(report: str) -> str:
     match = re.search(
         r"^\s*(?:#+\s*)?FINDINGS(?:[ \t]*\([^)\n]*\))?[ \t]*[:—-]?[ \t]*\n([\s\S]*?)(?=^\s*(?:#+\s*)?(?:ACCEPTANCE COVERAGE|OUT OF SCOPE|CHECKS RUN|REMAINING QUESTIONS)|\Z)",
@@ -4232,12 +4259,7 @@ class PostgresWorkStore(ResearchStoreMixin):
             "paused", "stopped", "canceled",
         }:
             return
-        work_ids = [data[key] for key in ("work_id", "source_work_id", "target_work_id")
-                    if data.get(key) is not None]
-        for key in ("receipt", "input"):
-            nested = data.get(key)
-            if isinstance(nested, dict) and nested.get("work_id") is not None:
-                work_ids.append(nested["work_id"])
+        work_ids = _collect_work_item_ids(data)
         grant_id = data.get("grant_id") or data.get("execution_grant_id")
         attempt_id = data.get("attempt_id")
         if grant_id is None and attempt_id is None and not work_ids:
