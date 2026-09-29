@@ -70,6 +70,7 @@ from omp_work.research.store import ResearchStoreMixin
 from .store_shared import WorkStoreError
 from .store_shared import row_json as _row_json
 from .agent_stop import allowed_while_stopped, read_stop_state, stop_result
+from .decision_records import answer_decision, create_decision, list_decisions
 from .semantics import (
     BOUNDED_INTAKE_RULE_BUNDLE_SHA256,
     bounded_intake_semantic_sha256,
@@ -532,6 +533,8 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
             "conclude_research_campaign",
             "engage_stop",
             "release_stop",
+            "create_decision",
+            "answer_decision",
         }
         conflict = False
         with self._transaction(
@@ -710,11 +713,18 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
                         (envelope.workspace_id,),
                     )
                     result = stop_result(envelope)
-                elif command.type in {"create_decision", "answer_decision"}:
-                    # OMP-414: a decision is recorded as a domain event (no
-                    # migration), but the indexed persistence lands in a later
-                    # slice, so the live store refuses rather than half-write.
-                    raise WorkStoreError("unavailable")
+                elif command.type == "create_decision":
+                    cur.execute(
+                        "INSERT INTO omp_control.workspaces(workspace_id) VALUES(%s) ON CONFLICT DO NOTHING",
+                        (envelope.workspace_id,),
+                    )
+                    result = create_decision(cur, envelope)
+                elif command.type == "answer_decision":
+                    cur.execute(
+                        "INSERT INTO omp_control.workspaces(workspace_id) VALUES(%s) ON CONFLICT DO NOTHING",
+                        (envelope.workspace_id,),
+                    )
+                    result = answer_decision(cur, envelope)
                 else:
                     raise WorkStoreError("unavailable")
                 result_hash = sha256(result)
@@ -6884,9 +6894,15 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
         after: tuple[datetime, UUID] | None = None,
         limit: int = 100,
     ) -> dict[str, object]:
-        # OMP-414 records decisions as domain events; the indexed read lands in a
-        # later slice, so the live store refuses rather than fabricate a page.
-        raise WorkStoreError("unavailable")
+        # Project, cursor, and limit stay with the indexed read. This slice
+        # rebuilds status and mission from applied decision events.
+        del project_id, after, limit
+        with self._transaction(workspace_id, actor_id) as cur:
+            return {
+                "decisions": list_decisions(
+                    cur, workspace_id, status=status, mission_id=mission_id
+                )
+            }
 
     def work_items(
         self,
