@@ -14,12 +14,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from omp_work.routing import policy as routing_policy
+
 ACTIVE = Path(
     os.environ.get("OMP_ECONOMY_ACTIVE_DIR") or (Path.home() / ".codex/workflows/economy/ACTIVE")
 )
 RUNTIME = ACTIVE / "parallel-runtime"
 DB = RUNTIME / "parallel.db"
 POLICY = ACTIVE / "PARALLEL-STREAMS.json"
+
+DEFAULT_EXPECTED_MAX_TOKENS = 40000
+ACTIVE_STATUSES = ("admitted", "in_flight", "returned", "checking")
 
 
 def _connect() -> sqlite3.Connection:
@@ -75,16 +80,11 @@ def init_db() -> None:
 def load_policy() -> dict[str, Any]:
     if POLICY.is_file():
         return json.loads(POLICY.read_text())
+    concurrency = routing_policy.load_policy().concurrency
     return {
-        "in_flight_max": 10,
-        "provider_partitions": {
-            "gemini_flash": 6,
-            "ollama_cloud": 4,
-            "anthropic_fable": 2,
-            "kimi": 2,
-            "chatgpt_astra": 0,
-        },
-        "default_expected_max_tokens": 40000,
+        "in_flight_max": concurrency.in_flight_max,
+        "provider_partitions": dict(concurrency.providers),
+        "default_expected_max_tokens": DEFAULT_EXPECTED_MAX_TOKENS,
     }
 
 
@@ -153,6 +153,19 @@ def _partition_count(c: sqlite3.Connection, partition: str) -> int:
         (partition,),
     ).fetchone()
     return int(row["n"])
+
+
+def partition_in_flight() -> dict[str, int]:
+    """Active job count per provider_partition; the router's provider_in_flight."""
+    init_db()
+    placeholders = ",".join("?" for _ in ACTIVE_STATUSES)
+    with _connect() as c:
+        rows = c.execute(
+            f"SELECT provider_partition, COUNT(*) AS n FROM jobs "
+            f"WHERE status IN ({placeholders}) GROUP BY provider_partition",
+            ACTIVE_STATUSES,
+        ).fetchall()
+    return {row["provider_partition"]: int(row["n"]) for row in rows}
 
 
 def _lease_held(c: sqlite3.Connection, path_glob: str) -> str | None:
