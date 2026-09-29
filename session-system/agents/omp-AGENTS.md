@@ -117,10 +117,12 @@ Three-part rule:
    together when that rule passes (OMP-93 rider authority, decision 0006).
    Absorbed, duplicate, or deletable items that the owner has ruled are a
    plain-language cancellation. Delivered work keeps its delivered label.
-3. **Contract changes ride owner hash-approval.** Rider authority (and any
-   future contract change) lands only when Chris approves the exact staged
-   `contract_sha256`; approval.json is his attestation and is never minted
-   from chat scope. A session that commits that approval itself uses
+3. **Contract changes ride automated hash-approval (D44, owner ruling
+   2026-09-29, reversing D30).** Chris does not approve contract fingerprints.
+   Rider authority (and any future contract change) lands when flood's
+   allowlisted `omp-work approve` records the exact staged `contract_sha256`
+   after the change's tests and independent review pass; Chris is told
+   afterwards. approval.json is never minted from chat scope. A session that commits that approval itself uses
    `bun scripts/commit-contract-approval.ts --issue <key>` so the commit's
    author and committer are `flood-owner` and the subject carries
    `owner step by owner session`. `bun scripts/approval-provenance.ts` rejects
