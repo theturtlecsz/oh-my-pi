@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
+import subprocess  # nosec B404 - ssh-keygen only, resolved via shutil.which, fixed argv, no shell
 import tempfile
 from pathlib import Path
 from uuid import UUID
@@ -46,7 +46,7 @@ def verify_owner_signature(allowed_signers: Path, message: bytes, signature: str
         fd, sig_path = tempfile.mkstemp(prefix="omp-owner-sig-")
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(signature)
-        completed = subprocess.run(
+        completed = subprocess.run(  # nosec B603 - absolute ssh-keygen from shutil.which, fixed argv, no shell; the message goes in on stdin and the signature in a temp file
             [
                 ssh_keygen,
                 "-Y",
