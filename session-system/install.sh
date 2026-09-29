@@ -85,6 +85,11 @@ if [ -n "$EXPECT_BACKEND" ]; then
   exit 0
 fi
 
+case "${OMP_KNOWLEDGE_ENGINE:-none}" in
+  none|cognee) ;;
+  *) echo "invalid OMP_KNOWLEDGE_ENGINE: $OMP_KNOWLEDGE_ENGINE (must be none or cognee)" >&2; exit 2 ;;
+esac
+
 place() { # place <repo-relative> <live-path>
   local src="$REPO/$1" dst="$2"
   mkdir -p "$(dirname "$dst")"
@@ -204,6 +209,67 @@ for s in $RETIRED_SKILLS; do
   unplace "$HOME/.claude/skills/$s"
   unplace "$HOME/.codex/skills/$s"
 done
+KNOWLEDGE_CONFIG_DIR="${OMP_KNOWLEDGE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/omp-knowledge}"
+CONTEXT_JSON="$KNOWLEDGE_CONFIG_DIR/context.json"
+if [ ! -e "$CONTEXT_JSON" ] && [ ! -L "$CONTEXT_JSON" ]; then
+  UV_BIN="$(command -v uv 2>/dev/null || true)"
+  BUN_BIN="$(command -v bun 2>/dev/null || true)"
+  MISSING=0
+  if [ -z "$UV_BIN" ]; then
+    echo "WARNING: uv not found on PATH"
+    MISSING=1
+  fi
+  if [ -z "$BUN_BIN" ]; then
+    echo "WARNING: bun not found on PATH"
+    MISSING=1
+  fi
+  if [ "$MISSING" -eq 0 ]; then
+    ROOT="$(cd "$REPO/.." && pwd)"
+    mkdir -p "$KNOWLEDGE_CONFIG_DIR"
+    TMP_JSON="$KNOWLEDGE_CONFIG_DIR/.context.json.$$"
+    (umask 077 && python3 - "$ROOT" "$UV_BIN" "$BUN_BIN" <<'PY' > "$TMP_JSON"
+import json
+import os
+import sys
+
+root, uv_bin, bun_bin = sys.argv[1:4]
+home = os.environ.get("HOME", "")
+state_dir = os.environ.get("OMP_KNOWLEDGE_STATE_DIR") or os.path.join(home, ".local/state/omp-fleet-knowledge/knowledge-data")
+engine = os.environ.get("OMP_KNOWLEDGE_ENGINE") or "none"
+reranker_url = os.environ.get("OMP_KNOWLEDGE_RERANKER_URL") or None
+reranker_model = os.environ.get("OMP_KNOWLEDGE_RERANKER_MODEL") or None
+
+doc = {
+    "command": [
+        os.path.abspath(uv_bin),
+        "run",
+        "--frozen",
+        "--project",
+        os.path.join(root, "python/omp-knowledge"),
+        "python",
+        "-m",
+        "omp_knowledge.context",
+    ],
+    "state_dir": state_dir,
+    "structural_state_dir": state_dir,
+    "token_cmd": [
+        os.path.abspath(bun_bin),
+        os.path.join(root, "packages/coding-agent/src/cli.ts"),
+        "tokens",
+    ],
+    "encoding": "O200kBase",
+    "token_budget": 8000,
+    "engine": engine,
+    "reranker_url": reranker_url,
+    "reranker_model": reranker_model,
+}
+print(json.dumps(doc, indent=2))
+PY
+    )
+    chmod 0600 "$TMP_JSON"
+    mv "$TMP_JSON" "$CONTEXT_JSON"
+  fi
+fi
 # prompts/ is archive-only by ruling 2026-08-10: work routes through the
 # ledger, never through ~/PROMPT-*.md files — nothing from prompts/ gets linked.
 [ -f "$HOME/.config/omp-work/client.json" ] || echo "WARNING: ~/.config/omp-work/client.json missing — the work backend stays dormant until it exists."

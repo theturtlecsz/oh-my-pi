@@ -140,7 +140,7 @@ class ProjectStoreMixin:
         """The one unarchived project with key; zero raises ProjectNotFound."""
         with self._transaction(workspace_id, actor_id) as cur:
             cur.execute(
-                f"SELECT {_PROJECT_FIELDS} FROM omp_work.projects"
+                f"SELECT {_PROJECT_FIELDS} FROM omp_work.projects"  # nosec B608 - static column list
                 " WHERE workspace_id=%s AND key=%s AND NOT archived ORDER BY project_id",
                 (workspace_id, key),
             )
@@ -167,7 +167,7 @@ class ProjectStoreMixin:
         with self._transaction(workspace_id, actor_id) as cur:
             self._require_project(cur, workspace_id, project_id)
             cur.execute(
-                f"SELECT {_RECORD_FIELDS} FROM omp_work.project_records"
+                f"SELECT {_RECORD_FIELDS} FROM omp_work.project_records"  # nosec B608 - static column list
                 " WHERE workspace_id=%s AND project_id=%s",
                 (workspace_id, project_id),
             )
@@ -312,7 +312,7 @@ class ProjectStoreMixin:
         """The whole project: record, profile, missions and history."""
         with self._transaction(workspace_id, actor_id) as cur:
             cur.execute(
-                f"SELECT {_PROJECT_FIELDS} FROM omp_work.projects"
+                f"SELECT {_PROJECT_FIELDS} FROM omp_work.projects"  # nosec B608 - static column list
                 " WHERE workspace_id=%s AND project_id=%s",
                 (workspace_id, project_id),
             )
@@ -321,35 +321,35 @@ class ProjectStoreMixin:
                 raise ProjectNotFound(f"id {project_id}")
 
             cur.execute(
-                f"SELECT {_RECORD_FIELDS} FROM omp_work.project_records"
+                f"SELECT {_RECORD_FIELDS} FROM omp_work.project_records"  # nosec B608 - static column list
                 " WHERE workspace_id=%s AND project_id=%s",
                 (workspace_id, project_id),
             )
             record = cur.fetchone()
 
             cur.execute(
-                f"SELECT {_GOAL_FIELDS} FROM omp_work.project_goals"
+                f"SELECT {_GOAL_FIELDS} FROM omp_work.project_goals"  # nosec B608 - static column list
                 " WHERE workspace_id=%s AND project_id=%s ORDER BY position",
                 (workspace_id, project_id),
             )
             goals = [dict(row) for row in cur.fetchall()]
 
             cur.execute(
-                f"SELECT {_QUESTION_FIELDS} FROM omp_work.project_questions"
+                f"SELECT {_QUESTION_FIELDS} FROM omp_work.project_questions"  # nosec B608 - static column list
                 " WHERE workspace_id=%s AND project_id=%s ORDER BY question",
                 (workspace_id, project_id),
             )
             questions = [dict(row) for row in cur.fetchall()]
 
             cur.execute(
-                f"SELECT {_REF_FIELDS} FROM omp_work.project_refs"
+                f"SELECT {_REF_FIELDS} FROM omp_work.project_refs"  # nosec B608 - static column list
                 " WHERE workspace_id=%s AND project_id=%s ORDER BY kind, ref",
                 (workspace_id, project_id),
             )
             refs = [dict(row) for row in cur.fetchall()]
 
             cur.execute(
-                f"SELECT {_REPOSITORY_FIELDS} FROM omp_work.project_repositories pr"
+                f"SELECT {_REPOSITORY_FIELDS} FROM omp_work.project_repositories pr"  # nosec B608 - static column list
                 " JOIN omp_work.repositories r ON r.workspace_id=pr.workspace_id"
                 " AND r.repository_id=pr.repository_id"
                 " WHERE pr.workspace_id=%s AND pr.project_id=%s ORDER BY r.key",
@@ -358,35 +358,35 @@ class ProjectStoreMixin:
             repositories = [dict(row) for row in cur.fetchall()]
 
             cur.execute(
-                f"SELECT {_MISSION_FIELDS} FROM omp_work.project_missions"
+                f"SELECT {_MISSION_FIELDS} FROM omp_work.project_missions"  # nosec B608 - static column list
                 " WHERE workspace_id=%s AND project_id=%s ORDER BY mission_id",
                 (workspace_id, project_id),
             )
             missions = [dict(row) for row in cur.fetchall()]
 
             cur.execute(
-                f"SELECT {_HISTORY_FIELDS} FROM omp_work.project_history"
+                f"SELECT {_HISTORY_FIELDS} FROM omp_work.project_history"  # nosec B608 - static column list
                 " WHERE workspace_id=%s AND project_id=%s ORDER BY at, history_id",
                 (workspace_id, project_id),
             )
             history = [dict(row) for row in cur.fetchall()]
 
             cur.execute(
-                f"SELECT {_MANDATE_FIELDS} FROM omp_work.standing_mandates"
+                f"SELECT {_MANDATE_FIELDS} FROM omp_work.standing_mandates"  # nosec B608 - static column list
                 " WHERE workspace_id=%s AND project_id=%s AND active",
                 (workspace_id, project_id),
             )
             mandate = cur.fetchone()
 
             cur.execute(
-                f"SELECT {_POLICY_FIELDS} FROM omp_work.standing_policies"
+                f"SELECT {_POLICY_FIELDS} FROM omp_work.standing_policies"  # nosec B608 - static column list
                 " WHERE workspace_id=%s AND project_id=%s AND active ORDER BY policy_id",
                 (workspace_id, project_id),
             )
             policies = [dict(row) for row in cur.fetchall()]
 
             cur.execute(
-                f"SELECT {_BUDGET_FIELDS} FROM omp_work.spend_budgets"
+                f"SELECT {_BUDGET_FIELDS} FROM omp_work.spend_budgets"  # nosec B608 - static column list
                 " WHERE workspace_id=%s AND project_id=%s AND active AND mission_id IS NULL",
                 (workspace_id, project_id),
             )
@@ -803,7 +803,7 @@ class ProjectStoreMixin:
         self, cur: psycopg.Cursor[dict[str, object]], workspace_id: UUID, key: str
     ) -> UUID | None:
         cur.execute(
-            f"SELECT {_PROJECT_FIELDS} FROM omp_work.projects"
+            f"SELECT {_PROJECT_FIELDS} FROM omp_work.projects"  # nosec B608 - static column list
             " WHERE workspace_id=%s AND key=%s AND NOT archived ORDER BY project_id",
             (workspace_id, key),
         )
@@ -862,7 +862,7 @@ class ProjectStoreMixin:
         project_id: UUID,
     ) -> list[RepositoryRecord]:
         cur.execute(
-            f"SELECT {_REPOSITORY_FIELDS} FROM omp_work.project_repositories pr"
+            f"SELECT {_REPOSITORY_FIELDS} FROM omp_work.project_repositories pr"  # nosec B608 - static column list
             " JOIN omp_work.repositories r ON r.workspace_id=pr.workspace_id"
             " AND r.repository_id=pr.repository_id"
             " WHERE pr.workspace_id=%s AND pr.project_id=%s ORDER BY r.key",
@@ -888,7 +888,7 @@ class ProjectStoreMixin:
         project_id: UUID,
     ) -> StandingMandate | None:
         cur.execute(
-            f"SELECT {_MANDATE_FIELDS} FROM omp_work.standing_mandates"
+            f"SELECT {_MANDATE_FIELDS} FROM omp_work.standing_mandates"  # nosec B608 - static column list
             " WHERE workspace_id=%s AND project_id=%s AND active",
             (workspace_id, project_id),
         )
@@ -912,7 +912,7 @@ class ProjectStoreMixin:
         policy_id: UUID,
     ) -> StandingPolicy | None:
         cur.execute(
-            f"SELECT {_POLICY_FIELDS} FROM omp_work.standing_policies"
+            f"SELECT {_POLICY_FIELDS} FROM omp_work.standing_policies"  # nosec B608 - static column list
             " WHERE workspace_id=%s AND project_id=%s AND policy_id=%s AND active",
             (workspace_id, project_id, policy_id),
         )
@@ -929,7 +929,7 @@ class ProjectStoreMixin:
         mission_id: UUID | None,
     ) -> tuple[SpendBudget | None, UUID | None]:
         cur.execute(
-            f"SELECT {_BUDGET_FIELDS} FROM omp_work.spend_budgets"
+            f"SELECT {_BUDGET_FIELDS} FROM omp_work.spend_budgets"  # nosec B608 - static column list
             " WHERE workspace_id=%s AND project_id=%s AND active"
             " AND mission_id IS NOT DISTINCT FROM %s",
             (workspace_id, project_id, mission_id),
@@ -955,7 +955,7 @@ class ProjectStoreMixin:
     ) -> tuple[SpendBudget | None, UUID | None]:
         """Load one active budget FOR UPDATE so a decide-then-record spend serializes."""
         cur.execute(
-            f"SELECT {_BUDGET_FIELDS} FROM omp_work.spend_budgets"
+            f"SELECT {_BUDGET_FIELDS} FROM omp_work.spend_budgets"  # nosec B608 - static column list
             " WHERE workspace_id=%s AND project_id=%s AND active"
             " AND mission_id IS NOT DISTINCT FROM %s FOR UPDATE",
             (workspace_id, project_id, mission_id),
@@ -1058,7 +1058,7 @@ class ProjectStoreMixin:
     ) -> list[StandingPolicy]:
         """Every active policy on the project, in policy_id order."""
         cur.execute(
-            f"SELECT {_POLICY_FIELDS} FROM omp_work.standing_policies"
+            f"SELECT {_POLICY_FIELDS} FROM omp_work.standing_policies"  # nosec B608 - static column list
             " WHERE workspace_id=%s AND project_id=%s AND active ORDER BY policy_id",
             (workspace_id, project_id),
         )
@@ -1072,7 +1072,7 @@ class ProjectStoreMixin:
     ) -> list[StandingPolicy]:
         """The active spend_beyond_threshold policies, for authorize_spend."""
         cur.execute(
-            f"SELECT {_POLICY_FIELDS} FROM omp_work.standing_policies"
+            f"SELECT {_POLICY_FIELDS} FROM omp_work.standing_policies"  # nosec B608 - static column list
             " WHERE workspace_id=%s AND project_id=%s AND active"
             " AND action_class='spend_beyond_threshold' ORDER BY policy_id",
             (workspace_id, project_id),

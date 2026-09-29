@@ -13,6 +13,17 @@
             "action": "get_execution"
           }
         }
+      ],
+      "hold_s": 30
+    },
+    {
+      "tool_calls": [
+        {
+          "name": "work",
+          "arguments": {
+            "action": "get_execution"
+          }
+        }
       ]
     },
     {
@@ -29,11 +40,40 @@
     {
       "tool_calls": [
         {
+          "name": "write",
+          "arguments": {
+            "path": "local://execute-omp-246-plan.md",
+            "content": "## Approach\n- Write grant-note.txt so the one-item grant finishes once.\n\n## Verification\n- Read grant-note.txt and confirm it records the finished grant.\n"
+          }
+        },
+        {
+          "name": "write",
+          "arguments": {
+            "path": "grant-note.txt",
+            "content": "the one-item grant finishes once\n"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
           "name": "work",
           "arguments": {
             "action": "stamp_execution_plan",
             "plan_file": "local://execute-omp-246-plan.md",
-            "paths": ["result.txt"]
+            "paths": ["grant-note.txt"]
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "name": "write",
+          "arguments": {
+            "path": "grant-note.txt",
+            "content": "the one-item grant finishes once\n"
           }
         }
       ]
@@ -44,10 +84,58 @@
           "name": "work",
           "arguments": {
             "action": "begin_execution_review",
-            "body": "the grant completed once"
+            "body": "grant-note.txt records that the one-item grant finishes once."
           }
         }
       ]
+    },
+    {
+      "text": "Ending the turn so the close-attempt checkpoint can deliver."
+    },
+    {
+      "tool_calls": [
+        {
+          "name": "work",
+          "arguments": {
+            "action": "begin_execution_review",
+            "body": "grant-note.txt records that the one-item grant finishes once."
+          }
+        }
+      ]
+    },
+    {
+      "text": "OK"
+    },
+    {
+      "tool_calls": [
+        {
+          "name": "yield",
+          "arguments": {
+            "result": {
+              "data": {
+                "report": "VERDICT: PASS\n\nFINDINGS\nnone\n\nACCEPTANCE COVERAGE\n| AC-1 | met | grant-note.txt records that the one-item grant finishes once |\n\nOUT OF SCOPE\nnone\n\nCHECKS RUN\n- read grant-note.txt → the one-item grant finishes once\n\nREMAINING QUESTIONS\nnone\n"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "text": "Ending the turn so the audit checkpoint can deliver."
+    },
+    {
+      "tool_calls": [
+        {
+          "name": "work",
+          "arguments": {
+            "action": "begin_execution_review",
+            "body": "grant-note.txt records that the one-item grant finishes once."
+          }
+        }
+      ]
+    },
+    {
+      "text": "The one-item grant is complete."
     }
   ],
   "ui_script": [],

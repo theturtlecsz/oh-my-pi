@@ -1,8 +1,9 @@
-"""Compile and reproduce a fleet context bundle from the command line (OMP-311).
+"""Compile and reproduce a fleet context bundle from the command line (OMP-311, OMP-419).
 
 ``compile`` reads one workflow view from stdin, retrieves exact, structural,
 procedural and semantic items, reranks the optional ones, compiles against
 ``omp tokens count``, and persists the bundle before it prints anything.
+``stage`` runs an in-process stage compile from context settings.
 ``reproduce`` replays a persisted bundle offline. A compile failure exits 2
 with a reason on stderr and an empty stdout; a reproduction failure exits 3.
 """
@@ -12,9 +13,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import shutil
 import subprocess  # nosec B404 - invokes git to resolve the workspace remote
 import sys
+from collections.abc import Collection, Sequence
 from typing import Any, TextIO
 from uuid import UUID
 
@@ -25,7 +28,8 @@ from omp_work.v1.models import StrictModel
 from pydantic import Field
 
 from omp_knowledge.context.compiler import compile_bundle
-from omp_knowledge.context.models import CompileRequest, ContextItem, Stage
+from omp_knowledge.context.models import CompileRequest, ContextItem, Stage, StageIdentity
+from omp_knowledge.context.project_sources import ProjectContext
 from omp_knowledge.context.rerank import HttpReranker, OrderReranker, Reranker
 from omp_knowledge.context.routes import ContextRouteStore
 from omp_knowledge.context.semantic import semantic_items
@@ -40,12 +44,14 @@ from omp_knowledge.context.tokens import OmpTokenCounter, ReproductionError
 from omp_knowledge.engine.protocol import KnowledgeEngine
 from omp_knowledge.errors import KnowledgeError, SnapshotNotPublishedError
 from omp_knowledge.inference.embedding import Embedder, HttpEmbedder
-from omp_knowledge.inference.routes import load_routes, resolve
+from omp_knowledge.inference.routes import RouteSet, load_routes, resolve
 from omp_knowledge.vectors.store import VectorProjectionStore
 
 EXIT_OK = 0
 EXIT_ERROR = 2
 EXIT_REPRODUCTION = 3
+DEFAULT_STRUCTURAL_LIMIT = 40
+DEFAULT_SEMANTIC_LIMIT = 10
 
 
 class _CompileStdin(StrictModel):
@@ -55,6 +61,12 @@ class _CompileStdin(StrictModel):
     attempt_id: str = Field(min_length=1)
     cwd: str = Field(min_length=1)
     workflow: WorkflowView
+
+
+class _StageStdin(_CompileStdin):
+    """The one JSON object ``stage`` reads from stdin."""
+
+    project: ProjectContext | None = None
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -75,9 +87,12 @@ def _build_parser() -> argparse.ArgumentParser:
     compile_parser.add_argument("--reranker-model")
     compile_parser.add_argument("--routes")
     compile_parser.add_argument("--vector-state-dir")
-    compile_parser.add_argument("--structural-limit", type=int, default=40)
-    compile_parser.add_argument("--semantic-limit", type=int, default=10)
+    compile_parser.add_argument("--structural-limit", type=int, default=DEFAULT_STRUCTURAL_LIMIT)
+    compile_parser.add_argument("--semantic-limit", type=int, default=DEFAULT_SEMANTIC_LIMIT)
     compile_parser.add_argument("--json", action="store_true")
+
+    stage_parser = subcommands.add_parser("stage")
+    stage_parser.add_argument("--settings")
 
     reproduce_parser = subcommands.add_parser("reproduce")
     reproduce_parser.add_argument("--state-dir", required=True)
@@ -144,15 +159,23 @@ def _resolve_repository(cwd: str) -> str | None:
     return normalize_remote_url(result.stdout.strip())
 
 
-def _read_compile_stdin(stdin: TextIO | None) -> _CompileStdin:
+def _read_json_stdin(stdin: TextIO | None, command: str) -> dict[str, Any]:
     stream = sys.stdin if stdin is None else stdin
     raw = stream.read()
     if not raw.strip():
-        raise ValueError("compile expects a JSON object on stdin")
+        raise ValueError(f"{command} expects a JSON object on stdin")
     payload = json.loads(raw)
     if not isinstance(payload, dict):
-        raise ValueError("compile stdin must be a JSON object")
-    return _CompileStdin.model_validate(payload)
+        raise ValueError(f"{command} stdin must be a JSON object")
+    return payload
+
+
+def _read_compile_stdin(stdin: TextIO | None) -> _CompileStdin:
+    return _CompileStdin.model_validate(_read_json_stdin(stdin, "compile"))
+
+
+def _read_stage_stdin(stdin: TextIO | None) -> _StageStdin:
+    return _StageStdin.model_validate(_read_json_stdin(stdin, "stage"))
 
 
 def _reranker(url: str | None, model: str | None) -> Reranker:
@@ -181,15 +204,169 @@ def _rerank_optional(
     return updated
 
 
-def _engine_for(args: argparse.Namespace, engine: KnowledgeEngine | None) -> KnowledgeEngine | None:
+def engine_for(engine_name: str, engine: KnowledgeEngine | None) -> KnowledgeEngine | None:
+    """The injected engine, else a Cognee adapter when ``engine_name`` is ``cognee``."""
     if engine is not None:
         return engine
-    if args.engine == "cognee":
+    if engine_name == "cognee":
         from omp_knowledge.config import load_config
         from omp_knowledge.engine.cognee_adapter import RealCogneeAdapter
 
         return RealCogneeAdapter(load_config())
     return None
+
+
+def _reranker_route_from_resolved(resolved: Any) -> dict[str, Any]:
+    return {
+        "role": "reranker",
+        "name": resolved.profile.name,
+        "provider": resolved.profile.provider,
+        "model": resolved.profile.model or "",
+        "accelerator": resolved.profile.accelerator,
+        "used": resolved.used,
+        "reason": resolved.reason,
+    }
+
+
+def _cli_reranker_route(model: str | None) -> dict[str, Any]:
+    return {
+        "role": "reranker",
+        "name": "cli",
+        "provider": "llama.cpp",
+        "model": model or "",
+        "accelerator": "unknown",
+        "used": "primary",
+        "reason": "",
+    }
+
+
+def _order_reranker_route() -> dict[str, Any]:
+    return {
+        "role": "reranker",
+        "name": "order",
+        "provider": "order",
+        "model": "",
+        "accelerator": "cpu",
+        "used": "primary",
+        "reason": "",
+    }
+
+
+def resolve_reranker(
+    *,
+    injected: Reranker | None,
+    reranker_url: str | None,
+    reranker_model: str | None,
+    route_set: RouteSet | None,
+) -> tuple[Reranker, dict[str, Any]]:
+    """Pick the reranker and the route row ``_compile`` persists for it."""
+    if injected is not None:
+        if route_set is not None:
+            return injected, _reranker_route_from_resolved(resolve(route_set, "reranker"))
+        if reranker_url is not None:
+            return injected, _cli_reranker_route(reranker_model)
+        return injected, _order_reranker_route()
+
+    if route_set is not None:
+        resolved_reranker = resolve(route_set, "reranker")
+        if resolved_reranker.profile.provider == "llama.cpp":
+            if not resolved_reranker.profile.endpoint or not resolved_reranker.profile.model:
+                raise ValueError("llama.cpp reranker requires endpoint and model")
+            active: Reranker = HttpReranker(
+                resolved_reranker.profile.endpoint,
+                resolved_reranker.profile.model,
+            )
+        elif resolved_reranker.profile.provider == "order":
+            active = OrderReranker()
+        else:
+            raise ValueError(
+                f"unsupported reranker provider: {resolved_reranker.profile.provider}"
+            )
+        return active, _reranker_route_from_resolved(resolved_reranker)
+
+    if reranker_url is not None:
+        return _reranker(reranker_url, reranker_model), _cli_reranker_route(reranker_model)
+    return OrderReranker(), _order_reranker_route()
+
+
+def append_structural_items(
+    items: list[ContextItem],
+    *,
+    structural_state_dir: str | None,
+    selection: Sequence[tuple[UUID, UUID, str]],
+    permitted: Collection[str | UUID],
+    limit: int,
+) -> None:
+    """Append symbol-map items when a structural state dir is configured."""
+    if structural_state_dir is None:
+        return
+    structural = StructuralPublicationStore(structural_state_dir)
+    items.extend(structural_items(structural, selection, permitted, limit))
+
+
+def append_semantic_items(
+    items: list[ContextItem],
+    *,
+    engine_name: str,
+    engine: KnowledgeEngine | None,
+    selection: Sequence[tuple[UUID, UUID, str]],
+    permitted: Collection[str | UUID],
+    query: str,
+    limit: int,
+) -> None:
+    """Append engine retrieval items when an engine and a snapshot selection exist."""
+    active = engine_for(engine_name, engine)
+    if active is None or not selection:
+        return
+    items.extend(
+        asyncio.run(
+            semantic_items(
+                active,
+                selection,
+                permitted,
+                query,
+                limit=limit,
+            )
+        )
+    )
+
+
+def finish_compile(
+    *,
+    items: list[ContextItem],
+    identity: StageIdentity,
+    token_budget: int,
+    encoding: str,
+    token_cmd: Sequence[str],
+    state_dir: str,
+    query: str,
+    reranker: Reranker,
+    routes: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Rerank optional items, compile, persist the bundle and its route rows."""
+    ranked = _rerank_optional(reranker, query, items)
+    request = CompileRequest(
+        identity=identity,
+        token_budget=token_budget,
+        encoding=encoding,
+        items=tuple(ranked),
+    )
+    compiled = compile_bundle(
+        request,
+        OmpTokenCounter(list(token_cmd), encoding),
+    )
+    bundle_id = ContextBundleStore(state_dir).persist(request, compiled)
+    ContextRouteStore(state_dir).persist(bundle_id, routes)
+    return {
+        "bundle_id": bundle_id,
+        "bundle_sha256": compiled.sha256,
+        "stage": identity.stage,
+        "tokens": compiled.tokens,
+        "token_budget": request.token_budget,
+        "exclusions": [exclusion.model_dump(mode="json") for exclusion in compiled.exclusions],
+        "text": compiled.text,
+        "routes": routes,
+    }
 
 
 def _compile(
@@ -210,87 +387,12 @@ def _compile(
 
     route_set = load_routes(args.routes) if args.routes is not None else None
 
-    reranker_route: dict[str, Any]
-    active_reranker: Reranker
-    if reranker is not None:
-        active_reranker = reranker
-        if route_set is not None:
-            resolved_reranker = resolve(route_set, "reranker")
-            reranker_route = {
-                "role": "reranker",
-                "name": resolved_reranker.profile.name,
-                "provider": resolved_reranker.profile.provider,
-                "model": resolved_reranker.profile.model or "",
-                "accelerator": resolved_reranker.profile.accelerator,
-                "used": resolved_reranker.used,
-                "reason": resolved_reranker.reason,
-            }
-        elif args.reranker_url is not None:
-            reranker_route = {
-                "role": "reranker",
-                "name": "cli",
-                "provider": "llama.cpp",
-                "model": args.reranker_model or "",
-                "accelerator": "unknown",
-                "used": "primary",
-                "reason": "",
-            }
-        else:
-            reranker_route = {
-                "role": "reranker",
-                "name": "order",
-                "provider": "order",
-                "model": "",
-                "accelerator": "cpu",
-                "used": "primary",
-                "reason": "",
-            }
-    elif route_set is not None:
-        resolved_reranker = resolve(route_set, "reranker")
-        if resolved_reranker.profile.provider == "llama.cpp":
-            if not resolved_reranker.profile.endpoint or not resolved_reranker.profile.model:
-                raise ValueError("llama.cpp reranker requires endpoint and model")
-            active_reranker = HttpReranker(
-                resolved_reranker.profile.endpoint,
-                resolved_reranker.profile.model,
-            )
-        elif resolved_reranker.profile.provider == "order":
-            active_reranker = OrderReranker()
-        else:
-            raise ValueError(
-                f"unsupported reranker provider: {resolved_reranker.profile.provider}"
-            )
-        reranker_route = {
-            "role": "reranker",
-            "name": resolved_reranker.profile.name,
-            "provider": resolved_reranker.profile.provider,
-            "model": resolved_reranker.profile.model or "",
-            "accelerator": resolved_reranker.profile.accelerator,
-            "used": resolved_reranker.used,
-            "reason": resolved_reranker.reason,
-        }
-    elif args.reranker_url is not None:
-        active_reranker = _reranker(args.reranker_url, args.reranker_model)
-        reranker_route = {
-            "role": "reranker",
-            "name": "cli",
-            "provider": "llama.cpp",
-            "model": args.reranker_model or "",
-            "accelerator": "unknown",
-            "used": "primary",
-            "reason": "",
-        }
-    else:
-        active_reranker = OrderReranker()
-        reranker_route = {
-            "role": "reranker",
-            "name": "order",
-            "provider": "order",
-            "model": "",
-            "accelerator": "cpu",
-            "used": "primary",
-            "reason": "",
-        }
+    active_reranker, reranker_route = resolve_reranker(
+        injected=reranker,
+        reranker_url=args.reranker_url,
+        reranker_model=args.reranker_model,
+        route_set=route_set,
+    )
 
     body = _read_compile_stdin(stdin)
     view = body.workflow
@@ -299,18 +401,15 @@ def _compile(
     permitted: list[str] = list(args.permit_repository or [])
 
     items: list[ContextItem] = list(exact_items(view))
-    if args.structural_state_dir is not None:
-        structural = StructuralPublicationStore(args.structural_state_dir)
-        items.extend(
-            structural_items(
-                structural,
-                selection,
-                permitted,
-                args.structural_limit,
-            )
-        )
-    elif selection:
+    if args.structural_state_dir is None and selection:
         raise ValueError("--structural-state-dir is required when --snapshot is set")
+    append_structural_items(
+        items,
+        structural_state_dir=args.structural_state_dir,
+        selection=selection,
+        permitted=permitted,
+        limit=args.structural_limit,
+    )
 
     context: dict[str, str] = {}
     if view.item.project_id is not None:
@@ -321,18 +420,15 @@ def _compile(
     if args.learning_db is not None:
         items.extend(procedural_items(args.learning_db, context))
 
-    active_engine = _engine_for(args, engine)
-    if active_engine is not None and selection:
-        semantic = asyncio.run(
-            semantic_items(
-                active_engine,
-                selection,
-                permitted,
-                view.item.revision.title,
-                limit=args.semantic_limit,
-            )
-        )
-        items.extend(semantic)
+    append_semantic_items(
+        items,
+        engine_name=args.engine,
+        engine=engine,
+        selection=selection,
+        permitted=permitted,
+        query=view.item.revision.title,
+        limit=args.semantic_limit,
+    )
 
     embedding_route: dict[str, Any] | None = None
     if args.vector_state_dir is not None:
@@ -454,38 +550,53 @@ def _compile(
                     )
                 )
 
-    ranked = _rerank_optional(
-        active_reranker,
-        view.item.revision.title,
-        items,
-    )
-    request = CompileRequest(
-        identity=identity,
-        token_budget=args.token_budget,
-        encoding=args.encoding,
-        items=tuple(ranked),
-    )
-    compiled = compile_bundle(
-        request,
-        OmpTokenCounter(_parse_token_cmd(args.token_cmd), args.encoding),
-    )
     routes: list[dict[str, Any]] = []
     if embedding_route is not None:
         routes.append(embedding_route)
     routes.append(reranker_route)
+    return finish_compile(
+        items=items,
+        identity=identity,
+        token_budget=args.token_budget,
+        encoding=args.encoding,
+        token_cmd=_parse_token_cmd(args.token_cmd),
+        state_dir=args.state_dir,
+        query=view.item.revision.title,
+        reranker=active_reranker,
+        routes=routes,
+    )
 
-    bundle_id = ContextBundleStore(args.state_dir).persist(request, compiled)
-    ContextRouteStore(args.state_dir).persist(bundle_id, routes)
-    return {
-        "bundle_id": bundle_id,
-        "bundle_sha256": compiled.sha256,
-        "stage": identity.stage,
-        "tokens": compiled.tokens,
-        "token_budget": request.token_budget,
-        "exclusions": [exclusion.model_dump(mode="json") for exclusion in compiled.exclusions],
-        "text": compiled.text,
-        "routes": routes,
-    }
+
+def _stage(
+    args: argparse.Namespace,
+    *,
+    stdin: TextIO | None,
+    engine: KnowledgeEngine | None = None,
+    reranker: Reranker | None = None,
+) -> dict[str, Any]:
+    from omp_knowledge.context.stage import (
+        compile_stage,
+        default_settings_path,
+        load_settings,
+    )
+
+    settings_path = args.settings
+    if settings_path is None:
+        settings_path = default_settings_path(os.environ)
+
+    settings = load_settings(settings_path)
+    body = _read_stage_stdin(stdin)
+
+    return compile_stage(
+        settings,
+        view=body.workflow,
+        stage=body.stage,
+        attempt_id=body.attempt_id,
+        cwd=body.cwd,
+        project=body.project,
+        engine=engine,
+        reranker=reranker,
+    )
 
 
 def _reproduce(args: argparse.Namespace) -> dict[str, Any]:
@@ -525,6 +636,13 @@ def main(
                 stdin=stdin,
                 engine=engine,
                 embedder=embedder,
+                reranker=reranker,
+            )
+        elif args.command == "stage":
+            payload = _stage(
+                args,
+                stdin=stdin,
+                engine=engine,
                 reranker=reranker,
             )
         else:
