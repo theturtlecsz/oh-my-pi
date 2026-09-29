@@ -219,6 +219,18 @@ def _run_alarms_command(args: argparse.Namespace) -> int:
 
 
 def _run_stop_command(args: argparse.Namespace) -> int:
+    if args.stop_command == "install-guards":
+        try:
+            stop_ops.install_guards(
+                args.units,
+                systemd_dir=args.systemd_dir,
+                interval=args.interval,
+            )
+            return 0
+        except Exception as error:
+            print(f"stop: {error}", file=sys.stderr)
+            return 2
+
     client_config = args.client_config or str(_default_client_config())
     try:
         client, workspace_id = stop_ops.load_client(
@@ -228,6 +240,9 @@ def _run_stop_command(args: argparse.Namespace) -> int:
         print(f"stop: {error}", file=sys.stderr)
         return 255
     try:
+        if args.stop_command == "watch":
+            stop_ops.watch(client, args.units, interval=args.interval)
+            return 0
         if args.stop_command == "check":
             return stop_ops.check(client)
         if args.stop_command == "status":
@@ -307,6 +322,17 @@ def main(argv: list[str] | None = None) -> int | None:
     engage.add_argument("--reason", required=True)
     release = stop_commands.add_parser("release", parents=[stop_scope])
     release.add_argument("--reason", required=True)
+    watch_parser = stop_commands.add_parser("watch", parents=[stop_scope])
+    watch_parser.add_argument(
+        "--unit", action="extend", nargs="+", dest="units", required=True
+    )
+    watch_parser.add_argument("--interval", type=float, default=5.0)
+    install_parser = stop_commands.add_parser("install-guards", parents=[stop_scope])
+    install_parser.add_argument(
+        "--unit", action="extend", nargs="+", dest="units", required=True
+    )
+    install_parser.add_argument("--systemd-dir", type=Path, default=None)
+    install_parser.add_argument("--interval", type=float, default=5.0)
 
     alarms = subcommands.add_parser("alarms")
     alarm_common = argparse.ArgumentParser(add_help=False)
