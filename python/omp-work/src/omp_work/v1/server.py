@@ -248,6 +248,12 @@ def create_app(
     def execution(request: Request, workspace_id: UUID, grant_id: str = "") -> JSONResponse:
         return read_route(request, workspace_id, "execution", grant_id)
 
+    @app.get("/v1/workspaces/{workspace_id}/missions/{mission_id}")
+    def mission(
+        request: Request, workspace_id: UUID, mission_id: str
+    ) -> JSONResponse:
+        return read_route(request, workspace_id, "mission", mission_id)
+
     @app.get("/v1/workspaces/{workspace_id}/stop")
     def stop(request: Request, workspace_id: UUID) -> JSONResponse:
         try:
