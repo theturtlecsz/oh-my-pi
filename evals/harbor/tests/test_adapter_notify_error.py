@@ -70,3 +70,40 @@ def test_error_notify_after_agent_start_does_not_abort(tmp_path: Path) -> None:
     assert outcome == "completed"
     assert elapsed < 2
     assert loaded.read_json("outcome.json") == {"outcome": "completed", "reason": "terminal", "prompts_sent": 1}
+
+
+def test_error_notify_before_restart_ends_the_trial(tmp_path: Path) -> None:
+    import subprocess
+    import time
+    from test_adapter_controls import COMMAND, drive, kill_process_group
+
+    refusal = "Cannot begin execution: branch protection on refs/heads/main has no required status checks"
+
+    def delayed_killer(process: subprocess.Popen[str]) -> None:
+        time.sleep(0.05)
+        kill_process_group(process)
+
+    outcome, loaded, record, session_file, _command = drive(
+        tmp_path,
+        timeout_s=5,
+        ui_rules=[],
+        ui_requests=[_notify(refusal, "error")],
+        kill_at={"match": {"type": "prompt", "message": COMMAND}},
+        killer=delayed_killer,
+        work_state="running",
+    )
+    assert outcome == "harness_error"
+    assert loaded.read_json("outcome.json") == {
+        "outcome": "harness_error",
+        "reason": refusal,
+        "prompts_sent": 1,
+    }
+    assert "restarts" not in loaded.read_json("session.json")
+    frames = loaded.read_jsonl("rpc-transcript.jsonl")
+    assert any(
+        row["direction"] == "in"
+        and row["frame"].get("type") == "extension_ui_request"
+        and row["frame"].get("notifyType") == "error"
+        and row["frame"].get("message") == refusal
+        for row in frames
+    )

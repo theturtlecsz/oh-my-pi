@@ -301,6 +301,21 @@ class _LoggingClient(omp_rpc.RpcClient):
             subprocess.Popen = original  # type: ignore[misc, assignment]
         return self
 
+    def stop(self) -> None:
+        process = self._process
+        if process is not None:
+            if process.poll() is not None:
+                if self._stdout_thread is not None:
+                    self._stdout_thread.join(timeout=2.0)
+            else:
+                try:
+                    process.wait(timeout=1.0)
+                except (subprocess.TimeoutExpired, OSError):
+                    pass
+                if self._stdout_thread is not None and process.poll() is not None:
+                    self._stdout_thread.join(timeout=2.0)
+        super().stop()
+
 
 def _require_loopback(base_url: str) -> str:
     if not isinstance(base_url, str) or base_url.strip() == "":
@@ -680,6 +695,9 @@ class RpcAdapter:
         old = self._client
         if old is not None:
             old.stop()
+        early = self._pre_turn_failure()
+        if early is not None:
+            return early
         if not self._session_file:
             return "harness_error", "restart requires a session file", self._last
         client = self._open((*self.command, "--session", self._session_file))
