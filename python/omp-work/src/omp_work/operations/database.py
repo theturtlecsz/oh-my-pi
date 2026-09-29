@@ -37,22 +37,67 @@ def _operations_path(part: str) -> Path:
     return Path(str(files("omp_work.operations").joinpath(part)))
 
 
-def migrations() -> list[tuple[int, Path]]:
+def _migration_set(part: str) -> list[tuple[int, Path]]:
     result: list[tuple[int, Path]] = []
-    for path in _operations_path("migrations").glob("*.sql"):
+    for path in _operations_path(part).glob("*.sql"):
         ordinal = int(path.name.split("_", 1)[0])
         result.append((ordinal, path))
     return sorted(result)
 
 
+def migrations() -> list[tuple[int, Path]]:
+    return _migration_set("migrations")
+
+
+def jobs_migrations() -> list[tuple[int, Path]]:
+    return _migration_set("jobs_migrations")
+
+
+def jobs_grants_path() -> Path:
+    return _operations_path("sql/jobs_grants.sql")
+
+
+def _migration_set_hash_entry(path: Path) -> bytes:
+    return (
+        path.relative_to(_operations_path(".")).as_posix().encode()
+        + b"\0"
+        + sha256(path.read_bytes()).hexdigest().encode()
+        + b"\n"
+    )
+
+
 def migration_set_sha256() -> str:
     digest = sha256()
-    for _, path in migrations():
-        digest.update(path.relative_to(_operations_path(".")).as_posix().encode())
-        digest.update(b"\0")
-        digest.update(sha256(path.read_bytes()).hexdigest().encode())
-        digest.update(b"\n")
+    for _, path in (*migrations(), *jobs_migrations()):
+        digest.update(_migration_set_hash_entry(path))
+    digest.update(_migration_set_hash_entry(jobs_grants_path()))
     return digest.hexdigest()
+
+
+def _jobs_migration_state(
+    cur: psycopg.Cursor[Any],
+) -> tuple[list[str], list[str]]:
+    """Jobs-ledger pending/drift against ``omp_jobs.schema_migrations``.
+
+    The schema absent is all-pending, matching a database that has never run
+    the jobs set; a recorded sequence that is not a prefix of the on-disk set
+    is drift (a renamed, removed, or edited file).
+    """
+    expected = [
+        (ordinal, path.name, sha256(path.read_bytes()).hexdigest())
+        for ordinal, path in jobs_migrations()
+    ]
+    cur.execute("SELECT to_regclass('omp_jobs.schema_migrations')")
+    if cur.fetchone()[0] is None:
+        return [name for _, name, _ in expected], []
+    cur.execute(
+        "SELECT ordinal, filename, sha256 FROM omp_jobs.schema_migrations ORDER BY ordinal"
+    )
+    actual = [(int(row[0]), row[1], row[2]) for row in cur.fetchall()]
+    prefix = expected[: len(actual)]
+    drift = [] if actual == prefix else ["migration_drift"]
+    pending = [name for _, name, _ in expected[len(actual) :]]
+    return pending, drift
 
 
 def _redacted(error: Exception) -> RuntimeError:
@@ -119,13 +164,16 @@ def check_migrations(
             "SELECT ordinal, filename, sha256 FROM omp_control.schema_migrations ORDER BY ordinal"
         )
         actual = [(int(row[0]), row[1], row[2]) for row in cur.fetchall()]
+        jobs_pending, jobs_drift = _jobs_migration_state(cur)
     expected_rows = [
         (ordinal, path.name, sha256(path.read_bytes()).hexdigest())
         for ordinal, path in expected
     ]
     prefix = expected_rows[: len(actual)]
     drift = [] if actual == prefix else ["migration_drift"]
+    drift += jobs_drift
     pending = [name for _, name, _ in expected_rows[len(actual) :]]
+    pending += jobs_pending
     if drift or (pending and not allow_pending):
         raise ValueError("migration_drift" if drift else "migration_pending")
     return {"pending": pending, "drift": drift}
@@ -181,6 +229,18 @@ def migrate(
                                 POSTGRES_MAJOR,
                             ),
                         )
+                    jobs_pending, jobs_drift = _jobs_migration_state(cur)
+                    if jobs_drift:
+                        raise ValueError("migration_drift")
+                    for ordinal, path in jobs_migrations():
+                        if path.name not in jobs_pending:
+                            continue
+                        cur.execute(path.read_text())
+                        cur.execute(
+                            "INSERT INTO omp_jobs.schema_migrations (ordinal, filename, sha256) VALUES (%s,%s,%s) ON CONFLICT (ordinal) DO NOTHING",
+                            (ordinal, path.name, sha256(path.read_bytes()).hexdigest()),
+                        )
+                    cur.execute(jobs_grants_path().read_text())
                     cur.execute(
                         "SELECT to_regclass('omp_control.runtime_compatibility')"
                     )

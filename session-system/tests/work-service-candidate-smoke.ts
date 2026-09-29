@@ -148,6 +148,22 @@ try {
 			if (res.exitCode !== 0) throw new Error(`migration ${f} failed: ${res.stderr.toString()}`);
 			psqlAdmin(`INSERT INTO omp_control.schema_migrations(ordinal, filename, sha256, contract_version, contract_sha256, postgres_major) VALUES (${ordinal}, '${f}', '${sha}', 'work.omp.dev/v1', '${WORK_CONTRACT_SHA256}', 18) ON CONFLICT (ordinal) DO NOTHING;`, "omp_work");
 		}
+		// The omp_jobs set and its backup grants ride the same ledger: ops migrate
+		// applies them inline, so a hand-rolled bootstrap must too or the runtime
+		// compatibility row and health readiness disagree with migration_set_sha256().
+		const jobsMigDir = path.join(pythonDir, "src/omp_work/operations/jobs_migrations");
+		for (const f of fs.readdirSync(jobsMigDir).filter(f => f.endsWith(".sql")).sort()) {
+			const sqlContent = fs.readFileSync(path.join(jobsMigDir, f), "utf8");
+			const ordinal = parseInt(f.split("_")[0], 10);
+			const sha = new Bun.CryptoHasher("sha256").update(sqlContent).digest("hex");
+			const res = Bun.spawnSync(["psql", "-h", "127.0.0.1", "-p", String(pgPort), "-U", "omp_work_migrator", "-d", "omp_work", "-v", "ON_ERROR_STOP=1"], {
+				env: { ...process.env, PGPASSWORD: migratorSecret },
+				stdin: Buffer.from(sqlContent),
+			});
+			if (res.exitCode !== 0) throw new Error(`jobs migration ${f} failed: ${res.stderr.toString()}`);
+			psqlAdmin(`INSERT INTO omp_jobs.schema_migrations(ordinal, filename, sha256) VALUES (${ordinal}, '${f}', '${sha}') ON CONFLICT (ordinal) DO NOTHING;`, "omp_work");
+		}
+		psqlAdmin(fs.readFileSync(path.join(pythonDir, "src/omp_work/operations/sql/jobs_grants.sql"), "utf8"), "omp_work");
 		// Readiness compares this row against the computed migration-set digest
 		// (collect_health `compatible`); a placeholder value keeps the service
 		// permanently not-ready.
