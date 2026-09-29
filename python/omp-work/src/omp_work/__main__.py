@@ -325,7 +325,7 @@ def main(argv: list[str] | None = None) -> int | None:
     subcommands = parser.add_subparsers(
         dest="command",
         required=True,
-        metavar="{schema,hash,approve,validate,ops,serve,demo,headroom,stall-check,parallel-admit,budget-alerts,stop,alarms,jobs}",
+        metavar="{schema,hash,approve,validate,ops,serve,demo,headroom,stall-check,parallel-admit,budget-alerts,projects,stop,alarms,jobs}",
     )
 
     schema = subcommands.add_parser("schema")
@@ -369,6 +369,17 @@ def main(argv: list[str] | None = None) -> int | None:
     alerts = subcommands.add_parser("budget-alerts")
     alerts.add_argument("--workspace", required=True, type=UUID)
     alerts.add_argument("--actor", required=True, type=UUID)
+
+    projects = subcommands.add_parser("projects")
+    projects_sub = projects.add_subparsers(dest="projects_command", required=True)
+    project_scope = argparse.ArgumentParser(add_help=False)
+    project_scope.add_argument("--workspace", required=True, type=UUID)
+    project_scope.add_argument("--actor", required=True, type=UUID)
+    seed_parser = projects_sub.add_parser("seed", parents=[project_scope])
+    seed_parser.add_argument("--file", required=True, type=Path)
+    show_parser = projects_sub.add_parser("show", parents=[project_scope])
+    show_parser.add_argument("--key", required=True)
+    projects_sub.add_parser("check", parents=[project_scope])
 
     stop = subcommands.add_parser("stop")
     stop_commands = stop.add_subparsers(dest="stop_command", required=True)
@@ -548,6 +559,10 @@ def main(argv: list[str] | None = None) -> int | None:
             return 0
     if args.command == "budget-alerts":
         return _budget_alerts(args.workspace, args.actor)
+    if args.command == "projects":
+        from .project_cli import run_projects
+
+        return run_projects(args)
     if args.command == "jobs":
         from .jobs.process import check, register_component, run_worker
 

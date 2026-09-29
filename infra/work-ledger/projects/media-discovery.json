@@ -1,0 +1,22 @@
+{
+  "key": "media-discovery",
+  "name": "Media Discovery",
+  "kind": "world",
+  "purpose": "The media-discovery application.",
+  "goals": [],
+  "questions": [
+    "What are Media Discovery's goals and standing mandate? (Chris)"
+  ],
+  "repositories": [
+    {
+      "key": "media-discovery",
+      "name": "media-discovery",
+      "url": "https://github.com/theturtlecsz/media-discovery.git",
+      "default_branch": "main",
+      "protected_branches": [
+        "main"
+      ],
+      "automation_ci_secret_free": false
+    }
+  ]
+}
