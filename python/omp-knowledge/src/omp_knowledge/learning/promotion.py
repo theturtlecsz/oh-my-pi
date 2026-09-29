@@ -256,7 +256,12 @@ def answer_promotion(
     approve: bool,
     answer_ref: str,
 ) -> dict[str, Any]:
-    """Answer a pending promotion batch decision with approve or reject."""
+    """Answer a pending promotion batch. An answered batch stays answered.
+
+    Approve and reject are one-way. A later call on the same decision_id does
+    not change status, answer_ref, or answered_at, so a rejected version cannot
+    be supplied by approving that decision again.
+    """
     ensure_promotion_tables(store)
     decision_id_str = str(decision_id)
     new_status = "approved" if approve else "rejected"
@@ -264,20 +269,28 @@ def answer_promotion(
 
     with store.transaction() as conn:
         row = conn.execute(
-            "SELECT decision_id, status, decision_json FROM promotion_batches WHERE decision_id = ?",
+            "SELECT status FROM promotion_batches WHERE decision_id = ?",
             (decision_id_str,),
         ).fetchone()
         if row is None:
             raise KeyError(f"promotion decision {decision_id_str} not found")
+        if row["status"] != "pending":
+            raise ValueError(
+                f"promotion decision {decision_id_str} is already {row['status']}"
+            )
 
-        conn.execute(
+        updated = conn.execute(
             """
             UPDATE promotion_batches
             SET status = ?, answer_ref = ?, answered_at = ?
-            WHERE decision_id = ?
+            WHERE decision_id = ? AND status = 'pending'
             """,
             (new_status, str(answer_ref), now, decision_id_str),
         )
+        if updated.rowcount != 1:
+            raise ValueError(
+                f"promotion decision {decision_id_str} is no longer pending"
+            )
 
         return {
             "decision_id": decision_id_str,
@@ -285,6 +298,28 @@ def answer_promotion(
             "answer_ref": str(answer_ref),
             "answered_at": now,
         }
+
+
+def journey_pass_workspace(
+    store: LearningStore,
+    capability: str = "research_to_learning",
+) -> str | None:
+    """Workspace on the latest journey pass, or None when no pass is recorded."""
+    ensure_promotion_tables(store)
+    with store.transaction() as conn:
+        row = conn.execute(
+            """
+            SELECT workspace_id
+            FROM journey_passes
+            WHERE capability = ?
+            ORDER BY passed_at DESC, rowid DESC
+            LIMIT 1
+            """,
+            (capability,),
+        ).fetchone()
+    if row is None or row["workspace_id"] is None:
+        return None
+    return str(row["workspace_id"])
 
 
 def get_promoted_procedures(
@@ -326,6 +361,7 @@ __all__ = [
     "ensure_promotion_tables",
     "get_promoted_procedures",
     "has_journey_pass",
+    "journey_pass_workspace",
     "record_journey_pass",
     "request_promotion",
 ]

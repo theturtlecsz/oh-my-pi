@@ -385,12 +385,18 @@ def main(
             return EXIT_OK if run.failed == 0 else EXIT_RUN_FAILED
 
         if args.command == "promotion-request":
-            from .promotion import request_promotion
+            from .promotion import journey_pass_workspace, request_promotion
 
-            record = request_promotion(
-                active_store,
-                workspace_id=args.workspace or "default",
-                project_id=args.project_id,
+            # No --workspace: use the workspace on the latest journey pass.
+            workspace_id = args.workspace or journey_pass_workspace(active_store)
+            record = (
+                request_promotion(
+                    active_store,
+                    workspace_id=workspace_id,
+                    project_id=args.project_id,
+                )
+                if workspace_id is not None
+                else None
             )
             if record is None:
                 if args.json:
@@ -415,12 +421,19 @@ def main(
         if args.command == "promotion-answer":
             from .promotion import answer_promotion
 
-            result = answer_promotion(
-                active_store,
-                decision_id=args.decision_id,
-                approve=args.approve,
-                answer_ref=args.answer_ref,
-            )
+            try:
+                result = answer_promotion(
+                    active_store,
+                    decision_id=args.decision_id,
+                    approve=args.approve,
+                    answer_ref=args.answer_ref,
+                )
+            except ValueError as exc:
+                if args.json:
+                    print(json.dumps({"error": str(exc)}))
+                else:
+                    print(str(exc))
+                return EXIT_RUN_FAILED
             if args.json:
                 print(json.dumps(result, indent=2, sort_keys=True))
             else:
@@ -446,7 +459,12 @@ def main(
                     work_id_str = str(item.work_id)
                     res_data = client._get(f"/v1/work-items/{args.work_key}/research")
                     campaigns = res_data.get("campaigns", [])
-                    if campaigns and any(c.get("state") == "concluded" for c in campaigns):
+                    # Every campaign on this work must be concluded.
+                    if campaigns and all(
+                        isinstance(campaign, dict)
+                        and campaign.get("state") == "concluded"
+                        for campaign in campaigns
+                    ):
                         with active_store.transaction() as conn:
                             rows = conn.execute(
                                 """

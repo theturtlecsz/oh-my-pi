@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
+import pytest
+
 from omp_knowledge.learning.cli import EXIT_OK, EXIT_RUN_FAILED, main as cli_main
 from omp_knowledge.learning.promotion import (
     answer_promotion,
@@ -292,6 +294,25 @@ def test_journey_check_pass_and_failure_conditions() -> None:
     assert rc == EXIT_RUN_FAILED
     out = json.loads(buf.getvalue().strip())
     assert out == {"capability": "research_to_learning", "passed": False}
+    assert not has_journey_pass(store, ws)
+
+    # 2b. Failure: one concluded campaign does not cover a campaign still running
+    client_mixed = FakeWorkClient(
+        item=done_item,
+        campaigns=[{"state": "running"}, {"state": "concluded"}],
+    )
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = cli_main(
+            ["journey-check", "--state-dir", ":memory:", "--work-url", "http://fake", "--bearer-file", "/fake", "--workspace", ws, "--work-key", work_key],
+            store=store,
+            client=client_mixed,
+        )
+    assert rc == EXIT_RUN_FAILED
+    out = json.loads(buf.getvalue().strip())
+    assert out == {"capability": "research_to_learning", "passed": False}
+    assert not has_journey_pass(store, ws)
 
     # 3. Failure: work_id does not match active procedure
     different_work_id = uuid4()
@@ -389,3 +410,131 @@ def test_cli_promoted_only_supply_and_promotion_commands() -> None:
     promoted_lines = json.loads(buf.getvalue().strip())
     assert len(promoted_lines) == 1
     assert proc_id in promoted_lines[0]
+
+
+def _batch_row(store: LearningStore, decision_id: str) -> Any:
+    with store.transaction() as conn:
+        return conn.execute(
+            """
+            SELECT status, answer_ref
+            FROM promotion_batches
+            WHERE decision_id = ?
+            """,
+            (decision_id,),
+        ).fetchone()
+
+
+def test_second_answer_does_not_change_a_rejected_or_approved_batch() -> None:
+    store = LearningStore(":memory:")
+    ws = "ws-terminal-answer"
+    proc_a = insert_procedure(store, title="Procedure A")
+    proc_b = insert_procedure(store, title="Procedure B")
+    record_journey_pass(store, ws)
+
+    rec = request_promotion(store, ws)
+    assert rec is not None
+    assert {item["procedure_id"] for item in rec["batch"]} == {proc_a, proc_b}
+    decision_id = rec["decision_id"]
+
+    rejected = answer_promotion(
+        store, decision_id, approve=False, answer_ref="owner-rejected"
+    )
+    assert rejected["status"] == "rejected"
+
+    with pytest.raises(ValueError, match="already rejected"):
+        answer_promotion(store, decision_id, approve=True, answer_ref="owner-flipped")
+
+    row = _batch_row(store, decision_id)
+    assert row["status"] == "rejected"
+    assert row["answer_ref"] == "owner-rejected"
+    assert get_promoted_procedures(store, ws) == set()
+    assert supply(
+        store, workspace_id=ws, work_key="k-1", allowed=get_promoted_procedures(store, ws)
+    ).lines == ()
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = cli_main(
+            [
+                "promotion-answer",
+                "--state-dir",
+                ":memory:",
+                "--decision-id",
+                decision_id,
+                "--approve",
+                "--answer-ref",
+                "cli-flip",
+                "--json",
+            ],
+            store=store,
+        )
+    assert rc == EXIT_RUN_FAILED
+    assert "already rejected" in json.loads(buf.getvalue())["error"]
+    assert get_promoted_procedures(store, ws) == set()
+    assert request_promotion(store, ws) is None
+
+    # A new version is a new batch. Approving it does not supply the rejected version.
+    add_procedure_version(store, procedure_id=proc_a, version=2, title="Procedure A v2")
+    rec_v2 = request_promotion(store, ws)
+    assert rec_v2 is not None
+    assert rec_v2["decision_id"] != decision_id
+    assert rec_v2["batch"] == [
+        {"procedure_id": proc_a, "version": 2, "title": "Procedure A v2"}
+    ]
+    answer_promotion(store, rec_v2["decision_id"], approve=True, answer_ref="v2-ok")
+    allowed = get_promoted_procedures(store, ws)
+    assert allowed == {(proc_a, 2)}
+
+    with pytest.raises(ValueError, match="already approved"):
+        answer_promotion(
+            store, rec_v2["decision_id"], approve=False, answer_ref="v2-undo"
+        )
+    assert _batch_row(store, rec_v2["decision_id"])["status"] == "approved"
+    assert _batch_row(store, rec_v2["decision_id"])["answer_ref"] == "v2-ok"
+    assert get_promoted_procedures(store, ws) == {(proc_a, 2)}
+
+
+def test_promotion_request_without_workspace_uses_journey_pass() -> None:
+    store = LearningStore(":memory:")
+    ws = str(uuid4())
+    proc_id = insert_procedure(store, title="Passed Workspace Procedure")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = cli_main(
+            ["promotion-request", "--state-dir", ":memory:", "--json"],
+            store=store,
+        )
+    assert rc == EXIT_OK
+    assert json.loads(buf.getvalue()) is None
+
+    record_journey_pass(store, ws)
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = cli_main(
+            ["promotion-request", "--state-dir", ":memory:", "--json"],
+            store=store,
+        )
+    assert rc == EXIT_OK
+    rec = json.loads(buf.getvalue())
+    assert rec["batch"] == [
+        {"procedure_id": proc_id, "version": 1, "title": "Passed Workspace Procedure"}
+    ]
+    with store.transaction() as conn:
+        stored = conn.execute(
+            "SELECT workspace_id FROM promotion_batches WHERE decision_id = ?",
+            (rec["decision_id"],),
+        ).fetchone()
+    assert stored["workspace_id"] == ws
+
+    answer_promotion(store, rec["decision_id"], approve=True, answer_ref="ws-ok")
+    promoted = supply(
+        store,
+        workspace_id=ws,
+        work_key="k-1",
+        allowed=get_promoted_procedures(store, ws),
+    )
+    assert len(promoted.lines) == 1
+    assert proc_id in promoted.lines[0]
+    assert get_promoted_procedures(store, str(uuid4())) == set()
