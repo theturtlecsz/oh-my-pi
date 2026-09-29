@@ -8,9 +8,14 @@ the generated TypeScript work client contract, the digest the worker's omp
 sends. ``RpcAdapter.run`` waits for a ready frame and a good ``get_state``,
 then polls the ready probe until it reports ready or a bounded deadline
 passes. It sends ``scenario.command`` once and polls until the readback
-pointer is terminal. A deadline that passes while the last read raised
-``ProbeError`` appends ``; last probe error: `` and that text to the outcome
-reason.
+pointer is terminal. A scenario with a model script does not seal on that
+match while an agent turn is open (``agent_start`` or ``turn_start`` seen,
+and neither a terminal ``agent_end`` nor a final assistant ``message_end``):
+it waits, within the same scenario timeout, for the agent to end, then reads
+the service once more and seals with that readback. A match before any agent
+turn, or a scenario with no model script, seals on that readback. A deadline
+that passes while the last read raised ``ProbeError`` appends ``; last probe error: ``
+and that text to the outcome reason.
 
 Scripted UI rules answer ``select``, ``confirm``, ``input``, and ``editor``
 requests. A request with no rule is cancelled and the run ends ``blocked``.
@@ -222,6 +227,39 @@ def _status_failure(path: str, status: int, body: Any) -> ProbeError:
 
 
 _TURN_TYPES = frozenset({"agent_start", "turn_start"})
+
+
+def _marks_agent_end(frame: Mapping[str, Any]) -> bool:
+    """True for a terminal ``agent_end`` or the assistant's final text.
+
+    ``isTerminal: false`` means the session will resume. A message that still
+    carries a tool call is a mid-script turn, not the end. Absent
+    ``isTerminal`` stays terminal, matching older runtimes.
+    """
+
+    kind = frame.get("type")
+    if kind == "agent_end":
+        return frame.get("isTerminal") is not False
+    if kind != "message_end":
+        return False
+    message = frame.get("message")
+    if not isinstance(message, dict) or message.get("role") != "assistant":
+        return False
+    if message.get("stopReason") not in (None, "stop"):
+        return False
+    content = message.get("content")
+    if not isinstance(content, list):
+        return False
+    has_text = False
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "toolCall":
+            return False
+        text = block.get("text")
+        if block.get("type") == "text" and isinstance(text, str) and text.strip() != "":
+            has_text = True
+    return has_text
 
 
 def _inbound_error_text(frame: Mapping[str, Any], kind: str) -> str:
@@ -672,6 +710,9 @@ class RpcAdapter:
         self._agent_turn_seen = False
         self._early_error: str | None = None
         self._early_error_event = threading.Event()
+        self._agent_finished = threading.Event()
+        self._held = False
+        self._held_outcome: str | None = None
 
     def _open(self, command: Sequence[str]) -> _LoggingClient:
         if self._transcript is None:
@@ -732,6 +773,8 @@ class RpcAdapter:
     def _on_inbound(self, frame: Any) -> None:
         if not isinstance(frame, dict):
             return
+        if _marks_agent_end(frame):
+            self._agent_finished.set()
         kind = frame.get("type")
         if not isinstance(kind, str):
             return
@@ -891,6 +934,11 @@ class RpcAdapter:
         expected_id = self._enqueue_session_id or self._session_id
         if not session_file:
             return "harness_error", "restart requires a session file", self._last
+        # The resumed process has its own agent lifecycle. A terminal readback
+        # from before the kill does not carry over.
+        self._agent_finished.clear()
+        self._held = False
+        self._held_outcome = None
         client = self._open((*self.command, "--session", session_file))
         state = client.get_state()
         self._restarts.append({"id": state.session_id, "file": state.session_file})
@@ -926,6 +974,9 @@ class RpcAdapter:
                 return self._restart_and_wait()
             if document is not None:
                 self._last = document
+            if self._held and self._agent_finished.is_set():
+                return self._finish_held()
+            if document is not None:
                 try:
                     value = resolve_pointer(document, pointer)
                 except (KeyError, TypeError, ValueError):
@@ -942,14 +993,44 @@ class RpcAdapter:
                         if self._killed.is_set():
                             return self._restart_and_wait()
                     outcome = value if isinstance(value, str) else "completed"
-                    return outcome, "terminal", self._last
+                    # No model script, or no agent turn yet: the readback is
+                    # the whole completion. An open scripted turn stays up
+                    # until the agent ends, then one more read.
+                    if self.scenario.model_script and self._agent_turn_open():
+                        self._held = True
+                        self._held_outcome = outcome
+                    else:
+                        return outcome, "terminal", self._last
+            if self._held and self._agent_finished.is_set():
+                return self._finish_held()
             remaining = self._deadline - time.monotonic()
             if remaining <= 0:
-                reason = f"timed out after {self._timeout_s}s waiting for {pointer}"
+                if self._held:
+                    reason = f"timed out after {self._timeout_s}s waiting for the agent to end"
+                else:
+                    reason = f"timed out after {self._timeout_s}s waiting for {pointer}"
                 if last_probe_error:
                     reason = f"{reason}; last probe error: {last_probe_error}"
                 return "timeout", reason, self._last
             self._early_error_event.wait(min(_POLL_INTERVAL_S, remaining))
+
+    def _agent_turn_open(self) -> bool:
+        """True when a scripted turn has started and the agent has not ended."""
+
+        with self._turn_lock:
+            seen = self._agent_turn_seen
+        return seen and not self._agent_finished.is_set()
+
+    def _finish_held(self) -> tuple[str, str, dict[str, Any] | None]:
+        """Seal a scripted trial with the readback taken after the agent ended."""
+
+        outcome = self._held_outcome if isinstance(self._held_outcome, str) else "completed"
+        try:
+            document = self.probe.read()
+        except ProbeError:
+            return outcome, "terminal", self._last
+        self._last = document
+        return outcome, "terminal", document
 
     def _seal(
         self,
