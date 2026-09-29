@@ -424,10 +424,21 @@ async function measureCurrent(
 	const total = items.length || 1;
 	const correct = values.filter((v, i) => v !== undefined && v === items[i].expected).length;
 	const unparseable = values.filter(v => v === undefined).length;
+	let precision: number | undefined;
+	let recall: number | undefined;
+	if (mode === "stop") {
+		const tp = values.filter((v, i) => v === "continue" && items[i].expected === "continue").length;
+		const fp = values.filter((v, i) => v === "continue" && items[i].expected !== "continue").length;
+		const fn = values.filter((v, i) => v !== "continue" && items[i].expected === "continue").length;
+		precision = tp + fp > 0 ? tp / (tp + fp) : 1;
+		recall = tp + fn > 0 ? tp / (tp + fn) : 1;
+	}
 	return {
 		sampleSize: items.length,
 		answerRate: (items.length - unparseable) / total,
 		accuracy: correct / total,
+		precision,
+		recall,
 		p50LatencyMs: percentile(latencies, 0.5),
 		p95LatencyMs: percentile(latencies, 0.95),
 		costPer1000Usd: (costTotal / total) * 1000,
@@ -444,7 +455,7 @@ async function measureCurrent(
  * the plain smol classifier. Mirrors the harness's own `withoutJev`, kept local
  * so this module adds no export to the existing harness.
  */
-function withoutJevSettings(settings: CurrentSmolHarness["settings"]): CurrentSmolHarness["settings"] {
+export function withoutJevSettings(settings: CurrentSmolHarness["settings"]): CurrentSmolHarness["settings"] {
 	const forcedOff = new Set(["jev.enabled", "jev.autoThinking", "jev.unexpectedStop"]);
 	return new Proxy(settings, {
 		get(target, prop, receiver) {

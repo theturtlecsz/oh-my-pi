@@ -50,9 +50,21 @@ Everything downstream of "probability" therefore does not survive the move. What
 
 ## Metrics that stay comparable to the OMP-298 report
 
-- **Accuracy vs current.** Same datasets, same labels, same scoring; the current-side numbers come from the OMP-298 path (the configured smol classifier with the Jev decision path forced off), so the column comparison holds.
+- **Accuracy vs current.** Same datasets, same labels, same scoring; the current-side numbers come from the OMP-298 path (the configured smol classifier with the Jev decision path forced off), so the column comparison holds. The current side uses the configured `smol` model (resolved from `settings.getModelRole("smol")` or the `MODEL_PRIO.smol` fast priority chain in `model-resolver.ts`, authenticated with credentials from `~/.config/omp/auth.json` discovered via `discoverAuthStorage()`).
 - **p50 / p95 latency.** Per-call wall time, measured the same way on both sides.
 - **Cost per 1000 calls.** Jev-side from actual OpenRouter usage (the generation record's `total_cost`); current-side from provider-reported usage. Every Jev cell records its cost source, so a price derived without a generation record is visible.
+
+## Current-side smol model and harness resolution
+
+The current side runs the configured `smol` role through the standard classifiers (`classifyDifficulty` and `classifyUnexpectedStop`) with the Jev decision path forced off.
+
+- **Which model it uses:** The model resolved for the `smol` role (or `tiny` role fallback).
+- **Where it comes from:** It is constructed by `buildCurrentSmolHarness()` in `run-router.ts`:
+  1. Loads read-only settings via `Settings.loadReadOnly()` (from `~/.config/omp/settings.json` or `~/.omp/settings.json`).
+  2. Discovers credentials from `~/.config/omp/auth.json` via `discoverAuthStorage()`.
+  3. Initializes the `ModelRegistry` with those credentials and settings.
+  4. Wraps settings with `withoutJevSettings()` to ensure `jev.enabled`, `jev.autoThinking`, and `jev.unexpectedStop` evaluate to `false`.
+  5. The classifiers resolve the active model via `resolveRoleSelection(["tiny", "smol"], settings, registry.getAvailable())`, matching the owner's configured `modelRoles.smol` setting or falling back to the priority order in `MODEL_PRIO.smol` in `packages/coding-agent/src/config/model-resolver.ts`.
 
 ## What the report must say is not measured
 
@@ -62,7 +74,7 @@ The report's "What is not measured" section (in `router-report-template.md`) sta
 - Off-list / off-options answer-space validation — a routed answer with no allowed label is one unparseable bucket, not two.
 - Robomp routed-decision equivalence — the five yes/no gates and the answer/session route are not reproduced.
 - Router internals — Jev Router's own routing cost and its forwarded sub-request are invisible; only the routed model id, its reasoning effort, and its price are reported.
-- Current-side model identity — the current side runs the configured smol role, not a matched model, so the latency/cost comparison is not a same-model comparison.
+- Current-side model identity — the current side runs the configured smol role (the model resolved for the `smol` role in `ModelRegistry` via `resolveRoleSelection(["tiny", "smol"], settings, registry)`, originating from `~/.config/omp/settings.json` or the built-in fast model priority chain in `model-resolver.ts`), not a matched model, so the latency/cost comparison is not a same-model comparison.
 
 ## WP5 verdict decision
 
