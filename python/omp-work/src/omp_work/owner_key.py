@@ -5,7 +5,14 @@ missing, group- or world-writable, or does not contain exactly one ``owner``
 line; when ``--key`` is readable by ``--user`` (mode bits and parent-directory
 search); or when a ``--scan`` file, other than a symlink and at most 64 KiB,
 is an OpenSSH private key whose ``openssh-key-v1`` header public key is the
-owner's. No OMP principal is given the owner private key.
+owner's.
+
+Owner decision D47 (2026-09-30): flood creates and holds the owner signing key
+on this host under ``~/.config/omp/owner-signing``, not on Chris's own device,
+so an owner signature proves flood's approval. Removing that key and
+``owner_allowed_signers`` undoes this. ``--scan`` still reports a matching
+private key under any scanned directory; the operator does not scan the key's
+own directory.
 """
 
 from __future__ import annotations
