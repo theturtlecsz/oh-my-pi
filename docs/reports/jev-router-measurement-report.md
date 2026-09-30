@@ -63,16 +63,16 @@ The router answers the primary classification only. The typed prefilter's yes/no
 
 | Metric | Jev Router |
 | --- | --- |
-| Primary-label accuracy | 0.0% |
-| Answered (named a label) | 0.0% |
-| Skip-session share (invalid / question) | 0.0% |
-| p50 Latency (ms) | 0.0 |
-| p95 Latency (ms) | 0.0 |
+| Primary-label accuracy | not measured |
+| Answered (named a label) | not measured |
+| Skip-session share (invalid / question) | not measured |
+| p50 Latency (ms) | not measured |
+| p95 Latency (ms) | not measured |
 | Cost per 1000 calls ($) | not measured |
 | Cost source | unavailable |
-| Unparseable / off-list | 0.0% |
-| Truncated (no answer at token cap) | 0.0% |
-| Transport-failure rate | 0.0% |
+| Unparseable / off-list | not measured |
+| Truncated (no answer at token cap) | not measured |
+| Transport-failure rate | not measured |
 
 Routed models picked: unavailable
 

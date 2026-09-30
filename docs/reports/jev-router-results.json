@@ -50,19 +50,19 @@
     },
     "robomp_route": {
       "sampleSize": 0,
-      "answerRate": 0,
-      "accuracy": 0,
-      "p50LatencyMs": 0,
-      "p95LatencyMs": 0,
+      "answerRate": null,
+      "accuracy": null,
+      "p50LatencyMs": null,
+      "p95LatencyMs": null,
       "costPer1000Usd": null,
       "costSource": "unavailable",
-      "unparseableRate": 0,
-      "truncatedRate": 0,
+      "unparseableRate": null,
+      "truncatedRate": null,
       "excludedLabels": {},
-      "transportFailureRate": 0,
+      "transportFailureRate": null,
       "routedModels": {},
       "routedEffort": {},
-      "skipSessionShare": 0
+      "skipSessionShare": null
     }
   },
   "current": {
