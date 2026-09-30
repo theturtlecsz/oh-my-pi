@@ -5,16 +5,23 @@ from __future__ import annotations
 import glob
 import json
 import os
+from contextlib import suppress
 from pathlib import Path
 import shutil
 import socket
 import stat
 import struct
-import subprocess
+import subprocess  # nosec B404 - argv lists only, no shell
 import sys
 import tempfile
 import threading
 import time
+
+
+def _executable(name: str, path: str | None = None) -> str:
+    """Absolute path of a fixed tool, or the bare name when it is not on PATH."""
+    found = shutil.which(name, path=path)
+    return found if found is not None else name
 
 
 class PacketTap:
@@ -34,11 +41,9 @@ class PacketTap:
         self.thread.start()
 
     def _send_record(self, proto: str, ip: str, port: int) -> None:
-        try:
+        with suppress(Exception):
             payload = json.dumps({"protocol": proto, "ip": ip, "port": port}).encode("utf-8")
             self.dgram_sock.sendto(payload, self.record_sock_path)
-        except Exception:
-            pass
 
     def _process_packet(self, raw: bytes, addr: tuple) -> None:
         # addr[2] == 4 is PACKET_OUTGOING
@@ -133,13 +138,18 @@ class PacketTap:
 
 
 def _setup_network() -> None:
-    subprocess.run(["ip", "link", "set", "lo", "up"], check=True)
-    subprocess.run(["ip", "link", "add", "egress0", "type", "dummy"], check=True)
-    subprocess.run(["ip", "addr", "add", "10.255.255.1/32", "dev", "egress0"], check=True)
-    subprocess.run(["ip", "addr", "add", "fd00::1/128", "dev", "egress0", "nodad"], check=True)
-    subprocess.run(["ip", "link", "set", "egress0", "up"], check=True)
-    subprocess.run(["ip", "route", "add", "default", "dev", "egress0"], check=True)
-    subprocess.run(["ip", "-6", "route", "add", "default", "dev", "egress0"], check=True)
+    ip = _executable("ip")
+    commands = (
+        ("link", "set", "lo", "up"),
+        ("link", "add", "egress0", "type", "dummy"),
+        ("addr", "add", "10.255.255.1/32", "dev", "egress0"),
+        ("addr", "add", "fd00::1/128", "dev", "egress0", "nodad"),
+        ("link", "set", "egress0", "up"),
+        ("route", "add", "default", "dev", "egress0"),
+        ("-6", "route", "add", "default", "dev", "egress0"),
+    )
+    for args in commands:
+        subprocess.run([ip, *args], check=True)  # nosec B603 - argv list, no shell
 
 
 def _setup_etc_files(etc_dir: Path) -> None:
@@ -152,6 +162,7 @@ def _setup_etc_files(etc_dir: Path) -> None:
     hosts_file = etc_dir / "hosts"
     hosts_file.write_text("127.0.0.1 localhost\n::1 localhost\n", encoding="utf-8")
 
+    mount = _executable("mount")
     for src, dst in [
         (resolv_file, Path("/etc/resolv.conf")),
         (nsswitch_file, Path("/etc/nsswitch.conf")),
@@ -159,7 +170,10 @@ def _setup_etc_files(etc_dir: Path) -> None:
     ]:
         if dst.exists() or dst.is_symlink():
             target = dst.resolve() if dst.is_symlink() else dst
-            subprocess.run(["mount", "--bind", str(src), str(target)], check=True)
+            subprocess.run(  # nosec B603 - argv list, no shell
+                [mount, "--bind", str(src), str(target)],
+                check=True,
+            )
 
 
 def _mask_sockets() -> None:
@@ -176,38 +190,42 @@ def _mask_sockets() -> None:
             if p not in socket_paths:
                 socket_paths.append(p)
 
+    mount = _executable("mount")
     for p in socket_paths:
-        try:
+        with suppress(Exception):
             st = os.stat(p, follow_symlinks=False)
             if stat.S_ISSOCK(st.st_mode) or stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode):
-                subprocess.run(["mount", "--bind", "/dev/null", p], check=False)
-        except Exception:
-            pass
+                subprocess.run(  # nosec B603 - argv list, no shell
+                    [mount, "--bind", "/dev/null", p],
+                    check=False,
+                )
 
 
 def _mask_helper_cmdlines() -> None:
+    mount = _executable("mount")
     for p in glob.glob("/proc/*/cmdline"):
-        try:
+        with suppress(Exception):
             with open(p, "rb") as f:
                 c = f.read()
             if b"egress_sandbox_helper" in c:
-                subprocess.run(["mount", "--bind", "/dev/null", p], check=False)
-        except Exception:
-            pass
+                subprocess.run(  # nosec B603 - argv list, no shell
+                    [mount, "--bind", "/dev/null", p],
+                    check=False,
+                )
 
 
 def _ensure_worker_unshare_supported(temp_dir: Path) -> dict[str, str]:
-    probe = subprocess.run(
+    probe = subprocess.run(  # nosec B603 - argv list, no shell
         [
-            "unshare",
+            _executable("unshare"),
             "--pid",
             "--fork",
             "--mount-proc",
-            "setpriv",
+            _executable("setpriv"),
             "--bounding-set=-all",
             "--inh-caps=-all",
             "--no-new-privs",
-            "true",
+            _executable("true"),
         ],
         capture_output=True,
     )
@@ -236,7 +254,10 @@ int mount(const char *source, const char *target, const char *filesystemtype, un
 """,
         encoding="utf-8",
     )
-    subprocess.run(["gcc", "-shared", "-fPIC", "-o", str(shim_so), str(shim_c), "-ldl"], check=True)
+    subprocess.run(  # nosec B603 - argv list, no shell
+        [_executable("gcc"), "-shared", "-fPIC", "-o", str(shim_so), str(shim_c), "-ldl"],
+        check=True,
+    )
     unshare_wrapper = shim_dir / "unshare"
     real_unshare = shutil.which("unshare") or "/usr/bin/unshare"
     unshare_wrapper.write_text(
@@ -289,6 +310,9 @@ def main() -> None:
     worker_env = os.environ.copy() if env is None else dict(env)
     if "PATH" in env_update:
         worker_env["PATH"] = env_update["PATH"]
+    # Match subprocess: a provided env searches its PATH, or os.defpath when PATH is absent.
+    # The shim directory, when present, is first, so unshare resolves to that wrapper.
+    search_path = worker_env["PATH"] if "PATH" in worker_env else os.defpath
 
     # Signal that setup is complete before launching the worker
     if setup_ok_path:
@@ -296,18 +320,22 @@ def main() -> None:
 
     # 7. Run worker
     worker_cmd = [
-        "unshare",
+        _executable("unshare", search_path),
         "--pid",
         "--fork",
         "--mount-proc",
-        "setpriv",
+        _executable("setpriv", search_path),
         "--bounding-set=-all",
         "--inh-caps=-all",
         "--no-new-privs",
         *argv,
     ]
 
-    worker = subprocess.Popen(worker_cmd, cwd=workdir, env=worker_env)
+    worker = subprocess.Popen(  # nosec B603 - argv list, no shell
+        worker_cmd,
+        cwd=workdir,
+        env=worker_env,
+    )
     returncode = worker.wait()
 
     # Drain tap before exit

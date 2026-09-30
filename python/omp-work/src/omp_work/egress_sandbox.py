@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import suppress
 from pathlib import Path
 import shutil
 import socket
-import subprocess
+import subprocess  # nosec B404 - argv lists only, no shell
 import sys
 import tempfile
 import threading
@@ -19,6 +20,12 @@ from omp_work.egress_policy import EgressRecord, EgressRecorder, Identity
 
 class SandboxUnavailable(RuntimeError):
     """Raised when sandbox tools are missing or sandbox setup fails."""
+
+
+def _executable(name: str, path: str | None = None) -> str:
+    """Absolute path of a fixed tool, or the bare name when it is not on PATH."""
+    found = shutil.which(name, path=path)
+    return found if found is not None else name
 
 
 def run_sandboxed(
@@ -35,14 +42,26 @@ def run_sandboxed(
     Missing tools or setup failure raises :class:`SandboxUnavailable`.
     Returns the worker's exit status.
     """
+    resolved: dict[str, str] = {}
     for tool in ("unshare", "setpriv", "ip"):
-        if shutil.which(tool) is None:
+        found = shutil.which(tool)
+        if found is None:
             raise SandboxUnavailable(f"Required sandbox tool '{tool}' not found on PATH")
+        resolved[tool] = found
 
     # Probe namespace unshare capability
     try:
-        probe = subprocess.run(
-            ["unshare", "--user", "--map-root-user", "--net", "--mount", "--pid", "--fork", "true"],
+        probe = subprocess.run(  # nosec B603 - argv list, no shell
+            [
+                resolved["unshare"],
+                "--user",
+                "--map-root-user",
+                "--net",
+                "--mount",
+                "--pid",
+                "--fork",
+                _executable("true"),
+            ],
             capture_output=True,
             timeout=5,
         )
@@ -119,10 +138,8 @@ def run_sandboxed(
             policy_id=None,
             at=datetime.now(UTC),
         )
-        try:
+        with suppress(Exception):
             recorder.record(rec)
-        except Exception:
-            pass
 
     def _listener() -> None:
         while not stop_event.is_set():
@@ -150,7 +167,7 @@ def run_sandboxed(
     config_path.write_text(json.dumps(config), encoding="utf-8")
 
     helper_cmd = [
-        "unshare",
+        resolved["unshare"],
         "--user",
         "--map-root-user",
         "--net",
@@ -163,7 +180,7 @@ def run_sandboxed(
     ]
 
     try:
-        proc = subprocess.Popen(
+        proc = subprocess.Popen(  # nosec B603 - argv list, no shell
             helper_cmd,
             env=os.environ.copy(),
         )
