@@ -1942,6 +1942,100 @@ class AnswerDecisionCommand(StrictModel):
     payload: AnswerDecisionPayload
 
 
+class InstructionProvenance(StrictModel):
+    """Where an owner instruction was received."""
+
+    channel: str = Field(min_length=1, max_length=100)
+    message_ref: str = Field(min_length=1, max_length=500)
+    received_at: datetime
+
+
+class OwnerInstruction(StrictModel):
+    """The owner's words and the message they arrived on."""
+
+    text: str = Field(min_length=1, max_length=8000)
+    provenance: InstructionProvenance
+
+
+class MissionIntakeScope(StrictModel):
+    """MissionDraft without objective, acceptance_criteria, or constraints.
+
+    Those three are what the owner confirms. Sending any of them on a scope
+    is rejected.
+    """
+
+    project_id: UUID
+    context_refs: tuple[str, ...] = ()
+    artifact_expectations: tuple[str, ...] = ()
+    requested_capabilities: tuple[str, ...] = ()
+    repositories: tuple[str, ...] = ()
+    approval_classes: tuple[str, ...] = ()
+    risk_policy: str = Field(min_length=1, max_length=200)
+    approval_policy: str = Field(min_length=1, max_length=200)
+    effort_policy: str = Field(min_length=1, max_length=200)
+    budget_policy: ItemBudget | None = None
+    priority: int = Field(default=2, ge=0, le=3)
+    continuation_of: UUID | None = None
+    parent_mission: UUID | None = None
+
+
+class MissionDraftOptionAnswer(StrictModel):
+    """``confirm`` accepts the draft. ``reject`` abandons the mission."""
+
+    kind: Literal["option"]
+    option: Literal["confirm", "reject"]
+
+
+class MissionDraftEditedAnswer(StrictModel):
+    """The owner replaced the draft with a full MissionDraft."""
+
+    kind: Literal["edited_draft"]
+    draft: MissionDraft
+
+
+class MissionDraftNoteAnswer(StrictModel):
+    """A note is recorded and never applies a draft."""
+
+    kind: Literal["note"]
+    text: str = Field(min_length=1, max_length=8000)
+
+
+MissionDraftAnswer = Annotated[
+    MissionDraftOptionAnswer | MissionDraftEditedAnswer | MissionDraftNoteAnswer,
+    Field(discriminator="kind"),
+]
+
+
+class DraftMissionIntakePayload(StrictModel):
+    """A bounded intake plus the mission envelope, minus the scope the owner confirms."""
+
+    mission_id: UUID
+    base_revision: int | None = Field(default=None, ge=1)
+    intake: BoundedIntakeDraft
+    scope: MissionIntakeScope
+    instruction: OwnerInstruction | None = None
+
+
+class AnswerMissionDraftPayload(StrictModel):
+    """The owner's answer. ``instruction`` is required."""
+
+    decision_id: UUID
+    mission_id: UUID
+    revision: int = Field(ge=1)
+    answer: MissionDraftAnswer
+    instruction: OwnerInstruction
+
+
+class DraftMissionIntakeCommand(StrictModel):
+    type: Literal["draft_mission_intake"]
+    payload: DraftMissionIntakePayload
+
+
+class AnswerMissionDraftCommand(StrictModel):
+    type: Literal["answer_mission_draft"]
+    payload: AnswerMissionDraftPayload
+
+
 Command = Annotated[
     CreateWorkBatchCommand
     | CreateSameSessionChildCommand
@@ -2004,7 +2098,9 @@ Command = Annotated[
     | SetMissionStatusCommand
     | LinkMissionWorkCommand
     | CreateDecisionCommand
-    | AnswerDecisionCommand,
+    | AnswerDecisionCommand
+    | DraftMissionIntakeCommand
+    | AnswerMissionDraftCommand,
     Field(discriminator="type"),
 ]
 

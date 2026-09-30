@@ -1425,6 +1425,729 @@
       "title": "AnswerIntakeDecisionPayload",
       "type": "object"
     },
+    "AnswerMissionDraftCommand": {
+      "$defs": {
+        "AnswerMissionDraftPayload": {
+          "additionalProperties": false,
+          "description": "The owner's answer. ``instruction`` is required.",
+          "properties": {
+            "answer": {
+              "discriminator": {
+                "mapping": {
+                  "edited_draft": "#/$defs/MissionDraftEditedAnswer",
+                  "note": "#/$defs/MissionDraftNoteAnswer",
+                  "option": "#/$defs/MissionDraftOptionAnswer"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/MissionDraftOptionAnswer"
+                },
+                {
+                  "$ref": "#/$defs/MissionDraftEditedAnswer"
+                },
+                {
+                  "$ref": "#/$defs/MissionDraftNoteAnswer"
+                }
+              ],
+              "title": "Answer"
+            },
+            "decision_id": {
+              "format": "uuid",
+              "title": "Decision Id",
+              "type": "string"
+            },
+            "instruction": {
+              "$ref": "#/$defs/OwnerInstruction"
+            },
+            "mission_id": {
+              "format": "uuid",
+              "title": "Mission Id",
+              "type": "string"
+            },
+            "revision": {
+              "minimum": 1,
+              "title": "Revision",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "decision_id",
+            "mission_id",
+            "revision",
+            "answer",
+            "instruction"
+          ],
+          "title": "AnswerMissionDraftPayload",
+          "type": "object"
+        },
+        "InstructionProvenance": {
+          "additionalProperties": false,
+          "description": "Where an owner instruction was received.",
+          "properties": {
+            "channel": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Channel",
+              "type": "string"
+            },
+            "message_ref": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Message Ref",
+              "type": "string"
+            },
+            "received_at": {
+              "format": "date-time",
+              "title": "Received At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "channel",
+            "message_ref",
+            "received_at"
+          ],
+          "title": "InstructionProvenance",
+          "type": "object"
+        },
+        "ItemBudget": {
+          "additionalProperties": false,
+          "properties": {
+            "max_subagents": {
+              "minimum": 0,
+              "title": "Max Subagents",
+              "type": "integer"
+            },
+            "tokens": {
+              "exclusiveMinimum": 0,
+              "title": "Tokens",
+              "type": "integer"
+            },
+            "usd": {
+              "title": "Usd",
+              "type": "string"
+            },
+            "wall_clock_seconds": {
+              "exclusiveMinimum": 0,
+              "title": "Wall Clock Seconds",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "usd",
+            "tokens",
+            "wall_clock_seconds",
+            "max_subagents"
+          ],
+          "title": "ItemBudget",
+          "type": "object"
+        },
+        "MissionDraft": {
+          "additionalProperties": false,
+          "description": "D29 mission record: the objective, its envelope, and the policies that\ngovern it. ``created_by``/``created_at`` are service-stamped, never sent.\n\n``risk_policy``, ``approval_policy``, and ``effort_policy`` are policy ids\n(OMP-417/418); ``budget_policy`` is the mission's envelope, from which item\nbudgets (OMP-404) are drawn.",
+          "properties": {
+            "acceptance_criteria": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Acceptance Criteria",
+              "type": "array"
+            },
+            "approval_classes": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Approval Classes",
+              "type": "array"
+            },
+            "approval_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Approval Policy",
+              "type": "string"
+            },
+            "artifact_expectations": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Artifact Expectations",
+              "type": "array"
+            },
+            "budget_policy": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ItemBudget"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "constraints": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Constraints",
+              "type": "array"
+            },
+            "context_refs": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Context Refs",
+              "type": "array"
+            },
+            "continuation_of": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Continuation Of"
+            },
+            "effort_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Effort Policy",
+              "type": "string"
+            },
+            "objective": {
+              "maxLength": 4000,
+              "minLength": 1,
+              "title": "Objective",
+              "type": "string"
+            },
+            "parent_mission": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Mission"
+            },
+            "priority": {
+              "default": 2,
+              "maximum": 3,
+              "minimum": 0,
+              "title": "Priority",
+              "type": "integer"
+            },
+            "project_id": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            },
+            "repositories": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Repositories",
+              "type": "array"
+            },
+            "requested_capabilities": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Requested Capabilities",
+              "type": "array"
+            },
+            "risk_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Risk Policy",
+              "type": "string"
+            }
+          },
+          "required": [
+            "project_id",
+            "objective",
+            "risk_policy",
+            "approval_policy",
+            "effort_policy"
+          ],
+          "title": "MissionDraft",
+          "type": "object"
+        },
+        "MissionDraftEditedAnswer": {
+          "additionalProperties": false,
+          "description": "The owner replaced the draft with a full MissionDraft.",
+          "properties": {
+            "draft": {
+              "$ref": "#/$defs/MissionDraft"
+            },
+            "kind": {
+              "const": "edited_draft",
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "draft"
+          ],
+          "title": "MissionDraftEditedAnswer",
+          "type": "object"
+        },
+        "MissionDraftNoteAnswer": {
+          "additionalProperties": false,
+          "description": "A note is recorded and never applies a draft.",
+          "properties": {
+            "kind": {
+              "const": "note",
+              "title": "Kind",
+              "type": "string"
+            },
+            "text": {
+              "maxLength": 8000,
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "text"
+          ],
+          "title": "MissionDraftNoteAnswer",
+          "type": "object"
+        },
+        "MissionDraftOptionAnswer": {
+          "additionalProperties": false,
+          "description": "``confirm`` accepts the draft. ``reject`` abandons the mission.",
+          "properties": {
+            "kind": {
+              "const": "option",
+              "title": "Kind",
+              "type": "string"
+            },
+            "option": {
+              "enum": [
+                "confirm",
+                "reject"
+              ],
+              "title": "Option",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "option"
+          ],
+          "title": "MissionDraftOptionAnswer",
+          "type": "object"
+        },
+        "OwnerInstruction": {
+          "additionalProperties": false,
+          "description": "The owner's words and the message they arrived on.",
+          "properties": {
+            "provenance": {
+              "$ref": "#/$defs/InstructionProvenance"
+            },
+            "text": {
+              "maxLength": 8000,
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "provenance"
+          ],
+          "title": "OwnerInstruction",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/AnswerMissionDraftPayload"
+        },
+        "type": {
+          "const": "answer_mission_draft",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "AnswerMissionDraftCommand",
+      "type": "object"
+    },
+    "AnswerMissionDraftPayload": {
+      "$defs": {
+        "InstructionProvenance": {
+          "additionalProperties": false,
+          "description": "Where an owner instruction was received.",
+          "properties": {
+            "channel": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Channel",
+              "type": "string"
+            },
+            "message_ref": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Message Ref",
+              "type": "string"
+            },
+            "received_at": {
+              "format": "date-time",
+              "title": "Received At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "channel",
+            "message_ref",
+            "received_at"
+          ],
+          "title": "InstructionProvenance",
+          "type": "object"
+        },
+        "ItemBudget": {
+          "additionalProperties": false,
+          "properties": {
+            "max_subagents": {
+              "minimum": 0,
+              "title": "Max Subagents",
+              "type": "integer"
+            },
+            "tokens": {
+              "exclusiveMinimum": 0,
+              "title": "Tokens",
+              "type": "integer"
+            },
+            "usd": {
+              "title": "Usd",
+              "type": "string"
+            },
+            "wall_clock_seconds": {
+              "exclusiveMinimum": 0,
+              "title": "Wall Clock Seconds",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "usd",
+            "tokens",
+            "wall_clock_seconds",
+            "max_subagents"
+          ],
+          "title": "ItemBudget",
+          "type": "object"
+        },
+        "MissionDraft": {
+          "additionalProperties": false,
+          "description": "D29 mission record: the objective, its envelope, and the policies that\ngovern it. ``created_by``/``created_at`` are service-stamped, never sent.\n\n``risk_policy``, ``approval_policy``, and ``effort_policy`` are policy ids\n(OMP-417/418); ``budget_policy`` is the mission's envelope, from which item\nbudgets (OMP-404) are drawn.",
+          "properties": {
+            "acceptance_criteria": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Acceptance Criteria",
+              "type": "array"
+            },
+            "approval_classes": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Approval Classes",
+              "type": "array"
+            },
+            "approval_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Approval Policy",
+              "type": "string"
+            },
+            "artifact_expectations": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Artifact Expectations",
+              "type": "array"
+            },
+            "budget_policy": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ItemBudget"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "constraints": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Constraints",
+              "type": "array"
+            },
+            "context_refs": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Context Refs",
+              "type": "array"
+            },
+            "continuation_of": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Continuation Of"
+            },
+            "effort_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Effort Policy",
+              "type": "string"
+            },
+            "objective": {
+              "maxLength": 4000,
+              "minLength": 1,
+              "title": "Objective",
+              "type": "string"
+            },
+            "parent_mission": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Mission"
+            },
+            "priority": {
+              "default": 2,
+              "maximum": 3,
+              "minimum": 0,
+              "title": "Priority",
+              "type": "integer"
+            },
+            "project_id": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            },
+            "repositories": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Repositories",
+              "type": "array"
+            },
+            "requested_capabilities": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Requested Capabilities",
+              "type": "array"
+            },
+            "risk_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Risk Policy",
+              "type": "string"
+            }
+          },
+          "required": [
+            "project_id",
+            "objective",
+            "risk_policy",
+            "approval_policy",
+            "effort_policy"
+          ],
+          "title": "MissionDraft",
+          "type": "object"
+        },
+        "MissionDraftEditedAnswer": {
+          "additionalProperties": false,
+          "description": "The owner replaced the draft with a full MissionDraft.",
+          "properties": {
+            "draft": {
+              "$ref": "#/$defs/MissionDraft"
+            },
+            "kind": {
+              "const": "edited_draft",
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "draft"
+          ],
+          "title": "MissionDraftEditedAnswer",
+          "type": "object"
+        },
+        "MissionDraftNoteAnswer": {
+          "additionalProperties": false,
+          "description": "A note is recorded and never applies a draft.",
+          "properties": {
+            "kind": {
+              "const": "note",
+              "title": "Kind",
+              "type": "string"
+            },
+            "text": {
+              "maxLength": 8000,
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "text"
+          ],
+          "title": "MissionDraftNoteAnswer",
+          "type": "object"
+        },
+        "MissionDraftOptionAnswer": {
+          "additionalProperties": false,
+          "description": "``confirm`` accepts the draft. ``reject`` abandons the mission.",
+          "properties": {
+            "kind": {
+              "const": "option",
+              "title": "Kind",
+              "type": "string"
+            },
+            "option": {
+              "enum": [
+                "confirm",
+                "reject"
+              ],
+              "title": "Option",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "option"
+          ],
+          "title": "MissionDraftOptionAnswer",
+          "type": "object"
+        },
+        "OwnerInstruction": {
+          "additionalProperties": false,
+          "description": "The owner's words and the message they arrived on.",
+          "properties": {
+            "provenance": {
+              "$ref": "#/$defs/InstructionProvenance"
+            },
+            "text": {
+              "maxLength": 8000,
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "provenance"
+          ],
+          "title": "OwnerInstruction",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "The owner's answer. ``instruction`` is required.",
+      "properties": {
+        "answer": {
+          "discriminator": {
+            "mapping": {
+              "edited_draft": "#/$defs/MissionDraftEditedAnswer",
+              "note": "#/$defs/MissionDraftNoteAnswer",
+              "option": "#/$defs/MissionDraftOptionAnswer"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/MissionDraftOptionAnswer"
+            },
+            {
+              "$ref": "#/$defs/MissionDraftEditedAnswer"
+            },
+            {
+              "$ref": "#/$defs/MissionDraftNoteAnswer"
+            }
+          ],
+          "title": "Answer"
+        },
+        "decision_id": {
+          "format": "uuid",
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "instruction": {
+          "$ref": "#/$defs/OwnerInstruction"
+        },
+        "mission_id": {
+          "format": "uuid",
+          "title": "Mission Id",
+          "type": "string"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "decision_id",
+        "mission_id",
+        "revision",
+        "answer",
+        "instruction"
+      ],
+      "title": "AnswerMissionDraftPayload",
+      "type": "object"
+    },
     "AppendEvidenceCommand": {
       "$defs": {
         "AppendEvidencePayload": {
@@ -6474,6 +7197,80 @@
           "title": "AnswerIntakeDecisionPayload",
           "type": "object"
         },
+        "AnswerMissionDraftCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/AnswerMissionDraftPayload"
+            },
+            "type": {
+              "const": "answer_mission_draft",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "AnswerMissionDraftCommand",
+          "type": "object"
+        },
+        "AnswerMissionDraftPayload": {
+          "additionalProperties": false,
+          "description": "The owner's answer. ``instruction`` is required.",
+          "properties": {
+            "answer": {
+              "discriminator": {
+                "mapping": {
+                  "edited_draft": "#/$defs/MissionDraftEditedAnswer",
+                  "note": "#/$defs/MissionDraftNoteAnswer",
+                  "option": "#/$defs/MissionDraftOptionAnswer"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/MissionDraftOptionAnswer"
+                },
+                {
+                  "$ref": "#/$defs/MissionDraftEditedAnswer"
+                },
+                {
+                  "$ref": "#/$defs/MissionDraftNoteAnswer"
+                }
+              ],
+              "title": "Answer"
+            },
+            "decision_id": {
+              "format": "uuid",
+              "title": "Decision Id",
+              "type": "string"
+            },
+            "instruction": {
+              "$ref": "#/$defs/OwnerInstruction"
+            },
+            "mission_id": {
+              "format": "uuid",
+              "title": "Mission Id",
+              "type": "string"
+            },
+            "revision": {
+              "minimum": 1,
+              "title": "Revision",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "decision_id",
+            "mission_id",
+            "revision",
+            "answer",
+            "instruction"
+          ],
+          "title": "AnswerMissionDraftPayload",
+          "type": "object"
+        },
         "AppendEvidenceCommand": {
           "additionalProperties": false,
           "properties": {
@@ -8612,6 +9409,73 @@
           "title": "CutoverManifest",
           "type": "object"
         },
+        "DraftMissionIntakeCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/DraftMissionIntakePayload"
+            },
+            "type": {
+              "const": "draft_mission_intake",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "DraftMissionIntakeCommand",
+          "type": "object"
+        },
+        "DraftMissionIntakePayload": {
+          "additionalProperties": false,
+          "description": "A bounded intake plus the mission envelope, minus the scope the owner confirms.",
+          "properties": {
+            "base_revision": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Base Revision"
+            },
+            "instruction": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/OwnerInstruction"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "intake": {
+              "$ref": "#/$defs/BoundedIntakeDraft"
+            },
+            "mission_id": {
+              "format": "uuid",
+              "title": "Mission Id",
+              "type": "string"
+            },
+            "scope": {
+              "$ref": "#/$defs/MissionIntakeScope"
+            }
+          },
+          "required": [
+            "mission_id",
+            "intake",
+            "scope"
+          ],
+          "title": "DraftMissionIntakePayload",
+          "type": "object"
+        },
         "EngageStopCommand": {
           "additionalProperties": false,
           "properties": {
@@ -9090,6 +9954,36 @@
           "title": "FocusSlot",
           "type": "object"
         },
+        "InstructionProvenance": {
+          "additionalProperties": false,
+          "description": "Where an owner instruction was received.",
+          "properties": {
+            "channel": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Channel",
+              "type": "string"
+            },
+            "message_ref": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Message Ref",
+              "type": "string"
+            },
+            "received_at": {
+              "format": "date-time",
+              "title": "Received At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "channel",
+            "message_ref",
+            "received_at"
+          ],
+          "title": "InstructionProvenance",
+          "type": "object"
+        },
         "IntakeAcceptanceCriterion": {
           "additionalProperties": false,
           "properties": {
@@ -9564,6 +10458,216 @@
             "effort_policy"
           ],
           "title": "MissionDraft",
+          "type": "object"
+        },
+        "MissionDraftEditedAnswer": {
+          "additionalProperties": false,
+          "description": "The owner replaced the draft with a full MissionDraft.",
+          "properties": {
+            "draft": {
+              "$ref": "#/$defs/MissionDraft"
+            },
+            "kind": {
+              "const": "edited_draft",
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "draft"
+          ],
+          "title": "MissionDraftEditedAnswer",
+          "type": "object"
+        },
+        "MissionDraftNoteAnswer": {
+          "additionalProperties": false,
+          "description": "A note is recorded and never applies a draft.",
+          "properties": {
+            "kind": {
+              "const": "note",
+              "title": "Kind",
+              "type": "string"
+            },
+            "text": {
+              "maxLength": 8000,
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "text"
+          ],
+          "title": "MissionDraftNoteAnswer",
+          "type": "object"
+        },
+        "MissionDraftOptionAnswer": {
+          "additionalProperties": false,
+          "description": "``confirm`` accepts the draft. ``reject`` abandons the mission.",
+          "properties": {
+            "kind": {
+              "const": "option",
+              "title": "Kind",
+              "type": "string"
+            },
+            "option": {
+              "enum": [
+                "confirm",
+                "reject"
+              ],
+              "title": "Option",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "option"
+          ],
+          "title": "MissionDraftOptionAnswer",
+          "type": "object"
+        },
+        "MissionIntakeScope": {
+          "additionalProperties": false,
+          "description": "MissionDraft without objective, acceptance_criteria, or constraints.\n\nThose three are what the owner confirms. Sending any of them on a scope\nis rejected.",
+          "properties": {
+            "approval_classes": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Approval Classes",
+              "type": "array"
+            },
+            "approval_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Approval Policy",
+              "type": "string"
+            },
+            "artifact_expectations": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Artifact Expectations",
+              "type": "array"
+            },
+            "budget_policy": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ItemBudget"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "context_refs": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Context Refs",
+              "type": "array"
+            },
+            "continuation_of": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Continuation Of"
+            },
+            "effort_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Effort Policy",
+              "type": "string"
+            },
+            "parent_mission": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Mission"
+            },
+            "priority": {
+              "default": 2,
+              "maximum": 3,
+              "minimum": 0,
+              "title": "Priority",
+              "type": "integer"
+            },
+            "project_id": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            },
+            "repositories": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Repositories",
+              "type": "array"
+            },
+            "requested_capabilities": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Requested Capabilities",
+              "type": "array"
+            },
+            "risk_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Risk Policy",
+              "type": "string"
+            }
+          },
+          "required": [
+            "project_id",
+            "risk_policy",
+            "approval_policy",
+            "effort_policy"
+          ],
+          "title": "MissionIntakeScope",
+          "type": "object"
+        },
+        "OwnerInstruction": {
+          "additionalProperties": false,
+          "description": "The owner's words and the message they arrived on.",
+          "properties": {
+            "provenance": {
+              "$ref": "#/$defs/InstructionProvenance"
+            },
+            "text": {
+              "maxLength": 8000,
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "provenance"
+          ],
+          "title": "OwnerInstruction",
           "type": "object"
         },
         "PromoteImportBatchCommand": {
@@ -12324,6 +13428,7 @@
               "admit_research_campaign": "#/$defs/AdmitResearchCampaignCommand",
               "answer_decision": "#/$defs/AnswerDecisionCommand",
               "answer_intake_decision": "#/$defs/AnswerIntakeDecisionCommand",
+              "answer_mission_draft": "#/$defs/AnswerMissionDraftCommand",
               "append_evidence": "#/$defs/AppendEvidenceCommand",
               "approve_mission": "#/$defs/ApproveMissionCommand",
               "assess_bounded_intake": "#/$defs/AssessBoundedIntakeCommand",
@@ -12346,6 +13451,7 @@
               "create_research_campaign": "#/$defs/CreateResearchCampaignCommand",
               "create_same_session_child": "#/$defs/CreateSameSessionChildCommand",
               "create_work_batch": "#/$defs/CreateWorkBatchCommand",
+              "draft_mission_intake": "#/$defs/DraftMissionIntakeCommand",
               "engage_stop": "#/$defs/EngageStopCommand",
               "finalize_candidate": "#/$defs/FinalizeCandidateCommand",
               "link_mission_work": "#/$defs/LinkMissionWorkCommand",
@@ -12570,6 +13676,12 @@
             },
             {
               "$ref": "#/$defs/AnswerDecisionCommand"
+            },
+            {
+              "$ref": "#/$defs/DraftMissionIntakeCommand"
+            },
+            {
+              "$ref": "#/$defs/AnswerMissionDraftCommand"
             }
           ],
           "title": "Command"
@@ -17999,6 +19111,1195 @@
       "title": "DependencyGraph",
       "type": "object"
     },
+    "DraftMissionIntakeCommand": {
+      "$defs": {
+        "BoundedIntakeDraft": {
+          "additionalProperties": false,
+          "properties": {
+            "acceptance_criteria": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeAcceptanceCriterion"
+              },
+              "title": "Acceptance Criteria",
+              "type": "array"
+            },
+            "archetype": {
+              "const": "small_code_change",
+              "default": "small_code_change",
+              "title": "Archetype",
+              "type": "string"
+            },
+            "budget": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ItemBudget"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "constraints": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeConstraint"
+              },
+              "title": "Constraints",
+              "type": "array"
+            },
+            "goal": {
+              "$ref": "#/$defs/IntakeGoal"
+            },
+            "source": {
+              "$ref": "#/$defs/IntakeSource"
+            },
+            "unknowns": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeUnknown"
+              },
+              "title": "Unknowns",
+              "type": "array"
+            }
+          },
+          "required": [
+            "source",
+            "goal"
+          ],
+          "title": "BoundedIntakeDraft",
+          "type": "object"
+        },
+        "DraftMissionIntakePayload": {
+          "additionalProperties": false,
+          "description": "A bounded intake plus the mission envelope, minus the scope the owner confirms.",
+          "properties": {
+            "base_revision": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Base Revision"
+            },
+            "instruction": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/OwnerInstruction"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "intake": {
+              "$ref": "#/$defs/BoundedIntakeDraft"
+            },
+            "mission_id": {
+              "format": "uuid",
+              "title": "Mission Id",
+              "type": "string"
+            },
+            "scope": {
+              "$ref": "#/$defs/MissionIntakeScope"
+            }
+          },
+          "required": [
+            "mission_id",
+            "intake",
+            "scope"
+          ],
+          "title": "DraftMissionIntakePayload",
+          "type": "object"
+        },
+        "InstructionProvenance": {
+          "additionalProperties": false,
+          "description": "Where an owner instruction was received.",
+          "properties": {
+            "channel": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Channel",
+              "type": "string"
+            },
+            "message_ref": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Message Ref",
+              "type": "string"
+            },
+            "received_at": {
+              "format": "date-time",
+              "title": "Received At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "channel",
+            "message_ref",
+            "received_at"
+          ],
+          "title": "InstructionProvenance",
+          "type": "object"
+        },
+        "IntakeAcceptanceCriterion": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "observable_outcome": {
+              "title": "Observable Outcome",
+              "type": "string"
+            },
+            "oracle": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "automated_test",
+                    "static_check",
+                    "manual_inspection",
+                    "external_receipt"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Oracle"
+            },
+            "source_span_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Source Span Ids",
+              "type": "array"
+            },
+            "statement": {
+              "title": "Statement",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "statement",
+            "observable_outcome"
+          ],
+          "title": "IntakeAcceptanceCriterion",
+          "type": "object"
+        },
+        "IntakeConstraint": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "key": {
+              "title": "Key",
+              "type": "string"
+            },
+            "polarity": {
+              "enum": [
+                "positive",
+                "negative"
+              ],
+              "title": "Polarity",
+              "type": "string"
+            },
+            "source_span_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Source Span Ids",
+              "type": "array"
+            },
+            "statement": {
+              "title": "Statement",
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/KnownIntakeValue"
+                },
+                {
+                  "$ref": "#/$defs/UnknownIntakeValue"
+                }
+              ],
+              "title": "Value"
+            }
+          },
+          "required": [
+            "id",
+            "statement",
+            "key",
+            "value",
+            "polarity"
+          ],
+          "title": "IntakeConstraint",
+          "type": "object"
+        },
+        "IntakeGoal": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "source_span_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Source Span Ids",
+              "type": "array"
+            },
+            "statement": {
+              "title": "Statement",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "statement"
+          ],
+          "title": "IntakeGoal",
+          "type": "object"
+        },
+        "IntakeSource": {
+          "additionalProperties": false,
+          "properties": {
+            "sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Sha256",
+              "type": "string"
+            },
+            "spans": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeSourceSpan"
+              },
+              "title": "Spans",
+              "type": "array"
+            },
+            "text": {
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "sha256"
+          ],
+          "title": "IntakeSource",
+          "type": "object"
+        },
+        "IntakeSourceSpan": {
+          "additionalProperties": false,
+          "properties": {
+            "end": {
+              "title": "End",
+              "type": "integer"
+            },
+            "exact_text_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Exact Text Sha256",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "start": {
+              "minimum": 0,
+              "title": "Start",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "start",
+            "end",
+            "exact_text_sha256"
+          ],
+          "title": "IntakeSourceSpan",
+          "type": "object"
+        },
+        "IntakeUnknown": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "authority_or_dependency",
+                "routine_choice"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "material": {
+              "title": "Material",
+              "type": "boolean"
+            },
+            "source_span_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Source Span Ids",
+              "type": "array"
+            },
+            "statement": {
+              "title": "Statement",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "statement",
+            "kind",
+            "material"
+          ],
+          "title": "IntakeUnknown",
+          "type": "object"
+        },
+        "ItemBudget": {
+          "additionalProperties": false,
+          "properties": {
+            "max_subagents": {
+              "minimum": 0,
+              "title": "Max Subagents",
+              "type": "integer"
+            },
+            "tokens": {
+              "exclusiveMinimum": 0,
+              "title": "Tokens",
+              "type": "integer"
+            },
+            "usd": {
+              "title": "Usd",
+              "type": "string"
+            },
+            "wall_clock_seconds": {
+              "exclusiveMinimum": 0,
+              "title": "Wall Clock Seconds",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "usd",
+            "tokens",
+            "wall_clock_seconds",
+            "max_subagents"
+          ],
+          "title": "ItemBudget",
+          "type": "object"
+        },
+        "KnownIntakeValue": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "known",
+              "default": "known",
+              "title": "Kind",
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "title": "Value"
+            }
+          },
+          "required": [
+            "value"
+          ],
+          "title": "KnownIntakeValue",
+          "type": "object"
+        },
+        "MissionIntakeScope": {
+          "additionalProperties": false,
+          "description": "MissionDraft without objective, acceptance_criteria, or constraints.\n\nThose three are what the owner confirms. Sending any of them on a scope\nis rejected.",
+          "properties": {
+            "approval_classes": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Approval Classes",
+              "type": "array"
+            },
+            "approval_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Approval Policy",
+              "type": "string"
+            },
+            "artifact_expectations": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Artifact Expectations",
+              "type": "array"
+            },
+            "budget_policy": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ItemBudget"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "context_refs": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Context Refs",
+              "type": "array"
+            },
+            "continuation_of": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Continuation Of"
+            },
+            "effort_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Effort Policy",
+              "type": "string"
+            },
+            "parent_mission": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Mission"
+            },
+            "priority": {
+              "default": 2,
+              "maximum": 3,
+              "minimum": 0,
+              "title": "Priority",
+              "type": "integer"
+            },
+            "project_id": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            },
+            "repositories": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Repositories",
+              "type": "array"
+            },
+            "requested_capabilities": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Requested Capabilities",
+              "type": "array"
+            },
+            "risk_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Risk Policy",
+              "type": "string"
+            }
+          },
+          "required": [
+            "project_id",
+            "risk_policy",
+            "approval_policy",
+            "effort_policy"
+          ],
+          "title": "MissionIntakeScope",
+          "type": "object"
+        },
+        "OwnerInstruction": {
+          "additionalProperties": false,
+          "description": "The owner's words and the message they arrived on.",
+          "properties": {
+            "provenance": {
+              "$ref": "#/$defs/InstructionProvenance"
+            },
+            "text": {
+              "maxLength": 8000,
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "provenance"
+          ],
+          "title": "OwnerInstruction",
+          "type": "object"
+        },
+        "UnknownIntakeValue": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "unknown",
+              "default": "unknown",
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "title": "UnknownIntakeValue",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/DraftMissionIntakePayload"
+        },
+        "type": {
+          "const": "draft_mission_intake",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "DraftMissionIntakeCommand",
+      "type": "object"
+    },
+    "DraftMissionIntakePayload": {
+      "$defs": {
+        "BoundedIntakeDraft": {
+          "additionalProperties": false,
+          "properties": {
+            "acceptance_criteria": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeAcceptanceCriterion"
+              },
+              "title": "Acceptance Criteria",
+              "type": "array"
+            },
+            "archetype": {
+              "const": "small_code_change",
+              "default": "small_code_change",
+              "title": "Archetype",
+              "type": "string"
+            },
+            "budget": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ItemBudget"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "constraints": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeConstraint"
+              },
+              "title": "Constraints",
+              "type": "array"
+            },
+            "goal": {
+              "$ref": "#/$defs/IntakeGoal"
+            },
+            "source": {
+              "$ref": "#/$defs/IntakeSource"
+            },
+            "unknowns": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeUnknown"
+              },
+              "title": "Unknowns",
+              "type": "array"
+            }
+          },
+          "required": [
+            "source",
+            "goal"
+          ],
+          "title": "BoundedIntakeDraft",
+          "type": "object"
+        },
+        "InstructionProvenance": {
+          "additionalProperties": false,
+          "description": "Where an owner instruction was received.",
+          "properties": {
+            "channel": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Channel",
+              "type": "string"
+            },
+            "message_ref": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Message Ref",
+              "type": "string"
+            },
+            "received_at": {
+              "format": "date-time",
+              "title": "Received At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "channel",
+            "message_ref",
+            "received_at"
+          ],
+          "title": "InstructionProvenance",
+          "type": "object"
+        },
+        "IntakeAcceptanceCriterion": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "observable_outcome": {
+              "title": "Observable Outcome",
+              "type": "string"
+            },
+            "oracle": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "automated_test",
+                    "static_check",
+                    "manual_inspection",
+                    "external_receipt"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Oracle"
+            },
+            "source_span_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Source Span Ids",
+              "type": "array"
+            },
+            "statement": {
+              "title": "Statement",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "statement",
+            "observable_outcome"
+          ],
+          "title": "IntakeAcceptanceCriterion",
+          "type": "object"
+        },
+        "IntakeConstraint": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "key": {
+              "title": "Key",
+              "type": "string"
+            },
+            "polarity": {
+              "enum": [
+                "positive",
+                "negative"
+              ],
+              "title": "Polarity",
+              "type": "string"
+            },
+            "source_span_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Source Span Ids",
+              "type": "array"
+            },
+            "statement": {
+              "title": "Statement",
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/KnownIntakeValue"
+                },
+                {
+                  "$ref": "#/$defs/UnknownIntakeValue"
+                }
+              ],
+              "title": "Value"
+            }
+          },
+          "required": [
+            "id",
+            "statement",
+            "key",
+            "value",
+            "polarity"
+          ],
+          "title": "IntakeConstraint",
+          "type": "object"
+        },
+        "IntakeGoal": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "source_span_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Source Span Ids",
+              "type": "array"
+            },
+            "statement": {
+              "title": "Statement",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "statement"
+          ],
+          "title": "IntakeGoal",
+          "type": "object"
+        },
+        "IntakeSource": {
+          "additionalProperties": false,
+          "properties": {
+            "sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Sha256",
+              "type": "string"
+            },
+            "spans": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeSourceSpan"
+              },
+              "title": "Spans",
+              "type": "array"
+            },
+            "text": {
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "sha256"
+          ],
+          "title": "IntakeSource",
+          "type": "object"
+        },
+        "IntakeSourceSpan": {
+          "additionalProperties": false,
+          "properties": {
+            "end": {
+              "title": "End",
+              "type": "integer"
+            },
+            "exact_text_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Exact Text Sha256",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "start": {
+              "minimum": 0,
+              "title": "Start",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "start",
+            "end",
+            "exact_text_sha256"
+          ],
+          "title": "IntakeSourceSpan",
+          "type": "object"
+        },
+        "IntakeUnknown": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "authority_or_dependency",
+                "routine_choice"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "material": {
+              "title": "Material",
+              "type": "boolean"
+            },
+            "source_span_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Source Span Ids",
+              "type": "array"
+            },
+            "statement": {
+              "title": "Statement",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "statement",
+            "kind",
+            "material"
+          ],
+          "title": "IntakeUnknown",
+          "type": "object"
+        },
+        "ItemBudget": {
+          "additionalProperties": false,
+          "properties": {
+            "max_subagents": {
+              "minimum": 0,
+              "title": "Max Subagents",
+              "type": "integer"
+            },
+            "tokens": {
+              "exclusiveMinimum": 0,
+              "title": "Tokens",
+              "type": "integer"
+            },
+            "usd": {
+              "title": "Usd",
+              "type": "string"
+            },
+            "wall_clock_seconds": {
+              "exclusiveMinimum": 0,
+              "title": "Wall Clock Seconds",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "usd",
+            "tokens",
+            "wall_clock_seconds",
+            "max_subagents"
+          ],
+          "title": "ItemBudget",
+          "type": "object"
+        },
+        "KnownIntakeValue": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "known",
+              "default": "known",
+              "title": "Kind",
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "title": "Value"
+            }
+          },
+          "required": [
+            "value"
+          ],
+          "title": "KnownIntakeValue",
+          "type": "object"
+        },
+        "MissionIntakeScope": {
+          "additionalProperties": false,
+          "description": "MissionDraft without objective, acceptance_criteria, or constraints.\n\nThose three are what the owner confirms. Sending any of them on a scope\nis rejected.",
+          "properties": {
+            "approval_classes": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Approval Classes",
+              "type": "array"
+            },
+            "approval_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Approval Policy",
+              "type": "string"
+            },
+            "artifact_expectations": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Artifact Expectations",
+              "type": "array"
+            },
+            "budget_policy": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ItemBudget"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "context_refs": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Context Refs",
+              "type": "array"
+            },
+            "continuation_of": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Continuation Of"
+            },
+            "effort_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Effort Policy",
+              "type": "string"
+            },
+            "parent_mission": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Mission"
+            },
+            "priority": {
+              "default": 2,
+              "maximum": 3,
+              "minimum": 0,
+              "title": "Priority",
+              "type": "integer"
+            },
+            "project_id": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            },
+            "repositories": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Repositories",
+              "type": "array"
+            },
+            "requested_capabilities": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Requested Capabilities",
+              "type": "array"
+            },
+            "risk_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Risk Policy",
+              "type": "string"
+            }
+          },
+          "required": [
+            "project_id",
+            "risk_policy",
+            "approval_policy",
+            "effort_policy"
+          ],
+          "title": "MissionIntakeScope",
+          "type": "object"
+        },
+        "OwnerInstruction": {
+          "additionalProperties": false,
+          "description": "The owner's words and the message they arrived on.",
+          "properties": {
+            "provenance": {
+              "$ref": "#/$defs/InstructionProvenance"
+            },
+            "text": {
+              "maxLength": 8000,
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "provenance"
+          ],
+          "title": "OwnerInstruction",
+          "type": "object"
+        },
+        "UnknownIntakeValue": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "unknown",
+              "default": "unknown",
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "title": "UnknownIntakeValue",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "A bounded intake plus the mission envelope, minus the scope the owner confirms.",
+      "properties": {
+        "base_revision": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Revision"
+        },
+        "instruction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OwnerInstruction"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "intake": {
+          "$ref": "#/$defs/BoundedIntakeDraft"
+        },
+        "mission_id": {
+          "format": "uuid",
+          "title": "Mission Id",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/MissionIntakeScope"
+        }
+      },
+      "required": [
+        "mission_id",
+        "intake",
+        "scope"
+      ],
+      "title": "DraftMissionIntakePayload",
+      "type": "object"
+    },
     "EngageStopCommand": {
       "$defs": {
         "StopReasonPayload": {
@@ -18671,6 +20972,36 @@
         "new_revision_number"
       ],
       "title": "ImmutableRevisionExample",
+      "type": "object"
+    },
+    "InstructionProvenance": {
+      "additionalProperties": false,
+      "description": "Where an owner instruction was received.",
+      "properties": {
+        "channel": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Channel",
+          "type": "string"
+        },
+        "message_ref": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Message Ref",
+          "type": "string"
+        },
+        "received_at": {
+          "format": "date-time",
+          "title": "Received At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel",
+        "message_ref",
+        "received_at"
+      ],
+      "title": "InstructionProvenance",
       "type": "object"
     },
     "IntakeAcceptanceCriterion": {
@@ -19424,6 +21755,407 @@
       "title": "MissionDraft",
       "type": "object"
     },
+    "MissionDraftEditedAnswer": {
+      "$defs": {
+        "ItemBudget": {
+          "additionalProperties": false,
+          "properties": {
+            "max_subagents": {
+              "minimum": 0,
+              "title": "Max Subagents",
+              "type": "integer"
+            },
+            "tokens": {
+              "exclusiveMinimum": 0,
+              "title": "Tokens",
+              "type": "integer"
+            },
+            "usd": {
+              "title": "Usd",
+              "type": "string"
+            },
+            "wall_clock_seconds": {
+              "exclusiveMinimum": 0,
+              "title": "Wall Clock Seconds",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "usd",
+            "tokens",
+            "wall_clock_seconds",
+            "max_subagents"
+          ],
+          "title": "ItemBudget",
+          "type": "object"
+        },
+        "MissionDraft": {
+          "additionalProperties": false,
+          "description": "D29 mission record: the objective, its envelope, and the policies that\ngovern it. ``created_by``/``created_at`` are service-stamped, never sent.\n\n``risk_policy``, ``approval_policy``, and ``effort_policy`` are policy ids\n(OMP-417/418); ``budget_policy`` is the mission's envelope, from which item\nbudgets (OMP-404) are drawn.",
+          "properties": {
+            "acceptance_criteria": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Acceptance Criteria",
+              "type": "array"
+            },
+            "approval_classes": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Approval Classes",
+              "type": "array"
+            },
+            "approval_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Approval Policy",
+              "type": "string"
+            },
+            "artifact_expectations": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Artifact Expectations",
+              "type": "array"
+            },
+            "budget_policy": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ItemBudget"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "constraints": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Constraints",
+              "type": "array"
+            },
+            "context_refs": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Context Refs",
+              "type": "array"
+            },
+            "continuation_of": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Continuation Of"
+            },
+            "effort_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Effort Policy",
+              "type": "string"
+            },
+            "objective": {
+              "maxLength": 4000,
+              "minLength": 1,
+              "title": "Objective",
+              "type": "string"
+            },
+            "parent_mission": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Mission"
+            },
+            "priority": {
+              "default": 2,
+              "maximum": 3,
+              "minimum": 0,
+              "title": "Priority",
+              "type": "integer"
+            },
+            "project_id": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            },
+            "repositories": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Repositories",
+              "type": "array"
+            },
+            "requested_capabilities": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Requested Capabilities",
+              "type": "array"
+            },
+            "risk_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Risk Policy",
+              "type": "string"
+            }
+          },
+          "required": [
+            "project_id",
+            "objective",
+            "risk_policy",
+            "approval_policy",
+            "effort_policy"
+          ],
+          "title": "MissionDraft",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "The owner replaced the draft with a full MissionDraft.",
+      "properties": {
+        "draft": {
+          "$ref": "#/$defs/MissionDraft"
+        },
+        "kind": {
+          "const": "edited_draft",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "draft"
+      ],
+      "title": "MissionDraftEditedAnswer",
+      "type": "object"
+    },
+    "MissionDraftNoteAnswer": {
+      "additionalProperties": false,
+      "description": "A note is recorded and never applies a draft.",
+      "properties": {
+        "kind": {
+          "const": "note",
+          "title": "Kind",
+          "type": "string"
+        },
+        "text": {
+          "maxLength": 8000,
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "text"
+      ],
+      "title": "MissionDraftNoteAnswer",
+      "type": "object"
+    },
+    "MissionDraftOptionAnswer": {
+      "additionalProperties": false,
+      "description": "``confirm`` accepts the draft. ``reject`` abandons the mission.",
+      "properties": {
+        "kind": {
+          "const": "option",
+          "title": "Kind",
+          "type": "string"
+        },
+        "option": {
+          "enum": [
+            "confirm",
+            "reject"
+          ],
+          "title": "Option",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "option"
+      ],
+      "title": "MissionDraftOptionAnswer",
+      "type": "object"
+    },
+    "MissionIntakeScope": {
+      "$defs": {
+        "ItemBudget": {
+          "additionalProperties": false,
+          "properties": {
+            "max_subagents": {
+              "minimum": 0,
+              "title": "Max Subagents",
+              "type": "integer"
+            },
+            "tokens": {
+              "exclusiveMinimum": 0,
+              "title": "Tokens",
+              "type": "integer"
+            },
+            "usd": {
+              "title": "Usd",
+              "type": "string"
+            },
+            "wall_clock_seconds": {
+              "exclusiveMinimum": 0,
+              "title": "Wall Clock Seconds",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "usd",
+            "tokens",
+            "wall_clock_seconds",
+            "max_subagents"
+          ],
+          "title": "ItemBudget",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "MissionDraft without objective, acceptance_criteria, or constraints.\n\nThose three are what the owner confirms. Sending any of them on a scope\nis rejected.",
+      "properties": {
+        "approval_classes": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Approval Classes",
+          "type": "array"
+        },
+        "approval_policy": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Approval Policy",
+          "type": "string"
+        },
+        "artifact_expectations": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Artifact Expectations",
+          "type": "array"
+        },
+        "budget_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemBudget"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "context_refs": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Context Refs",
+          "type": "array"
+        },
+        "continuation_of": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Continuation Of"
+        },
+        "effort_policy": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Effort Policy",
+          "type": "string"
+        },
+        "parent_mission": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Mission"
+        },
+        "priority": {
+          "default": 2,
+          "maximum": 3,
+          "minimum": 0,
+          "title": "Priority",
+          "type": "integer"
+        },
+        "project_id": {
+          "format": "uuid",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "repositories": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Repositories",
+          "type": "array"
+        },
+        "requested_capabilities": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Requested Capabilities",
+          "type": "array"
+        },
+        "risk_policy": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Risk Policy",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_id",
+        "risk_policy",
+        "approval_policy",
+        "effort_policy"
+      ],
+      "title": "MissionIntakeScope",
+      "type": "object"
+    },
     "OperationReceipt": {
       "$defs": {
         "OperationState": {
@@ -19480,6 +22212,59 @@
         "result_sha256"
       ],
       "title": "OperationReceipt",
+      "type": "object"
+    },
+    "OwnerInstruction": {
+      "$defs": {
+        "InstructionProvenance": {
+          "additionalProperties": false,
+          "description": "Where an owner instruction was received.",
+          "properties": {
+            "channel": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Channel",
+              "type": "string"
+            },
+            "message_ref": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Message Ref",
+              "type": "string"
+            },
+            "received_at": {
+              "format": "date-time",
+              "title": "Received At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "channel",
+            "message_ref",
+            "received_at"
+          ],
+          "title": "InstructionProvenance",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "The owner's words and the message they arrived on.",
+      "properties": {
+        "provenance": {
+          "$ref": "#/$defs/InstructionProvenance"
+        },
+        "text": {
+          "maxLength": 8000,
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "provenance"
+      ],
+      "title": "OwnerInstruction",
       "type": "object"
     },
     "PromoteImportBatchCommand": {
