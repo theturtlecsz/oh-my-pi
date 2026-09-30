@@ -71,6 +71,8 @@ from .store_shared import WorkStoreError
 from .store_shared import row_json as _row_json
 from .agent_stop import allowed_while_stopped, read_stop_state, stop_result
 from .decision_records import answer_decision, create_decision, list_decisions
+from .missions import execute as execute_mission
+from .missions import read_mission
 from .semantics import (
     BOUNDED_INTAKE_RULE_BUNDLE_SHA256,
     bounded_intake_semantic_sha256,
@@ -535,6 +537,11 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
             "release_stop",
             "create_decision",
             "answer_decision",
+            "submit_mission",
+            "revise_mission",
+            "approve_mission",
+            "set_mission_status",
+            "link_mission_work",
         }
         conflict = False
         with self._transaction(
@@ -725,6 +732,14 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
                         (envelope.workspace_id,),
                     )
                     result = answer_decision(cur, envelope)
+                elif command.type in {
+                    "submit_mission",
+                    "revise_mission",
+                    "approve_mission",
+                    "set_mission_status",
+                    "link_mission_work",
+                }:
+                    result = execute_mission(cur, envelope, actor_id, actor_kind)
                 else:
                     raise WorkStoreError("unavailable")
                 result_hash = sha256(result)
@@ -770,26 +785,34 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
         event_type: str | None = None,
     ) -> None:
         payload = envelope.command.payload
-        aggregate_id = getattr(payload, "work_id", None) or envelope.workspace_id
-        if hasattr(payload, "relation"):
-            aggregate_id = payload.relation.source_work_id
-        elif hasattr(payload, "receipt"):
-            aggregate_id = payload.receipt.work_id
-        elif hasattr(payload, "input"):
-            aggregate_id = payload.input.work_id
-        elif hasattr(payload, "parent_work_id"):
-            aggregate_id = payload.parent_work_id
-        elif hasattr(payload, "grant_id"):
-            aggregate_id = getattr(payload, "work_id", payload.grant_id)
-        elif hasattr(payload, "slot"):
-            aggregate_id = payload.slot.work_id or envelope.workspace_id
-        close_event = result.get("event")
-        if isinstance(close_event, dict) and isinstance(
-            close_event.get("work_id"), str
-        ):
-            # Close-ritual commands aggregate under the work item their typed
-            # event names — never accidentally under the workspace (OMP-47).
-            aggregate_id = UUID(close_event["work_id"])
+        mission_id = getattr(payload, "mission_id", None)
+        if isinstance(mission_id, UUID):
+            aggregate_id = mission_id
+            aggregate_type = "mission"
+        else:
+            aggregate_id = getattr(payload, "work_id", None) or envelope.workspace_id
+            if hasattr(payload, "relation"):
+                aggregate_id = payload.relation.source_work_id
+            elif hasattr(payload, "receipt"):
+                aggregate_id = payload.receipt.work_id
+            elif hasattr(payload, "input"):
+                aggregate_id = payload.input.work_id
+            elif hasattr(payload, "parent_work_id"):
+                aggregate_id = payload.parent_work_id
+            elif hasattr(payload, "grant_id"):
+                aggregate_id = getattr(payload, "work_id", payload.grant_id)
+            elif hasattr(payload, "slot"):
+                aggregate_id = payload.slot.work_id or envelope.workspace_id
+            close_event = result.get("event")
+            if isinstance(close_event, dict) and isinstance(
+                close_event.get("work_id"), str
+            ):
+                # Close-ritual commands aggregate under the work item their typed
+                # event names — never accidentally under the workspace (OMP-47).
+                aggregate_id = UUID(close_event["work_id"])
+            aggregate_type = (
+                "work_item" if aggregate_id != envelope.workspace_id else "workspace"
+            )
         cur.execute(
             "SELECT event_sha256 FROM omp_audit.domain_events WHERE workspace_id=%s AND aggregate_id=%s ORDER BY sequence DESC LIMIT 1",
             (envelope.workspace_id, aggregate_id),
@@ -815,7 +838,7 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
             (
                 uuid4(),
                 envelope.workspace_id,
-                "work_item" if aggregate_id != envelope.workspace_id else "workspace",
+                aggregate_type,
                 aggregate_id,
                 int(result.get("row_version", 1)),
                 actor_id,
@@ -6724,6 +6747,8 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
                     None,
                 )
                 return {"grant": grant, "items": items, "active_item": active_item}
+            if kind == "mission":
+                return read_mission(cur, workspace_id, value)
             raise WorkStoreError("invalid_request")
 
     def activity(
