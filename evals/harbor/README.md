@@ -76,7 +76,9 @@ python -m omp_harbor_eval.grader validate --help
 ```
 
 `interactive_env` brings the fixture's workservice and worker up for one
-interactive omp session, then writes `service-readback.json` and copies the
-session directory into `DIR/session`. `verify` runs the fixture's independent
+interactive omp session. Stop the environment (readback) before quitting omp.
+It then writes `service-readback.json` and copies `<home>/omp-sessions` and
+every session under `<home>/.omp/agent/sessions` into `DIR/session`, printing
+each execution session file it copied. `verify` runs the fixture's independent
 tests against the sealed bundle and grades that evidence. `grader` prints one
 JSON object. This package does not call a model.

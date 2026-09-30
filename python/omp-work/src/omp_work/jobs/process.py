@@ -18,6 +18,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from omp_work.jobs.admission import enqueue_job
+from omp_work.jobs.probe import probe_job_id
 from omp_work.jobs.store import NativeJobStore
 from omp_work.jobs.worker import Handler, JobWorker, Settlement, load_handler
 from omp_work.operations.config import OperationsConfig
@@ -230,11 +231,29 @@ def register_component(
     return comp_sha
 
 
+def probe_lease_seconds(timeout: float, lease: int | None = None) -> int:
+    """Return the probe job lease in seconds.
+
+    ``None`` derives a short lease from ``timeout`` (a quarter of it, clamped to
+    1..30). An explicit ``lease`` must be an int (not bool) in 1..3600 and below
+    ``timeout``, otherwise ValueError.
+    """
+    if lease is None:
+        return max(1, min(30, int(timeout // 4)))
+    if isinstance(lease, bool) or not isinstance(lease, int):
+        raise ValueError("lease must be an int in 1..3600 and less than timeout")
+    if lease < 1 or lease > 3600 or lease >= timeout:
+        raise ValueError("lease must be an int in 1..3600 and less than timeout")
+    return lease
+
+
 def check(
     path: str | Path,
     work_id: str | UUID | None = None,
     count: int = 1,
     timeout: float = 30.0,
+    lease: int | None = None,
+    sleep: float = 0.0,
 ) -> dict[str, Any]:
     """Enqueue probe jobs and poll until sealed with exactly one settled event."""
     config = load_config(path)
@@ -248,10 +267,9 @@ def check(
     work_uuid = UUID(str(target_work_id))
 
     store = NativeJobStore(ops_config)
-    job_ids: list[str] = []
-    lease_sec = max(1, min(3600, int(timeout)))
-    for _ in range(count):
-        jid = f"probe-{uuid4()}"
+    lease_sec = probe_lease_seconds(timeout, lease)
+    job_ids = [probe_job_id(sleep) for _ in range(count)]
+    for jid in job_ids:
         enqueue_job(
             store,
             operation_id=str(uuid4()),
@@ -264,7 +282,6 @@ def check(
             resources={"cpu": 0, "memory_mib": 0, "gpu": 0, "model_calls": 0},
             lease_seconds=lease_sec,
         )
-        job_ids.append(jid)
 
     deadline = time.monotonic() + timeout
     passed = False

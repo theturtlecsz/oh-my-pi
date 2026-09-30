@@ -114,7 +114,7 @@ def test_decision_signature_store_lifecycle(service, tmp_path: Path) -> None:
             required_scope="work.mutate",
         )
         assert create_receipt.state == OperationState.APPLIED
-        assert create_result["status"] == "pending"
+        assert create_result["decision_id"] == str(decision_id)
 
         # 1. Answer without signature -> approval_required ("owner_signature_required"), still pending
         with pytest.raises(WorkStoreError) as exc_missing:

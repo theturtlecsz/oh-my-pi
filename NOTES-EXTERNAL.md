@@ -376,5 +376,31 @@ the cutover moves the units.
    unreadable to the automation user.
 
 
+---
+
+# OMP-480 interactive step text (flood operator)
+
+Status: **NOT APPLIED — the numbered steps live outside this repository
+(`/home/thetu/flood/tasks/OMP-250-s08.md`).** Apply the replacement below there.
+The in-repo banner already prints the same instruction.
+
+In the "In a second terminal" list, replace step 4:
+
+```
+4. At the terminal state, quit omp and press Ctrl-C in the first terminal.
+```
+
+with:
+
+```
+4. At the terminal state, stop the environment (readback) before quitting omp: press Ctrl-C in the first terminal, then quit omp.
+```
+
+Quitting omp first pauses the grant. The automated known_good readback is taken
+with omp still running, so parity compare then differs on transitions and result.
+The 22Z note's "stop the unit only after the omp session has quit" is the same
+reversed order; a rerun follows step 4 instead.
+
+
 
 

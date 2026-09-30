@@ -600,6 +600,7 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
                             "cutover_invariant", ("awaiting_cutover_plan_attestation",)
                         )
                 self._require_unexpired_execution(cur, envelope)
+                event: dict[str, object] | None = None
                 if command.type == "create_work_batch":
                     result = self._create_batch(cur, envelope, actor_kind)
                 elif command.type == "create_same_session_child":
@@ -725,7 +726,7 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
                         "INSERT INTO omp_control.workspaces(workspace_id) VALUES(%s) ON CONFLICT DO NOTHING",
                         (envelope.workspace_id,),
                     )
-                    result = create_decision(cur, envelope)
+                    result, event = create_decision(cur, envelope)
                 elif command.type == "answer_decision":
                     cur.execute(
                         "INSERT INTO omp_control.workspaces(workspace_id) VALUES(%s) ON CONFLICT DO NOTHING",
@@ -747,7 +748,13 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
                 else:
                     raise WorkStoreError("unavailable")
                 result_hash = sha256(result)
-                self._record_event(cur, envelope, actor_id, actor_kind, result)
+                self._record_event(
+                    cur,
+                    envelope,
+                    actor_id,
+                    actor_kind,
+                    event if event is not None else result,
+                )
                 if command.type != "activate_cutover":
                     cur.execute(
                         "UPDATE omp_control.workspace_authority SET first_work_mutation_at=clock_timestamp(), first_work_mutation_request_id=%s WHERE workspace_id=%s AND first_work_mutation_at IS NULL",

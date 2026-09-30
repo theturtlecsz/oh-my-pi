@@ -42,14 +42,36 @@ from omp_work.egress_policy import (
     _parse_destination,
 )
 
-__all__ = ["RelayGateway", "SandboxUnavailable", "run_sandboxed"]
+__all__ = [
+    "RelayGateway",
+    "ResearchStageRefused",
+    "SandboxUnavailable",
+    "run_research_stage",
+    "run_sandboxed",
+]
 
 _DNS_PORT = 53
 _PROXY_PORT = 3128
 
+_WORKER_ENV_ALLOWED = frozenset({"PATH", "LANG", "TERM", "TZ"})
+
 
 class SandboxUnavailable(RuntimeError):
     """Raised when sandbox tools are missing or sandbox setup fails."""
+
+
+class ResearchStageRefused(RuntimeError):
+    """Raised when a research-stage launch is refused before any process starts.
+
+    ``code`` is ``worktree_not_allowed``, ``context_not_allowed``, or
+    ``credential_not_allowed``.
+    """
+
+    code: str
+
+    def __init__(self, code: str, message: str | None = None) -> None:
+        super().__init__(message or code)
+        self.code = code
 
 
 def _executable(name: str, path: str | None = None) -> str:
@@ -315,7 +337,7 @@ def _pump(left: socket.socket, right: socket.socket) -> None:
         right.close()
 
 
-def run_sandboxed(
+def _run_sandbox_body(
     argv: Sequence[str],
     identity: Identity,
     recorder: EgressRecorder,
@@ -326,12 +348,9 @@ def run_sandboxed(
     gateway: RelayGateway | None = None,
     workservice: tuple[str, int] | None = None,
     ca_cert_path: str | Path | None = None,
+    root: str | None = None,
 ) -> int:
-    """Run argv inside an isolated egress sandbox.
-
-    Missing tools or setup failure raises :class:`SandboxUnavailable`.
-    Returns the worker's exit status.
-    """
+    """Shared sandbox body. ``root`` names the worker profile in config.json."""
     resolved: dict[str, str] = {}
     for tool in ("unshare", "setpriv", "ip"):
         found = shutil.which(tool)
@@ -465,6 +484,7 @@ def run_sandboxed(
         config = {
             "record_sock": str(sock_path),
             "setup_ok": str(setup_ok),
+            "root": root,
             "argv": list(argv),
             "workdir": str(workdir) if workdir is not None else None,
             "env": dict(env) if env is not None else None,
@@ -534,3 +554,85 @@ def run_sandboxed(
         raise SandboxUnavailable(f"Sandbox setup failed inside helper (exit code {returncode})")
 
     return returncode
+
+
+def run_sandboxed(
+    argv: Sequence[str],
+    identity: Identity,
+    recorder: EgressRecorder,
+    workdir: str | Path | None,
+    env: Mapping[str, str] | None,
+    timeout: float | int | None,
+    sockets_root: str | Path | None = None,
+    gateway: RelayGateway | None = None,
+    workservice: tuple[str, int] | None = None,
+    ca_cert_path: str | Path | None = None,
+) -> int:
+    """Run argv inside an isolated egress sandbox.
+
+    Missing tools or setup failure raises :class:`SandboxUnavailable`, and a
+    research identity raises :class:`ResearchStageRefused` before any tool
+    lookup, probe, or socket. Returns the worker's exit status.
+    """
+    if identity.stage == "research":
+        raise ResearchStageRefused("research_stage_launcher")
+    return _run_sandbox_body(
+        argv,
+        identity,
+        recorder,
+        workdir,
+        env,
+        timeout,
+        sockets_root,
+        gateway,
+        workservice,
+        ca_cert_path,
+    )
+
+
+def run_research_stage(
+    argv: Sequence[str],
+    identity: Identity,
+    recorder: EgressRecorder,
+    workdir: str | Path | None,
+    env: Mapping[str, str] | None,
+    timeout: float | int | None,
+    sockets_root: str | Path | None = None,
+    gateway: RelayGateway | None = None,
+    workservice: tuple[str, int] | None = None,
+    ca_cert_path: str | Path | None = None,
+    cwd: str | Path | None = None,
+    context_paths: Sequence[str | Path] = (),
+) -> int:
+    """Run a research-stage worker in the sandbox.
+
+    Refuses before any process starts: a ``workdir`` or ``cwd`` with
+    ``worktree_not_allowed``, non-empty ``context_paths`` with
+    ``context_not_allowed``, and an ``env`` naming anything but ``PATH``,
+    ``LANG``, ``TERM``, ``TZ``, or ``LC_*`` with ``credential_not_allowed``.
+    Otherwise runs the same body as :func:`run_sandboxed` with config root
+    ``research``.
+    """
+    if workdir is not None or cwd is not None:
+        raise ResearchStageRefused("worktree_not_allowed")
+    if tuple(context_paths):
+        raise ResearchStageRefused("context_not_allowed")
+    if env is not None:
+        for name in env:
+            upper = name.upper()
+            if upper in _WORKER_ENV_ALLOWED or upper.startswith("LC_"):
+                continue
+            raise ResearchStageRefused("credential_not_allowed")
+    return _run_sandbox_body(
+        argv,
+        identity,
+        recorder,
+        None,
+        env,
+        timeout,
+        sockets_root,
+        gateway,
+        workservice,
+        ca_cert_path,
+        root="research",
+    )

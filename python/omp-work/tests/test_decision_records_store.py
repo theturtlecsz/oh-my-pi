@@ -7,8 +7,8 @@ from uuid import UUID, uuid4
 
 import psycopg
 import pytest
-from omp_work.v1.api_models import DecisionView
-from omp_work.v1.models import CommandEnvelope, CreateDecisionCommand, OperationState
+from omp_work.v1.api_models import CommandResponse, DecisionView
+from omp_work.v1.models import CommandEnvelope, OperationState
 from omp_work.v1.store import PostgresWorkStore
 from omp_work.v1.store_shared import WorkStoreError
 from test_workflow_service import _grant
@@ -91,14 +91,10 @@ def test_decision_records_persist_answer_and_replay(service) -> None:
         required_scope="work.mutate",
     )
     assert receipt.state == OperationState.APPLIED
-    dumped = CreateDecisionCommand.model_validate(
-        {"type": "create_decision", "payload": body}
-    ).payload.model_dump(mode="json")
-    assert result == {
-        "type": "create_decision",
-        "status": "pending",
-        "decision": dumped,
-    }
+    CommandResponse.model_validate({"receipt": receipt, "result": result})
+    assert result["decision_id"] == str(decision_id)
+    assert result["project_id"] == str(project_id)
+    assert result["mission_id"] == "OMP-414"
 
     with pytest.raises(WorkStoreError) as duplicate:
         store.execute(

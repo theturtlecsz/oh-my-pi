@@ -443,6 +443,11 @@ def main() -> None:
     config_path = Path(sys.argv[1])
     config = json.loads(config_path.read_text(encoding="utf-8"))
 
+    # Fail closed until the research jail (s02) exists: a non-null profile root
+    # is a launch the helper cannot yet isolate. Exit before setup_ok.
+    if config.get("root"):
+        sys.exit(125)
+
     record_sock = config["record_sock"]
     setup_ok_path = config.get("setup_ok")
     argv = config["argv"]
