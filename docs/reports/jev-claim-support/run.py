@@ -15,8 +15,9 @@ Usage::
       --out docs/reports/jev-claim-support-measurement-report.md \
       --pairs-per-report 24
 
-``JEV_CLAIM_SUPPORT_CHAT_CMD`` reads the rendered classifier prompt on stdin and
-writes ``{"text": ..., "input_tokens": ..., "output_tokens": ..., "model": ...}``
+``JEV_CLAIM_SUPPORT_CHAT_CMD`` is a program and its arguments (POSIX quoting,
+no shell). It reads the rendered classifier prompt on stdin and writes
+``{"text": ..., "input_tokens": ..., "output_tokens": ..., "model": ...}``
 on stdout.
 """
 
@@ -26,7 +27,8 @@ import argparse
 import json
 import os
 import re
-import subprocess
+import shlex
+import subprocess  # nosec B404 - owner chat command runs as an argv list; no shell
 import sys
 import time
 from dataclasses import dataclass
@@ -109,12 +111,15 @@ def load_labels(path: Path) -> list[LabeledPair]:
 
 
 def chat_completer(command: str):
-    """A ``complete(prompt) -> Completion`` backed by an external command."""
+    """A ``complete(prompt) -> Completion`` backed by an external command.
+
+    ``command`` is split with POSIX quoting and executed as an argv list.
+    The prompt is written to stdin and is not part of the argv.
+    """
 
     def complete(prompt: str) -> Completion:
-        result = subprocess.run(
-            command,
-            shell=True,
+        result = subprocess.run(  # nosec B603 - argv from the owner chat command; no shell; prompt is stdin only
+            shlex.split(command),
             input=prompt,
             capture_output=True,
             text=True,
