@@ -5,7 +5,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import AwareDatetime, Field, field_validator
+from pydantic import AwareDatetime, Field, field_validator, model_serializer
 
 from .models import (
     AuditManifest,
@@ -542,6 +542,13 @@ class AnswerDecisionResult(StrictModel):
     answer: str
     resume_state: str | None = None
     expires_at: AwareDatetime | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_expiry(self, handler: Any) -> Any:
+        data = handler(self)
+        if isinstance(data, dict) and data.get("expires_at") is None:
+            data.pop("expires_at", None)
+        return data
 
 
 class DecisionView(StrictModel):

@@ -12,13 +12,12 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 import pytest
-from pydantic import ValidationError
-
-from omp_work.v1.api_models import DecisionView
+from omp_work.v1.api_models import AnswerDecisionResult, DecisionView
 from omp_work.v1.models import (
     AnswerDecisionPayload,
     CreateDecisionPayload,
 )
+from pydantic import ValidationError
 
 TARGET = "a" * 64
 
@@ -96,3 +95,36 @@ def test_payloads_without_the_new_fields_still_validate() -> None:
         {"decision_id": str(uuid4()), "answer": "approve"}
     )
     assert answer.expires_at is None
+
+
+def test_answer_result_omits_unset_expiry_and_keeps_a_set_one() -> None:
+    decision_id = uuid4()
+    unset = AnswerDecisionResult.model_validate(
+        {
+            "type": "answer_decision",
+            "decision_id": str(decision_id),
+            "mission_id": "OMP-414",
+            "answer": "approve",
+            "resume_state": "contract-approved",
+        }
+    )
+    assert unset.model_dump(mode="json") == {
+        "type": "answer_decision",
+        "decision_id": str(decision_id),
+        "mission_id": "OMP-414",
+        "answer": "approve",
+        "resume_state": "contract-approved",
+    }
+    expires_at = datetime(2099, 1, 1, tzinfo=timezone.utc)
+    set_result = AnswerDecisionResult.model_validate(
+        {
+            "type": "answer_decision",
+            "decision_id": str(decision_id),
+            "answer": "approve",
+            "expires_at": expires_at.isoformat(),
+        }
+    )
+    assert (
+        datetime.fromisoformat(set_result.model_dump(mode="json")["expires_at"])
+        == expires_at
+    )
