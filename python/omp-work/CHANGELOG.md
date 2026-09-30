@@ -39,6 +39,7 @@
 - Per-stage provider, model, and effort from a written routing policy, with per-provider concurrency, retries, and automatic escalation within the item budget.
 - Unattended workers reach the network only through a default-deny egress policy; refusals and research fetches are recorded (OMP-431).
 - `omp-work jobs check --sleep S` makes each probe job run S seconds, so a kill drill can land mid-job (OMP-475).
+- WorkService authorises proposals through named Run Owner checks, fails closed with a decision record, and only an owner-signed change alters a D35 lock.
 
 ### Changed
 
