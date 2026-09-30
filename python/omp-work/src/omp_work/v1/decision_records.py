@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 from uuid import UUID
@@ -78,6 +79,17 @@ def answer_decision(
     if action_class is not None:
         if not isinstance(action_class, str):
             raise WorkStoreError("invalid_request")
+        target_sha256 = record.view.get("target_sha256")
+        if target_sha256 is not None and payload.expires_at is None:
+            raise WorkStoreError("approval_required", ("expires_at_required",))
+        if payload.expires_at is not None:
+            cur.execute("SELECT clock_timestamp() AS now")
+            now_row = cur.fetchone()
+            if now_row is None:
+                raise WorkStoreError("unavailable")
+            now = now_row["now"]
+            if payload.expires_at.astimezone(timezone.utc) <= now.astimezone(timezone.utc):
+                raise WorkStoreError("approval_required", ("authorization_expired",))
         if payload.owner_signature is None:
             raise WorkStoreError("approval_required", ("owner_signature_required",))
         message = decision_signature_message(
@@ -85,6 +97,8 @@ def answer_decision(
             decision_id=payload.decision_id,
             action_class=action_class,
             answer=payload.answer,
+            target_sha256=str(target_sha256) if target_sha256 is not None else None,
+            expires_at=payload.expires_at,
         )
         if not verify_owner_signature(
             owner_allowed_signers, message, payload.owner_signature
@@ -97,7 +111,20 @@ def answer_decision(
         mission_id=mission_id if isinstance(mission_id, str) else None,
         answer=payload.answer,
         resume_state=record.resume_state,
+        expires_at=payload.expires_at,
     ).model_dump(mode="json")
+
+
+def find_decision(
+    cur: psycopg.Cursor[dict[str, object]],
+    workspace_id: UUID,
+    decision_id: UUID | str,
+) -> dict[str, object] | None:
+    target_id = str(decision_id)
+    for record in _load(cur, workspace_id):
+        if str(record.view["decision_id"]) == target_id:
+            return record.view
+    return None
 
 
 def list_decisions(
@@ -160,6 +187,7 @@ def _load(
             if hasattr(occurred_at, "isoformat")
             else occurred_at
         )
+        record.view["expires_at"] = body.get("expires_at")
     return [records[decision_id] for decision_id in order]
 
 
@@ -177,8 +205,10 @@ def _pending_view(decision: dict[str, object]) -> dict[str, object]:
         "default_if_any": decision.get("default_if_any"),
         "risk_of_each_choice": decision["risk_of_each_choice"],
         "action_class": decision.get("action_class"),
+        "target_sha256": decision.get("target_sha256"),
         "answer": None,
         "answered_at": None,
+        "expires_at": None,
     }
 
 
