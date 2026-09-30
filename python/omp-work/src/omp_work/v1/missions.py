@@ -1,14 +1,16 @@
-"""Mission submit, revise, approve, status, and read. State is the mission
+"""Mission submit, revise, approve, status, link, and read. State is the mission
 snapshot on the latest applied mission event (no mission table).
 """
 
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from uuid import UUID
 
 import psycopg
 
+from omp_work.jobs.budget import item_budget
 from omp_work.mission_budget import MissionBudgetAdmission, admit_mission_budget
 from omp_work.mission_scope import (
     TERMINAL_STATUSES,
@@ -20,12 +22,15 @@ from omp_work.mission_scope import (
 from .api_models import (
     MissionApprovedScope,
     MissionDrawn,
+    MissionLink,
     MissionTransition,
     MissionView,
 )
 from .models import (
     ApproveMissionCommand,
     CommandEnvelope,
+    ItemBudget,
+    LinkMissionWorkCommand,
     MissionDraft,
     MissionStatus,
     ReviseMissionCommand,
@@ -45,6 +50,9 @@ _MISSION_EVENTS = (
 _NEW_SCOPE_RULE = "D29.new_scope"
 _BUDGET_SUPPLIED_RULE = "D29.budget_supplied"
 _MATERIAL_RULE_PREFIX = "D29.material:"
+_LINKABLE_STATUSES = frozenset(
+    {MissionStatus.APPROVED, MissionStatus.RUNNING, MissionStatus.PAUSED}
+)
 
 
 def execute(
@@ -62,6 +70,8 @@ def execute(
         return _approve(cur, envelope, actor_id, actor_kind)
     if isinstance(command, SetMissionStatusCommand):
         return _set_status(cur, envelope, actor_id, actor_kind)
+    if isinstance(command, LinkMissionWorkCommand):
+        return _link(cur, envelope)
     raise WorkStoreError("unavailable")
 
 
@@ -465,6 +475,77 @@ def _set_status(
     mission = updated_view.model_dump(mode="json")
     mission = MissionView.model_validate(mission).model_dump(mode="json")
     return {"type": "set_mission_status", "mission": mission}
+
+
+def _link(
+    cur: psycopg.Cursor[dict[str, object]],
+    envelope: CommandEnvelope,
+) -> dict[str, object]:
+    """Append one work item and add its published budget to the mission draw.
+
+    ``max_subagents`` is a per-item cap against the mission envelope, not a sum.
+    """
+    command = envelope.command
+    assert isinstance(command, LinkMissionWorkCommand)
+    payload = command.payload
+    workspace_id = envelope.workspace_id
+
+    raw_mission = _latest_mission(cur, workspace_id, payload.mission_id)
+    if raw_mission is None:
+        raise WorkStoreError("invalid_request")
+    view = MissionView.model_validate(raw_mission)
+    if view.status not in _LINKABLE_STATUSES:
+        raise WorkStoreError("mission_transition_refused")
+
+    cur.execute(
+        "SELECT 1 FROM omp_work.work_items WHERE workspace_id=%s AND work_id=%s",
+        (workspace_id, payload.work_id),
+    )
+    if cur.fetchone() is None:
+        raise WorkStoreError("invalid_request")
+    if any(link.work_id == payload.work_id for link in view.links):
+        raise WorkStoreError("invalid_request")
+
+    budget = item_budget(cur, workspace_id, payload.work_id)
+    if budget is None:
+        raise WorkStoreError("invalid_request")
+    # view.budget is the admitted envelope: the mission policy, or the project's standing budget.
+    if view.budget is None or not _within_envelope(view.drawn, budget, view.budget):
+        raise WorkStoreError("mission_budget_exceeded")
+
+    cur.execute("SELECT clock_timestamp() AS linked_at")
+    created_row = cur.fetchone()
+    if created_row is None:
+        raise WorkStoreError("unavailable")
+    link = MissionLink(
+        work_id=payload.work_id,
+        budget=budget,
+        linked_at=created_row["linked_at"],
+    )
+    drawn = MissionDrawn(
+        usd=_sum_usd(view.drawn.usd, budget.usd),
+        tokens=view.drawn.tokens + budget.tokens,
+        wall_clock_seconds=view.drawn.wall_clock_seconds + budget.wall_clock_seconds,
+    )
+    updated = view.model_copy(update={"links": (*view.links, link), "drawn": drawn})
+    mission = updated.model_dump(mode="json")
+    mission = MissionView.model_validate(mission).model_dump(mode="json")
+    return {"type": "link_mission_work", "mission": mission}
+
+
+def _within_envelope(drawn: MissionDrawn, item: ItemBudget, limit: ItemBudget) -> bool:
+    if item.max_subagents > limit.max_subagents:
+        return False
+    return (
+        Decimal(drawn.usd) + Decimal(item.usd) <= Decimal(limit.usd)
+        and drawn.tokens + item.tokens <= limit.tokens
+        and drawn.wall_clock_seconds + item.wall_clock_seconds
+        <= limit.wall_clock_seconds
+    )
+
+
+def _sum_usd(left: str, right: str) -> str:
+    return format(Decimal(left) + Decimal(right), "f")
 
 
 def _budget_admission(
