@@ -73,6 +73,7 @@ from .agent_stop import allowed_while_stopped, read_stop_state, stop_result
 from .decision_records import answer_decision, create_decision, list_decisions
 from .missions import execute as execute_mission
 from .missions import read_mission, unconfirmed_missions_for_work
+from .mission_intake import draft_mission_intake
 from .semantics import (
     BOUNDED_INTAKE_RULE_BUNDLE_SHA256,
     bounded_intake_semantic_sha256,
@@ -558,6 +559,7 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
             "approve_mission",
             "set_mission_status",
             "link_mission_work",
+            "draft_mission_intake",
         }
         conflict = False
         with self._transaction(
@@ -761,6 +763,16 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
                     "link_mission_work",
                 }:
                     result = execute_mission(cur, envelope, actor_id, actor_kind)
+                elif command.type == "draft_mission_intake":
+                    payload = command.payload
+                    ws = envelope.workspace_id
+                    project_id = payload.scope.project_id
+                    mandate = self._load_mandate(cur, ws, project_id)
+                    budget, _ = self._load_budget(cur, ws, project_id, None)
+                    ceiling = None if budget is None else budget.ceiling_usd
+                    result, event = draft_mission_intake(
+                        cur, envelope, actor_id, actor_kind, mandate, ceiling
+                    )
                 else:
                     raise WorkStoreError("unavailable")
                 result_hash = sha256(result)
