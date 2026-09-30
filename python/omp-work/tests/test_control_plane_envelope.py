@@ -25,6 +25,8 @@ from omp_work.standing_policy import ActionRequest, RepositoryRecord, StandingPo
 from omp_work.v1.models import (
     ApproveMissionCommand,
     CommandEnvelope,
+    CreateDecisionCommand,
+    CreateDecisionPayload,
     EngageStopCommand,
     ReleaseStopCommand,
     ReviseMissionCommand,
@@ -215,6 +217,43 @@ def test_bind_command_workspace_and_operation_mismatch_refuse() -> None:
     assert refusal.code == "classification_mismatch"
 
 
+def _decision_command(mission_id: str) -> CreateDecisionCommand:
+    return CreateDecisionCommand(
+        type="create_decision",
+        payload=CreateDecisionPayload(
+            decision_id=uuid4(),
+            project_id=uuid4(),
+            mission_id=mission_id,
+            question="Authorize?",
+            why_it_matters="it blocks progress",
+            risk_of_delay="work stays blocked",
+            options=("authorize", "reject"),
+            default_if_any="reject",
+            risk_of_each_choice={"authorize": "runs it", "reject": "aborts it"},
+        ),
+    )
+
+
+def test_bind_command_decision_with_non_uuid_mission_id_binds_without_raising() -> None:
+    # A decision record's mission_id is a free string, not a UUID; binding must
+    # not coerce it (Proposal.mission_id is a UUID) and crash.
+    proposal = Proposal(proposal_id=uuid4(), workspace_id=WORKSPACE)
+    bound = bind_command(proposal, _envelope(_decision_command("M-1")), "work.mutate")
+    assert isinstance(bound, Proposal)
+    assert bound.action_class == "update_mission_state"
+    assert bound.mission_id is None
+
+
+def test_bind_command_decision_with_uuid_mission_id_binds_it() -> None:
+    mid = uuid4()
+    proposal = Proposal(proposal_id=uuid4(), workspace_id=WORKSPACE)
+    bound = bind_command(
+        proposal, _envelope(_decision_command(str(mid))), "work.mutate"
+    )
+    assert isinstance(bound, Proposal)
+    assert bound.mission_id == mid
+
+
 # ---------------------------------------------------------------------------
 # tier_gate
 # ---------------------------------------------------------------------------
@@ -261,6 +300,26 @@ def test_tier_gate_unclassified_unsigned_refuses_unlisted() -> None:
 
 def test_tier_gate_unclassified_blank_unsigned_refuses() -> None:
     proposal = Proposal(proposal_id=uuid4(), action_class="  ")
+    refusal = _run_tier_gate(proposal, _ctx())
+    assert refusal is not None
+    assert refusal.code == "unclassified_action"
+    assert refusal.action_class == "unlisted"
+
+
+def test_tier_gate_padded_tier1_class_unsigned_refuses_unlisted() -> None:
+    # " modify_files" is not a listed class; stripping it would let it pass as
+    # tier 1 without the owner's signature.
+    proposal = Proposal(proposal_id=uuid4(), action_class=" modify_files")
+    refusal = _run_tier_gate(proposal, _ctx())
+    assert refusal is not None
+    assert refusal.code == "unclassified_action"
+    assert refusal.action_class == "unlisted"
+
+
+def test_tier_gate_trailing_space_tier3_class_refuses_unlisted() -> None:
+    # A padded tier-3 class is not that class, so the owner-signature path must
+    # not run; the action is unlisted and needs authorization as unlisted.
+    proposal = Proposal(proposal_id=uuid4(), action_class="merge_protected_branch ")
     refusal = _run_tier_gate(proposal, _ctx())
     assert refusal is not None
     assert refusal.code == "unclassified_action"

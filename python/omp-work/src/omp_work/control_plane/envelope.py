@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from typing import Any
+from uuid import UUID
 
 from omp_work.action_tiers import TIER1, TIER2, TIER3
 from omp_work.control_plane.gate import (
@@ -51,6 +52,23 @@ _MISSION_TERMINAL: frozenset[str] = frozenset({"completed", "failed"})
 def _command_mission_id(command: Any) -> Any:
     payload = getattr(command, "payload", None)
     return getattr(payload, "mission_id", None)
+
+
+def _bindable_mission_id(command: Any) -> UUID | None:
+    """Return the command's mission id in the form a ``Proposal`` can hold.
+
+    Mission commands carry a ``UUID``; a decision record's ``mission_id`` is a
+    free-form string. ``Proposal.mission_id`` is a UUID and coerces strings in
+    its constructor, so a value it cannot represent binds as ``None`` instead
+    of raising out of ``bind_command``.
+    """
+    value = _command_mission_id(command)
+    if value is None or isinstance(value, UUID):
+        return value
+    try:
+        return UUID(str(value))
+    except (ValueError, AttributeError, TypeError):
+        return None
 
 
 def _mission_target_status(command: Any) -> Any:
@@ -96,7 +114,7 @@ def bind_command(proposal: Proposal, envelope: Any, scope: str) -> Proposal | Re
     command_type = getattr(command, "type", None)
     workspace_id = getattr(envelope, "workspace_id", None)
     action_class = classify_command(command, scope)
-    mission_id = _command_mission_id(command)
+    mission_id = _bindable_mission_id(command)
 
     mismatch = (
         proposal.operation != "command"
@@ -131,7 +149,9 @@ def _bounds_equal(left: StandingPolicy, right: StandingPolicy) -> bool:
 
 
 def _tier_gate(proposal: Proposal, ctx: CheckContext) -> Refusal | None:
-    action_class = (proposal.action_class or "").strip()
+    # The class is matched raw: stripping it would move a padded string that no
+    # tier lists (" modify_files") into a tier and let it skip the owner gate.
+    action_class = proposal.action_class
 
     if action_class in TIER1:
         return None
