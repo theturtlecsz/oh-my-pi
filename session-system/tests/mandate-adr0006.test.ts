@@ -131,8 +131,8 @@ describe("ADR 0006: On-demand roles", () => {
 		const rows = parseTableRows(section);
 
 		expect(rows[0]).toEqual(EXPECTED_HEADER);
-		expect(rows.slice(1)).toEqual(EXPECTED_ROWS);
-		expect(rows.slice(1).length).toBe(4);
+		// Appended roles follow these four; lock the original prefix.
+		expect(rows.slice(1, 1 + EXPECTED_ROWS.length)).toEqual(EXPECTED_ROWS);
 	});
 
 	test("each expected role is found by name with equal cells", async () => {
