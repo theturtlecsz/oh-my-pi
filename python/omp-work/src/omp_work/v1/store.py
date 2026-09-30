@@ -76,7 +76,11 @@ from .missions import read_mission, unconfirmed_missions_for_work
 from .mission_intake import answer_mission_draft, draft_mission_intake
 from .mission_event_store import (
     DOMAIN_EVENTS_WINDOW_QUERY,
+    advance_event_cursor as _advance_event_cursor,
+    delete_event_subscription as _delete_event_subscription,
+    event_subscriptions as _event_subscriptions_dispatch,
     mission_events as _mission_events_dispatch,
+    put_event_subscription as _put_event_subscription,
     record_finding as _record_finding,
 )
 from .semantics import (
@@ -567,6 +571,9 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
             "draft_mission_intake",
             "answer_mission_draft",
             "record_finding",
+            "put_event_subscription",
+            "delete_event_subscription",
+            "advance_event_cursor",
         }
         conflict = False
         with self._transaction(
@@ -786,6 +793,12 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
                     )
                 elif command.type == "record_finding":
                     result = _record_finding(cur, envelope, actor_id, actor_kind)
+                elif command.type == "put_event_subscription":
+                    result = _put_event_subscription(cur, envelope, actor_id, actor_kind)
+                elif command.type == "delete_event_subscription":
+                    result = _delete_event_subscription(cur, envelope, actor_id, actor_kind)
+                elif command.type == "advance_event_cursor":
+                    result = _advance_event_cursor(cur, envelope, actor_id, actor_kind)
                 else:
                     raise WorkStoreError("unavailable")
                 result_hash = sha256(result)
@@ -7112,6 +7125,11 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
         *,
         client_id: UUID | None,
     ) -> dict[str, object]:
-        raise WorkStoreError("unavailable")
+        return _event_subscriptions_dispatch(
+            self,
+            workspace_id,
+            actor_id,
+            client_id=client_id,
+        )
 
 
