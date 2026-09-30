@@ -326,7 +326,7 @@ def test_new_mission_without_prior_files_owner_decision(service) -> None:
     assert event["instruction"]["text"] == instruction["text"]
     assert event["decision"]["decision_id"] == result["decision_id"]
     assert event["decision"]["options"] == ["confirm", "reject"]
-    assert event["decision"]["evidence_refs"] == [f"mission:{mission_id} @1"]
+    assert event["decision"]["evidence_refs"] == [f"mission:{mission_id}@1"]
     assert event["decision"]["mission_id"] == str(mission_id)
     assert event["decision"]["action_class"] is None
 
@@ -379,7 +379,7 @@ def test_material_case_files_one_decision_for_the_revision(service) -> None:
     assert first["mission"]["status"] == "awaiting_confirmation"
     assert "Bound memory growth" in second_event["decision"]["question"]
     assert "cases: a" in second_event["decision"]["question"]
-    assert second_event["decision"]["evidence_refs"] == [f"mission:{mission_id} @2"]
+    assert second_event["decision"]["evidence_refs"] == [f"mission:{mission_id}@2"]
     # The prior approval carries to the revised snapshot untouched.
     assert first["mission"]["approved_scope"] == approved["approved_scope"]
 

@@ -145,7 +145,7 @@ def intake_decision(
             "owner approved."
         ),
         options=_OPTIONS,
-        evidence_refs=(f"mission:{mission_id} @{revision}",),
+        evidence_refs=(f"mission:{mission_id}@{revision}",),
         risk_of_each_choice={
             "confirm": "The mission proceeds with this scope.",
             "reject": "The mission is abandoned and no work proceeds.",
