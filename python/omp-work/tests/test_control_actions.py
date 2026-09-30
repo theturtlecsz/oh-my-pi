@@ -12,6 +12,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import psycopg
+from fastapi.testclient import TestClient
 from psycopg.rows import dict_row
 import pytest
 
@@ -30,7 +31,9 @@ from omp_work.standing_mandate import StandingMandate
 from omp_work.standing_policy import ActionRequest, RepositoryRecord, StandingPolicy
 from omp_work.v1.models import CommandEnvelope, OperationState
 from omp_work.v1.owner_signature import NAMESPACE, decision_signature_message
+from omp_work.v1.server import create_app
 from omp_work.v1.store import PostgresWorkStore
+from test_decision_records_api import _list, _post
 from test_workflow_service import OWNER, _grant
 
 pytest_plugins = ["test_workflow_service"]
@@ -542,6 +545,99 @@ def test_tier3_each_class_is_held_then_runs_after_owner_answer(
             assert done.decision_id == held.decision_id
             assert len(done_executor.calls) == 1
     finally:
+        if signers_path.exists():
+            signers_path.unlink()
+
+
+@pytest.mark.parametrize("action_class", sorted(TIER3))
+def test_held_tier3_survives_restart_and_runs_once_after_http_answer(
+    service, tmp_path: Path, action_class: str
+) -> None:
+    store, workspace_id, project_id = _open(service)
+    _mandate_all_tier3(store, workspace_id, project_id)
+    owner_key = _generate_key(tmp_path, "owner_key")
+    signers_path = _signers_file(service, owner_key)
+    submission = dict(TIER3_SUBMISSIONS[action_class])
+    resolver = _resolver_for(store, workspace_id, project_id)
+    operation = parse_submission(submission)
+    classification = classify(operation, resolver(operation))
+    assert classification.action_class == action_class
+    assert classification.tier == 3
+    client: TestClient | None = None
+    try:
+        executor = _Executor()
+        held = perform(
+            store,
+            workspace_id,
+            OWNER,
+            project_id,
+            None,
+            submission,
+            resolver,
+            executor,
+            NOW,
+        )
+        assert held.status == "held", action_class
+        assert held.action_class == action_class
+        assert held.tier == 3
+        assert held.decision_id is not None
+        assert executor.calls == []
+
+        restarted = PostgresWorkStore(service.config)
+        client = TestClient(
+            create_app(service.config, capabilities_dir=service.capabilities)
+        )
+        pending = _list(client, workspace_id, status="pending")["decisions"]
+        assert len(pending) == 1, pending
+        row = pending[0]
+        assert row["decision_id"] == str(held.decision_id)
+        assert row["action_class"] == action_class
+        assert row["target_sha256"] == classification.target_sha256
+
+        message = decision_signature_message(
+            workspace_id=workspace_id,
+            decision_id=held.decision_id,
+            action_class=action_class,
+            answer="approve",
+            target_sha256=classification.target_sha256,
+            expires_at=FUTURE,
+        )
+        status, body, _sent = _post(
+            client,
+            workspace_id,
+            {
+                "type": "answer_decision",
+                "payload": {
+                    "decision_id": str(held.decision_id),
+                    "answer": "approve",
+                    "owner_signature": _sign(owner_key, message),
+                    "expires_at": FUTURE.astimezone(UTC).isoformat(),
+                },
+            },
+        )
+        assert status == 200, body
+        assert body["receipt"]["state"] == "applied"
+
+        done_executor = _Executor()
+        done = perform(
+            restarted,
+            workspace_id,
+            OWNER,
+            project_id,
+            None,
+            submission,
+            resolver,
+            done_executor,
+            NOW,
+            decision_id=held.decision_id,
+        )
+        assert done.status == "done", action_class
+        assert done.action_class == action_class
+        assert done.decision_id == held.decision_id
+        assert len(done_executor.calls) == 1
+    finally:
+        if client is not None:
+            client.close()
         if signers_path.exists():
             signers_path.unlink()
 
