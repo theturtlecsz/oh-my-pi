@@ -44,6 +44,7 @@ class JevStub:
 
         self.payloads: list[dict[str, Any]] = []
         self.requests: list[httpx.Request] = []
+        self._label_offset = 0
 
     def _ok_body(self, body: dict[str, Any]) -> dict[str, Any]:
         if self.answers is not None:
@@ -51,10 +52,14 @@ class JevStub:
         names = list((body.get("questions") or {}).keys())
         answers: dict[str, Any] = {}
         for index, name in enumerate(names):
+            label_idx = self._label_offset + index
             label = (
-                self.labels[index] if self.labels and index < len(self.labels) else "neither"
+                self.labels[label_idx]
+                if self.labels and label_idx < len(self.labels)
+                else "neither"
             )
             answers[name] = {"probabilities": probabilities(label)}
+        self._label_offset += len(names)
         return {"id": self.server_id, "answers": answers}
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:

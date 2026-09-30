@@ -32,9 +32,10 @@ per (claim, passage) pair. The measurement asks three questions:
    human label, over **at least 100 hand-labeled (claim, passage) pairs**? The
    hand labels are the ground truth; the chat classifier's own labels are not.
 3. **Cost per report.** What does one report's worth of classification cost on
-   the Jev path, from the request's own token accounting (input at
-   $0.042/MTok, output free, per the §5 review's Jev primitive table) and
-   scaled to the pairs a single report links?
+   the Jev path, calculated from the input character token estimate
+   (`(len(state)+3)//4`, as Jev `/v1/systemone` responses return no token
+   usage metadata), priced at $0.042/MTok (output tokens free, per the §5
+   review's Jev primitive table) and scaled to the pairs a single report links?
 
 ## Evaluation set
 
@@ -66,7 +67,8 @@ with the model the owner selects.
 Reported per classifier: label accuracy against the hand labels, the confusion
 by label, and the transport/parse failure share. Reported across classifiers:
 pairwise agreement (Jev vs chat). Reported for the Jev path: input tokens per
-pair, p50/p95 latency, and cost per pair and per report.
+pair (character estimate, `(len(state)+3)//4`), p50/p95 latency, and cost per
+pair and per report.
 
 **Probabilities are routing only.** The Jev choice's probability map is stored
 on `Classification.probabilities` and never used as a confidence interval, never

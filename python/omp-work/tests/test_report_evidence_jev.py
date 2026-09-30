@@ -18,6 +18,7 @@ from omp_work.report_evidence import (
     classify_pairs,
     render_matrix_table,
     annotate_report,
+    truncate_passage,
     truncate_state,
 )
 
@@ -336,3 +337,139 @@ def test_jev_answer_keyed_by_instructions_is_accepted() -> None:
     classifier = JevClassifier(transport=stub.transport)
     (result,) = classifier.classify([(claim, passage)])
     assert result.label == "contradicts"
+
+
+def test_jev_batch_preserves_every_passage_under_partitioning() -> None:
+    """Eight 2400-char passages partition across batches without cutting off any passage."""
+    stub = JevStub(labels=["supports"] * 8)
+    classifier = JevClassifier(transport=stub.transport, batch_size=8)
+    claims = [
+        Claim(
+            id=f"c-{i}",
+            text=f"Claim {i} asserts cache performance [src-1].",
+            char_start=0,
+            char_end=20,
+            material=True,
+        )
+        for i in range(8)
+    ]
+    passages = [
+        Passage(
+            passage_id=f"p-{i}",
+            source_id="src-1",
+            locator=f"p.{i}",
+            text=f"PASSAGE-{i}-START " + ("benchmark-evidence " * 120) + f"PASSAGE-{i}-END",
+        )
+        for i in range(8)
+    ]
+    pairs = list(zip(claims, passages, strict=True))
+    for _, p in pairs:
+        assert 2000 < len(p.text) < 2500
+
+    results = classifier.classify(pairs)
+
+    assert len(results) == 8
+    assert all(r.label == "supports" for r in results)
+    # 8 * ~2300 chars > 8000 cap, so multiple batches were sent.
+    assert len(stub.payloads) > 1
+
+    assert len(stub.payloads) == 3
+    assert "PASSAGE-0-START" in stub.payloads[0]["state"]
+    assert "PASSAGE-2-END" in stub.payloads[0]["state"]
+    assert "PASSAGE-3-START" in stub.payloads[1]["state"]
+    assert "PASSAGE-5-END" in stub.payloads[1]["state"]
+    assert "PASSAGE-6-START" in stub.payloads[2]["state"]
+    assert "PASSAGE-7-END" in stub.payloads[2]["state"]
+
+    for payload in stub.payloads:
+        sent_state = payload["state"]
+        # None of the individual passages exceeded 8000 chars, so no truncation marker.
+        assert "…[truncated" not in sent_state
+        question_names = list(payload["questions"].keys())
+        for q_name in question_names:
+            pair_num = int(q_name.split("-")[1])
+            assert f"{pair_num}. CLAIM:" in sent_state
+
+
+def test_jev_overlong_passage_isolated_and_truncated() -> None:
+    """An overlong passage is isolated to its own batch and truncated; subsequent pairs remain intact."""
+    stub = JevStub(labels=["supports", "supports"])
+    classifier = JevClassifier(transport=stub.transport, batch_size=8)
+    overlong = Passage(
+        passage_id="p-long",
+        source_id="src-1",
+        locator="p.1",
+        text="PASSAGE-0-START " + ("giant-text " * 1500) + "PASSAGE-0-END",
+    )
+    normal = Passage(
+        passage_id="p-short",
+        source_id="src-1",
+        locator="p.2",
+        text="PASSAGE-1-START short text PASSAGE-1-END",
+    )
+    claim1 = Claim(id="c-1", text="Claim 1.", char_start=0, char_end=5, material=True)
+    claim2 = Claim(id="c-2", text="Claim 2.", char_start=0, char_end=5, material=True)
+
+    results = classifier.classify([(claim1, overlong), (claim2, normal)])
+
+    assert len(results) == 2
+    assert len(stub.payloads) == 2
+
+    # Batch 1: only pair 1, truncated with marker
+    p1 = stub.payloads[0]
+    assert list(p1["questions"].keys()) == ["pair-1"]
+    assert "…[truncated " in p1["state"]
+    assert "PASSAGE-0-START" in p1["state"]
+
+    # Batch 2: pair 2, completely intact with no truncation marker
+    p2 = stub.payloads[1]
+    assert list(p2["questions"].keys()) == ["pair-1"]
+    assert "…[truncated" not in p2["state"]
+    assert "PASSAGE-1-START short text PASSAGE-1-END" in p2["state"]
+
+
+def test_measurement_harness_requires_at_least_100_pairs(tmp_path) -> None:
+    """The measurement harness requires >= 100 hand-labeled pairs per spec."""
+    import sys
+    sys.path.insert(0, "docs/reports/jev-claim-support")
+    from run import load_labels, update_report
+
+    label_file = tmp_path / "few_labels.jsonl"
+    lines = [
+        json.dumps(
+            {
+                "claim": f"Claim {i}",
+                "passage": f"Passage {i}",
+                "label": "supports",
+            }
+        )
+        for i in range(50)
+    ]
+    label_file.write_text("\n".join(lines), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="acceptance measurement requires >= 100"):
+        load_labels(label_file)
+
+
+def test_measurement_harness_update_report_replaces_pending_results() -> None:
+    """update_report replaces the pending Results table while preserving the report structure."""
+    import sys
+    sys.path.insert(0, "docs/reports/jev-claim-support")
+    from run import update_report
+
+    skeleton = (
+        "# Title\n\n"
+        "## Results\n\n"
+        "| Metric | Chat classifier | Jev |\n"
+        "| --- | --- | --- |\n"
+        "| Hand-label accuracy | pending | pending |\n\n"
+        "## What is not measured\n\n"
+        "Nothing.\n"
+    )
+    new_results = "Measured 100 pairs.\n\n| Metric | Chat classifier | Jev |\n| --- | --- | --- |\n| Hand-label accuracy | 92.0% | 94.0% |"
+    updated = update_report(skeleton, new_results)
+    assert "pending" not in updated
+    assert "Measured 100 pairs." in updated
+    assert "## What is not measured" in updated
+
+

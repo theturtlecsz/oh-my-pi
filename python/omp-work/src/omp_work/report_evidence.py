@@ -567,6 +567,9 @@ def truncate_state(state: str, cap: int = JEV_STATE_CHAR_CAP) -> tuple[str, bool
     return f"{state[:cap]}…[truncated {removed} chars]", True
 
 
+truncate_passage = truncate_state
+
+
 def _pair_question_name(index: int) -> str:
     return f"pair-{index}"
 
@@ -593,6 +596,43 @@ def _jev_batch_body(pairs: Sequence[ClaimPassagePair]) -> dict[str, Any]:
             "options": list(LABELS),
         }
     return {"model": JEV_MODEL, "state": state, "questions": questions}
+
+
+def _partition_jev_batches(
+    pairs: Sequence[ClaimPassagePair],
+    batch_size: int,
+    cap: int = JEV_STATE_CHAR_CAP,
+) -> list[list[ClaimPassagePair]]:
+    """Partition pairs into batches respecting batch_size and the character cap.
+
+    Pairs are packed into a batch until adding the next pair would exceed
+    ``cap`` or ``batch_size``. If a single pair itself meets or exceeds
+    ``cap``, it forms a single-item batch that is truncated.
+    """
+    if batch_size < 1:
+        raise ValueError("batch_size must be >= 1")
+    batches: list[list[ClaimPassagePair]] = []
+    current_batch: list[ClaimPassagePair] = []
+
+    for pair in pairs:
+        if not current_batch:
+            current_batch.append(pair)
+            continue
+        if len(current_batch) >= batch_size:
+            batches.append(current_batch)
+            current_batch = [pair]
+            continue
+        candidate = current_batch + [pair]
+        candidate_state = _jev_batch_body(candidate)["state"]
+        if len(candidate_state) > cap:
+            batches.append(current_batch)
+            current_batch = [pair]
+        else:
+            current_batch.append(pair)
+
+    if current_batch:
+        batches.append(current_batch)
+    return batches
 
 
 def _extract_choice_probabilities(answer: Any) -> dict[str, float]:
@@ -643,8 +683,10 @@ def _argmax_label(probabilities: Mapping[str, float]) -> Label:
 class JevClassifier:
     """Jev choice classifier: one choice question per (claim, passage) pair.
 
-    Pairs are batched, sent as state (head-truncated to
-    :data:`JEV_STATE_CHAR_CAP` with a marker), and the choice answer's
+    Pairs are batched into requests that respect ``batch_size`` and the
+    :data:`JEV_STATE_CHAR_CAP` input cap, ensuring every pair in a batch is
+    present in the state. Individual passages or pairs exceeding the cap are
+    head-truncated with a ``…[truncated N chars]`` marker. Choice
     probabilities are stored on each :class:`Classification` as routing hints
     only: they are never a confidence interval and never reach a report body.
     ``transport`` is injected so an implementer slice runs against a stub Jev
@@ -677,10 +719,9 @@ class JevClassifier:
     def classify(self, pairs: Sequence[ClaimPassagePair]) -> list[Classification]:
         if self.batch_size < 1:
             raise ValueError("batch_size must be >= 1")
-        pair_list = list(pairs)
+        batches = _partition_jev_batches(pairs, self.batch_size, JEV_STATE_CHAR_CAP)
         results: list[Classification] = []
-        for start in range(0, len(pair_list), self.batch_size):
-            batch = pair_list[start : start + self.batch_size]
+        for batch in batches:
             body = _jev_batch_body(batch)
             state = body["state"]
             body["state"] = truncate_state(state)[0]
