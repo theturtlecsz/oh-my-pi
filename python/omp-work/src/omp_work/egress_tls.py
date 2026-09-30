@@ -69,7 +69,8 @@ class GatewayCA:
         self._openssl = _openssl()
         self._dir = Path(state_dir)
         self._dir.mkdir(parents=True, exist_ok=True)
-        os.chmod(self._dir, 0o700)
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+        os.chmod(self._dir, 0o700)  # owner-only; execute bit keeps the dir traversable
         self._ca_cert = self._dir / "ca.crt"
         self._ca_key = self._dir / "ca.key"
         self._leaves = self._dir / "leaves"

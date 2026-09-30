@@ -1,7 +1,21 @@
-"""Internal helper for egress_sandbox: sets up namespace isolation and tap (OMP-431)."""
+"""Internal helper for egress_sandbox: sets up namespace isolation and tap (OMP-431).
+
+The helper re-enters the network namespace ``run_sandboxed`` created. It brings
+up ``lo`` and a dummy ``egress0``, taps ``egress0`` to record refused TCP/UDP
+flows, masks system sockets, and starts a worker under a second ``unshare``.
+
+When ``run_sandboxed`` bound an egress gateway or a WorkService relay, the
+worker reaches the network only through loopback listeners the helper owns:
+UDP ``127.0.0.1:53`` forwards to the gateway's policy-controlled name service,
+TCP ``127.0.0.1:3128`` forwards to the gateway proxy socket, and TCP
+``127.0.0.1:<workservice port>`` forwards to the WorkService relay socket. A
+tmpfs over the socket root hides every other sandbox's sockets, with only this
+sandbox's directory bound back so ``record.sock`` stays reachable.
+"""
 
 from __future__ import annotations
 
+import ctypes
 import glob
 import json
 import os
@@ -16,6 +30,22 @@ import sys
 import tempfile
 import threading
 import time
+
+_PROXY_PORT = 3128
+_DNS_PORT = 53
+_MS_BIND = 0x1000
+
+_libc = ctypes.CDLL("libc.so.6", use_errno=True)
+
+
+def _mount(source: str, target: str, fstype: str | None, flags: int) -> None:
+    """Call mount(2) directly, so a ``/proc/self/fd/N`` source is not canonicalized."""
+    result = _libc.mount(
+        source.encode(), target.encode(), fstype.encode() if fstype else None, flags, None
+    )
+    if result != 0:
+        errno = ctypes.get_errno()
+        raise OSError(errno, os.strerror(errno), target)
 
 
 def _executable(name: str, path: str | None = None) -> str:
@@ -201,6 +231,21 @@ def _mask_sockets() -> None:
                 )
 
 
+def _hide_other_sandboxes(sockets_root: Path, sandbox_dir: Path) -> None:
+    """Tmpfs over ``sockets_root``, then bind this sandbox's directory back.
+
+    The directory is held open as a file descriptor first, so the bind source
+    is ``/proc/self/fd/N`` and survives the tmpfs that hides its former path.
+    """
+    fd = os.open(str(sandbox_dir), os.O_PATH | os.O_DIRECTORY)
+    try:
+        _mount("tmpfs", str(sockets_root), "tmpfs", 0)
+        os.makedirs(str(sandbox_dir), exist_ok=True)
+        _mount(f"/proc/self/fd/{fd}", str(sandbox_dir), None, _MS_BIND)
+    finally:
+        os.close(fd)
+
+
 def _mask_helper_cmdlines() -> None:
     mount = _executable("mount")
     for p in glob.glob("/proc/*/cmdline"):
@@ -212,6 +257,125 @@ def _mask_helper_cmdlines() -> None:
                     [mount, "--bind", "/dev/null", p],
                     check=False,
                 )
+
+
+def _pump(left: socket.socket, right: socket.socket) -> None:
+    def forward(src: socket.socket, dst: socket.socket) -> None:
+        try:
+            while True:
+                data = src.recv(65536)
+                if not data:
+                    break
+                dst.sendall(data)
+        except OSError:
+            pass
+        finally:
+            with suppress(OSError):
+                dst.shutdown(socket.SHUT_WR)
+
+    other = threading.Thread(target=forward, args=(right, left), daemon=True)
+    other.start()
+    forward(left, right)
+    other.join(timeout=5.0)
+    with suppress(OSError):
+        left.close()
+    with suppress(OSError):
+        right.close()
+
+
+def _serve_tcp_relay(bind_port: int, target_path: str) -> None:
+    """Forward TCP ``127.0.0.1:bind_port`` to the AF_UNIX ``target_path``."""
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", bind_port))
+    listener.listen(16)
+
+    def accept() -> None:
+        while True:
+            try:
+                conn, _ = listener.accept()
+            except OSError:
+                return
+            upstream = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                upstream.connect(target_path)
+            except OSError:
+                conn.close()
+                upstream.close()
+                continue
+            threading.Thread(target=_pump, args=(conn, upstream), daemon=True).start()
+
+    threading.Thread(target=accept, name=f"relay-{bind_port}", daemon=True).start()
+
+
+def _serve_dns_relay(target_path: str, client_path: str) -> None:
+    """Forward UDP ``127.0.0.1:53`` one datagram at a time to ``target_path``.
+
+    The upstream AF_UNIX datagram socket is bound to a file under the sandbox
+    directory, so the responder -- which runs outside this network namespace --
+    has a filesystem address to send its reply to.
+    """
+    listener = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", _DNS_PORT))
+
+    def serve() -> None:
+        try:
+            upstream = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+            with suppress(OSError):
+                os.unlink(client_path)
+            upstream.bind(client_path)
+            upstream.settimeout(5.0)
+            upstream.connect(target_path)
+        except OSError:
+            return
+        while True:
+            try:
+                data, addr = listener.recvfrom(65536)
+            except OSError:
+                upstream.close()
+                return
+            with suppress(OSError):
+                upstream.send(data)
+                reply = upstream.recv(65536)
+                listener.sendto(reply, addr)
+
+    threading.Thread(target=serve, name="relay-dns", daemon=True).start()
+
+
+def _setup_relays(config: dict) -> None:
+    """Mask other sandboxes, then expose loopback listeners for this one."""
+    sockets_root = config.get("sockets_root")
+    sandbox_dir = config.get("sandbox_dir")
+    if sockets_root and sandbox_dir:
+        _hide_other_sandboxes(Path(sockets_root), Path(sandbox_dir))
+    dns_sock = config.get("dns_sock")
+    if dns_sock:
+        _serve_dns_relay(dns_sock, str(Path(dns_sock).with_name("dns.client.sock")))
+    proxy_sock = config.get("proxy_sock")
+    if proxy_sock:
+        _serve_tcp_relay(_PROXY_PORT, proxy_sock)
+    ws_sock = config.get("ws_sock")
+    workservice_port = config.get("workservice_port")
+    if ws_sock and workservice_port:
+        _serve_tcp_relay(int(workservice_port), ws_sock)
+
+
+def _worker_env(config: dict, workdir: str | None) -> dict[str, str]:
+    """The worker environment: base env, proxy variables, and CA trust paths."""
+    base = config.get("env")
+    worker_env = os.environ.copy() if base is None else dict(base)
+    if config.get("proxy_sock"):
+        proxy_url = f"http://127.0.0.1:{_PROXY_PORT}"
+        for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+            worker_env[name] = proxy_url
+        worker_env["NO_PROXY"] = ""
+        worker_env["no_proxy"] = ""
+    ca_cert_path = config.get("ca_cert_path")
+    if ca_cert_path:
+        for name in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS", "GIT_SSL_CAINFO"):
+            worker_env[name] = str(ca_cert_path)
+    return worker_env
 
 
 def _ensure_worker_unshare_supported(temp_dir: Path) -> dict[str, str]:
@@ -283,7 +447,6 @@ def main() -> None:
     setup_ok_path = config.get("setup_ok")
     argv = config["argv"]
     workdir = config.get("workdir")
-    env = config.get("env")
 
     # 1. lo up, dummy egress0
     _setup_network()
@@ -304,10 +467,13 @@ def main() -> None:
     # 5. Mask cmdline of helper
     _mask_helper_cmdlines()
 
-    # 6. Ensure unshare with mount-proc works
+    # 6. Mask sibling sandboxes and expose loopback relays
+    _setup_relays(config)
+
+    # 7. Ensure unshare with mount-proc works
     env_update = _ensure_worker_unshare_supported(temp_dir)
 
-    worker_env = os.environ.copy() if env is None else dict(env)
+    worker_env = _worker_env(config, workdir)
     if "PATH" in env_update:
         worker_env["PATH"] = env_update["PATH"]
     # Match subprocess: a provided env searches its PATH, or os.defpath when PATH is absent.
@@ -318,7 +484,7 @@ def main() -> None:
     if setup_ok_path:
         Path(setup_ok_path).touch()
 
-    # 7. Run worker
+    # 8. Run worker
     worker_cmd = [
         _executable("unshare", search_path),
         "--pid",
@@ -331,6 +497,7 @@ def main() -> None:
         *argv,
     ]
 
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
     worker = subprocess.Popen(  # nosec B603 - argv list, no shell
         worker_cmd,
         cwd=workdir,
