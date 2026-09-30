@@ -1,4 +1,9 @@
-"""OMP-414 decision records rebuilt from workspace domain events. No decision table."""
+"""OMP-414 decision records rebuilt from applied domain events. No decision table.
+
+Applied draft_mission_intake events on the mission aggregate contribute a
+pending decision when payload["decision"] is an object, in sequence with
+create_decision and answer_decision. A null decision adds nothing.
+"""
 
 from __future__ import annotations
 
@@ -153,9 +158,13 @@ def _load(
         "SELECT event_type, payload, occurred_at "
         "FROM omp_audit.domain_events "
         "WHERE workspace_id = %s "
-        "  AND aggregate_id = %s "
-        "  AND event_type IN ('create_decision', 'answer_decision') "
         "  AND outcome = 'applied' "
+        "  AND ("
+        "    (aggregate_id = %s "
+        "      AND event_type IN ('create_decision', 'answer_decision')) "
+        "    OR (aggregate_type = 'mission' "
+        "      AND event_type = 'draft_mission_intake')"
+        "  ) "
         "ORDER BY sequence ASC",
         (workspace_id, workspace_id),
     )
@@ -163,7 +172,10 @@ def _load(
     order: list[str] = []
     for row in cur.fetchall():
         body = _object(row["payload"])
-        if row["event_type"] == "create_decision":
+        event_type = row["event_type"]
+        if event_type == "create_decision" or (
+            event_type == "draft_mission_intake" and isinstance(body.get("decision"), dict)
+        ):
             decision = body["decision"]
             decision_id = str(decision["decision_id"])
             if decision_id in records:
@@ -174,6 +186,8 @@ def _load(
                 resume_state=raw_resume if isinstance(raw_resume, str) else None,
             )
             order.append(decision_id)
+            continue
+        if event_type == "draft_mission_intake":
             continue
         decision_id = str(body["decision_id"])
         record = records.get(decision_id)
