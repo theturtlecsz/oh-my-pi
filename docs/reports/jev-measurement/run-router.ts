@@ -45,13 +45,13 @@ export async function buildCurrentSmolHarness(): Promise<CurrentSmolHarness> {
 	return { settings, registry };
 }
 
-function formatPercent(value?: number): string {
-	if (value === undefined || Number.isNaN(value)) return "0.0%";
+function formatPercent(value?: number | null): string {
+	if (value === null || value === undefined || Number.isNaN(value)) return "not measured";
 	return `${(value * 100).toFixed(1)}%`;
 }
 
-function formatNumber(value?: number, decimals = 1): string {
-	if (value === undefined || Number.isNaN(value)) return "0.0";
+function formatNumber(value?: number | null, decimals = 1): string {
+	if (value === null || value === undefined || Number.isNaN(value)) return "not measured";
 	return value.toFixed(decimals);
 }
 

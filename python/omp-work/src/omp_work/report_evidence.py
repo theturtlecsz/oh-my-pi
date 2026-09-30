@@ -23,6 +23,9 @@ from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
 from typing import Any, Literal, Mapping, Protocol, Sequence
+from uuid import uuid4
+
+import httpx
 
 from omp_work.research_ledger import append_ledger_event
 from omp_work.v1.canonical import sha256
@@ -35,6 +38,12 @@ DEFAULT_SUPPORT_THRESHOLD = 0.6
 Label = Literal["supports", "contradicts", "neither"]
 ClaimStatus = Literal["supported", "contested", "unsupported"]
 LABELS: tuple[Label, ...] = ("supports", "contradicts", "neither")
+
+JEV_MODEL = "jev-latest"
+JEV_DEFAULT_BASE_URL = "https://api.typesafe.ai"
+#: Maximum state characters sent to Jev; longer input is head-truncated with a
+#: marker, mirroring the coding agent's ``JEV_STATE_CAP`` and robomp's cap.
+JEV_STATE_CHAR_CAP = 8000
 
 MATERIALITY_RULE = (
     "A sentence is a material claim when it asserts a fact, figure, or causal "
@@ -544,6 +553,200 @@ class ChatModelClassifier:
                         else _estimate_tokens(completion.text)
                     ),
                     model=completion.model,
+                    pair_count=len(batch),
+                )
+            )
+        return results
+
+
+def truncate_state(state: str, cap: int = JEV_STATE_CHAR_CAP) -> tuple[str, bool]:
+    """Head-truncate ``state`` to ``cap`` chars with a ``…[truncated N chars]`` marker."""
+    if len(state) <= cap:
+        return state, False
+    removed = len(state) - cap
+    return f"{state[:cap]}…[truncated {removed} chars]", True
+
+
+truncate_passage = truncate_state
+
+
+def _pair_question_name(index: int) -> str:
+    return f"pair-{index}"
+
+
+def _jev_batch_body(pairs: Sequence[ClaimPassagePair]) -> dict[str, Any]:
+    """One choice question per pair, text-only (passage metadata is never sent)."""
+    lines: list[str] = []
+    for index, (claim, passage) in enumerate(pairs, start=1):
+        lines.append(f"{index}. CLAIM: {strip_citations(claim.text)}")
+        lines.append(f"   PASSAGE: {passage.text}")
+        lines.append("")
+    state = "\n".join(lines).rstrip()
+    questions: dict[str, Any] = {}
+    for index in range(1, len(pairs) + 1):
+        questions[_pair_question_name(index)] = {
+            "type": "choice",
+            "instructions": (
+                f"For pair {index} in the state, judge whether the passage's own "
+                "content argues for the claim (supports), argues against it "
+                "(contradicts), or does neither (neither). Never use the "
+                "citation's existence, author, venue, or DOI as evidence; "
+                "metadata is checked separately and is not the question here."
+            ),
+            "options": list(LABELS),
+        }
+    return {"model": JEV_MODEL, "state": state, "questions": questions}
+
+
+def _partition_jev_batches(
+    pairs: Sequence[ClaimPassagePair],
+    batch_size: int,
+    cap: int = JEV_STATE_CHAR_CAP,
+) -> list[list[ClaimPassagePair]]:
+    """Partition pairs into batches respecting batch_size and the character cap.
+
+    Pairs are packed into a batch until adding the next pair would exceed
+    ``cap`` or ``batch_size``. If a single pair itself meets or exceeds
+    ``cap``, it forms a single-item batch that is truncated.
+    """
+    if batch_size < 1:
+        raise ValueError("batch_size must be >= 1")
+    batches: list[list[ClaimPassagePair]] = []
+    current_batch: list[ClaimPassagePair] = []
+
+    for pair in pairs:
+        if not current_batch:
+            current_batch.append(pair)
+            continue
+        if len(current_batch) >= batch_size:
+            batches.append(current_batch)
+            current_batch = [pair]
+            continue
+        candidate = current_batch + [pair]
+        candidate_state = _jev_batch_body(candidate)["state"]
+        if len(candidate_state) > cap:
+            batches.append(current_batch)
+            current_batch = [pair]
+        else:
+            current_batch.append(pair)
+
+    if current_batch:
+        batches.append(current_batch)
+    return batches
+
+
+def _extract_choice_probabilities(answer: Any) -> dict[str, float]:
+    """The probability map of one Jev choice answer, rejecting any off-list key."""
+    if not isinstance(answer, dict):
+        raise ClassifierAnswerError("Jev choice answer must be an object")
+    probabilities = answer.get("probabilities")
+    if not isinstance(probabilities, dict) or not probabilities:
+        raise ClassifierAnswerError("Jev choice answer is missing probabilities")
+    parsed: dict[str, float] = {}
+    for key, value in probabilities.items():
+        if key not in LABELS:
+            raise ClassifierAnswerError(f"Jev choice answer has off-list option {key!r}")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ClassifierAnswerError("Jev probability must be a number")
+        if not 0.0 <= float(value) <= 1.0:
+            raise ClassifierAnswerError("Jev probability must be in [0, 1]")
+        parsed[key] = float(value)
+    return parsed
+
+
+def _choice_answer(payload: Any, name: str, instructions: str) -> dict[str, float]:
+    """The choice answer in a Jev response body, keyed by question name or instructions."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("answers"), dict):
+        raise ClassifierAnswerError("Jev response must be {'answers': {...}}")
+    answers: dict[str, Any] = payload["answers"]
+    answer = answers.get(name)
+    if answer is None:
+        answer = answers.get(instructions)
+    if answer is None:
+        raise ClassifierAnswerError(f"Jev response omitted choice answer {name!r}")
+    return _extract_choice_probabilities(answer)
+
+
+def _argmax_label(probabilities: Mapping[str, float]) -> Label:
+    """The most probable label; a tie resolves to ``neither`` (least committal)."""
+    ranked = sorted(
+        LABELS, key=lambda option: probabilities.get(option, 0.0), reverse=True
+    )
+    if len(ranked) > 1 and probabilities.get(ranked[0], 0.0) == probabilities.get(
+        ranked[1], 0.0
+    ):
+        return "neither"
+    return ranked[0]
+
+
+@dataclass
+class JevClassifier:
+    """Jev choice classifier: one choice question per (claim, passage) pair.
+
+    Pairs are batched into requests that respect ``batch_size`` and the
+    :data:`JEV_STATE_CHAR_CAP` input cap, ensuring every pair in a batch is
+    present in the state. Individual passages or pairs exceeding the cap are
+    head-truncated with a ``…[truncated N chars]`` marker. Choice
+    probabilities are stored on each :class:`Classification` as routing hints
+    only: they are never a confidence interval and never reach a report body.
+    ``transport`` is injected so an implementer slice runs against a stub Jev
+    server and the owner slice runs against the real endpoint with the owner's
+    key.
+    """
+
+    api_key: str | None = None
+    base_url: str = JEV_DEFAULT_BASE_URL
+    batch_size: int = DEFAULT_BATCH_SIZE
+    transport: httpx.BaseTransport | None = None
+    usages: list[UsageEntry] = field(default_factory=list)
+
+    def _post(self, body: dict[str, Any]) -> Any:
+        headers = {"Content-Type": "application/json", "X-Request-Id": str(uuid4())}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        url = f"{self.base_url.rstrip('/')}/v1/systemone"
+        with httpx.Client(timeout=10, transport=self.transport) as client:
+            response = client.post(url, json=body, headers=headers)
+        if response.is_error:
+            raise ClassifierAnswerError(
+                f"Jev request failed with HTTP {response.status_code}"
+            )
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise ClassifierAnswerError(f"Jev response is not JSON: {exc}") from exc
+
+    def classify(self, pairs: Sequence[ClaimPassagePair]) -> list[Classification]:
+        if self.batch_size < 1:
+            raise ValueError("batch_size must be >= 1")
+        batches = _partition_jev_batches(pairs, self.batch_size, JEV_STATE_CHAR_CAP)
+        results: list[Classification] = []
+        for batch in batches:
+            body = _jev_batch_body(batch)
+            state = body["state"]
+            body["state"] = truncate_state(state)[0]
+            questions = body["questions"]
+            payload = self._post(body)
+            for index, (claim, passage) in enumerate(batch, start=1):
+                name = _pair_question_name(index)
+                probabilities = _choice_answer(
+                    payload, name, questions[name]["instructions"]
+                )
+                results.append(
+                    Classification(
+                        claim_id=claim.id,
+                        passage_id=passage.passage_id,
+                        label=_argmax_label(probabilities),
+                        probabilities=dict(probabilities),
+                    )
+                )
+            server_id: Any = payload.get("id") if isinstance(payload, dict) else None
+            model = f"{JEV_MODEL}:{server_id}" if server_id else JEV_MODEL
+            self.usages.append(
+                UsageEntry(
+                    input_tokens=_estimate_tokens(body["state"]),
+                    output_tokens=len(batch),
+                    model=model,
                     pair_count=len(batch),
                 )
             )

@@ -133,12 +133,12 @@ export interface RouterIssueItem {
 
 export interface RouterRouteMetrics {
 	sampleSize: number;
-	answerRate: number;
-	accuracy: number;
-	precision?: number;
-	recall?: number;
-	p50LatencyMs: number;
-	p95LatencyMs: number;
+	answerRate: number | null;
+	accuracy: number | null;
+	precision?: number | null;
+	recall?: number | null;
+	p50LatencyMs: number | null;
+	p95LatencyMs: number | null;
 	/**
 	 * Cost of 1000 calls in USD: the mean of the calls that reported a cost,
 	 * times 1000. An unread call is left out of that mean, not counted as zero.
@@ -157,14 +157,14 @@ export interface RouterRouteMetrics {
 	 */
 	costSource: "completion-usage" | "generation-record" | "provider-usage" | "unavailable";
 	/** Routed answers that carried no allowed label. There is no separate off-list bucket in router mode. */
-	unparseableRate: number;
+	unparseableRate: number | null;
 	/**
 	 * Routed calls that hit the completion-token cap (`finish_reason=length`)
 	 * and returned no content. A truncated call is counted on its own, not folded
 	 * into {@link unparseableRate}: it measured the harness's budget, not the
 	 * router.
 	 */
-	truncatedRate: number;
+	truncatedRate: number | null;
 	/**
 	 * Dataset labels outside the scored vocabulary that were excluded from
 	 * scoring, with how many items carried each. An excluded item is not in
@@ -173,13 +173,13 @@ export interface RouterRouteMetrics {
 	 * routes, whose label sets are fixed.
 	 */
 	excludedLabels: Record<string, number>;
-	transportFailureRate: number;
+	transportFailureRate: number | null;
 	/** Histogram of routed model ids, from the response / generation record. */
 	routedModels: Record<string, number>;
 	/** Histogram of reasoning effort values the generation records reported. */
 	routedEffort: Record<string, number>;
 	/** Share of issues routed away from a full session (robomp only). */
-	skipSessionShare?: number;
+	skipSessionShare?: number | null;
 }
 
 export interface RouterMeasurementResults {
@@ -341,7 +341,38 @@ function summarise(
 	correct: number,
 	extras: Partial<RouterRouteMetrics> = {},
 ): RouterRouteMetrics {
-	const total = call.latencies.length || 1;
+	if (call.latencies.length === 0) {
+		const metrics: RouterRouteMetrics = {
+			sampleSize: 0,
+			answerRate: null,
+			accuracy: null,
+			p50LatencyMs: null,
+			p95LatencyMs: null,
+			costPer1000Usd: null,
+			costSource: "unavailable",
+			unparseableRate: null,
+			truncatedRate: null,
+			excludedLabels: extras.excludedLabels ?? {},
+			transportFailureRate: null,
+			routedModels: {},
+			routedEffort: {},
+			...extras,
+		};
+		metrics.answerRate = null;
+		metrics.accuracy = null;
+		metrics.p50LatencyMs = null;
+		metrics.p95LatencyMs = null;
+		metrics.costPer1000Usd = null;
+		metrics.costSource = "unavailable";
+		metrics.unparseableRate = null;
+		metrics.truncatedRate = null;
+		metrics.transportFailureRate = null;
+		if ("precision" in extras) metrics.precision = null;
+		if ("recall" in extras) metrics.recall = null;
+		if ("skipSessionShare" in extras) metrics.skipSessionShare = null;
+		return metrics;
+	}
+	const total = call.latencies.length;
 	const transportFailures = call.entries.filter(
 		e => e.outcome === "http_error" || e.outcome === "network_error" || e.outcome === "timeout",
 	).length;
@@ -639,18 +670,19 @@ export function withoutJevSettings(settings: CurrentSmolHarness["settings"]): Cu
 function emptyRouteMetrics(sampleSize: number): RouterRouteMetrics {
 	return {
 		sampleSize,
-		answerRate: 0,
-		accuracy: 0,
-		p50LatencyMs: 0,
-		p95LatencyMs: 0,
+		answerRate: null,
+		accuracy: null,
+		p50LatencyMs: null,
+		p95LatencyMs: null,
 		costPer1000Usd: null,
 		costSource: "unavailable",
-		unparseableRate: 0,
-		truncatedRate: 0,
+		unparseableRate: null,
+		truncatedRate: null,
 		excludedLabels: {},
-		transportFailureRate: 0,
+		transportFailureRate: null,
 		routedModels: {},
 		routedEffort: {},
+		skipSessionShare: null,
 	};
 }
 

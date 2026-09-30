@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime, timezone
 import fnmatch
 
 from omp_work.control_plane.gate import Check, CheckContext, Proposal, Refusal

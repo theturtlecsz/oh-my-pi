@@ -3,11 +3,14 @@ import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import type { Usage } from "@oh-my-pi/pi-ai";
 import { Text } from "@oh-my-pi/pi-tui";
-import { getDefault, isSettingsInitialized, type Settings, settings } from "../../config/settings";
-import type { ExtensionContext, ToolDefinition } from "../../extensibility/extensions";
+import { getDefault, isSettingsInitialized, settings } from "../../config/settings";
+import type { SettingPath, SettingValue } from "../../config/settings-schema";
+import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../../extensibility/extensions";
 import type { Theme } from "../../modes/theme/theme";
+import { JEV_PROVIDER } from "../../tiny/jev-client";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../../tools/render-utils";
 import { addUsageTotals } from "../../utils/usage-totals";
+import { createJevJudge } from "../tournament/jev-judge";
 import { createModelJudge, createModelSummarizer } from "../tournament/model-judge";
 import { type HypothesisInput, prepareHypotheses, type Summarizer } from "../tournament/prepare";
 import { runTournament } from "../tournament/runner";
@@ -39,12 +42,42 @@ export interface HypothesisTournamentDeps {
 	createSummarizer?: (ctx: ExtensionContext, options?: { signal?: AbortSignal }) => Promise<Summarizer> | Summarizer;
 }
 
+function isJevJudgeSpec(spec: string | undefined): boolean {
+	if (!spec) return false;
+	const trimmed = spec.trim().toLowerCase();
+	return trimmed === "jev" || trimmed === "@jev";
+}
+
+function createJevJudgeForContext(ctx: ExtensionContext, pi: ExtensionAPI, signal?: AbortSignal): TournamentJudge {
+	const activeSettings = isSettingsInitialized() ? settings : undefined;
+	return createJevJudge({
+		deps: {
+			// The typed ExtensionContext exposes no settings handle; the session
+			// singleton is the sanctioned settings source (see render-utils.ts).
+			recordUsage: entry => pi.appendEntry("jev_usage", entry),
+			getSetting: <P extends SettingPath>(path: P): SettingValue<P> =>
+				activeSettings ? activeSettings.get(path) : getDefault(path),
+			getApiKey: async (provider?: string) => {
+				const sessionId = ctx.sessionManager.getSessionId();
+				try {
+					return await ctx.modelRegistry.getApiKeyForProvider(provider ?? JEV_PROVIDER, sessionId);
+				} catch {
+					// No stored credential; the client falls back to JEV_ENV_KEY.
+					return undefined;
+				}
+			},
+			signal,
+		},
+	});
+}
+
 async function defaultCreateJudges(
 	ctx: ExtensionContext,
+	pi: ExtensionAPI,
 	seed: number,
 	signal?: AbortSignal,
 ): Promise<TournamentJudge[]> {
-	const activeSettings = (ctx as { settings?: Settings }).settings ?? (isSettingsInitialized() ? settings : undefined);
+	const activeSettings = isSettingsInitialized() ? settings : undefined;
 	const judgeModelSpec =
 		activeSettings?.get("autoresearch.tournament.judgeModel") ??
 		getDefault("autoresearch.tournament.judgeModel") ??
@@ -53,56 +86,79 @@ async function defaultCreateJudges(
 		activeSettings?.get("autoresearch.tournament.secondJudgeModel") ??
 		getDefault("autoresearch.tournament.secondJudgeModel");
 
-	const primaryModel = ctx.models.resolve(judgeModelSpec);
-	if (!primaryModel) {
-		throw new Error(`Failed to resolve tournament judge model: "${judgeModelSpec}"`);
-	}
-	const sessionId = ctx.sessionManager.getSessionId();
-	const primaryApiKey = await ctx.modelRegistry.getApiKey(primaryModel, sessionId);
-	const primaryFamily = ctx.models.family(primaryModel);
+	const jevEnabledFlag = activeSettings?.get("jev.tournamentJudge") === true;
+	const isPrimaryJev = isJevJudgeSpec(judgeModelSpec) || jevEnabledFlag;
 
-	const judges: TournamentJudge[] = [
-		createModelJudge({
-			id: primaryModel.id,
-			family: primaryFamily,
-			model: primaryModel,
-			apiKey: primaryApiKey,
-			seed,
-			signal,
-		}),
-	];
-
-	if (secondJudgeModelSpec) {
-		const secondaryModel = ctx.models.resolve(secondJudgeModelSpec);
-		if (!secondaryModel) {
-			throw new Error(`Failed to resolve tournament second judge model: "${secondJudgeModelSpec}"`);
+	const judges: TournamentJudge[] = [];
+	if (isPrimaryJev) {
+		judges.push(createJevJudgeForContext(ctx, pi, signal));
+	} else {
+		const primaryModel = ctx.models.resolve(judgeModelSpec);
+		if (!primaryModel) {
+			throw new Error(`Failed to resolve tournament judge model: "${judgeModelSpec}"`);
 		}
-		const secondaryApiKey = await ctx.modelRegistry.getApiKey(secondaryModel, sessionId);
-		const secondaryFamily = ctx.models.family(secondaryModel);
+		const sessionId = ctx.sessionManager.getSessionId();
+		const primaryApiKey = await ctx.modelRegistry.getApiKey(primaryModel, sessionId);
+		const primaryFamily = ctx.models.family(primaryModel);
 		judges.push(
 			createModelJudge({
-				id: secondaryModel.id,
-				family: secondaryFamily,
-				model: secondaryModel,
-				apiKey: secondaryApiKey,
-				seed: (seed + 1) | 0,
+				id: primaryModel.id,
+				family: primaryFamily,
+				model: primaryModel,
+				apiKey: primaryApiKey,
+				seed,
 				signal,
 			}),
 		);
+	}
+
+	if (secondJudgeModelSpec) {
+		if (isJevJudgeSpec(secondJudgeModelSpec)) {
+			judges.push(createJevJudgeForContext(ctx, pi, signal));
+		} else {
+			const secondaryModel = ctx.models.resolve(secondJudgeModelSpec);
+			if (!secondaryModel) {
+				throw new Error(`Failed to resolve tournament second judge model: "${secondJudgeModelSpec}"`);
+			}
+			const sessionId = ctx.sessionManager.getSessionId();
+			const secondaryApiKey = await ctx.modelRegistry.getApiKey(secondaryModel, sessionId);
+			const secondaryFamily = ctx.models.family(secondaryModel);
+			judges.push(
+				createModelJudge({
+					id: secondaryModel.id,
+					family: secondaryFamily,
+					model: secondaryModel,
+					apiKey: secondaryApiKey,
+					seed: (seed + 1) | 0,
+					signal,
+				}),
+			);
+		}
 	}
 
 	return judges;
 }
 
 async function defaultCreateSummarizer(ctx: ExtensionContext): Promise<Summarizer> {
-	const activeSettings = (ctx as { settings?: Settings }).settings ?? (isSettingsInitialized() ? settings : undefined);
+	const activeSettings = isSettingsInitialized() ? settings : undefined;
 	const judgeModelSpec =
 		activeSettings?.get("autoresearch.tournament.judgeModel") ??
 		getDefault("autoresearch.tournament.judgeModel") ??
 		"@smol";
-	const model = ctx.models.resolve(judgeModelSpec);
+	const secondJudgeModelSpec =
+		activeSettings?.get("autoresearch.tournament.secondJudgeModel") ??
+		getDefault("autoresearch.tournament.secondJudgeModel");
+
+	const isPrimaryJev = isJevJudgeSpec(judgeModelSpec) || activeSettings?.get("jev.tournamentJudge") === true;
+	const summarizerModelSpec = isPrimaryJev
+		? secondJudgeModelSpec && !isJevJudgeSpec(secondJudgeModelSpec)
+			? secondJudgeModelSpec
+			: "@smol"
+		: judgeModelSpec;
+
+	const model = ctx.models.resolve(summarizerModelSpec);
 	if (!model) {
-		throw new Error(`Failed to resolve tournament summarizer model: "${judgeModelSpec}"`);
+		throw new Error(`Failed to resolve tournament summarizer model: "${summarizerModelSpec}"`);
 	}
 	const sessionId = ctx.sessionManager.getSessionId();
 	const apiKey = await ctx.modelRegistry.getApiKey(model, sessionId);
@@ -110,7 +166,7 @@ async function defaultCreateSummarizer(ctx: ExtensionContext): Promise<Summarize
 }
 
 export function createHypothesisTournamentTool(
-	_options: AutoresearchToolFactoryOptions,
+	options: AutoresearchToolFactoryOptions,
 	deps?: HypothesisTournamentDeps,
 ): ToolDefinition<typeof hypothesisTournamentSchema, HypothesisTournamentDetails> {
 	return {
@@ -150,8 +206,7 @@ export function createHypothesisTournamentTool(
 
 			const seed = params.seed !== undefined ? params.seed : Math.floor(Math.random() * 0x7fffffff) | 0;
 
-			const activeSettings =
-				(ctx as { settings?: Settings }).settings ?? (isSettingsInitialized() ? settings : undefined);
+			const activeSettings = isSettingsInitialized() ? settings : undefined;
 			const swissRoundCap =
 				activeSettings?.get("autoresearch.tournament.swissRoundCap") ??
 				getDefault("autoresearch.tournament.swissRoundCap");
@@ -165,7 +220,7 @@ export function createHypothesisTournamentTool(
 
 			const judges = deps?.createJudges
 				? await deps.createJudges(ctx, seed, { signal })
-				: await defaultCreateJudges(ctx, seed, signal);
+				: await defaultCreateJudges(ctx, options.pi, seed, signal);
 
 			const { hypotheses, usage: prepareUsage } = await prepareHypotheses(payload.hypotheses, {
 				maxJudgeChars,

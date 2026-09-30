@@ -11,7 +11,8 @@ mixes this in; the host supplies _transaction and the workspace/actor claims.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
@@ -50,6 +51,7 @@ from omp_work.standing_policy import (
     policy_change_kind,
     validate_policy,
 )
+from omp_work.v1.decision_records import find_decision
 from omp_work.v1.store_shared import WorkStoreError, row_json
 
 if TYPE_CHECKING:
@@ -101,6 +103,14 @@ class AmbiguousProjectKey(WorkStoreError):
             "ambiguous_project_key",
             (f"more than one unarchived project has key {key}",),
         )
+
+
+@dataclass(frozen=True)
+class Tier3Approval:
+    """One signed owner decision offered as authorization for a tier 3 action."""
+
+    decision_id: UUID | str
+    target_sha256: str
 
 
 class ProjectStoreMixin:
@@ -676,6 +686,8 @@ class ProjectStoreMixin:
         action: ActionRequest,
         authority: ChangeAuthority | None,
         now: datetime,
+        *,
+        approval: Tier3Approval | None = None,
     ) -> None:
         """Evaluate one action against its tier and record the verdict.
 
@@ -683,13 +695,17 @@ class ProjectStoreMixin:
         covers it over the project's repositories, and the record names that
         policy. Tier 3 consults the active mandate and the mission status; an
         allowed action names the owner decision, and an outside-mandate class
-        moves the mission to awaiting_confirmation. Every verdict appends a
+        moves the mission to awaiting_confirmation. A tier 3 action may instead
+        present a Tier3Approval — a signed owner decision record found through
+        find_decision; when it verifies, authority is ignored and the allowed
+        row names the approval's decision_id. Every verdict appends a
         project_action_records row and a history row; a refusal then raises
         ProjectAuthorityRefused with the refusal code.
         """
         code: str | None = None
         policy_id: UUID | None = None
         decision_id: UUID | None = None
+        signed = False
         tier = tier_of(action.action_class)
         with self._transaction(workspace_id, actor_id) as cur:
             self._require_project(cur, workspace_id, project_id)
@@ -701,14 +717,20 @@ class ProjectStoreMixin:
                     code = "standing_policy_required"
                 else:
                     policy_id = found
+            elif approval is not None:
+                signed, decision_id, code = self._check_tier3_approval(
+                    cur, workspace_id, action, approval
+                )
             else:
+                signed = authority is not None and owner_signed(authority)
+            if tier == 3 and code is None:
                 status = self._mission_status(cur, workspace_id, project_id, mission_id)
                 mandate = self._load_mandate(cur, workspace_id, project_id)
                 new_status, tier3_outcome = encounter_tier3(
                     mandate,
                     status,
                     action.action_class,
-                    authority is not None and owner_signed(authority),
+                    signed,
                 )
                 if new_status != status and mission_id is not None:
                     cur.execute(
@@ -717,9 +739,11 @@ class ProjectStoreMixin:
                         (new_status, workspace_id, mission_id),
                     )
                 if tier3_outcome == "allowed":
-                    decision_id = _authority_decision(authority)
+                    if decision_id is None:
+                        decision_id = _authority_decision(authority)
                 else:
                     code = "blocked_owner_signature"
+                    decision_id = None
             outcome = "refused" if code else "allowed"
             self._insert_action_record(
                 cur,
@@ -1112,6 +1136,57 @@ class ProjectStoreMixin:
             raise ProjectAuthorityRefused("mission_not_found")
         return str(row["status"])
 
+    def _check_tier3_approval(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        action: ActionRequest,
+        approval: Tier3Approval,
+    ) -> tuple[bool, UUID | None, str | None]:
+        """Verify one signed owner decision offered for a tier 3 action.
+
+        A transaction-scoped advisory lock on the decision id serializes two
+        actions that present the same approval, so one signed decision can never
+        authorize two actions. Returns (signed, decision_id, code): signed True
+        with the decision_id when the approval is a valid, unused owner answer;
+        otherwise signed False with the first refusal code that applies.
+        """
+        try:
+            decision_id = _as_uuid(approval.decision_id)
+        except ValueError:
+            return False, None, "authorization_missing"
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (f"omp_work.tier3_approval:{workspace_id}:{decision_id}",),
+        )
+        record = find_decision(cur, workspace_id, decision_id)
+        if (
+            record is None
+            or record["status"] != "answered"
+            or record["answer"] != "approve"
+        ):
+            return False, None, "authorization_missing"
+        if record["action_class"] != action.action_class:
+            return False, None, "authorization_class_mismatch"
+        target = record["target_sha256"]
+        if target is None or str(target) != approval.target_sha256:
+            return False, None, "authorization_target_mismatch"
+        expires_at = record["expires_at"]
+        if expires_at is None:
+            return False, None, "authorization_expired"
+        cur.execute("SELECT clock_timestamp() AS now")
+        row = cur.fetchone()
+        if row is None or _as_datetime(expires_at) <= _as_datetime(row["now"]):
+            return False, None, "authorization_expired"
+        cur.execute(
+            "SELECT 1 FROM omp_work.project_action_records"
+            " WHERE workspace_id=%s AND decision_id=%s AND outcome='allowed' LIMIT 1",
+            (workspace_id, decision_id),
+        )
+        if cur.fetchone() is not None:
+            return False, None, "authorization_used"
+        return True, decision_id, None
+
     def _insert_action_record(
         self,
         cur: psycopg.Cursor[dict[str, object]],
@@ -1369,6 +1444,12 @@ def _as_decimal(value: object) -> Decimal:
     if isinstance(value, Decimal):
         return value
     return Decimal(str(value))
+
+
+def _as_datetime(value: object) -> datetime:
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    return datetime.fromisoformat(str(value))
 
 
 def _strings(values: Iterable[object]) -> list[str]:

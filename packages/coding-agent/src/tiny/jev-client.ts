@@ -155,6 +155,7 @@ export interface JevDeps {
 	uuid?: () => string;
 	budgetMs?: number;
 	breaker?: JevBreaker;
+	signal?: AbortSignal;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -292,7 +293,10 @@ export async function decide(state: string, questions: JevQuestions, deps: JevDe
 	let lastRequestId = "";
 	let lastLatencyMs = 0;
 
+	if (deps.signal?.aborted) return undefined;
+
 	while (attempt < JEV_MAX_ATTEMPTS) {
+		if (deps.signal?.aborted) break;
 		const remaining = deadline - now();
 		if (remaining <= 0) break;
 		attempt += 1;
@@ -304,6 +308,7 @@ export async function decide(state: string, questions: JevQuestions, deps: JevDe
 			() => controller.abort(new DOMException("The operation timed out.", "TimeoutError")),
 			remaining,
 		);
+		const effectiveSignal = deps.signal ? AbortSignal.any([controller.signal, deps.signal]) : controller.signal;
 		let outcome: JevOutcome;
 		let status: number | undefined;
 		let serverId: string | undefined;
@@ -318,7 +323,7 @@ export async function decide(state: string, questions: JevQuestions, deps: JevDe
 					Authorization: `Bearer ${apiKey}`,
 				},
 				body: JSON.stringify(body),
-				signal: controller.signal,
+				signal: effectiveSignal,
 			});
 			status = response.status;
 			if (!response.ok) {
@@ -340,7 +345,7 @@ export async function decide(state: string, questions: JevQuestions, deps: JevDe
 				}
 			}
 		} catch {
-			outcome = controller.signal.aborted ? "timeout" : "network_error";
+			outcome = controller.signal.aborted || deps.signal?.aborted ? "timeout" : "network_error";
 		} finally {
 			clearTimeout(timer);
 		}
@@ -365,6 +370,7 @@ export async function decide(state: string, questions: JevQuestions, deps: JevDe
 			return answers;
 		}
 
+		if (deps.signal?.aborted) break;
 		// A timeout consumes the budget; never retry after one.
 		if (outcome === "timeout") break;
 		// Client errors (4xx) are not transient; malformed/off-list are 2xx bodies.
