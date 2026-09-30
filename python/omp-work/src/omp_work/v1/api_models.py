@@ -16,9 +16,11 @@ from .models import (
     CloseAttemptEvent,
     DecisionActionClass,
     EvidenceReceipt,
+    FindingSeverity,
     IntakeBlockingQuestion,
     ItemBudget,
     MissionDraft,
+    MissionEventType,
     MissionStatus,
     OperationReceipt,
     OwnerInstruction,
@@ -35,6 +37,7 @@ from .models import (
     WorkAlias,
     WorkRevision,
     hex64,
+    validate_subscription_event_types,
 )
 
 
@@ -675,6 +678,71 @@ class AnswerMissionDraftResult(StrictModel):
     instruction: OwnerInstruction
 
 
+class EvidenceRef(StrictModel):
+    kind: Literal["domain_event", "evidence", "decision", "finding", "work_item"]
+    ref: str
+
+
+class MissionEventView(StrictModel):
+    mission_event_id: UUID
+    sequence: int = Field(ge=1)
+    mission_id: UUID
+    type: MissionEventType
+    trigger: str
+    occurred_at: datetime
+    source_event_id: UUID
+    evidence_refs: tuple[EvidenceRef, ...]
+
+
+class MissionEventsPage(StrictModel):
+    events: tuple[MissionEventView, ...] = ()
+    watermark_sequence: int
+    next_after_sequence: int
+    has_more: bool
+
+
+class FindingView(StrictModel):
+    finding_id: UUID
+    mission_id: UUID
+    severity: FindingSeverity
+    title: str = Field(min_length=1, max_length=200)
+    evidence_refs: tuple[Annotated[str, Field(min_length=1, max_length=200)], ...] = (
+        Field(min_length=1, max_length=20)
+    )
+
+
+class EventSubscriptionView(StrictModel):
+    subscription_id: UUID
+    client_id: UUID
+    push_url: str | None = None
+    event_types: tuple[str, ...]
+    cursor_sequence: int = Field(ge=0)
+    deleted: bool
+
+    @field_validator("event_types")
+    @classmethod
+    def check_event_types(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return validate_subscription_event_types(value)
+
+
+class EventSubscriptionsPage(StrictModel):
+    subscriptions: tuple[EventSubscriptionView, ...] = ()
+
+
+class RecordFindingResult(StrictModel):
+    type: Literal["record_finding"]
+    finding: FindingView
+
+
+class EventSubscriptionResult(StrictModel):
+    type: Literal[
+        "put_event_subscription",
+        "delete_event_subscription",
+        "advance_event_cursor",
+    ]
+    subscription: EventSubscriptionView
+
+
 CommandResult = Annotated[
     CreateWorkBatchResult
     | CreateSameSessionChildResult
@@ -726,7 +794,9 @@ CommandResult = Annotated[
     | AnswerDecisionResult
     | MissionResult
     | DraftMissionIntakeResult
-    | AnswerMissionDraftResult,
+    | AnswerMissionDraftResult
+    | RecordFindingResult
+    | EventSubscriptionResult,
     Field(discriminator="type"),
 ]
 

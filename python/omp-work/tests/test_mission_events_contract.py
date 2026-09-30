@@ -1,22 +1,34 @@
-"""OMP-415: mission-event contract — commands, reads, and subscription rules.
+"""OMP-415: mission-event contract — commands, reads, views, and subscription rules.
 
-The two GET routes return the store dict as the store wrote it. Page views
-land in a later slice.
+The two GET routes return the store dict as the store wrote it. Page and
+result views validate the shapes a later read slice will serve.
 """
 
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import omp_work
 from omp_work import contract_sha256, load_contract
+from omp_work.mission_events import derive_mission_events
 from omp_work.operations.config import OperationsConfig
+from omp_work.v1.api_models import (
+    CommandResult,
+    EventSubscriptionResult,
+    EventSubscriptionView,
+    EventSubscriptionsPage,
+    FindingView,
+    MissionEventView,
+    MissionEventsPage,
+    RecordFindingResult,
+)
 from omp_work.v1.models import (
     MISSION_EVENT_TYPES,
     AdvanceEventCursor,
@@ -374,3 +386,112 @@ def test_postgres_work_store_reads_are_unavailable(tmp_path: Path) -> None:
     with pytest.raises(WorkStoreError) as subscriptions:
         store.event_subscriptions(WORKSPACE, READER, client_id=None)
     assert subscriptions.value.code == "unavailable"
+
+
+def _subscription_view(**overrides: object) -> dict[str, object]:
+    base: dict[str, object] = {
+        "subscription_id": str(SUBSCRIPTION),
+        "client_id": str(READER),
+        "push_url": "https://hooks.example/omp",
+        "event_types": ["mission.started", "important_finding"],
+        "cursor_sequence": 0,
+        "deleted": False,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_each_result_validates_as_command_result() -> None:
+    adapter = TypeAdapter(CommandResult)
+    finding = adapter.validate_python({"type": "record_finding", "finding": _finding()})
+    assert isinstance(finding, RecordFindingResult)
+    assert finding.finding.evidence_refs == ("receipt:abc",)
+
+    for command_type in (
+        "put_event_subscription",
+        "delete_event_subscription",
+        "advance_event_cursor",
+    ):
+        parsed = adapter.validate_python(
+            {"type": command_type, "subscription": _subscription_view()}
+        )
+        assert isinstance(parsed, EventSubscriptionResult)
+        assert parsed.type == command_type
+        assert parsed.subscription.cursor_sequence == 0
+        assert parsed.subscription.deleted is False
+
+
+def test_finding_view_rejects_object_refs_missing_refs_bad_severity_and_long_title() -> None:
+    with pytest.raises(ValidationError):
+        FindingView.model_validate(
+            _finding(evidence_refs=({"kind": "evidence", "ref": "receipt:abc"},))
+        )
+    missing = _finding()
+    missing.pop("evidence_refs")
+    with pytest.raises(ValidationError):
+        FindingView.model_validate(missing)
+    with pytest.raises(ValidationError):
+        FindingView.model_validate(_finding(severity="severe"))
+    with pytest.raises(ValidationError):
+        FindingView.model_validate(_finding(title="x" * 201))
+    accepted = FindingView.model_validate(_finding(title="x" * 200, severity="critical"))
+    assert accepted.title == "x" * 200
+    assert accepted.severity == "critical"
+
+
+def test_event_subscription_view_rejects_empty_unknown_and_mixed_ops() -> None:
+    with pytest.raises(ValidationError):
+        EventSubscriptionView.model_validate(_subscription_view(event_types=[]))
+    with pytest.raises(ValidationError):
+        EventSubscriptionView.model_validate(_subscription_view(event_types=["not-an-event"]))
+    with pytest.raises(ValidationError):
+        EventSubscriptionView.model_validate(
+            _subscription_view(event_types=[*MISSION_EVENT_TYPES, "ops.alarm"])
+        )
+    with pytest.raises(ValidationError):
+        EventSubscriptionView.model_validate(
+            _subscription_view(event_types=["ops.alarm", "ops.digest"])
+        )
+    alarm = EventSubscriptionView.model_validate(
+        _subscription_view(event_types=["ops.alarm"], push_url=None)
+    )
+    assert alarm.event_types == ("ops.alarm",)
+    assert alarm.push_url is None
+    page = EventSubscriptionsPage.model_validate({"subscriptions": [_subscription_view()]})
+    assert page.subscriptions[0].subscription_id == SUBSCRIPTION
+
+
+def test_derived_mission_event_validates_as_mission_event_view() -> None:
+    event_id = str(uuid4())
+    event = {
+        "event_id": event_id,
+        "sequence": 1,
+        "outcome": "applied",
+        "event_type": "set_mission_status",
+        "occurred_at": datetime(2026, 9, 30, 12, 0, tzinfo=timezone.utc),
+        "payload": {
+            "mission": {
+                "mission_id": str(MISSION),
+                "transitions": [{"from_status": "approved", "to_status": "running"}],
+            }
+        },
+    }
+    rows = derive_mission_events([event], mission_for_work=lambda _work_id, _sequence: None)
+    assert len(rows) == 1
+    view = MissionEventView.model_validate(rows[0])
+    assert view.type == "mission.started"
+    assert view.sequence == 1
+    assert view.mission_id == MISSION
+    assert view.source_event_id == UUID(event_id)
+    assert view.trigger == "status:approved->running"
+    assert view.evidence_refs[0].kind == "domain_event"
+    assert view.evidence_refs[0].ref == event_id
+    page = MissionEventsPage.model_validate(
+        {
+            "events": rows,
+            "watermark_sequence": 1,
+            "next_after_sequence": 1,
+            "has_more": False,
+        }
+    )
+    assert page.events == (view,)
