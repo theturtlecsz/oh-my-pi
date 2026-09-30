@@ -59,6 +59,7 @@ if TYPE_CHECKING:
     from contextlib import AbstractContextManager
 
 _PROJECT_FIELDS = "project_id,key,name,kind,archived"
+_LIST_FIELDS = "project_id,key,name,kind"
 _RECORD_FIELDS = "workspace_id,project_id,purpose,updated_at"
 _GOAL_FIELDS = "workspace_id,project_id,position,goal"
 _QUESTION_FIELDS = "workspace_id,project_id,question,resolved"
@@ -186,6 +187,21 @@ class ProjectStoreMixin:
             if len(rows) > 1:
                 raise AmbiguousProjectKey(key)
             return row_json(rows[0]) or {}
+
+    def list_projects(
+        self, workspace_id: UUID, actor_id: UUID
+    ) -> dict[str, object]:
+        """Every unarchived project in the workspace, ordered by name then key."""
+        with self._transaction(workspace_id, actor_id) as cur:
+            cur.execute(
+                f"SELECT {_LIST_FIELDS} FROM omp_work.projects"  # nosec B608 - static column list
+                " WHERE workspace_id=%s AND NOT archived ORDER BY name, key",
+                (workspace_id,),
+            )
+            return {
+                "workspace_id": str(workspace_id),
+                "projects": [row_json(row) for row in cur.fetchall()],
+            }
 
     def update_profile(
         self,
