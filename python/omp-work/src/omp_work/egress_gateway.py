@@ -27,9 +27,12 @@ destination the policy also defines as an ``https`` origin is re-judged as that
 https origin (:func:`_plain_decision`), so a named registry or remote is
 reachable in plain form while a genuinely unnamed destination still refuses.
 
-``CONNECT host:port`` is judged as an ``https`` tunnel. Model and standing
-destinations are tunnelled and recorded. Registry, remote, and research
-destinations need TLS inspection:
+``CONNECT host:port`` is judged as an ``https`` tunnel. Model destinations and
+standing destinations whose host is not a project remote are tunnelled and
+recorded. A standing destination whose host is a project remote is inspected
+instead, so a receive-pack or control-plane request cannot ride an opaque
+tunnel past :func:`decide`. Registry, remote, and research destinations need
+TLS inspection:
 
 * with ``tls`` unset they are refused ``tls_inspection_required`` and recorded;
 * with ``tls`` set to a :class:`GatewayCA` the gateway replies ``200``, upgrades
@@ -71,6 +74,7 @@ from omp_work.egress_policy import (
     _norm_host,
     _parse_destination,
     _parse_host_port,
+    _project_remote_host,
     _request_port,
     decide,
 )
@@ -627,11 +631,11 @@ class EgressGateway:
             await self._open_tunnel(identity, now, host, port, upstream, "model", None, reader, writer)
             return
 
-        if klass == "standing":
+        if klass == "standing" and not _project_remote_host(policy, host):
             await self._open_tunnel(identity, now, host, port, (host, port), "standing", None, reader, writer)
             return
 
-        if klass in _INSPECT_CLASSES:
+        if klass in _INSPECT_CLASSES or klass == "standing":
             ca = self._tls
             if ca is not None:
                 await self._inspect_tunnel(ca, identity, policy, host, port, now, reader, writer)

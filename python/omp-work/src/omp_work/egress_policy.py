@@ -19,7 +19,11 @@ and malformed or non-https/http entries are dropped.
 :func:`decide` evaluates a :class:`Request` against an :class:`EgressPolicy`
 and an :class:`Identity`, returning a :class:`Verdict`: the model proxy first,
 then the research stage, then standing destinations, then project registries,
-then project remotes, otherwise ``destination_not_allowed``.
+then project remotes, otherwise ``destination_not_allowed``. A non-research
+identity still refuses, with class ``standing``, a receive-pack request that a
+standing destination would have allowed (``git_receive_pack``) and a
+non-GET/HEAD, tunneled, or bodied request to a project remote host
+(``control_plane_action``).
 """
 
 from __future__ import annotations
@@ -589,6 +593,39 @@ def _has_git_receive_pack(query: str, path: str) -> bool:
     return False
 
 
+def _project_remote_host(policy: EgressPolicy, host: str) -> bool:
+    """True when ``host`` is the host of any compiled project remote."""
+    normalized = _norm_host(host)
+    return any(remote_host == normalized for _scheme, remote_host, _port, _repo in policy.remotes)
+
+
+def _receive_pack_request(req: Request) -> bool:
+    """True when the raw or percent-decoded path or query asks for receive-pack."""
+    raw = req.path or ""
+    if _has_git_receive_pack(req.query, raw):
+        return True
+    safe = _safe_request_path(raw)
+    return safe is not None and safe != raw and _has_git_receive_pack("", safe)
+
+
+def _standing_worker_refusal(
+    policy: EgressPolicy, req: Request, standing: Verdict, method: str
+) -> Verdict | None:
+    """Refuse tier-2/3 actions a standing network grant would otherwise carry.
+
+    Receive-pack is refused on every host. A non-GET/HEAD request, a tunnel,
+    or a request with a body, sent to a project remote's host, is a
+    control-plane action. The refusal keeps the standing class and policy id.
+    """
+    if _receive_pack_request(req):
+        return Verdict(False, "standing", "git_receive_pack", standing.policy_id)
+    if _project_remote_host(policy, req.host) and (
+        req.tunnel or req.has_body or method.upper() not in {"GET", "HEAD"}
+    ):
+        return Verdict(False, "standing", "control_plane_action", standing.policy_id)
+    return None
+
+
 def _remote_verdict(
     policy: EgressPolicy,
     req: Request,
@@ -652,6 +689,10 @@ def decide(
     Ordered rules: the model proxy, then the research stage, then standing
     destinations, then project registries, then project remotes, otherwise a
     refusal. A refusal raised after a match keeps that match's class.
+
+    A non-research identity does not receive a standing allow for git
+    receive-pack, or for a non-GET/HEAD, tunneled, or bodied request whose
+    host is a project remote. Those refusals use class ``standing``.
     """
     scheme = req.scheme.lower()
     host = _norm_host(req.host)
@@ -669,6 +710,10 @@ def decide(
 
     standing = _standing_verdict(policy, req, now)
     if standing is not None:
+        if identity.stage != "research":
+            blocked = _standing_worker_refusal(policy, req, standing, method)
+            if blocked is not None:
+                return blocked
         return standing
 
     if scheme == "https" and (host, port) in policy.registries:

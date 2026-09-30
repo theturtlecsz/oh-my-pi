@@ -21,6 +21,7 @@ from .models import (
     MissionDraft,
     MissionStatus,
     OperationReceipt,
+    OwnerInstruction,
     RelationEdge,
     ResearchArtifact,
     ResearchCampaign,
@@ -644,6 +645,26 @@ class MissionResult(StrictModel):
     mission: MissionView
 
 
+class DraftMissionIntakeResult(StrictModel):
+    type: Literal["draft_mission_intake"]
+    mission_id: UUID
+    outcome: Literal["clarify", "held", "awaiting_owner", "proceeded"]
+    questions: tuple[IntakeBlockingQuestion, ...]
+    mission: MissionView | None = None
+    decision_id: UUID | None = None
+    basis: Literal["approved_mission", "standing_mandate"] | None = None
+
+
+class AnswerMissionDraftResult(StrictModel):
+    type: Literal["answer_mission_draft"]
+    decision_id: UUID
+    mission_id: UUID
+    outcome: Literal["approved", "rejected", "noted"]
+    mission: MissionView
+    next_decision_id: UUID | None = None
+    instruction: OwnerInstruction
+
+
 CommandResult = Annotated[
     CreateWorkBatchResult
     | CreateSameSessionChildResult
@@ -693,7 +714,9 @@ CommandResult = Annotated[
     | ReleaseStopResult
     | CreateDecisionResult
     | AnswerDecisionResult
-    | MissionResult,
+    | MissionResult
+    | DraftMissionIntakeResult
+    | AnswerMissionDraftResult,
     Field(discriminator="type"),
 ]
 

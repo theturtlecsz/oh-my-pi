@@ -151,6 +151,8 @@ _COMMAND_TYPES = frozenset(
         "link_mission_work",
         "create_decision",
         "answer_decision",
+        "draft_mission_intake",
+        "answer_mission_draft",
     }
 )
 

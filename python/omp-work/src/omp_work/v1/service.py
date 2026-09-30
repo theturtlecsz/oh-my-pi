@@ -93,6 +93,8 @@ class WorkService:
         "link_mission_work": "work.mutate",
         "approve_mission": "work.approve",
         "set_mission_status": "work.execute",
+        "draft_mission_intake": "work.mutate",
+        "answer_mission_draft": "work.approve",
     }
 
     def __init__(self, store: WorkStore) -> None:
@@ -115,6 +117,12 @@ class WorkService:
         # tier-3 action is the owner's alone, so automation never answers.
         if (
             envelope.command.type == "answer_decision"
+            and principal.actor_kind != "owner"
+        ):
+            raise WorkError("forbidden", status=403)
+        # OMP-426: answering a mission draft is the owner's act.
+        if (
+            envelope.command.type == "answer_mission_draft"
             and principal.actor_kind != "owner"
         ):
             raise WorkError("forbidden", status=403)

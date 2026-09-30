@@ -168,6 +168,7 @@ describe("upstream-watch step script execution", () => {
 	test("discovery step against a fixed future baseline outputs newer: false and exits 0", async () => {
 		const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-watch-test-baseline-"));
 		const baselinePath = path.join(tmpDir, "upstream-baseline.json");
+		const releasesPath = path.join(tmpDir, "upstream-releases.json");
 		await Bun.write(
 			baselinePath,
 			JSON.stringify({
@@ -175,18 +176,74 @@ describe("upstream-watch step script execution", () => {
 				upstream_version: "99.0.0",
 			}),
 		);
+		await Bun.write(
+			releasesPath,
+			JSON.stringify([
+				{ tag_name: "v18.4.2", draft: false, prerelease: false },
+				{ tag_name: "v18.0.6", draft: false, prerelease: false },
+			]),
+		);
 
 		try {
 			const repoRoot = path.join(import.meta.dir, "..");
-			const result = await $`bun scripts/upstream-discovery.ts --baseline ${baselinePath} --json`
-				.cwd(repoRoot)
-				.quiet()
-				.nothrow();
+			const result =
+				await $`bun scripts/upstream-discovery.ts --baseline ${baselinePath} --releases ${releasesPath} --json`
+					.cwd(repoRoot)
+					.quiet()
+					.nothrow();
 
 			expect(result.exitCode).toBe(0);
 			const parsed = JSON.parse(result.text()) as { newer: boolean; baseline_version: string };
 			expect(parsed.newer).toBe(false);
 			expect(parsed.baseline_version).toBe("99.0.0");
+		} finally {
+			await fs.rm(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	test("discovery step with a fixture release above the baseline outputs newer: true with tag and commit and exits 0", async () => {
+		const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-watch-test-candidate-discovery-"));
+		const baselinePath = path.join(tmpDir, "upstream-baseline.json");
+		const releasesPath = path.join(tmpDir, "upstream-releases.json");
+		const lsRemotePath = path.join(tmpDir, "upstream-ls-remote.txt");
+
+		await Bun.write(
+			baselinePath,
+			JSON.stringify({
+				upstream_repo: "https://github.com/can1357/oh-my-pi",
+				upstream_version: "18.0.6",
+			}),
+		);
+		await Bun.write(
+			releasesPath,
+			JSON.stringify([
+				{ tag_name: "v18.4.2", draft: false, prerelease: false },
+				{ tag_name: "v18.0.6", draft: false, prerelease: false },
+			]),
+		);
+		await Bun.write(lsRemotePath, "4620bb8338e0ecace7ea237da9d5088d16068617\trefs/tags/v18.4.2^{}\n");
+
+		try {
+			const repoRoot = path.join(import.meta.dir, "..");
+			const result =
+				await $`bun scripts/upstream-discovery.ts --baseline ${baselinePath} --releases ${releasesPath} --ls-remote ${lsRemotePath} --json`
+					.cwd(repoRoot)
+					.quiet()
+					.nothrow();
+
+			expect(result.exitCode).toBe(0);
+			const parsed = JSON.parse(result.text()) as {
+				newer: boolean;
+				baseline_version: string;
+				candidate_version: string;
+				candidate_tag: string;
+				candidate_commit: string;
+			};
+			expect(parsed.newer).toBe(true);
+			expect(parsed.baseline_version).toBe("18.0.6");
+			expect(parsed.candidate_version).toBe("18.4.2");
+			expect(parsed.candidate_tag).toBe("v18.4.2");
+			expect(parsed.candidate_commit).toBe("4620bb8338e0ecace7ea237da9d5088d16068617");
 		} finally {
 			await fs.rm(tmpDir, { recursive: true, force: true });
 		}
