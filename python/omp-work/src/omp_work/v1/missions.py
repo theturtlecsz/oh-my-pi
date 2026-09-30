@@ -188,7 +188,8 @@ def _revise(
     actor_kind: str,
 ) -> dict[str, object]:
     command = envelope.command
-    assert isinstance(command, ReviseMissionCommand)
+    if not isinstance(command, ReviseMissionCommand):
+        raise TypeError("revise dispatched with a non-revise command")
     payload = command.payload
     draft = payload.draft
     workspace_id = envelope.workspace_id
@@ -486,7 +487,8 @@ def _link(
     ``max_subagents`` is a per-item cap against the mission envelope, not a sum.
     """
     command = envelope.command
-    assert isinstance(command, LinkMissionWorkCommand)
+    if not isinstance(command, LinkMissionWorkCommand):
+        raise TypeError("link dispatched with a non-link command")
     payload = command.payload
     workspace_id = envelope.workspace_id
 

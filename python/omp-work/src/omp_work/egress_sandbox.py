@@ -170,7 +170,7 @@ class _DnsResponder:
 
     def start(self) -> None:
         self._sock.bind(str(self._path))
-        os.chmod(self._path, 0o700)
+        os.chmod(self._path, 0o600)
         self._sock.settimeout(0.1)
         self._thread.start()
 
@@ -256,7 +256,7 @@ class _TcpOverUnixRelay:
 
     def start(self) -> None:
         self._sock.bind(str(self._path))
-        os.chmod(self._path, 0o700)
+        os.chmod(self._path, 0o600)
         self._sock.listen(16)
         self._sock.settimeout(0.1)
         self._thread.start()
