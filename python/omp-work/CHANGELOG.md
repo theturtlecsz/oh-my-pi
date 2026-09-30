@@ -41,6 +41,7 @@
 - Unattended workers reach the network only through a default-deny egress policy; refusals and research fetches are recorded (OMP-431).
 - `omp-work jobs check --sleep S` makes each probe job run S seconds, so a kill drill can land mid-job (OMP-475).
 - WorkService authorises proposals through named Run Owner checks, fails closed with a decision record, and only an owner-signed change alters a D35 lock.
+- `draft_mission_intake` routes a bounded intake to a mission: blocking questions clarify, a budgetless mission is held, scope already covered by an approved mission or a standing mandate proceeds without another confirmation, and anything else files one owner decision per revision (OMP-426).
 
 ### Changed
 

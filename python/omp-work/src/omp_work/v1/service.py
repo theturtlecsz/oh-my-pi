@@ -131,6 +131,10 @@ class WorkService:
         "set_mission_status": "work.execute",
         "draft_mission_intake": "work.mutate",
         "answer_mission_draft": "work.approve",
+        "record_finding": "work.execute",
+        "put_event_subscription": "work.read",
+        "delete_event_subscription": "work.read",
+        "advance_event_cursor": "work.read",
     }
 
     def __init__(
@@ -517,6 +521,71 @@ class WorkService:
         try:
             return self._store.events(
                 workspace_id, principal.actor_id, after=effective_after, limit=limit
+            )
+        except WorkStoreError as error:
+            statuses = {"invalid_request": 400, "forbidden": 403, "unavailable": 503}
+            raise WorkError(
+                error.code,
+                status=statuses.get(error.code, 409),
+                diagnostics=error.diagnostics,
+            ) from error
+
+    def mission_events(
+        self,
+        principal: Principal,
+        workspace_id: UUID,
+        *,
+        after_sequence: int = 0,
+        limit: int = 500,
+        mission_id: UUID | None = None,
+    ) -> dict[str, object]:
+        if (
+            workspace_id not in principal.workspaces
+            or "work.read" not in principal.scopes
+        ):
+            raise WorkError("forbidden", status=403)
+        try:
+            return self._store.mission_events(
+                workspace_id,
+                principal.actor_id,
+                after=after_sequence,
+                limit=limit,
+                mission_id=mission_id,
+            )
+        except WorkStoreError as error:
+            statuses = {"invalid_request": 400, "forbidden": 403, "unavailable": 503}
+            raise WorkError(
+                error.code,
+                status=statuses.get(error.code, 409),
+                diagnostics=error.diagnostics,
+            ) from error
+
+    def event_subscriptions(
+        self,
+        principal: Principal,
+        workspace_id: UUID,
+        *,
+        client_id: UUID | None = None,
+    ) -> dict[str, object]:
+        if (
+            workspace_id not in principal.workspaces
+            or "work.read" not in principal.scopes
+        ):
+            raise WorkError("forbidden", status=403)
+        if (
+            client_id is not None
+            and client_id != principal.actor_id
+            and "work.events.admin" not in principal.scopes
+        ):
+            raise WorkError("forbidden", status=403)
+        resolved = (
+            principal.actor_id
+            if client_id is None and "work.events.admin" not in principal.scopes
+            else client_id
+        )
+        try:
+            return self._store.event_subscriptions(
+                workspace_id, principal.actor_id, client_id=resolved
             )
         except WorkStoreError as error:
             statuses = {"invalid_request": 400, "forbidden": 403, "unavailable": 503}

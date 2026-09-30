@@ -7325,6 +7325,81 @@
           "title": "EngageStopResult",
           "type": "object"
         },
+        "EventSubscriptionResult": {
+          "additionalProperties": false,
+          "properties": {
+            "subscription": {
+              "$ref": "#/$defs/EventSubscriptionView"
+            },
+            "type": {
+              "enum": [
+                "put_event_subscription",
+                "delete_event_subscription",
+                "advance_event_cursor"
+              ],
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "subscription"
+          ],
+          "title": "EventSubscriptionResult",
+          "type": "object"
+        },
+        "EventSubscriptionView": {
+          "additionalProperties": false,
+          "properties": {
+            "client_id": {
+              "format": "uuid",
+              "title": "Client Id",
+              "type": "string"
+            },
+            "cursor_sequence": {
+              "minimum": 0,
+              "title": "Cursor Sequence",
+              "type": "integer"
+            },
+            "deleted": {
+              "title": "Deleted",
+              "type": "boolean"
+            },
+            "event_types": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Event Types",
+              "type": "array"
+            },
+            "push_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Push Url"
+            },
+            "subscription_id": {
+              "format": "uuid",
+              "title": "Subscription Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "subscription_id",
+            "client_id",
+            "event_types",
+            "cursor_sequence",
+            "deleted"
+          ],
+          "title": "EventSubscriptionView",
+          "type": "object"
+        },
         "EvidenceKind": {
           "enum": [
             "plan",
@@ -7970,6 +8045,57 @@
             "candidate"
           ],
           "title": "FinalizeCandidateResult",
+          "type": "object"
+        },
+        "FindingView": {
+          "additionalProperties": false,
+          "properties": {
+            "evidence_refs": {
+              "items": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 20,
+              "minItems": 1,
+              "title": "Evidence Refs",
+              "type": "array"
+            },
+            "finding_id": {
+              "format": "uuid",
+              "title": "Finding Id",
+              "type": "string"
+            },
+            "mission_id": {
+              "format": "uuid",
+              "title": "Mission Id",
+              "type": "string"
+            },
+            "severity": {
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "critical"
+              ],
+              "title": "Severity",
+              "type": "string"
+            },
+            "title": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            }
+          },
+          "required": [
+            "finding_id",
+            "mission_id",
+            "severity",
+            "title",
+            "evidence_refs"
+          ],
+          "title": "FindingView",
           "type": "object"
         },
         "FocusResult": {
@@ -9003,6 +9129,25 @@
             "receipt"
           ],
           "title": "RecordFableAdviceResult",
+          "type": "object"
+        },
+        "RecordFindingResult": {
+          "additionalProperties": false,
+          "properties": {
+            "finding": {
+              "$ref": "#/$defs/FindingView"
+            },
+            "type": {
+              "const": "record_finding",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "finding"
+          ],
+          "title": "RecordFindingResult",
           "type": "object"
         },
         "RecordResearchCacheResult": {
@@ -10979,6 +11124,7 @@
               "activate_cutover": "#/$defs/ActivateCutoverResult",
               "activate_execution_item": "#/$defs/ActivateExecutionItemResult",
               "admit_research_campaign": "#/$defs/AdmitResearchCampaignResult",
+              "advance_event_cursor": "#/$defs/EventSubscriptionResult",
               "answer_decision": "#/$defs/AnswerDecisionResult",
               "answer_intake_decision": "#/$defs/AnswerIntakeDecisionResult",
               "answer_mission_draft": "#/$defs/AnswerMissionDraftResult",
@@ -11004,17 +11150,20 @@
               "create_research_campaign": "#/$defs/CreateResearchCampaignResult",
               "create_same_session_child": "#/$defs/CreateSameSessionChildResult",
               "create_work_batch": "#/$defs/CreateWorkBatchResult",
+              "delete_event_subscription": "#/$defs/EventSubscriptionResult",
               "draft_mission_intake": "#/$defs/DraftMissionIntakeResult",
               "engage_stop": "#/$defs/EngageStopResult",
               "finalize_candidate": "#/$defs/FinalizeCandidateResult",
               "link_mission_work": "#/$defs/MissionResult",
               "propose_research_trial": "#/$defs/ProposeResearchTrialResult",
               "publish_bounded_intake": "#/$defs/PublishBoundedIntakeResult",
+              "put_event_subscription": "#/$defs/EventSubscriptionResult",
               "put_relation": "#/$defs/RelationResult",
               "record_alarm_signal": "#/$defs/AlarmSignalResult",
               "record_closeout_review": "#/$defs/RecordCloseoutReviewResult",
               "record_external_delivery": "#/$defs/RecordExternalDeliveryResult",
               "record_fable_advice": "#/$defs/RecordFableAdviceResult",
+              "record_finding": "#/$defs/RecordFindingResult",
               "record_project_health": "#/$defs/ProjectHealthResult",
               "record_research_cache": "#/$defs/RecordResearchCacheResult",
               "record_research_observation": "#/$defs/RecordResearchObservationResult",
@@ -11194,6 +11343,12 @@
             },
             {
               "$ref": "#/$defs/AnswerMissionDraftResult"
+            },
+            {
+              "$ref": "#/$defs/RecordFindingResult"
+            },
+            {
+              "$ref": "#/$defs/EventSubscriptionResult"
             }
           ],
           "title": "Result"
@@ -14922,6 +15077,204 @@
       "title": "EngageStopResult",
       "type": "object"
     },
+    "EventSubscriptionResult": {
+      "$defs": {
+        "EventSubscriptionView": {
+          "additionalProperties": false,
+          "properties": {
+            "client_id": {
+              "format": "uuid",
+              "title": "Client Id",
+              "type": "string"
+            },
+            "cursor_sequence": {
+              "minimum": 0,
+              "title": "Cursor Sequence",
+              "type": "integer"
+            },
+            "deleted": {
+              "title": "Deleted",
+              "type": "boolean"
+            },
+            "event_types": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Event Types",
+              "type": "array"
+            },
+            "push_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Push Url"
+            },
+            "subscription_id": {
+              "format": "uuid",
+              "title": "Subscription Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "subscription_id",
+            "client_id",
+            "event_types",
+            "cursor_sequence",
+            "deleted"
+          ],
+          "title": "EventSubscriptionView",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "subscription": {
+          "$ref": "#/$defs/EventSubscriptionView"
+        },
+        "type": {
+          "enum": [
+            "put_event_subscription",
+            "delete_event_subscription",
+            "advance_event_cursor"
+          ],
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "subscription"
+      ],
+      "title": "EventSubscriptionResult",
+      "type": "object"
+    },
+    "EventSubscriptionView": {
+      "additionalProperties": false,
+      "properties": {
+        "client_id": {
+          "format": "uuid",
+          "title": "Client Id",
+          "type": "string"
+        },
+        "cursor_sequence": {
+          "minimum": 0,
+          "title": "Cursor Sequence",
+          "type": "integer"
+        },
+        "deleted": {
+          "title": "Deleted",
+          "type": "boolean"
+        },
+        "event_types": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Event Types",
+          "type": "array"
+        },
+        "push_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Push Url"
+        },
+        "subscription_id": {
+          "format": "uuid",
+          "title": "Subscription Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscription_id",
+        "client_id",
+        "event_types",
+        "cursor_sequence",
+        "deleted"
+      ],
+      "title": "EventSubscriptionView",
+      "type": "object"
+    },
+    "EventSubscriptionsPage": {
+      "$defs": {
+        "EventSubscriptionView": {
+          "additionalProperties": false,
+          "properties": {
+            "client_id": {
+              "format": "uuid",
+              "title": "Client Id",
+              "type": "string"
+            },
+            "cursor_sequence": {
+              "minimum": 0,
+              "title": "Cursor Sequence",
+              "type": "integer"
+            },
+            "deleted": {
+              "title": "Deleted",
+              "type": "boolean"
+            },
+            "event_types": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Event Types",
+              "type": "array"
+            },
+            "push_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Push Url"
+            },
+            "subscription_id": {
+              "format": "uuid",
+              "title": "Subscription Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "subscription_id",
+            "client_id",
+            "event_types",
+            "cursor_sequence",
+            "deleted"
+          ],
+          "title": "EventSubscriptionView",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "subscriptions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EventSubscriptionView"
+          },
+          "title": "Subscriptions",
+          "type": "array"
+        }
+      },
+      "title": "EventSubscriptionsPage",
+      "type": "object"
+    },
     "EvidenceReceipt": {
       "$defs": {
         "EvidenceKind": {
@@ -15090,6 +15443,32 @@
         "issued_at"
       ],
       "title": "EvidenceReceipt",
+      "type": "object"
+    },
+    "EvidenceRef": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "domain_event",
+            "evidence",
+            "decision",
+            "finding",
+            "work_item"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "ref": {
+          "title": "Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "ref"
+      ],
+      "title": "EvidenceRef",
       "type": "object"
     },
     "EvidenceResult": {
@@ -16392,6 +16771,57 @@
       "title": "FinalizeCandidateResult",
       "type": "object"
     },
+    "FindingView": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence_refs": {
+          "items": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "finding_id": {
+          "format": "uuid",
+          "title": "Finding Id",
+          "type": "string"
+        },
+        "mission_id": {
+          "format": "uuid",
+          "title": "Mission Id",
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "finding_id",
+        "mission_id",
+        "severity",
+        "title",
+        "evidence_refs"
+      ],
+      "title": "FindingView",
+      "type": "object"
+    },
     "FocusResult": {
       "additionalProperties": false,
       "properties": {
@@ -16984,6 +17414,228 @@
         "wall_clock_seconds"
       ],
       "title": "MissionDrawn",
+      "type": "object"
+    },
+    "MissionEventView": {
+      "$defs": {
+        "EvidenceRef": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "domain_event",
+                "evidence",
+                "decision",
+                "finding",
+                "work_item"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "ref": {
+              "title": "Ref",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "ref"
+          ],
+          "title": "EvidenceRef",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "evidence_refs": {
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          },
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "mission_event_id": {
+          "format": "uuid",
+          "title": "Mission Event Id",
+          "type": "string"
+        },
+        "mission_id": {
+          "format": "uuid",
+          "title": "Mission Id",
+          "type": "string"
+        },
+        "occurred_at": {
+          "format": "date-time",
+          "title": "Occurred At",
+          "type": "string"
+        },
+        "sequence": {
+          "minimum": 1,
+          "title": "Sequence",
+          "type": "integer"
+        },
+        "source_event_id": {
+          "format": "uuid",
+          "title": "Source Event Id",
+          "type": "string"
+        },
+        "trigger": {
+          "title": "Trigger",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "mission.started",
+            "mission.blocked",
+            "mission.completed",
+            "mission.failed",
+            "mission.progressed",
+            "decision.required",
+            "budget.threshold_reached",
+            "important_finding"
+          ],
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mission_event_id",
+        "sequence",
+        "mission_id",
+        "type",
+        "trigger",
+        "occurred_at",
+        "source_event_id",
+        "evidence_refs"
+      ],
+      "title": "MissionEventView",
+      "type": "object"
+    },
+    "MissionEventsPage": {
+      "$defs": {
+        "EvidenceRef": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "domain_event",
+                "evidence",
+                "decision",
+                "finding",
+                "work_item"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "ref": {
+              "title": "Ref",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "ref"
+          ],
+          "title": "EvidenceRef",
+          "type": "object"
+        },
+        "MissionEventView": {
+          "additionalProperties": false,
+          "properties": {
+            "evidence_refs": {
+              "items": {
+                "$ref": "#/$defs/EvidenceRef"
+              },
+              "title": "Evidence Refs",
+              "type": "array"
+            },
+            "mission_event_id": {
+              "format": "uuid",
+              "title": "Mission Event Id",
+              "type": "string"
+            },
+            "mission_id": {
+              "format": "uuid",
+              "title": "Mission Id",
+              "type": "string"
+            },
+            "occurred_at": {
+              "format": "date-time",
+              "title": "Occurred At",
+              "type": "string"
+            },
+            "sequence": {
+              "minimum": 1,
+              "title": "Sequence",
+              "type": "integer"
+            },
+            "source_event_id": {
+              "format": "uuid",
+              "title": "Source Event Id",
+              "type": "string"
+            },
+            "trigger": {
+              "title": "Trigger",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "mission.started",
+                "mission.blocked",
+                "mission.completed",
+                "mission.failed",
+                "mission.progressed",
+                "decision.required",
+                "budget.threshold_reached",
+                "important_finding"
+              ],
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mission_event_id",
+            "sequence",
+            "mission_id",
+            "type",
+            "trigger",
+            "occurred_at",
+            "source_event_id",
+            "evidence_refs"
+          ],
+          "title": "MissionEventView",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "events": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/MissionEventView"
+          },
+          "title": "Events",
+          "type": "array"
+        },
+        "has_more": {
+          "title": "Has More",
+          "type": "boolean"
+        },
+        "next_after_sequence": {
+          "title": "Next After Sequence",
+          "type": "integer"
+        },
+        "watermark_sequence": {
+          "title": "Watermark Sequence",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "watermark_sequence",
+        "next_after_sequence",
+        "has_more"
+      ],
+      "title": "MissionEventsPage",
       "type": "object"
     },
     "MissionLink": {
@@ -20051,6 +20703,78 @@
         "receipt"
       ],
       "title": "RecordFableAdviceResult",
+      "type": "object"
+    },
+    "RecordFindingResult": {
+      "$defs": {
+        "FindingView": {
+          "additionalProperties": false,
+          "properties": {
+            "evidence_refs": {
+              "items": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 20,
+              "minItems": 1,
+              "title": "Evidence Refs",
+              "type": "array"
+            },
+            "finding_id": {
+              "format": "uuid",
+              "title": "Finding Id",
+              "type": "string"
+            },
+            "mission_id": {
+              "format": "uuid",
+              "title": "Mission Id",
+              "type": "string"
+            },
+            "severity": {
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "critical"
+              ],
+              "title": "Severity",
+              "type": "string"
+            },
+            "title": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            }
+          },
+          "required": [
+            "finding_id",
+            "mission_id",
+            "severity",
+            "title",
+            "evidence_refs"
+          ],
+          "title": "FindingView",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "finding": {
+          "$ref": "#/$defs/FindingView"
+        },
+        "type": {
+          "const": "record_finding",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "finding"
+      ],
+      "title": "RecordFindingResult",
       "type": "object"
     },
     "RecordResearchCacheResult": {
@@ -28596,6 +29320,81 @@
           "title": "EngageStopResult",
           "type": "object"
         },
+        "EventSubscriptionResult": {
+          "additionalProperties": false,
+          "properties": {
+            "subscription": {
+              "$ref": "#/$defs/EventSubscriptionView"
+            },
+            "type": {
+              "enum": [
+                "put_event_subscription",
+                "delete_event_subscription",
+                "advance_event_cursor"
+              ],
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "subscription"
+          ],
+          "title": "EventSubscriptionResult",
+          "type": "object"
+        },
+        "EventSubscriptionView": {
+          "additionalProperties": false,
+          "properties": {
+            "client_id": {
+              "format": "uuid",
+              "title": "Client Id",
+              "type": "string"
+            },
+            "cursor_sequence": {
+              "minimum": 0,
+              "title": "Cursor Sequence",
+              "type": "integer"
+            },
+            "deleted": {
+              "title": "Deleted",
+              "type": "boolean"
+            },
+            "event_types": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Event Types",
+              "type": "array"
+            },
+            "push_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Push Url"
+            },
+            "subscription_id": {
+              "format": "uuid",
+              "title": "Subscription Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "subscription_id",
+            "client_id",
+            "event_types",
+            "cursor_sequence",
+            "deleted"
+          ],
+          "title": "EventSubscriptionView",
+          "type": "object"
+        },
         "EvidenceKind": {
           "enum": [
             "plan",
@@ -29241,6 +30040,57 @@
             "candidate"
           ],
           "title": "FinalizeCandidateResult",
+          "type": "object"
+        },
+        "FindingView": {
+          "additionalProperties": false,
+          "properties": {
+            "evidence_refs": {
+              "items": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 20,
+              "minItems": 1,
+              "title": "Evidence Refs",
+              "type": "array"
+            },
+            "finding_id": {
+              "format": "uuid",
+              "title": "Finding Id",
+              "type": "string"
+            },
+            "mission_id": {
+              "format": "uuid",
+              "title": "Mission Id",
+              "type": "string"
+            },
+            "severity": {
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "critical"
+              ],
+              "title": "Severity",
+              "type": "string"
+            },
+            "title": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            }
+          },
+          "required": [
+            "finding_id",
+            "mission_id",
+            "severity",
+            "title",
+            "evidence_refs"
+          ],
+          "title": "FindingView",
           "type": "object"
         },
         "FocusResult": {
@@ -30274,6 +31124,25 @@
             "receipt"
           ],
           "title": "RecordFableAdviceResult",
+          "type": "object"
+        },
+        "RecordFindingResult": {
+          "additionalProperties": false,
+          "properties": {
+            "finding": {
+              "$ref": "#/$defs/FindingView"
+            },
+            "type": {
+              "const": "record_finding",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "finding"
+          ],
+          "title": "RecordFindingResult",
           "type": "object"
         },
         "RecordResearchCacheResult": {
@@ -32266,6 +33135,7 @@
                   "activate_cutover": "#/$defs/ActivateCutoverResult",
                   "activate_execution_item": "#/$defs/ActivateExecutionItemResult",
                   "admit_research_campaign": "#/$defs/AdmitResearchCampaignResult",
+                  "advance_event_cursor": "#/$defs/EventSubscriptionResult",
                   "answer_decision": "#/$defs/AnswerDecisionResult",
                   "answer_intake_decision": "#/$defs/AnswerIntakeDecisionResult",
                   "answer_mission_draft": "#/$defs/AnswerMissionDraftResult",
@@ -32291,17 +33161,20 @@
                   "create_research_campaign": "#/$defs/CreateResearchCampaignResult",
                   "create_same_session_child": "#/$defs/CreateSameSessionChildResult",
                   "create_work_batch": "#/$defs/CreateWorkBatchResult",
+                  "delete_event_subscription": "#/$defs/EventSubscriptionResult",
                   "draft_mission_intake": "#/$defs/DraftMissionIntakeResult",
                   "engage_stop": "#/$defs/EngageStopResult",
                   "finalize_candidate": "#/$defs/FinalizeCandidateResult",
                   "link_mission_work": "#/$defs/MissionResult",
                   "propose_research_trial": "#/$defs/ProposeResearchTrialResult",
                   "publish_bounded_intake": "#/$defs/PublishBoundedIntakeResult",
+                  "put_event_subscription": "#/$defs/EventSubscriptionResult",
                   "put_relation": "#/$defs/RelationResult",
                   "record_alarm_signal": "#/$defs/AlarmSignalResult",
                   "record_closeout_review": "#/$defs/RecordCloseoutReviewResult",
                   "record_external_delivery": "#/$defs/RecordExternalDeliveryResult",
                   "record_fable_advice": "#/$defs/RecordFableAdviceResult",
+                  "record_finding": "#/$defs/RecordFindingResult",
                   "record_project_health": "#/$defs/ProjectHealthResult",
                   "record_research_cache": "#/$defs/RecordResearchCacheResult",
                   "record_research_observation": "#/$defs/RecordResearchObservationResult",
@@ -32481,6 +33354,12 @@
                 },
                 {
                   "$ref": "#/$defs/AnswerMissionDraftResult"
+                },
+                {
+                  "$ref": "#/$defs/RecordFindingResult"
+                },
+                {
+                  "$ref": "#/$defs/EventSubscriptionResult"
                 }
               ]
             },
