@@ -809,18 +809,22 @@ class WorkService:
         if operation == "project.list":
             return self._store.list_projects(workspace_id, actor_id)
         if operation == "project.context":
-            assert project_id is not None
+            if project_id is None:
+                raise AssertionError("project_id is None")
             return self._store.project_context(workspace_id, actor_id, project_id)
         if operation == "project.status":
-            assert project_id is not None
+            if project_id is None:
+                raise AssertionError("project_id is None")
             return self._store.read_project(workspace_id, actor_id, project_id)
         if operation == "project.decisions":
-            assert project_id is not None
+            if project_id is None:
+                raise AssertionError("project_id is None")
             return self._store.decisions(
                 workspace_id, actor_id, project_id=project_id
             )
         if operation == "mission.status":
-            assert ident is not None
+            if ident is None:
+                raise AssertionError("ident is None")
             return self._store.read(workspace_id, actor_id, "mission", str(ident))
         if operation == "evidence.inspect":
             return self._store.receipt(workspace_id, actor_id, ident)

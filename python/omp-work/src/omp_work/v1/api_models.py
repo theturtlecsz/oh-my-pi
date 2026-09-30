@@ -25,6 +25,8 @@ from .models import (
     OperationReceipt,
     OwnerInstruction,
     RelationEdge,
+    RelayedInstruction,
+    RelayIntent,
     ResearchArtifact,
     ResearchCampaign,
     ResearchComponent,
@@ -743,6 +745,21 @@ class EventSubscriptionResult(StrictModel):
     subscription: EventSubscriptionView
 
 
+class RelayProvenance(StrictModel):
+    instruction: RelayedInstruction
+    relayed_by: UUID
+    signed: bool
+
+
+class RelayOwnerIntentResult(StrictModel):
+    type: Literal["relay_owner_intent"]
+    intent: RelayIntent
+    mission: MissionView | None = None
+    decision_id: UUID | None = None
+    answer: str | None = None
+    relay: RelayProvenance
+
+
 CommandResult = Annotated[
     CreateWorkBatchResult
     | CreateSameSessionChildResult
@@ -796,7 +813,8 @@ CommandResult = Annotated[
     | DraftMissionIntakeResult
     | AnswerMissionDraftResult
     | RecordFindingResult
-    | EventSubscriptionResult,
+    | EventSubscriptionResult
+    | RelayOwnerIntentResult,
     Field(discriminator="type"),
 ]
 
