@@ -11,6 +11,11 @@ TCP ``127.0.0.1:3128`` forwards to the gateway proxy socket, and TCP
 ``127.0.0.1:<workservice port>`` forwards to the WorkService relay socket. A
 tmpfs over the socket root hides every other sandbox's sockets, with only this
 sandbox's directory bound back so ``record.sock`` stays reachable.
+
+A ``research`` root skips the mount-proc shim and the setup_ok touch. The
+helper runs ``unshare --mount --pid --fork`` on
+:mod:`omp_work.egress_research_jail`, which builds the worker root and marks
+setup_ok only after ``pivot_root``.
 """
 
 from __future__ import annotations
@@ -34,6 +39,17 @@ import time
 _PROXY_PORT = 3128
 _DNS_PORT = 53
 _MS_BIND = 0x1000
+
+# Resolver files published into the sandbox. The research jail writes the same bytes.
+RESOLV_CONF_TEXT = "nameserver 127.0.0.1\n"
+NSSWITCH_CONF_TEXT = "hosts: files dns\n"
+HOSTS_TEXT = "127.0.0.1 localhost\n::1 localhost\n"
+
+# Research worker paths. CA variables name the cert inside the jail, not the host file.
+JAIL_CA_CERT = "/etc/ssl/certs/ca-certificates.crt"
+RESEARCH_HOME = "/home/research"
+RESEARCH_PATH_DEFAULT = "/usr/bin:/bin"
+_RESEARCH_ENV_NAMES = frozenset({"PATH", "LANG", "TERM", "TZ"})
 
 _libc = ctypes.CDLL("libc.so.6", use_errno=True)
 
@@ -184,13 +200,13 @@ def _setup_network() -> None:
 
 def _setup_etc_files(etc_dir: Path) -> None:
     resolv_file = etc_dir / "resolv.conf"
-    resolv_file.write_text("nameserver 127.0.0.1\n", encoding="utf-8")
+    resolv_file.write_text(RESOLV_CONF_TEXT, encoding="utf-8")
 
     nsswitch_file = etc_dir / "nsswitch.conf"
-    nsswitch_file.write_text("hosts: files dns\n", encoding="utf-8")
+    nsswitch_file.write_text(NSSWITCH_CONF_TEXT, encoding="utf-8")
 
     hosts_file = etc_dir / "hosts"
-    hosts_file.write_text("127.0.0.1 localhost\n::1 localhost\n", encoding="utf-8")
+    hosts_file.write_text(HOSTS_TEXT, encoding="utf-8")
 
     mount = _executable("mount")
     for src, dst in [
@@ -361,20 +377,57 @@ def _setup_relays(config: dict) -> None:
         _serve_tcp_relay(int(workservice_port), ws_sock)
 
 
+def _proxy_env(worker_env: dict[str, str]) -> None:
+    """The s07 loopback proxy variables."""
+    proxy_url = f"http://127.0.0.1:{_PROXY_PORT}"
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        worker_env[name] = proxy_url
+    worker_env["NO_PROXY"] = ""
+    worker_env["no_proxy"] = ""
+
+
+def _ca_env(worker_env: dict[str, str], path: str) -> None:
+    for name in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS", "GIT_SSL_CAINFO"):
+        worker_env[name] = path
+
+
+def _research_worker_env(config: dict) -> dict[str, str]:
+    """Closed research environment: allowlisted config env, HOME, proxy, in-jail CA."""
+    base = config.get("env") or {}
+    worker_env: dict[str, str] = {}
+    saw_path = False
+    for name, value in base.items():
+        upper = str(name).upper()
+        if upper not in _RESEARCH_ENV_NAMES and not upper.startswith("LC_"):
+            continue
+        worker_env[str(name)] = str(value)
+        if upper == "PATH":
+            saw_path = True
+    if not saw_path:
+        worker_env["PATH"] = RESEARCH_PATH_DEFAULT
+    worker_env["HOME"] = RESEARCH_HOME
+    if config.get("proxy_sock"):
+        _proxy_env(worker_env)
+    _ca_env(worker_env, JAIL_CA_CERT)
+    return worker_env
+
+
 def _worker_env(config: dict, workdir: str | None) -> dict[str, str]:
-    """The worker environment: base env, proxy variables, and CA trust paths."""
+    """The worker environment: base env, proxy variables, and CA trust paths.
+
+    A research root takes PATH, LANG, TERM, TZ, and LC_* from the config env
+    (PATH defaults to ``/usr/bin:/bin``), sets HOME, and points the CA variables
+    at the certificate inside the jail. Proxy variables match the s07 worker.
+    """
+    if config.get("root") == "research":
+        return _research_worker_env(config)
     base = config.get("env")
     worker_env = os.environ.copy() if base is None else dict(base)
     if config.get("proxy_sock"):
-        proxy_url = f"http://127.0.0.1:{_PROXY_PORT}"
-        for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
-            worker_env[name] = proxy_url
-        worker_env["NO_PROXY"] = ""
-        worker_env["no_proxy"] = ""
+        _proxy_env(worker_env)
     ca_cert_path = config.get("ca_cert_path")
     if ca_cert_path:
-        for name in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS", "GIT_SSL_CAINFO"):
-            worker_env[name] = str(ca_cert_path)
+        _ca_env(worker_env, str(ca_cert_path))
     return worker_env
 
 
@@ -435,6 +488,23 @@ exec "{real_unshare}" "$@"
     return {"PATH": str(shim_dir) + os.pathsep + os.environ.get("PATH", "")}
 
 
+def _spawn_research_jail(config_path: Path) -> int:
+    """Enter the research jail. The helper does not shim mount-proc or touch setup_ok."""
+    cmd = [
+        _executable("unshare"),
+        "--mount",
+        "--pid",
+        "--fork",
+        sys.executable,
+        "-m",
+        "omp_work.egress_research_jail",
+        str(config_path),
+    ]
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+    jail = subprocess.Popen(cmd)  # nosec B603 - argv list, no shell
+    return jail.wait()
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         sys.stderr.write("Usage: python3 -m omp_work.egress_sandbox_helper <config.json>\n")
@@ -443,9 +513,9 @@ def main() -> None:
     config_path = Path(sys.argv[1])
     config = json.loads(config_path.read_text(encoding="utf-8"))
 
-    # Fail closed until the research jail (s02) exists: a non-null profile root
-    # is a launch the helper cannot yet isolate. Exit before setup_ok.
-    if config.get("root"):
+    # A profile root other than research has no jail yet. Exit before setup_ok.
+    root = config.get("root")
+    if root not in (None, "research"):
         sys.exit(125)
 
     record_sock = config["record_sock"]
@@ -475,40 +545,45 @@ def main() -> None:
     # 6. Mask sibling sandboxes and expose loopback relays
     _setup_relays(config)
 
-    # 7. Ensure unshare with mount-proc works
-    env_update = _ensure_worker_unshare_supported(temp_dir)
+    if root == "research":
+        # No mount-proc shim and no setup_ok touch: the jail marks setup_ok
+        # after pivot_root, or leaves it absent when the CA cannot be read.
+        returncode = _spawn_research_jail(config_path)
+    else:
+        # 7. Ensure unshare with mount-proc works
+        env_update = _ensure_worker_unshare_supported(temp_dir)
 
-    worker_env = _worker_env(config, workdir)
-    if "PATH" in env_update:
-        worker_env["PATH"] = env_update["PATH"]
-    # Match subprocess: a provided env searches its PATH, or os.defpath when PATH is absent.
-    # The shim directory, when present, is first, so unshare resolves to that wrapper.
-    search_path = worker_env["PATH"] if "PATH" in worker_env else os.defpath
+        worker_env = _worker_env(config, workdir)
+        if "PATH" in env_update:
+            worker_env["PATH"] = env_update["PATH"]
+        # Match subprocess: a provided env searches its PATH, or os.defpath when PATH is absent.
+        # The shim directory, when present, is first, so unshare resolves to that wrapper.
+        search_path = worker_env["PATH"] if "PATH" in worker_env else os.defpath
 
-    # Signal that setup is complete before launching the worker
-    if setup_ok_path:
-        Path(setup_ok_path).touch()
+        # Signal that setup is complete before launching the worker
+        if setup_ok_path:
+            Path(setup_ok_path).touch()
 
-    # 8. Run worker
-    worker_cmd = [
-        _executable("unshare", search_path),
-        "--pid",
-        "--fork",
-        "--mount-proc",
-        _executable("setpriv", search_path),
-        "--bounding-set=-all",
-        "--inh-caps=-all",
-        "--no-new-privs",
-        *argv,
-    ]
+        # 8. Run worker
+        worker_cmd = [
+            _executable("unshare", search_path),
+            "--pid",
+            "--fork",
+            "--mount-proc",
+            _executable("setpriv", search_path),
+            "--bounding-set=-all",
+            "--inh-caps=-all",
+            "--no-new-privs",
+            *argv,
+        ]
 
-    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
-    worker = subprocess.Popen(  # nosec B603 - argv list, no shell
-        worker_cmd,
-        cwd=workdir,
-        env=worker_env,
-    )
-    returncode = worker.wait()
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+        worker = subprocess.Popen(  # nosec B603 - argv list, no shell
+            worker_cmd,
+            cwd=workdir,
+            env=worker_env,
+        )
+        returncode = worker.wait()
 
     # Drain tap before exit
     time.sleep(0.05)
