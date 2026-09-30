@@ -15,6 +15,7 @@ import { copyFile, lstat, mkdir, readdir, realpath, rmdir } from "node:fs/promis
 import { basename, dirname, isAbsolute, join as joinPath, resolve as resolvePath } from "node:path";
 import * as managedGit from "@oh-my-pi/pi-coding-agent/utils/git";
 import { getWorktreesDir, hashPath, isEnoent } from "@oh-my-pi/pi-utils";
+import { cloneDependencyTree } from "./dependency-tree";
 /** Run git in cwd; timeoutMs guards network ops (push). `raw` is untrimmed stdout —
  *  porcelain -z parsing needs the leading space of the first `XY path` entry. */
 export function runGit(cwd: string, args: string[], timeoutMs = 10_000): { ok: boolean; out: string; raw: string; err: string } {
@@ -71,13 +72,31 @@ type ExecutionDependencyInstall = {
 	readonly timeoutMs: number;
 };
 
+/** Harbor has no package network. Clone the primary install when this worktree's bun.lock is the same bytes. */
+async function reusePrimaryDependencyTree(
+	primaryRoot: string,
+	worktreePath: string,
+	worktreeNodeModules: string,
+): Promise<boolean> {
+	if (resolvePath(primaryRoot) === resolvePath(worktreePath)) return false;
+	const primaryNodeModules = joinPath(primaryRoot, "node_modules");
+	if (!existsSync(primaryNodeModules) || !statSync(primaryNodeModules).isDirectory()) return false;
+	const primaryLock = joinPath(primaryRoot, "bun.lock");
+	const worktreeLock = joinPath(worktreePath, "bun.lock");
+	if (!existsSync(primaryLock) || !existsSync(worktreeLock)) return false;
+	if (!readFileSync(primaryLock).equals(readFileSync(worktreeLock))) return false;
+	await cloneDependencyTree(primaryNodeModules, worktreeNodeModules);
+	return true;
+}
+
 export async function materializeExecutionRuntime(
 	primaryRoot: string,
 	worktreePath: string,
 	install: ExecutionDependencyInstall = EXECUTION_DEPENDENCY_INSTALL,
 ): Promise<void> {
 	const worktreeNodeModules = joinPath(worktreePath, "node_modules");
-	if (existsSync(joinPath(worktreePath, "package.json")) && !existsSync(worktreeNodeModules)) {
+	const needsDependencies = existsSync(joinPath(worktreePath, "package.json")) && !existsSync(worktreeNodeModules);
+	if (needsDependencies && !(await reusePrimaryDependencyTree(primaryRoot, worktreePath, worktreeNodeModules))) {
 		// OMP-472: ensure runs this install while /execute awaits it, after beginExecution
 		// and before deliverExecutionMessage. spawnSync froze that event loop for the whole
 		// install; a stall held it until 300s. Bun.spawn yields, and a stall is killed so

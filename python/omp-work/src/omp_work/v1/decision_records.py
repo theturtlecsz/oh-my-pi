@@ -1,0 +1,157 @@
+"""OMP-414 decision records rebuilt from workspace domain events. No decision table."""
+
+from __future__ import annotations
+
+import json
+from typing import TYPE_CHECKING, NamedTuple
+from uuid import UUID
+
+from .api_models import AnswerDecisionResult
+from .models import CommandEnvelope
+from .store_shared import WorkStoreError
+
+if TYPE_CHECKING:
+    import psycopg
+
+
+class _Record(NamedTuple):
+    view: dict[str, object]
+    resume_state: str | None
+
+
+def create_decision(
+    cur: psycopg.Cursor[dict[str, object]],
+    envelope: CommandEnvelope,
+) -> dict[str, object]:
+    payload = envelope.command.payload
+    decision_id = str(payload.decision_id)
+    if any(
+        str(record.view["decision_id"]) == decision_id
+        for record in _load(cur, envelope.workspace_id)
+    ):
+        raise WorkStoreError("revision_conflict", ("decision_exists",))
+    return {
+        "type": "create_decision",
+        "status": "pending",
+        "decision": payload.model_dump(mode="json"),
+    }
+
+
+def answer_decision(
+    cur: psycopg.Cursor[dict[str, object]],
+    envelope: CommandEnvelope,
+) -> dict[str, object]:
+    payload = envelope.command.payload
+    decision_id = str(payload.decision_id)
+    record = next(
+        (
+            item
+            for item in _load(cur, envelope.workspace_id)
+            if str(item.view["decision_id"]) == decision_id
+        ),
+        None,
+    )
+    if record is None:
+        raise WorkStoreError("invalid_request", ("decision_not_found",))
+    if record.view["status"] == "answered":
+        raise WorkStoreError("revision_conflict", ("decision_already_answered",))
+    if payload.answer not in record.view["options"]:
+        raise WorkStoreError("invalid_request", ("answer_not_an_option",))
+    mission_id = record.view["mission_id"]
+    return AnswerDecisionResult(
+        type="answer_decision",
+        decision_id=payload.decision_id,
+        mission_id=mission_id if isinstance(mission_id, str) else None,
+        answer=payload.answer,
+        resume_state=record.resume_state,
+    ).model_dump(mode="json")
+
+
+def list_decisions(
+    cur: psycopg.Cursor[dict[str, object]],
+    workspace_id: UUID,
+    *,
+    status: str | None = None,
+    mission_id: str | None = None,
+) -> list[dict[str, object]]:
+    views: list[dict[str, object]] = []
+    for record in _load(cur, workspace_id):
+        view = record.view
+        if status is not None and view["status"] != status:
+            continue
+        if mission_id is not None and view["mission_id"] != mission_id:
+            continue
+        views.append(view)
+    return views
+
+
+def _load(
+    cur: psycopg.Cursor[dict[str, object]],
+    workspace_id: UUID,
+) -> list[_Record]:
+    cur.execute(
+        "SELECT event_type, payload, occurred_at "
+        "FROM omp_audit.domain_events "
+        "WHERE workspace_id = %s "
+        "  AND aggregate_id = %s "
+        "  AND event_type IN ('create_decision', 'answer_decision') "
+        "  AND outcome = 'applied' "
+        "ORDER BY sequence ASC",
+        (workspace_id, workspace_id),
+    )
+    records: dict[str, _Record] = {}
+    order: list[str] = []
+    for row in cur.fetchall():
+        body = _object(row["payload"])
+        if row["event_type"] == "create_decision":
+            decision = body["decision"]
+            decision_id = str(decision["decision_id"])
+            if decision_id in records:
+                continue
+            raw_resume = decision.get("resume_state")
+            records[decision_id] = _Record(
+                view=_pending_view(decision),
+                resume_state=raw_resume if isinstance(raw_resume, str) else None,
+            )
+            order.append(decision_id)
+            continue
+        decision_id = str(body["decision_id"])
+        record = records.get(decision_id)
+        if record is None or record.view["status"] == "answered":
+            continue
+        occurred_at = row["occurred_at"]
+        record.view["status"] = "answered"
+        record.view["answer"] = body["answer"]
+        record.view["answered_at"] = (
+            occurred_at.isoformat()
+            if hasattr(occurred_at, "isoformat")
+            else occurred_at
+        )
+    return [records[decision_id] for decision_id in order]
+
+
+def _pending_view(decision: dict[str, object]) -> dict[str, object]:
+    return {
+        "decision_id": decision["decision_id"],
+        "project_id": decision["project_id"],
+        "mission_id": decision.get("mission_id"),
+        "status": "pending",
+        "question": decision["question"],
+        "why_it_matters": decision["why_it_matters"],
+        "risk_of_delay": decision["risk_of_delay"],
+        "options": decision["options"],
+        "evidence_refs": decision.get("evidence_refs", []),
+        "default_if_any": decision.get("default_if_any"),
+        "risk_of_each_choice": decision["risk_of_each_choice"],
+        "action_class": decision.get("action_class"),
+        "answer": None,
+        "answered_at": None,
+    }
+
+
+def _object(value: object) -> dict[str, object]:
+    if isinstance(value, str):
+        value = json.loads(value)
+    if isinstance(value, dict):
+        return value
+    raise TypeError("decision event payload is not an object")
