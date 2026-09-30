@@ -1096,6 +1096,19 @@
           "title": "Decision Id",
           "type": "string"
         },
+        "expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expires At"
+        },
         "mission_id": {
           "anyOf": [
             {
@@ -5582,6 +5595,19 @@
               "format": "uuid",
               "title": "Decision Id",
               "type": "string"
+            },
+            "expires_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expires At"
             },
             "mission_id": {
               "anyOf": [
@@ -13559,6 +13585,19 @@
           "title": "Evidence Refs",
           "type": "array"
         },
+        "expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expires At"
+        },
         "mission_id": {
           "anyOf": [
             {
@@ -13605,6 +13644,19 @@
           ],
           "title": "Status",
           "type": "string"
+        },
+        "target_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Sha256"
         },
         "why_it_matters": {
           "title": "Why It Matters",
@@ -13705,6 +13757,19 @@
               "title": "Evidence Refs",
               "type": "array"
             },
+            "expires_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expires At"
+            },
             "mission_id": {
               "anyOf": [
                 {
@@ -13751,6 +13816,19 @@
               ],
               "title": "Status",
               "type": "string"
+            },
+            "target_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Target Sha256"
             },
             "why_it_matters": {
               "title": "Why It Matters",
@@ -26788,6 +26866,19 @@
               "format": "uuid",
               "title": "Decision Id",
               "type": "string"
+            },
+            "expires_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expires At"
             },
             "mission_id": {
               "anyOf": [

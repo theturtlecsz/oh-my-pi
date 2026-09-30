@@ -39,6 +39,7 @@
 - Per-stage provider, model, and effort from a written routing policy, with per-provider concurrency, retries, and automatic escalation within the item budget.
 - Unattended workers reach the network only through a default-deny egress policy; refusals and research fetches are recorded (OMP-431).
 - `omp-work jobs check --sleep S` makes each probe job run S seconds, so a kill drill can land mid-job (OMP-475).
+- WorkService authorises proposals through named Run Owner checks, fails closed with a decision record, and only an owner-signed change alters a D35 lock.
 
 ### Changed
 
@@ -53,6 +54,7 @@
 - Answering a tier 3 decision record now requires a valid owner signature; unsigned or badly signed answers are refused and the decision stays pending.
 - `omp-work jobs check` gives probe jobs a lease well below its timeout (default min(30 s, a quarter of the timeout), set with `--lease`), so a job whose worker is killed mid-run is reclaimed and sealed before the check gives up (OMP-475).
 - the worker `capacity` setting is documented as a resource-weight budget; the worker runs one job at a time (OMP-475).
+- Plan stamping waits for confirmation of a linked mission's new or changed scope.
 
 ### Fixed
 

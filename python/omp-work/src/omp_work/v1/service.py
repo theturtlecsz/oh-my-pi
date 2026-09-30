@@ -2,14 +2,27 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 
 from pydantic import ValidationError
 
+from ..control_plane import gate
+from ..control_plane.envelope import bind_command
+from ..control_plane.registry import CONTROL_PLANE_CHECKS, ControlPlane
 from .api_models import DecisionsPage, StopStatusView
-from .models import OWNER_APPROVAL_COMMAND_TYPES, CommandEnvelope
+from .models import (
+    OWNER_APPROVAL_COMMAND_TYPES,
+    CommandEnvelope,
+    CreateDecisionCommand,
+    CreateDecisionPayload,
+)
 from .store import WorkStore, WorkStoreError
+
+# decision_payload hashes this same string into the decision id, so the
+# stored id and the envelope ids stay aligned when the proposal is replayed.
+_MISSING_PROPOSAL_ID = "00000000-0000-0000-0000-000000000000"
+_RECORDED_DECISION = frozenset({"idempotency_conflict", "decision_exists"})
 
 
 @dataclass(frozen=True)
@@ -27,6 +40,29 @@ class WorkError(Exception):
     ) -> None:
         super().__init__(code)
         self.code, self.status, self.diagnostics = code, status, diagnostics
+
+
+def _proposal_identity(proposal: gate.Proposal) -> str:
+    if proposal.proposal_id is None:
+        return _MISSING_PROPOSAL_ID
+    return str(proposal.proposal_id)
+
+
+def _decision_already_recorded(error: WorkStoreError) -> bool:
+    if error.code in _RECORDED_DECISION:
+        return True
+    return any(item in _RECORDED_DECISION for item in error.diagnostics)
+
+
+def _check_error_verdict() -> gate.Verdict:
+    """No plane, or facts() failed: one deciding check_error, no other checks."""
+    return gate.Verdict(
+        refusals=(
+            gate.Refusal(
+                check="control_plane", code="check_error", raise_decision=True
+            ),
+        )
+    )
 
 
 class WorkService:
@@ -97,8 +133,11 @@ class WorkService:
         "answer_mission_draft": "work.approve",
     }
 
-    def __init__(self, store: WorkStore) -> None:
+    def __init__(
+        self, store: WorkStore, control_plane: ControlPlane | None = None
+    ) -> None:
         self._store = store
+        self._control_plane = control_plane
 
     def execute(
         self, principal: Principal, envelope: CommandEnvelope
@@ -179,6 +218,112 @@ class WorkService:
             code=code,
             diagnostics=diagnostics,
         )
+
+    def execute_proposal(
+        self,
+        principal: Principal,
+        proposal: gate.Proposal,
+        envelope: CommandEnvelope | None = None,
+    ) -> tuple[object, dict[str, object]] | dict[str, object]:
+        # The envelope's workspace is the one being acted on. A proposal with
+        # no envelope is acted on in its own workspace. Either must be the
+        # principal's, before any check or store call.
+        workspace_id = (
+            envelope.workspace_id if envelope is not None else proposal.workspace_id
+        )
+        if not isinstance(workspace_id, UUID) or workspace_id not in principal.workspaces:
+            raise WorkError("forbidden", status=403)
+        proposer = proposal.proposer
+        if proposer in {"owner", "typed_command"} and principal.actor_kind != "owner":
+            raise WorkError("forbidden", status=403)
+        if proposer == "orchestrator" and principal.actor_kind != "automation":
+            raise WorkError("forbidden", status=403)
+
+        if envelope is not None:
+            bound = bind_command(
+                proposal, envelope, self._scopes.get(envelope.command.type)
+            )
+            if isinstance(bound, gate.Refusal):
+                # A malformed binding is not an authorization question.
+                verdict = gate.Verdict(refusals=(bound,))
+            else:
+                proposal = bound
+                verdict = self._evaluate_control_plane(proposal, workspace_id)
+        else:
+            verdict = self._evaluate_control_plane(proposal, workspace_id)
+
+        if not verdict.allowed:
+            decision_id = None
+            if verdict.raises_decision:
+                decision_id = self._record_control_plane_decision(
+                    principal, proposal, workspace_id, verdict
+                )
+            diagnostics = tuple(
+                sorted(f"{item.check}:{item.code}" for item in verdict.refusals)
+            )
+            if decision_id is not None:
+                diagnostics = diagnostics + (f"decision:{decision_id}",)
+            raise WorkError(
+                "control_plane_refused", status=409, diagnostics=diagnostics
+            )
+        if envelope is not None:
+            return self.execute(principal, envelope)
+        return {"authorized": True, "checks": list(verdict.checks_run)}
+
+    def _evaluate_control_plane(
+        self, proposal: gate.Proposal, workspace_id: UUID
+    ) -> gate.Verdict:
+        plane = self._control_plane
+        if plane is None:
+            return _check_error_verdict()
+        try:
+            facts = plane.facts(workspace_id)
+        except Exception:
+            return _check_error_verdict()
+        return gate.evaluate(
+            proposal,
+            gate.CheckContext(
+                facts=facts, verify_signature=plane.verify_signature
+            ),
+            CONTROL_PLANE_CHECKS,
+            budget_seconds=plane.budget_seconds,
+            clock=plane.clock,
+        )
+
+    def _record_control_plane_decision(
+        self,
+        principal: Principal,
+        proposal: gate.Proposal,
+        workspace_id: UUID,
+        verdict: gate.Verdict,
+    ) -> UUID:
+        payload = gate.decision_payload(proposal, verdict)
+        command = CreateDecisionCommand(
+            type="create_decision",
+            payload=CreateDecisionPayload.model_validate(payload.model_dump()),
+        )
+        # operation_id, request_id, and correlation_id are uuid5 of the
+        # proposal id, so a replay is the same operation and the same hash.
+        envelope_id = uuid5(NAMESPACE_URL, _proposal_identity(proposal))
+        decision_envelope = CommandEnvelope(
+            api_version="work.omp.dev/v1",
+            workspace_id=workspace_id,
+            operation_id=envelope_id,
+            request_id=envelope_id,
+            correlation_id=envelope_id,
+            command=command,
+        )
+        try:
+            self._store.execute(
+                decision_envelope,
+                actor_id=principal.actor_id,
+                actor_kind=principal.actor_kind,
+                required_scope=self._scopes["create_decision"],
+            )
+        except WorkStoreError as error:
+            if not _decision_already_recorded(error):
+                raise
+        return payload.decision_id
 
     def activity(
         self,
