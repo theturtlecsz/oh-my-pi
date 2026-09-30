@@ -4,7 +4,7 @@ Defends the contract:
 1. An item linked to an approved mission stamps its execution plan.
 2. After a material revise_mission transitions the mission to awaiting_confirmation,
    stamping an execution plan for that work item is refused with approval_required
-   diagnostics ("mission_awaiting_confirmation",), writing no plan or candidate.
+   diagnostics ("mission_scope_unconfirmed",), writing no plan or candidate.
 3. After the owner approves the mission (status returns to approved), stamping stamps.
 4. An unlinked item in the same workspace is unaffected and stamps even while a mission
    awaits confirmation.
@@ -385,12 +385,12 @@ def test_material_revision_blocks_stamping_until_approved(service) -> None:
     assert status == 200, body
     assert body["result"]["mission"]["status"] == "awaiting_confirmation"
 
-    # Stamping item is refused with approval_required and mission_awaiting_confirmation
+    # Stamping item is refused with approval_required and mission_scope_unconfirmed
     cand_id = str(uuid4())
     status, body = _stamp(service, workspace_id, grant_id, item["work_id"], rev_id, judge_sha, cand_id)
     assert status == 409, body
     assert body["error"]["code"] == "approval_required"
-    assert body["error"]["diagnostics"] == ["mission_awaiting_confirmation"]
+    assert body["error"]["diagnostics"] == ["mission_scope_unconfirmed"]
 
     # Assert no plan or candidate was recorded in DB
     with psycopg.connect(**service.config.connection_kwargs("postgres")) as conn, conn.cursor() as cur:

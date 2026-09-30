@@ -439,6 +439,49 @@ def mission_for_work(
     return view
 
 
+def unconfirmed_missions_for_work(
+    cur: psycopg.Cursor[dict[str, object]],
+    workspace_id: UUID,
+    work_id: UUID | str,
+) -> list[str]:
+    """Ids of missions whose latest snapshot links work_id but does not confirm it.
+
+    A mission confirms its work when its latest status is approved, running, or
+    paused; a snapshot that dropped the link no longer governs the item. The
+    aggregate is read with no LIMIT so every mission that ever linked the work is
+    checked, not only the most recent link event.
+    """
+    if not isinstance(work_id, UUID):
+        try:
+            work_id = UUID(str(work_id))
+        except (ValueError, TypeError):
+            return []
+    cur.execute(
+        "SELECT DISTINCT aggregate_id FROM omp_audit.domain_events"
+        " WHERE workspace_id = %s"
+        " AND aggregate_type = 'mission'"
+        " AND event_type = 'link_mission_work'"
+        " AND outcome = 'applied'"
+        " AND payload @> %s",
+        (
+            workspace_id,
+            json.dumps({"mission": {"links": [{"work_id": str(work_id)}]}}),
+        ),
+    )
+    unconfirmed: list[str] = []
+    for row in cur.fetchall():
+        aggregate_id = row["aggregate_id"] if isinstance(row, dict) else row[0]
+        view = latest_mission(cur, workspace_id, aggregate_id)
+        if view is None:
+            continue
+        if not any(link.work_id == work_id for link in view.links):
+            continue
+        if view.status in _LINKABLE_STATUSES:
+            continue
+        unconfirmed.append(str(aggregate_id))
+    return sorted(unconfirmed)
+
+
 def read_mission(
     cur: psycopg.Cursor[dict[str, object]],
     workspace_id: UUID,
