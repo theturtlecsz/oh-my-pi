@@ -590,7 +590,7 @@ packages/coding-agent/test/rpc-input-event.test.ts	fork-only	added	0359bc6f2100	
 packages/coding-agent/test/rpc-stdin-lock.test.ts	shared	modified	c5e90fe4df3e	session candidate: OMP-127	retained
 packages/coding-agent/test/rpc.test.ts	shared	modified	78e8e5580f04	session candidate: OMP-127	retained
 packages/coding-agent/test/sdk-instruction-prep-degradation.test.ts	fork-only	added	bd81e681114e	OMP-248: Test instruction-prep degradation reporting and prompt rebuild recovery on AgentSession	retained
-packages/coding-agent/test/sdk-mcp-instructions.test.ts	shared	modified	90f6738569ff	session candidate: OMP-147	retained
+packages/coding-agent/test/sdk-mcp-instructions.test.ts	shared	modified	8515e5072a37	session candidate: OMP-147; OMP-489: the deferred-instruction test polls the live prompt until it carries BOTH the server instructions and the later-rendered xd://mcp__instr_do_thing route guidance (bounded 12s deadline) instead of stopping on the instructions alone, so the assertion can no longer observe the prompt between the two rebuilds	retained
 packages/coding-agent/test/session-manager/session-id.test.ts	shared	modified	e47db26845a3	OMP-410: reopen of a session file with an embedded id preserves that session id in getSessionId and the header instead of minting a new one	retained
 packages/coding-agent/test/session-stop-continuation-recap.test.ts	shared	modified	0d1dfeda9381	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
 packages/coding-agent/test/session/session-init-instruction-degradation.test.ts	fork-only	added	c887acacf1b3	OMP-248: Test that session_init persists non-empty instructionPrepDegradations and omits the key when empty	retained
