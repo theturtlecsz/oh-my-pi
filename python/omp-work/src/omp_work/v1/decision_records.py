@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 from uuid import UUID
 
-from .api_models import AnswerDecisionResult
+from .api_models import AnswerDecisionResult, CreateDecisionResult
 from .models import CommandEnvelope
 from .owner_signature import decision_signature_message, verify_owner_signature
 from .store_shared import WorkStoreError
@@ -24,7 +24,7 @@ class _Record(NamedTuple):
 def create_decision(
     cur: psycopg.Cursor[dict[str, object]],
     envelope: CommandEnvelope,
-) -> dict[str, object]:
+) -> tuple[dict[str, object], dict[str, object]]:
     payload = envelope.command.payload
     decision_id = str(payload.decision_id)
     if any(
@@ -32,11 +32,25 @@ def create_decision(
         for record in _load(cur, envelope.workspace_id)
     ):
         raise WorkStoreError("revision_conflict", ("decision_exists",))
-    return {
+    cur.execute("SELECT clock_timestamp() AS created_at")
+    created_row = cur.fetchone()
+    if created_row is None:
+        raise WorkStoreError("unavailable")
+    created_at = created_row["created_at"]
+    result = CreateDecisionResult(
+        type="create_decision",
+        decision_id=payload.decision_id,
+        project_id=payload.project_id,
+        mission_id=payload.mission_id,
+        action_class=payload.action_class,
+        created_at=created_at,
+    ).model_dump(mode="json")
+    event = {
         "type": "create_decision",
         "status": "pending",
         "decision": payload.model_dump(mode="json"),
     }
+    return result, event
 
 
 def answer_decision(
