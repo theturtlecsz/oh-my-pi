@@ -6,11 +6,14 @@ or unusable file allows no host. ``check_destination`` refuses a non-https URL,
 userinfo, a host outside that set, a name that does not resolve, and any
 resolved address ``egress_policy.blocked_address`` refuses.
 
-``run_push`` walks every client's subscriptions: for each one it refuses an
-unsafe destination, then pages mission events from that subscription's cursor,
+``run_push`` walks every client's subscriptions. A row with no push_url is a
+pull subscription and is skipped, as is an ops.* stream. A push_url that
+``check_destination`` refuses returns ``{"refused": reason}`` and nothing is
+sent. Otherwise it pages mission events from that subscription's cursor,
 sending the subscribed types and advancing the cursor only past what was
 delivered. Delivery is a signed, bearer-less POST (``send_signed``) whose
-Idempotency-Key is the mission_event_id.
+Idempotency-Key is the mission_event_id. A redirect is a failed delivery:
+the POST is not replayed to the Location.
 """
 
 from __future__ import annotations
@@ -177,10 +180,19 @@ def signature(key: bytes, idempotency_key: str, body: Any) -> str:
 
 
 def verify(key: bytes, idempotency_key: str, body: Any, header: str | None) -> bool:
-    """Constant-time check of ``X-OMP-Signature`` against ``signature``."""
+    """Constant-time check of ``X-OMP-Signature`` against ``signature``.
+
+    A missing or non-ASCII header is a mismatch. ``compare_digest`` raises
+    TypeError on a non-ASCII ``str``, so both sides are compared as ASCII bytes.
+    """
     if not isinstance(header, str):
         return False
-    return hmac.compare_digest(header, signature(key, idempotency_key, body))
+    try:
+        presented = header.encode("ascii")
+    except UnicodeEncodeError:
+        return False
+    expected = signature(key, idempotency_key, body).encode("ascii")
+    return hmac.compare_digest(presented, expected)
 
 
 def subscription_key(master_key: bytes, subscription_id: UUID | str) -> bytes:
@@ -223,9 +235,10 @@ def send_signed(
     """Signed, bearer-less POST of one push body.
 
     Sends ``body`` through :func:`grokbot.send` with ``token=None`` (no
-    Authorization header) and ``X-OMP-Signature`` for ``key``. A GrokbotError
-    is retried after ``sleep(1)`` then ``sleep(2)``; the third failure is
-    raised.
+    Authorization header) and ``X-OMP-Signature`` for ``key``. ``grokbot.send``
+    does not follow redirects, so a 3xx is a GrokbotError rather than a delivery
+    to the Location. A GrokbotError is retried after ``sleep(1)`` then
+    ``sleep(2)``; the third failure is raised.
     """
     canonical = body_bytes(body)
     header = signature(key, idempotency_key, canonical)
@@ -263,22 +276,6 @@ def _items(value: Any) -> list[Any]:
     return []
 
 
-def _destination_refusal(
-    destination: Any,
-    *,
-    allowed_hosts: Iterable[str],
-    resolve: Callable[[str], Iterable[str]],
-) -> str | None:
-    """``check_destination``'s reason for a subscription's ``push_url``.
-
-    A subscription with no push_url (an ops stream is delivered elsewhere) is
-    refused with ``no_destination`` rather than silently skipped.
-    """
-    if not isinstance(destination, str) or not destination.strip():
-        return "no_destination"
-    return check_destination(destination, allowed_hosts=allowed_hosts, resolve=resolve)
-
-
 def _cursor_operation_id(subscription_id: str, next_after: int) -> UUID:
     return uuid5(NAMESPACE_URL, f"omp-push-cursor:{subscription_id}:{next_after}")
 
@@ -307,15 +304,16 @@ def run_push(
 ) -> dict[str, Any]:
     """Deliver every client's subscribed mission events to its push_url.
 
-    Each ``client.event_subscriptions()`` row is handled in turn. A destination
-    ``check_destination`` refuses returns ``{"refused": reason}`` for that row
+    Each ``client.event_subscriptions()`` row is handled in turn. A row with no
+    push_url is a pull subscription and is skipped, as is an ``ops.*`` stream.
+    A push_url ``check_destination`` refuses returns ``{"refused": reason}``
     and nothing is sent. Otherwise mission events page from the row's cursor;
     each event whose type is subscribed is sent once (Idempotency-Key is its
     mission_event_id) and the cursor advances to ``next_after_sequence`` with
-    ``operation_id = uuid5(NAMESPACE_URL, f"omp-push-cursor:{id}:{seq}")``. An
-    ``ops.*`` stream is skipped. A send failure returns ``{"failed": reason}``
-    for the row and stops, after advancing the cursor to the last delivered
-    event when that is past the current cursor. Returns ``{"pushed": n}``.
+    ``operation_id = uuid5(NAMESPACE_URL, f"omp-push-cursor:{id}:{seq}")``. A
+    send failure returns ``{"failed": reason}`` for the row and stops, after
+    advancing the cursor to the last delivered event when that is past the
+    current cursor. Returns ``{"pushed": n}``.
 
     ``send`` defaults to the module-level :func:`send_signed` and is looked up
     at call time so a monkeypatched ``event_push.send_signed`` takes effect.
@@ -333,7 +331,9 @@ def run_push(
         ):
             continue
         destination = _field(subscription, "push_url")
-        reason = _destination_refusal(
+        if not isinstance(destination, str) or not destination.strip():
+            continue
+        reason = check_destination(
             destination, allowed_hosts=allowed, resolve=resolve
         )
         if reason is not None:

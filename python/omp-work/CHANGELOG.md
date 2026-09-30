@@ -64,6 +64,7 @@
 
 ### Fixed
 
+- Signed mission-event push skips a subscription with no push_url, rejects a redirect instead of following it, and treats a non-ASCII signature header as unverified (OMP-415).
 - Parallel job completion now releases leases and reservations in the terminal transaction, preserves a winning terminal result, and can persist a bounded downstream closeout obligation for safe retry after daemon interruption. Cancellation waits for verified worker termination; checkpoint outcomes remain supported.
 - Expired execution grants fence fresh grant-linked commands, work-item relation edits/removals, and focus changes while preserving idempotent replay, delivery/auditor settlement, and explicit owner reconciliation before replacement admission.
 - S2 job mirrors preserve `empty_soft`, reject foreign identities, retain namespace-scoped deletion tombstones, and compare row identities and resource contents. A separate additive jobs migration records mirror provenance; explicit legacy reconciliation requires a hash-pinned allowlist and current identity checks.

@@ -168,6 +168,11 @@ def test_signature_verify_rejects_changed_body_and_other_key() -> None:
     assert verify(MASTER, "other-idem", body, header) is False
     assert verify(MASTER, "idem-1", body, None) is False
     assert verify(MASTER, "idem-1", body, "v1=deadbeef") is False
+    assert verify(MASTER, "idem-1", body, "") is False
+    assert verify(MASTER, "idem-1", body, "v1=") is False
+    # compare_digest raises TypeError on a non-ASCII str; verify must not
+    assert verify(MASTER, "idem-1", body, "v1=é") is False
+    assert verify(MASTER, "idem-1", body, "é" * 80) is False
     # compact, sorted-key JSON is the signed preimage
     assert body_bytes(body) == b'{"a":[2,3],"b":1}'
 
@@ -272,6 +277,146 @@ def test_unsubscribed_types_are_skipped_and_cursor_passes_them(
     assert keys == [events[0]["mission_event_id"], events[2]["mission_event_id"]]
     # the skipped event is not delivered but the cursor still moves past it
     assert client.advances == [(str(SUB_A), 3, _expected_op(SUB_A, 3))]
+
+
+def test_pull_subscription_does_not_block_a_later_push(
+    stub: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _allow(monkeypatch)
+    events = [_event(1, "mission.started")]
+    blank = uuid4()
+    client = _Client(
+        [
+            _subscription(SUB_A, uuid4(), None, event_types=["mission.started"]),
+            _subscription(blank, uuid4(), "", event_types=["mission.started"]),
+            _subscription(SUB_B, uuid4(), f"{stub}/b", event_types=["mission.started"]),
+        ],
+        events,
+    )
+
+    result = run_push(
+        client,
+        workspace_id=WORKSPACE,
+        master_key=MASTER,
+        allowed_hosts={"127.0.0.1"},
+    )
+
+    assert result == {"pushed": 1}
+    assert len(_StubHandler.requests) == 1
+    assert _StubHandler.requests[0]["path"] == "/b"
+    assert (
+        _StubHandler.requests[0]["headers"]["idempotency-key"]
+        == events[0]["mission_event_id"]
+    )
+    # the pull rows are not a refusal and their cursors stay put
+    assert client.advances == [(str(SUB_B), 1, _expected_op(SUB_B, 1))]
+    assert client.mission_event_calls == [0]
+    assert all(row[0] != str(blank) for row in client.advances)
+
+
+class _CaptureHandler(http.server.BaseHTTPRequestHandler):
+    """Records the method, path, and headers, then answers with ``status``."""
+
+    requests: ClassVar[list[dict[str, Any]]] = []
+    location: ClassVar[str] = ""
+    status: ClassVar[int] = 200
+
+    def _record(self) -> None:
+        length = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(length) if length else b""
+        self.requests.append(
+            {
+                "method": self.command,
+                "path": self.path,
+                "headers": {k.lower(): v for k, v in self.headers.items()},
+                "body": raw,
+            }
+        )
+        self.send_response(self.status)
+        if self.location:
+            self.send_header("Location", self.location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def do_GET(self) -> None:
+        self._record()
+
+    def do_POST(self) -> None:
+        self._record()
+
+    def log_message(self, format: str, *args: Any) -> None:
+        pass
+
+
+class _RedirectHandler(_CaptureHandler):
+    requests: ClassVar[list[dict[str, Any]]] = []
+    status = 302
+
+
+class _SinkHandler(_CaptureHandler):
+    requests: ClassVar[list[dict[str, Any]]] = []
+    status = 200
+    location = ""
+
+
+def _serve(handler: type[http.server.BaseHTTPRequestHandler]):
+    server = http.server.HTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address
+    return server, thread, f"http://{host}:{port}"
+
+
+def _stop(server: http.server.HTTPServer, thread: threading.Thread) -> None:
+    server.shutdown()
+    server.server_close()
+    thread.join(timeout=5)
+
+
+def test_signed_push_rejects_redirect_and_does_not_advance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _allow(monkeypatch)
+    _RedirectHandler.requests = []
+    _SinkHandler.requests = []
+    sink_server, sink_thread, private = _serve(_SinkHandler)
+    _RedirectHandler.location = f"{private}/private"
+    redirect_server, redirect_thread, redirect_url = _serve(_RedirectHandler)
+    try:
+        events = [_event(1, "mission.started")]
+        client = _Client(
+            [
+                _subscription(
+                    SUB_A,
+                    uuid4(),
+                    f"{redirect_url}/hook",
+                    event_types=["mission.started"],
+                )
+            ],
+            events,
+        )
+
+        def sending(url: str, idem: str, body: Any, *, key: bytes) -> None:
+            send_signed(url, idem, body, key=key, sleep=lambda _s: None)
+
+        result = run_push(
+            client,
+            workspace_id=WORKSPACE,
+            master_key=MASTER,
+            allowed_hosts={"127.0.0.1"},
+            send=sending,
+        )
+    finally:
+        _stop(redirect_server, redirect_thread)
+        _stop(sink_server, sink_thread)
+
+    assert result["failed"].startswith("HTTP 302")
+    assert client.advances == []
+    # the Location target never sees the POST, a follow-up GET, or the signature
+    assert _SinkHandler.requests == []
+    assert [row["method"] for row in _RedirectHandler.requests] == ["POST", "POST", "POST"]
+    assert all(row["path"] == "/hook" for row in _RedirectHandler.requests)
+    assert all("x-omp-signature" in row["headers"] for row in _RedirectHandler.requests)
 
 
 def test_refused_destination_sends_nothing(
