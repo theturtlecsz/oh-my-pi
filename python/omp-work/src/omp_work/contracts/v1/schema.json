@@ -1288,6 +1288,19 @@
               "title": "Decision Id",
               "type": "string"
             },
+            "expires_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expires At"
+            },
             "owner_signature": {
               "anyOf": [
                 {
@@ -1340,6 +1353,19 @@
           "format": "uuid",
           "title": "Decision Id",
           "type": "string"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expires At"
         },
         "owner_signature": {
           "anyOf": [
@@ -2600,8 +2626,8 @@
             "OMP-405",
             "OMP-413",
             "OMP-414",
-            "OMP-426",
-            "OMP-403"
+            "OMP-403",
+            "OMP-426"
           ],
           "title": "Issue",
           "type": "string"
@@ -7137,6 +7163,19 @@
               "title": "Decision Id",
               "type": "string"
             },
+            "expires_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expires At"
+            },
             "owner_signature": {
               "anyOf": [
                 {
@@ -8971,6 +9010,19 @@
               },
               "title": "Risk Of Each Choice",
               "type": "object"
+            },
+            "target_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Target Sha256"
             },
             "why_it_matters": {
               "minLength": 1,
@@ -17400,6 +17452,19 @@
               "title": "Risk Of Each Choice",
               "type": "object"
             },
+            "target_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Target Sha256"
+            },
             "why_it_matters": {
               "minLength": 1,
               "title": "Why It Matters",
@@ -17548,6 +17613,19 @@
           },
           "title": "Risk Of Each Choice",
           "type": "object"
+        },
+        "target_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Sha256"
         },
         "why_it_matters": {
           "minLength": 1,
