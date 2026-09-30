@@ -490,6 +490,7 @@ export const SETTINGS_SCHEMA = {
 	"jev.autoThinkingMaxSignal": { type: "number", default: 0.7 },
 	"jev.unexpectedStop": { type: "boolean", default: false },
 	"jev.unexpectedStopThreshold": { type: "number", default: 0.7 },
+	"jev.tournamentJudge": { type: "boolean", default: false },
 
 	// Autoresearch tournament judging — hidden from the UI; consumed by the tournament runner.
 	"autoresearch.tournament.judgeModel": { type: "string", default: "@smol" },
