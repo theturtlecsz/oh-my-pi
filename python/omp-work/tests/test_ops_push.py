@@ -1,4 +1,4 @@
-"""OMP-415-s08-s02: serve ops.alarm subscriptions in the push runner.
+"""OMP-415-s08-s02/s03: serve ops.alarm and ops.digest subscriptions.
 
 An ``event_types == ["ops.alarm"]`` row is no longer skipped: its every domain
 event is replayed into alerts and only the alerts past the row's cursor are
@@ -6,11 +6,17 @@ sent, with Idempotency-Key ``f"{event_id}:{kind}"``. A rerun sends none; a
 mid-run send failure advances only to the failed alert's sequence minus one, so
 the next run resends that alert with the same key and not the earlier ones; a
 refused destination sends nothing and advances nothing.
+
+An ``event_types == ["ops.digest"]`` row sends one digest per completed UTC
+day before ``today``, keyed ``digest:{workspace}:{day}``, and advances its own
+cursor to that day's last event sequence only after the send. A failed digest
+is not advanced and is resent with the same key; a refused destination sends
+nothing. An alarm row and a digest row in one run each move only their cursor.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
@@ -20,6 +26,14 @@ from omp_work.v1.api_models import DomainEventView
 MASTER = bytes(range(32))
 WORKSPACE = UUID("00000000-0000-7000-8000-0000000004f0")
 SUB_A = UUID("00000000-0000-7000-8000-0000000004a1")
+SUB_B = UUID("00000000-0000-7000-8000-0000000004b2")
+D1 = date(2026, 9, 28)
+D2 = date(2026, 9, 29)
+TODAY = date(2026, 9, 30)
+
+
+def _at(day: date, hour: int = 12) -> datetime:
+    return datetime(day.year, day.month, day.day, hour, tzinfo=timezone.utc)
 
 
 def _event(
@@ -30,6 +44,7 @@ def _event(
     outcome: str = "applied",
     aggregate_id: UUID | None = None,
     event_id: UUID | None = None,
+    occurred_at: datetime | None = None,
 ) -> DomainEventView:
     return DomainEventView(
         event_id=event_id or uuid5(NAMESPACE_URL, f"ops-ev:{sequence}"),
@@ -51,16 +66,40 @@ def _event(
         payload_sha256="b" * 64,
         previous_event_sha256=None,
         event_sha256="a" * 64,
-        occurred_at=datetime(2026, 9, 30, 12, 0, 0, tzinfo=timezone.utc),
+        occurred_at=occurred_at
+        or datetime(2026, 9, 30, 12, 0, 0, tzinfo=timezone.utc),
     )
 
 
-def _signal(sequence: int, kind: str, *, aggregate_id: UUID | None = None) -> DomainEventView:
+def _signal(
+    sequence: int,
+    kind: str,
+    *,
+    aggregate_id: UUID | None = None,
+    occurred_at: datetime | None = None,
+) -> DomainEventView:
     return _event(
         sequence,
         payload={"signal": kind, "reason": kind},
         aggregate_id=aggregate_id,
+        occurred_at=occurred_at,
     )
+
+
+def _digest_events() -> list[DomainEventView]:
+    """D1 has two alerts plus a later rest event; D2 is one alert; today is both."""
+    return [
+        _signal(1, "cost_threshold", occurred_at=_at(D1)),
+        _signal(2, "budget_exceeded", occurred_at=_at(D1, 13)),
+        _event(3, event_type="revise_work", outcome="applied", occurred_at=_at(D1, 14)),
+        _signal(4, "safety_check_failed", occurred_at=_at(D2)),
+        _signal(5, "credential_appeared", occurred_at=_at(TODAY)),
+        _event(6, event_type="revise_work", outcome="applied", occurred_at=_at(TODAY, 13)),
+    ]
+
+
+def _digest_key(day: date) -> str:
+    return f"digest:{WORKSPACE}:{day.isoformat()}"
 
 
 def _refused(sequence: int, aggregate_id: UUID) -> DomainEventView:
@@ -153,7 +192,9 @@ class _Sender:
         return [idem for _url, idem, _body in self.calls]
 
 
-def _run(client: _Client, send: Any) -> dict[str, Any]:
+def _run(
+    client: _Client, send: Any, *, today: date | None = None
+) -> dict[str, Any]:
     return run_push(
         client,
         workspace_id=WORKSPACE,
@@ -161,6 +202,7 @@ def _run(client: _Client, send: Any) -> dict[str, Any]:
         allowed_hosts={"hooks.example"},
         resolve=lambda _host: ["8.8.8.8"],
         send=send,
+        today=today,
     )
 
 
@@ -249,3 +291,149 @@ def test_refused_ops_destination_sends_nothing_and_advances_nothing() -> None:
     assert sender.calls == []
     assert client.advances == []
     assert client.event_calls == []
+
+
+def test_completed_days_sent_once_then_rerun_sends_none() -> None:
+    events = _digest_events()
+    client = _Client(
+        [
+            _subscription(
+                cursor=0,
+                push_url="https://hooks.example/digest",
+                event_types=["ops.digest"],
+            )
+        ],
+        events,
+        page_size=2,
+    )
+    sender = _Sender()
+
+    result = _run(client, sender, today=TODAY)
+
+    assert result == {"pushed": 2}
+    assert sender.keys() == [_digest_key(D1), _digest_key(D2)]
+    assert [url for url, _idem, _body in sender.calls] == [
+        "https://hooks.example/digest"
+    ] * 2
+    d1_body = sender.calls[0][2]
+    d2_body = sender.calls[1][2]
+    # two D1 signals; the later rest event is not an alert. D2 is one alert.
+    assert d1_body["alerts"] == 2
+    assert d1_body["day"] == D1.isoformat()
+    assert d1_body["event_count"] == 1
+    assert d2_body["alerts"] == 1
+    assert d2_body["day"] == D2.isoformat()
+    assert d2_body["event_count"] == 0
+    assert sender.keys_used == [subscription_key(MASTER, SUB_A)] * 2
+    # D1's last event is the rest event at sequence 3; D2's only event is 4.
+    # Today's events are not digested and do not move the cursor.
+    assert client.advances == [(str(SUB_A), 3), (str(SUB_A), 4)]
+    assert client.subscriptions[0]["cursor_sequence"] == 4
+
+    rerun_sender = _Sender()
+    assert _run(client, rerun_sender, today=TODAY) == {"pushed": 0}
+    assert rerun_sender.calls == []
+    assert client.advances == [(str(SUB_A), 3), (str(SUB_A), 4)]
+
+
+def test_digest_send_fails_on_first_day_and_next_run_resends_it() -> None:
+    client = _Client(
+        [
+            _subscription(
+                cursor=0,
+                push_url="https://hooks.example/digest",
+                event_types=["ops.digest"],
+            )
+        ],
+        _digest_events(),
+    )
+    sender = _Sender(fail_on=_digest_key(D1))
+
+    result = _run(client, sender, today=TODAY)
+
+    assert result == {"failed": "boom"}
+    assert sender.calls == []
+    assert client.advances == []
+    assert client.subscriptions[0]["cursor_sequence"] == 0
+
+    rerun_sender = _Sender()
+    assert _run(client, rerun_sender, today=TODAY) == {"pushed": 2}
+    assert rerun_sender.keys() == [_digest_key(D1), _digest_key(D2)]
+    assert client.advances == [(str(SUB_A), 3), (str(SUB_A), 4)]
+
+
+def test_refused_digest_destination_sends_nothing() -> None:
+    client = _Client(
+        [
+            _subscription(
+                cursor=0,
+                push_url="http://hooks.example/digest",
+                event_types=["ops.digest"],
+            )
+        ],
+        _digest_events(),
+    )
+    sender = _Sender()
+
+    result = _run(client, sender, today=TODAY)
+
+    assert result == {"refused": "scheme"}
+    assert sender.calls == []
+    assert client.advances == []
+    assert client.event_calls == []
+
+
+def test_alarm_and_digest_rows_advance_only_their_own_cursors() -> None:
+    events = _digest_events()
+    client = _Client(
+        [
+            _subscription(
+                SUB_A,
+                cursor=0,
+                push_url="https://hooks.example/alarm",
+                event_types=["ops.alarm"],
+            ),
+            _subscription(
+                SUB_B,
+                cursor=0,
+                push_url="https://hooks.example/digest",
+                event_types=["ops.digest"],
+            ),
+        ],
+        events,
+    )
+    sender = _Sender()
+
+    result = _run(client, sender, today=TODAY)
+
+    assert result == {"pushed": 6}
+    assert sender.keys() == [
+        f"{events[0].event_id}:cost_threshold",
+        f"{events[1].event_id}:budget_exceeded",
+        f"{events[3].event_id}:safety_check_failed",
+        f"{events[4].event_id}:credential_appeared",
+        _digest_key(D1),
+        _digest_key(D2),
+    ]
+    assert [url for url, _idem, _body in sender.calls] == [
+        "https://hooks.example/alarm",
+        "https://hooks.example/alarm",
+        "https://hooks.example/alarm",
+        "https://hooks.example/alarm",
+        "https://hooks.example/digest",
+        "https://hooks.example/digest",
+    ]
+    assert sender.keys_used == [subscription_key(MASTER, SUB_A)] * 4 + [
+        subscription_key(MASTER, SUB_B)
+    ] * 2
+    # Alarm walks every event, including today, and lands on sequence 6.
+    # Digest stops at D2's last sequence and never writes the alarm cursor.
+    assert client.advances == [
+        (str(SUB_A), 6),
+        (str(SUB_B), 3),
+        (str(SUB_B), 4),
+    ]
+    assert client.subscriptions[0]["cursor_sequence"] == 6
+    assert client.subscriptions[1]["cursor_sequence"] == 4
+    assert sender.calls[4][2]["alerts"] == 2
+    assert sender.calls[5][2]["alerts"] == 1
