@@ -203,7 +203,10 @@ def test_controller_cli_message_designate_show(
         )
         == 0
     )
-    assert capsys.readouterr().out.encode() == _EXPECTED_MESSAGE + b"\n"
+    # Signing the printed stdout must verify: message emits designation_message
+    # with no added newline.
+    printed = capsys.readouterr().out.encode()
+    assert printed == _EXPECTED_MESSAGE
 
     # A bad signature exits 1 and leaves no designation file behind.
     bad = tmp_path / "bad.sig"
@@ -226,7 +229,7 @@ def test_controller_cli_message_designate_show(
     assert not (config_dir / DESIGNATION_NAME).exists()
 
     good = tmp_path / "good.sig"
-    good.write_text(_sign(key, designation_message(workspace_id, _CONTROLLER_ID)))
+    good.write_text(_sign(key, printed))
     assert (
         main(
             [

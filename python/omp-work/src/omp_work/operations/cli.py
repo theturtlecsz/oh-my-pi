@@ -233,9 +233,10 @@ def run(args: argparse.Namespace, config: OperationsConfig | None = None) -> Non
     elif command == "controller":
         workspace_id = UUID(args.workspace_id)
         if args.controller_command == "message":
-            sys.stdout.buffer.write(
-                designation_message(workspace_id, UUID(args.actor_id)) + b"\n"
-            )
+            # Exact designation_message bytes: a trailing newline would be
+            # part of the signed payload and fail designate's verification.
+            sys.stdout.buffer.write(designation_message(workspace_id, UUID(args.actor_id)))
+            sys.stdout.buffer.flush()
         elif args.controller_command == "designate":
             actor_id = UUID(args.actor_id)
             try:
