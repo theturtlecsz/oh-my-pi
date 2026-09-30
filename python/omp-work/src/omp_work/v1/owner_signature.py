@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
 
+from .models import RelayOwnerIntentPayload
+
 NAMESPACE = "omp-work-decision"
 PRINCIPAL = "owner"
 _VERIFY_TIMEOUT_SECONDS = 10
@@ -45,6 +47,22 @@ def decision_signature_message(
     if expires_at is not None:
         payload["expires_at"] = expires_at.astimezone(timezone.utc).isoformat()
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def relay_signature_message(workspace_id: UUID, payload: RelayOwnerIntentPayload) -> bytes:
+    """Canonical relay bytes (decision 0019).
+
+    Compact sorted JSON of the payload with nulls and ``owner_signature``
+    omitted, plus ``workspace_id`` and ``purpose`` ``relay_owner_intent``.
+    """
+    body = {
+        **payload.model_dump(
+            mode="json", exclude_none=True, exclude={"owner_signature"}
+        ),
+        "workspace_id": str(workspace_id),
+        "purpose": "relay_owner_intent",
+    }
+    return json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
 def verify_owner_signature(allowed_signers: Path, message: bytes, signature: str) -> bool:

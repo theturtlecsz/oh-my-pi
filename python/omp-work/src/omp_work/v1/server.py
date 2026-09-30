@@ -24,6 +24,7 @@ from omp_work.operations.fingerprints import (
 from .api_models import CommandResponse
 from .client_api import register_client_reads
 from .models import CommandEnvelope, EngageStopCommand, SetExecutionStateCommand
+from .owner_controller import designated_controller
 from .service import Principal, WorkError, WorkService
 from .store import PostgresWorkStore, WorkStore
 
@@ -118,6 +119,7 @@ def create_app(
         push_destination_check=lambda url: event_push.check_destination(
             url, allowed_hosts=allowed_hosts
         ),
+        controller_lookup=lambda ws: designated_controller(config.config_dir, ws),
     )
     # OMP-89: writes fail closed when the on-disk source or migration set no
     # longer matches what this process loaded — an editable install can change

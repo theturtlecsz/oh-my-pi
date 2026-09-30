@@ -26,6 +26,7 @@ from .models import (
     CreateDecisionPayload,
     DeleteEventSubscriptionCommand,
     PutEventSubscriptionCommand,
+    RelayOwnerIntentCommand,
 )
 from .store import WorkStore, WorkStoreError
 
@@ -185,10 +186,12 @@ class WorkService:
         control_plane: ControlPlane | None = None,
         *,
         push_destination_check: Callable[[str], str | None] | None = None,
+        controller_lookup: Callable[[UUID], UUID | None] | None = None,
     ) -> None:
         self._store = store
         self._control_plane = control_plane
         self._push_destination_check = push_destination_check
+        self._controller_lookup = controller_lookup
 
     def execute(
         self, principal: Principal, envelope: CommandEnvelope
@@ -221,6 +224,16 @@ class WorkService:
         # OMP-415: another client's subscription needs work.events.admin, and a
         # push_url is refused before the store writes it.
         self._enforce_event_subscription(principal, envelope)
+        # OMP-416: an unsigned relay is only the designated controller's.
+        # A signature is checked in the store, against the owner signers.
+        if (
+            isinstance(envelope.command, RelayOwnerIntentCommand)
+            and envelope.command.payload.owner_signature is None
+        ):
+            lookup = self._controller_lookup
+            designated = lookup(envelope.workspace_id) if lookup is not None else None
+            if principal.actor_id != designated:
+                raise WorkError("not_designated_controller", status=403)
         try:
             return self._store.execute(
                 envelope,

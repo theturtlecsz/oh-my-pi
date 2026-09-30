@@ -73,6 +73,7 @@ from .agent_stop import allowed_while_stopped, read_stop_state, stop_result
 from .decision_records import answer_decision, create_decision, list_decisions
 from .missions import execute as execute_mission
 from .missions import read_mission, unconfirmed_missions_for_work
+from .owner_relay import relay_owner_intent
 from .mission_intake import answer_mission_draft, draft_mission_intake
 from .mission_event_store import (
     DOMAIN_EVENTS_WINDOW_QUERY,
@@ -591,6 +592,7 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
             "put_event_subscription",
             "delete_event_subscription",
             "advance_event_cursor",
+            "relay_owner_intent",
         }
         conflict = False
         with self._transaction(
@@ -650,6 +652,7 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
                         )
                 self._require_unexpired_execution(cur, envelope)
                 event: dict[str, object] | None = None
+                recorded_event_type: str | None = None
                 if command.type == "create_work_batch":
                     result = self._create_batch(cur, envelope, actor_kind)
                 elif command.type == "create_same_session_child":
@@ -816,6 +819,15 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
                     result = _delete_event_subscription(cur, envelope, actor_id, actor_kind)
                 elif command.type == "advance_event_cursor":
                     result = _advance_event_cursor(cur, envelope, actor_id, actor_kind)
+                elif command.type == "relay_owner_intent":
+                    result, event = relay_owner_intent(
+                        cur,
+                        envelope,
+                        actor_id,
+                        actor_kind,
+                        self._config.config_dir,
+                    )
+                    recorded_event_type = str(event["type"])
                 else:
                     raise WorkStoreError("unavailable")
                 result_hash = sha256(result)
@@ -825,6 +837,7 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
                     actor_id,
                     actor_kind,
                     event if event is not None else result,
+                    event_type=recorded_event_type,
                 )
                 if command.type != "activate_cutover":
                     cur.execute(
