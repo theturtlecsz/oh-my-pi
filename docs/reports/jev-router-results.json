@@ -1,0 +1,113 @@
+{
+  "features": {
+    "auto_thinking_route": {
+      "sampleSize": 5,
+      "answerRate": 1,
+      "accuracy": 0.2,
+      "p50LatencyMs": 2683.4389980000014,
+      "p95LatencyMs": 3766.937104,
+      "costPer1000Usd": 0.30594000000000005,
+      "costSource": "completion-usage",
+      "unparseableRate": 0,
+      "truncatedRate": 0,
+      "excludedLabels": {},
+      "transportFailureRate": 0,
+      "routedModels": {
+        "openai/gpt-6.1-sol-20260929": 1,
+        "deepseek/deepseek-v4.1-flash-20260910": 2,
+        "openai/gpt-6-luna-20260922": 2
+      },
+      "routedEffort": {}
+    },
+    "unexpected_stop_route": {
+      "sampleSize": 8162,
+      "answerRate": 0.990075961774075,
+      "accuracy": 0.761455525606469,
+      "p50LatencyMs": 1463.5214460007846,
+      "p95LatencyMs": 3488.7213279996067,
+      "costPer1000Usd": 0.17874622567998172,
+      "costSource": "completion-usage",
+      "unparseableRate": 0,
+      "truncatedRate": 0.009924038225925018,
+      "excludedLabels": {},
+      "transportFailureRate": 0,
+      "routedModels": {
+        "deepseek/deepseek-v4.1-flash-20260910": 2531,
+        "openai/gpt-6-luna-20260922": 5198,
+        "deepseek/deepseek-v4.1-flash": 81,
+        "google/gemini-3.8-flash-20260902": 300,
+        "openai/gpt-6-astra-20260903": 1,
+        "openai/gpt-6.1-sol-20260929": 30,
+        "anthropic/claude-opus-5.5-20260921": 2,
+        "anthropic/claude-sonnet-5.5-20260928": 12,
+        "z-ai/glm-5.3-flash-20260826": 3,
+        "moonshotai/kimi-k3-20260715": 3,
+        "openai/gpt-6-luna": 1
+      },
+      "routedEffort": {},
+      "precision": 0.020833333333333332,
+      "recall": 0.11147540983606558
+    },
+    "robomp_route": {
+      "sampleSize": 0,
+      "answerRate": 0,
+      "accuracy": 0,
+      "p50LatencyMs": 0,
+      "p95LatencyMs": 0,
+      "costPer1000Usd": null,
+      "costSource": "unavailable",
+      "unparseableRate": 0,
+      "truncatedRate": 0,
+      "excludedLabels": {},
+      "transportFailureRate": 0,
+      "routedModels": {},
+      "routedEffort": {},
+      "skipSessionShare": 0
+    }
+  },
+  "current": {
+    "auto_thinking": {
+      "sampleSize": 5,
+      "answerRate": 1,
+      "accuracy": 0,
+      "p50LatencyMs": 617.3359340000898,
+      "p95LatencyMs": 769.1502899993211,
+      "costPer1000Usd": 0.05605,
+      "costSource": "provider-usage",
+      "unparseableRate": 0,
+      "truncatedRate": 0,
+      "excludedLabels": {},
+      "transportFailureRate": 0,
+      "routedModels": {
+        "claude-sonnet-4-5": 5
+      },
+      "routedEffort": {}
+    },
+    "unexpected_stop": {
+      "sampleSize": 8162,
+      "answerRate": 0.6029159519725558,
+      "accuracy": 0.4921587846116148,
+      "precision": 0.020134228187919462,
+      "recall": 0.04918032786885246,
+      "p50LatencyMs": 391.4642609991133,
+      "p95LatencyMs": 576.5921919997782,
+      "costPer1000Usd": 0.03803534672874391,
+      "costSource": "provider-usage",
+      "unparseableRate": 0.39708404802744424,
+      "truncatedRate": 0,
+      "excludedLabels": {},
+      "transportFailureRate": 0,
+      "routedModels": {
+        "claude-sonnet-4-5": 8162
+      },
+      "routedEffort": {}
+    }
+  },
+  "verdict": "WP5 does not apply: the router is measured, not adopted — no per-request generative router is introduced.",
+  "routerModel": "typesafe/jev-router",
+  "sampleSizes": {
+    "auto_thinking": 5,
+    "unexpected_stop": 8162,
+    "robomp": 0
+  }
+}

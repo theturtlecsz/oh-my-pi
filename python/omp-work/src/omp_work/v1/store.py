@@ -72,7 +72,7 @@ from .store_shared import row_json as _row_json
 from .agent_stop import allowed_while_stopped, read_stop_state, stop_result
 from .decision_records import answer_decision, create_decision, list_decisions
 from .missions import execute as execute_mission
-from .missions import read_mission
+from .missions import read_mission, unconfirmed_missions_for_work
 from .semantics import (
     BOUNDED_INTAKE_RULE_BUNDLE_SHA256,
     bounded_intake_semantic_sha256,
@@ -4891,6 +4891,13 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
             raise WorkStoreError(
                 "invalid_request",
                 (f"item phase is {grant_item['phase']}, not planning/remediating",),
+            )
+
+        if unconfirmed_missions_for_work(
+            cur, envelope.workspace_id, payload.work_id
+        ):
+            raise WorkStoreError(
+                "approval_required", ("mission_scope_unconfirmed",)
             )
 
         try:

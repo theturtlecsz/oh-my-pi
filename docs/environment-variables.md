@@ -93,6 +93,7 @@ These are consumed via `getEnvApiKey()` (`packages/ai/src/stream.ts`) unless not
 | `YOLO_AUTO_API_KEY`             | Yolo-Auto auth                                   | Using `yolo-auto` provider                                     | Flat-rate Qwen models; validated against `https://yolo-auto.com/v1/models`                          |
 | `WAFER_SERVERLESS_API_KEY`      | Wafer Serverless auth                            | Using `wafer-serverless` provider                              | Pay-as-you-go Wafer SKU; validated against `https://pass.wafer.ai/v1/models`                        |
 | `GITLAB_TOKEN`                  | GitLab Duo auth                                  | Using `gitlab-duo` provider                                    |                                                                                                     |
+| `TYPESAFE_API_KEY`              | TypeSafe Jev decision service auth               | Using Jev decision client (`packages/coding-agent/src/tiny/jev-client.ts`) | Auth-storage provider `typesafe` fallback; coding-agent Jev key                                     |
 
 ### GitHub/Copilot tokens
 
@@ -323,6 +324,20 @@ therefore completes through the paste-code path.
 | Variable             | Behavior                                                                                                                                          |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PI_CACHE_RETENTION` | Cache-retention override where supported (`anthropic`, `openai-responses`, Bedrock). Accepts `long`, `short`, or `none`; other values are ignored |
+
+### TypeSafe Jev decision service
+
+The Jev decision client (`POST /v1/systemone`) provides opt-in classification for auto-thinking difficulty and unexpected-stop detection. It is gated by the `TYPESAFE_API_KEY` credential and the `jev.*` settings defined in `packages/coding-agent/src/config/settings-schema.ts`. All Jev settings default to off (`false`); each decision attempt records a `jev_usage` session entry. If Jev is disabled, unreachable, or times out, execution falls back to the existing path (the configured smol model).
+
+| Setting | Type | Default | Description |
+| ----------------------------- | ------- | --------------------------- | ------------------------------------------------------------------ |
+| `jev.enabled`                 | boolean | `false`                     | Master toggle gating all Jev decision service calls                 |
+| `jev.baseUrl`                 | string  | `"https://api.typesafe.ai"` | Base URL for the Jev decision API endpoint                         |
+| `jev.autoThinking`            | boolean | `false`                     | Enables Jev classifier for auto-thinking effort                    |
+| `jev.autoThinkingConfidence`  | number  | `0.5`                       | Minimum top-choice confidence threshold for auto-thinking          |
+| `jev.autoThinkingMaxSignal`   | number  | `0.7`                       | Threshold on Noul questions to trigger `max` effort tier           |
+| `jev.unexpectedStop`          | boolean | `false`                     | Enables Jev classifier for unexpected-stop detection               |
+| `jev.unexpectedStopThreshold` | number  | `0.7`                       | Probability threshold above which an unexpected stop is confirmed   |
 
 ---
 

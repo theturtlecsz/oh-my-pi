@@ -127,7 +127,8 @@ def _build_root(config_path: Path, ca: bytes) -> Path:
     new = config_path.parent / "research-root"
     new.mkdir(mode=0o755)
     _mount("tmpfs", str(new), "tmpfs", 0)
-    os.chmod(new, 0o755)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+    os.chmod(new, 0o755)  # nosec B103 - the unprivileged worker must traverse the jail root
     _rbind_readonly("/usr", new / "usr")
     for name in _HOST_TREES:
         _place_host_tree(new, name)
@@ -136,11 +137,14 @@ def _build_root(config_path: Path, ca: bytes) -> Path:
     _mount_proc(new)
     tmp = new / "tmp"
     tmp.mkdir()
-    os.chmod(tmp, 0o1777)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+    os.chmod(tmp, 0o1777)  # nosec B103 - sticky world-writable /tmp is the POSIX contract inside the jail
     home = new / "home" / "research"
     home.mkdir(parents=True)
-    os.chmod(new / "home", 0o755)
-    os.chmod(home, 0o755)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+    os.chmod(new / "home", 0o755)  # nosec B103 - the unprivileged worker must traverse /home to its HOME
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+    os.chmod(home, 0o755)  # nosec B103 - the unprivileged worker's own HOME directory
     return new
 
 
@@ -169,7 +173,8 @@ def _pivot_and_exec(
     _syscall_ok(_libc.umount2(b"/.old", _MNT_DETACH), "umount2")
     os.rmdir("/.old")
     try:
-        os.execve(
+        # nosemgrep: python.lang.security.audit.dangerous-os-exec-tainted-env-args.dangerous-os-exec-tainted-env-args
+        os.execve(  # nosec B606 - absolute setpriv, fixed argv list, no shell, no user-controlled executable
             setpriv,
             [setpriv, "--bounding-set=-all", "--inh-caps=-all", "--no-new-privs", *argv],
             env,
