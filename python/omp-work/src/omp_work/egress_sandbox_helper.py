@@ -497,6 +497,7 @@ def main() -> None:
         *argv,
     ]
 
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
     worker = subprocess.Popen(  # nosec B603 - argv list, no shell
         worker_cmd,
         cwd=workdir,

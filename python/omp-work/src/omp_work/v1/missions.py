@@ -93,7 +93,8 @@ def _submit(
     actor_kind: str,
 ) -> dict[str, object]:
     command = envelope.command
-    assert isinstance(command, SubmitMissionCommand)
+    if not isinstance(command, SubmitMissionCommand):
+        raise TypeError("submit dispatched with a non-submit command")
     draft = command.payload.draft
     mission_id = command.payload.mission_id
     workspace_id = envelope.workspace_id
@@ -314,7 +315,8 @@ def _approve(
     actor_kind: str,
 ) -> dict[str, object]:
     command = envelope.command
-    assert isinstance(command, ApproveMissionCommand)
+    if not isinstance(command, ApproveMissionCommand):
+        raise TypeError("approve dispatched with a non-approve command")
     payload = command.payload
     workspace_id = envelope.workspace_id
 
@@ -393,7 +395,8 @@ def _set_status(
     actor_kind: str,
 ) -> dict[str, object]:
     command = envelope.command
-    assert isinstance(command, SetMissionStatusCommand)
+    if not isinstance(command, SetMissionStatusCommand):
+        raise TypeError("set_status dispatched with a non-status command")
     payload = command.payload
     workspace_id = envelope.workspace_id
 
@@ -426,10 +429,12 @@ def _set_status(
     if payload.cause_kind == "principal":
         cause_id = str(actor_id)
     elif payload.cause_kind == "policy_rule":
-        assert payload.policy_rule_id is not None
+        if payload.policy_rule_id is None:
+            raise AssertionError("policy_rule cause without a policy_rule_id")
         cause_id = payload.policy_rule_id
     elif payload.cause_kind == "decision":
-        assert payload.decision_id is not None
+        if payload.decision_id is None:
+            raise AssertionError("decision cause without a decision_id")
         cause_id = str(payload.decision_id)
     else:
         raise WorkStoreError("invalid_request")
