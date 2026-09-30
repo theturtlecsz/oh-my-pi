@@ -25,16 +25,24 @@ The policy stores a registry as an ``https`` origin, which :func:`decide` never
 matches for an ``http`` request. An ``http`` absolute-form request whose
 destination the policy also defines as an ``https`` origin is re-judged as that
 https origin (:func:`_plain_decision`), so a named registry or remote is
-reachable in plain form while a genuinely unnamed destination still refuses. The
-upstream TLS of an inspected tunnel is s05's concern; this module only stores
-the ``tls`` argument.
+reachable in plain form while a genuinely unnamed destination still refuses.
 
 ``CONNECT host:port`` is judged as an ``https`` tunnel. Model and standing
 destinations are tunnelled and recorded. Registry, remote, and research
-destinations need TLS inspection, so with ``tls`` unset they are refused with
-``tls_inspection_required`` and recorded. Anything else is refused with the
-verdict :func:`decide` returns; an IP literal, named or not, is never a
-client-reachable destination.
+destinations need TLS inspection:
+
+* with ``tls`` unset they are refused ``tls_inspection_required`` and recorded;
+* with ``tls`` set to a :class:`GatewayCA` the gateway replies ``200``, upgrades
+  the client connection to a CA-signed leaf for the host, reads exactly one
+  inner request, and re-runs the plain-http path for it as an ``https`` request
+  with ``tunnel=False`` (the same one-request, ``Connection: close`` rule). The
+  upstream leg is TLS with SNI equal to the host, verified against system trust
+  or ``upstream_ca_bundle``; research goes to the s03 fetch service as an
+  ``https`` URL. An upstream certificate that does not verify fails the
+  request, records it, and no inner request reaches the upstream.
+
+Anything else is refused with the verdict :func:`decide` returns; an IP literal,
+named or not, is never a client-reachable destination.
 """
 
 from __future__ import annotations
@@ -42,6 +50,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import ssl
 import threading
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -65,14 +74,19 @@ from omp_work.egress_policy import (
     _request_port,
     decide,
 )
+from omp_work.egress_tls import GatewayCA
 
 __all__ = ["EgressGateway", "PolicySource", "ProxyRequest", "ResearchFetch"]
 
 _DEFAULT_TIMEOUT = 30.0
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 _PLAIN_SCHEMES = frozenset({"http", "https"})
-# A tunnel to one of these classes needs TLS inspection, which s04 does not have.
+# A tunnel to one of these classes needs TLS inspection.
 _INSPECT_CLASSES = frozenset({"registry", "remote", "research"})
+# The absolute-form scheme an inspected tunnel uses for the inner request and
+# for the upstream leg. The client's absolute-form target is ignored.
+_INSPECT_SCHEME = "https"
+
 _REASONS: dict[int, str] = {
     200: "OK",
     201: "Created",
@@ -178,6 +192,21 @@ def _content_length(headers: Sequence[tuple[str, str]]) -> int | None:
     return None
 
 
+def _tunnel_request(host: str, port: int, headers: Sequence[tuple[str, str]]) -> Request:
+    """The decision request for a CONNECT tunnel: an ``https`` CONNECT to ``host:port``."""
+    return Request(
+        scheme=_INSPECT_SCHEME,
+        host=host,
+        port=port,
+        method="CONNECT",
+        path="",
+        query="",
+        headers=headers,
+        has_body=False,
+        tunnel=True,
+    )
+
+
 async def _read_request(reader: asyncio.StreamReader) -> ProxyRequest | None:
     """Read exactly one request. Bytes past its body are dropped with the buffer."""
     head = await _read_head(reader)
@@ -277,7 +306,8 @@ class EgressGateway:
         connector: Connector,
         model_proxy_upstream: tuple[str, int] | None,
         clock: Callable[[], datetime],
-        tls: object = None,
+        tls: GatewayCA | None = None,
+        upstream_ca_bundle: str | None = None,
     ) -> None:
         self._policy_source = policy_source
         self._recorder = recorder
@@ -287,6 +317,7 @@ class EgressGateway:
         self._model_proxy_upstream = model_proxy_upstream
         self._clock = clock
         self._tls = tls
+        self._upstream_ca_bundle = upstream_ca_bundle
         self._timeout = _DEFAULT_TIMEOUT
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -404,9 +435,46 @@ class EgressGateway:
         if scheme not in _PLAIN_SCHEMES or not host:
             self._refuse(identity, request, now, scheme, "", raw_port, "invalid", writer)
             return
+        await self._exchange(
+            identity,
+            policy,
+            request,
+            now,
+            writer,
+            scheme=scheme,
+            host=host,
+            raw_port=raw_port,
+            path=parsed.path or "/",
+            query=parsed.query,
+            tunnel=False,
+            upstream_tls=False,
+            target_url=request.target,
+        )
 
-        path = parsed.path or "/"
-        query = parsed.query
+    async def _exchange(
+        self,
+        identity: Identity,
+        policy: EgressPolicy,
+        request: ProxyRequest,
+        now: datetime,
+        writer: asyncio.StreamWriter,
+        *,
+        scheme: str,
+        host: str,
+        raw_port: int | None,
+        path: str,
+        query: str,
+        tunnel: bool,
+        upstream_tls: bool,
+        target_url: str,
+    ) -> None:
+        """Decide and run one request against ``host:port``.
+
+        The plain-http path and the inspected-tunnel path share this body, so
+        both obey the same one-request, ``Connection: close`` rule. An
+        inspected tunnel passes its authority in and ``scheme="https"`` with
+        ``upstream_tls=True``; the inner request's own host is never used.
+        """
         probe = Request(
             scheme=scheme,
             host=host,
@@ -416,7 +484,7 @@ class EgressGateway:
             query=query,
             headers=request.headers,
             has_body=bool(request.body),
-            tunnel=False,
+            tunnel=tunnel,
         )
         verdict, effective = _plain_decision(policy, identity, probe, now)
 
@@ -424,13 +492,14 @@ class EgressGateway:
         # allow and its refusal, so the service owns the research verdict and
         # records it (channel fetch) with the request url.
         if verdict.klass == "research":
-            await self._serve_research(identity, request, now, writer)
+            await self._serve_research(identity, request, target_url, now, writer)
             return
 
         if not verdict.allowed:
             self._refuse(
                 identity, request, now, effective.scheme, effective.host,
                 effective.port, verdict.code or "destination_not_allowed", writer,
+                url=target_url,
             )
             return
 
@@ -439,7 +508,7 @@ class EgressGateway:
             if upstream is None:
                 self._refuse(
                     identity, request, now, effective.scheme, effective.host,
-                    effective.port, "destination_not_allowed", writer,
+                    effective.port, "destination_not_allowed", writer, url=target_url,
                 )
                 return
             dial_host, dial_port = upstream
@@ -447,11 +516,17 @@ class EgressGateway:
             dial_host, dial_port = effective.host, _request_port(effective)
 
         try:
-            up_reader, up_writer, ip = await self._dial(dial_host, dial_port)
+            up_reader, up_writer, ip = await self._dial(dial_host, dial_port, tls=upstream_tls)
+        except ssl.SSLError:
+            self._refuse(
+                identity, request, now, effective.scheme, effective.host,
+                effective.port, "tls_error", writer, url=target_url,
+            )
+            return
         except (OSError, EgressRefused):
             self._refuse(
                 identity, request, now, effective.scheme, effective.host,
-                effective.port, "upstream_failed", writer,
+                effective.port, "upstream_failed", writer, url=target_url,
             )
             return
 
@@ -469,7 +544,7 @@ class EgressGateway:
         if parsed_response is None:
             self._refuse(
                 identity, request, now, effective.scheme, effective.host,
-                effective.port, "upstream_failed", writer,
+                effective.port, "upstream_failed", writer, url=target_url,
             )
             return
 
@@ -492,15 +567,16 @@ class EgressGateway:
         self,
         identity: Identity,
         request: ProxyRequest,
+        url: str,
         now: datetime,
         writer: asyncio.StreamWriter,
     ) -> None:
         """Delegate to the s03 fetch service, which records the call itself."""
         if self._fetch is None:
-            await self._handle_plain_unavailable(identity, request, now, writer)
+            await self._handle_plain_unavailable(identity, request, now, writer, url)
             return
         try:
-            result = self._fetch.fetch(identity, request.method, request.target, request.headers, request.body)
+            result = self._fetch.fetch(identity, request.method, url, request.headers, request.body)
         except EgressRefused as exc:
             writer.write(_refusal_bytes(exc.code))
             await _drain(writer)
@@ -514,11 +590,13 @@ class EgressGateway:
         request: ProxyRequest,
         now: datetime,
         writer: asyncio.StreamWriter,
+        url: str | None = None,
     ) -> None:
         parsed = urlsplit(request.target)
         self._refuse(
             identity, request, now, parsed.scheme.lower(),
-            _norm_host(parsed.hostname or ""), parsed.port, "destination_not_allowed", writer,
+            _norm_host(parsed.hostname or ""), parsed.port, "destination_not_allowed",
+            writer, url=url,
         )
 
     async def _handle_connect(
@@ -554,20 +632,72 @@ class EgressGateway:
             return
 
         if klass in _INSPECT_CLASSES:
+            ca = self._tls
+            if ca is not None:
+                await self._inspect_tunnel(ca, identity, policy, host, port, now, reader, writer)
+                return
             self._record_tunnel(identity, now, host, port, None, klass, "refused", "tls_inspection_required", None)
             writer.write(_refusal_bytes("tls_inspection_required"))
             await _drain(writer)
             return
 
-        tunnel = Request(
-            scheme="https", host=host, port=port, method="CONNECT", path="", query="",
-            headers=request.headers, has_body=False, tunnel=True,
-        )
-        verdict = decide(policy, identity, tunnel, now)
+        verdict = decide(policy, identity, _tunnel_request(host, port, request.headers), now)
         code = verdict.code or "destination_not_allowed"
         self._record_tunnel(identity, now, host, port, None, verdict.klass, "refused", code, verdict.policy_id)
         writer.write(_refusal_bytes(code))
         await _drain(writer)
+
+    async def _inspect_tunnel(
+        self,
+        ca: GatewayCA,
+        identity: Identity,
+        policy: EgressPolicy,
+        host: str,
+        port: int,
+        now: datetime,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        """Terminate client TLS with a CA-signed leaf, then proxy one inner request.
+
+        The client trusts ``ca.ca_cert_path``, so it verifies the gateway's
+        leaf and the gateway reads the inner request. The tunnel authority
+        decides: the inner request's own host is ignored. No record is written
+        here; the shared path records the inner request the way a plain https
+        request is recorded, and the upstream leg is TLS verified against the
+        host.
+        """
+        context = ca.leaf_context(host)
+        writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+        await _drain(writer)
+        try:
+            await writer.start_tls(context)
+        except (ssl.SSLError, ConnectionError, OSError):
+            return
+        inner = await _read_request(reader)
+        if inner is None:
+            return
+        parts = urlsplit(inner.target)
+        path = parts.path or "/"
+        query = parts.query
+        target_url = f"{_INSPECT_SCHEME}://{host}:{port}{path}"
+        if query:
+            target_url = f"{target_url}?{query}"
+        await self._exchange(
+            identity,
+            policy,
+            inner,
+            now,
+            writer,
+            scheme=_INSPECT_SCHEME,
+            host=host,
+            raw_port=port,
+            path=path,
+            query=query,
+            tunnel=False,
+            upstream_tls=True,
+            target_url=target_url,
+        )
 
     async def _open_tunnel(
         self,
@@ -596,7 +726,9 @@ class EgressGateway:
 
     # -- plumbing ----------------------------------------------------------
 
-    async def _dial(self, host: str, port: int) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, str]:
+    async def _dial(
+        self, host: str, port: int, tls: bool = False
+    ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, str]:
         addresses = [str(item) for item in self._resolver(host, port)]
         if not addresses:
             raise OSError(f"no address for {host}:{port}")
@@ -604,7 +736,15 @@ class EgressGateway:
         sock = self._connector(ip, port, self._timeout)
         sock.setblocking(False)
         try:
-            reader, writer = await asyncio.open_connection(sock=sock)
+            if tls:
+                context = ssl.create_default_context()
+                if self._upstream_ca_bundle is not None:
+                    context.load_verify_locations(cafile=self._upstream_ca_bundle)
+                reader, writer = await asyncio.open_connection(
+                    sock=sock, ssl=context, server_hostname=host
+                )
+            else:
+                reader, writer = await asyncio.open_connection(sock=sock)
         except BaseException:
             sock.close()
             raise
@@ -635,12 +775,13 @@ class EgressGateway:
         port: int | None,
         code: str,
         writer: asyncio.StreamWriter,
+        url: str | None = None,
     ) -> None:
         self._record(
             identity, now, channel="http", protocol=scheme, host=host, ip=None,
             port=port if port is not None else _DEFAULT_PORTS.get(scheme, 0),
-            method=request.method, url=request.target, klass="none", outcome="refused",
-            code=code, policy_id=None,
+            method=request.method, url=url if url is not None else request.target,
+            klass="none", outcome="refused", code=code, policy_id=None,
         )
         writer.write(_refusal_bytes(code))
 
