@@ -388,6 +388,70 @@ def create_app(
                 status_code=error.status,
             )
 
+    @app.get("/v1/workspaces/{workspace_id}/mission-events")
+    def mission_events(
+        request: Request,
+        workspace_id: UUID,
+        after_sequence: int = Query(0, ge=0),
+        limit: int = Query(500, ge=1, le=500),
+        mission_id: UUID | None = None,
+    ) -> JSONResponse:
+        try:
+            _require_contract(request, service_digest)
+            principal = _principal(request, capabilities_dir)
+            return JSONResponse(
+                jsonable_encoder(
+                    service.mission_events(
+                        principal,
+                        workspace_id,
+                        after_sequence=after_sequence,
+                        limit=limit,
+                        mission_id=mission_id,
+                    )
+                )
+            )
+        except WorkError as error:
+            return JSONResponse(
+                {
+                    "error": {
+                        "code": error.code,
+                        "request_id": None,
+                        "correlation_id": None,
+                        "diagnostics": list(error.diagnostics[:8]),
+                    }
+                },
+                status_code=error.status,
+            )
+
+    @app.get("/v1/workspaces/{workspace_id}/event-subscriptions")
+    def event_subscriptions(
+        request: Request,
+        workspace_id: UUID,
+        client_id: UUID | None = None,
+    ) -> JSONResponse:
+        try:
+            _require_contract(request, service_digest)
+            principal = _principal(request, capabilities_dir)
+            return JSONResponse(
+                jsonable_encoder(
+                    service.event_subscriptions(
+                        principal, workspace_id, client_id=client_id
+                    )
+                )
+            )
+        except WorkError as error:
+            return JSONResponse(
+                {
+                    "error": {
+                        "code": error.code,
+                        "request_id": None,
+                        "correlation_id": None,
+                        "diagnostics": list(error.diagnostics[:8]),
+                    }
+                },
+                status_code=error.status,
+            )
+
 
     @app.get("/v1/operations/{operation_id}")
     def operation(

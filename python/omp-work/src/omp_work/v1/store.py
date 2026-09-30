@@ -331,6 +331,22 @@ class WorkStore(Protocol):
         after: int = 0,
         limit: int = 500,
     ) -> dict[str, object]: ...
+    def mission_events(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        *,
+        after: int,
+        limit: int,
+        mission_id: UUID | None,
+    ) -> dict[str, object]: ...
+    def event_subscriptions(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        *,
+        client_id: UUID | None,
+    ) -> dict[str, object]: ...
     def stop_status(
         self,
         workspace_id: UUID,
@@ -7082,5 +7098,25 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
     ) -> dict[str, object]:
         with self._transaction(workspace_id, actor_id) as cur:
             return read_stop_state(cur, workspace_id)
+
+    def mission_events(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        *,
+        after: int,
+        limit: int,
+        mission_id: UUID | None,
+    ) -> dict[str, object]:
+        raise WorkStoreError("unavailable")
+
+    def event_subscriptions(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        *,
+        client_id: UUID | None,
+    ) -> dict[str, object]:
+        raise WorkStoreError("unavailable")
 
 

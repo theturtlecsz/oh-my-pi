@@ -1239,6 +1239,69 @@
       "title": "AdmitResearchCampaignPayload",
       "type": "object"
     },
+    "AdvanceEventCursor": {
+      "additionalProperties": false,
+      "properties": {
+        "after_sequence": {
+          "minimum": 0,
+          "title": "After Sequence",
+          "type": "integer"
+        },
+        "subscription_id": {
+          "format": "uuid",
+          "title": "Subscription Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscription_id",
+        "after_sequence"
+      ],
+      "title": "AdvanceEventCursor",
+      "type": "object"
+    },
+    "AdvanceEventCursorCommand": {
+      "$defs": {
+        "AdvanceEventCursor": {
+          "additionalProperties": false,
+          "properties": {
+            "after_sequence": {
+              "minimum": 0,
+              "title": "After Sequence",
+              "type": "integer"
+            },
+            "subscription_id": {
+              "format": "uuid",
+              "title": "Subscription Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "subscription_id",
+            "after_sequence"
+          ],
+          "title": "AdvanceEventCursor",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/AdvanceEventCursor"
+        },
+        "type": {
+          "const": "advance_event_cursor",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "AdvanceEventCursorCommand",
+      "type": "object"
+    },
     "Anomaly": {
       "additionalProperties": false,
       "properties": {
@@ -2627,7 +2690,8 @@
             "OMP-413",
             "OMP-414",
             "OMP-403",
-            "OMP-426"
+            "OMP-426",
+            "OMP-415"
           ],
           "title": "Issue",
           "type": "string"
@@ -7097,6 +7161,46 @@
           "title": "AdmitResearchCampaignPayload",
           "type": "object"
         },
+        "AdvanceEventCursor": {
+          "additionalProperties": false,
+          "properties": {
+            "after_sequence": {
+              "minimum": 0,
+              "title": "After Sequence",
+              "type": "integer"
+            },
+            "subscription_id": {
+              "format": "uuid",
+              "title": "Subscription Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "subscription_id",
+            "after_sequence"
+          ],
+          "title": "AdvanceEventCursor",
+          "type": "object"
+        },
+        "AdvanceEventCursorCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/AdvanceEventCursor"
+            },
+            "type": {
+              "const": "advance_event_cursor",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "AdvanceEventCursorCommand",
+          "type": "object"
+        },
         "Anomaly": {
           "additionalProperties": false,
           "properties": {
@@ -9462,6 +9566,40 @@
           "title": "CutoverManifest",
           "type": "object"
         },
+        "DeleteEventSubscription": {
+          "additionalProperties": false,
+          "properties": {
+            "subscription_id": {
+              "format": "uuid",
+              "title": "Subscription Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "subscription_id"
+          ],
+          "title": "DeleteEventSubscription",
+          "type": "object"
+        },
+        "DeleteEventSubscriptionCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/DeleteEventSubscription"
+            },
+            "type": {
+              "const": "delete_event_subscription",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "DeleteEventSubscriptionCommand",
+          "type": "object"
+        },
         "DraftMissionIntakeCommand": {
           "additionalProperties": false,
           "properties": {
@@ -10961,6 +11099,73 @@
           "title": "PublishBoundedIntakePayload",
           "type": "object"
         },
+        "PutEventSubscription": {
+          "additionalProperties": false,
+          "properties": {
+            "client_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Client Id"
+            },
+            "event_types": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Event Types",
+              "type": "array"
+            },
+            "push_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Push Url"
+            },
+            "subscription_id": {
+              "format": "uuid",
+              "title": "Subscription Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "subscription_id",
+            "event_types"
+          ],
+          "title": "PutEventSubscription",
+          "type": "object"
+        },
+        "PutEventSubscriptionCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/PutEventSubscription"
+            },
+            "type": {
+              "const": "put_event_subscription",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "PutEventSubscriptionCommand",
+          "type": "object"
+        },
         "PutRelationCommand": {
           "additionalProperties": false,
           "properties": {
@@ -11348,6 +11553,77 @@
             "rule_bundle_sha256"
           ],
           "title": "RecordFableAdvicePayload",
+          "type": "object"
+        },
+        "RecordFinding": {
+          "additionalProperties": false,
+          "description": "One finding on a mission. evidence_refs are opaque strings.",
+          "properties": {
+            "evidence_refs": {
+              "items": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 20,
+              "minItems": 1,
+              "title": "Evidence Refs",
+              "type": "array"
+            },
+            "finding_id": {
+              "format": "uuid",
+              "title": "Finding Id",
+              "type": "string"
+            },
+            "mission_id": {
+              "format": "uuid",
+              "title": "Mission Id",
+              "type": "string"
+            },
+            "severity": {
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "critical"
+              ],
+              "title": "Severity",
+              "type": "string"
+            },
+            "title": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            }
+          },
+          "required": [
+            "finding_id",
+            "mission_id",
+            "severity",
+            "title",
+            "evidence_refs"
+          ],
+          "title": "RecordFinding",
+          "type": "object"
+        },
+        "RecordFindingCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/RecordFinding"
+            },
+            "type": {
+              "const": "record_finding",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "RecordFindingCommand",
           "type": "object"
         },
         "RecordProjectHealthCommand": {
@@ -13479,6 +13755,7 @@
               "activate_cutover": "#/$defs/ActivateCutoverCommand",
               "activate_execution_item": "#/$defs/ActivateExecutionItemCommand",
               "admit_research_campaign": "#/$defs/AdmitResearchCampaignCommand",
+              "advance_event_cursor": "#/$defs/AdvanceEventCursorCommand",
               "answer_decision": "#/$defs/AnswerDecisionCommand",
               "answer_intake_decision": "#/$defs/AnswerIntakeDecisionCommand",
               "answer_mission_draft": "#/$defs/AnswerMissionDraftCommand",
@@ -13504,6 +13781,7 @@
               "create_research_campaign": "#/$defs/CreateResearchCampaignCommand",
               "create_same_session_child": "#/$defs/CreateSameSessionChildCommand",
               "create_work_batch": "#/$defs/CreateWorkBatchCommand",
+              "delete_event_subscription": "#/$defs/DeleteEventSubscriptionCommand",
               "draft_mission_intake": "#/$defs/DraftMissionIntakeCommand",
               "engage_stop": "#/$defs/EngageStopCommand",
               "finalize_candidate": "#/$defs/FinalizeCandidateCommand",
@@ -13511,11 +13789,13 @@
               "promote_import_batch": "#/$defs/PromoteImportBatchCommand",
               "propose_research_trial": "#/$defs/ProposeResearchTrialCommand",
               "publish_bounded_intake": "#/$defs/PublishBoundedIntakeCommand",
+              "put_event_subscription": "#/$defs/PutEventSubscriptionCommand",
               "put_relation": "#/$defs/PutRelationCommand",
               "record_alarm_signal": "#/$defs/RecordAlarmSignalCommand",
               "record_closeout_review": "#/$defs/RecordCloseoutReviewCommand",
               "record_external_delivery": "#/$defs/RecordExternalDeliveryCommand",
               "record_fable_advice": "#/$defs/RecordFableAdviceCommand",
+              "record_finding": "#/$defs/RecordFindingCommand",
               "record_project_health": "#/$defs/RecordProjectHealthCommand",
               "record_research_cache": "#/$defs/RecordResearchCacheCommand",
               "record_research_observation": "#/$defs/RecordResearchObservationCommand",
@@ -13735,6 +14015,18 @@
             },
             {
               "$ref": "#/$defs/AnswerMissionDraftCommand"
+            },
+            {
+              "$ref": "#/$defs/RecordFindingCommand"
+            },
+            {
+              "$ref": "#/$defs/PutEventSubscriptionCommand"
+            },
+            {
+              "$ref": "#/$defs/DeleteEventSubscriptionCommand"
+            },
+            {
+              "$ref": "#/$defs/AdvanceEventCursorCommand"
             }
           ],
           "title": "Command"
@@ -19108,6 +19400,57 @@
       "title": "CutoverManifest",
       "type": "object"
     },
+    "DeleteEventSubscription": {
+      "additionalProperties": false,
+      "properties": {
+        "subscription_id": {
+          "format": "uuid",
+          "title": "Subscription Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscription_id"
+      ],
+      "title": "DeleteEventSubscription",
+      "type": "object"
+    },
+    "DeleteEventSubscriptionCommand": {
+      "$defs": {
+        "DeleteEventSubscription": {
+          "additionalProperties": false,
+          "properties": {
+            "subscription_id": {
+              "format": "uuid",
+              "title": "Subscription Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "subscription_id"
+          ],
+          "title": "DeleteEventSubscription",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/DeleteEventSubscription"
+        },
+        "type": {
+          "const": "delete_event_subscription",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "DeleteEventSubscriptionCommand",
+      "type": "object"
+    },
     "DependencyGraph": {
       "additionalProperties": false,
       "properties": {
@@ -23590,6 +23933,123 @@
       "title": "PushedBranchExample",
       "type": "object"
     },
+    "PutEventSubscription": {
+      "additionalProperties": false,
+      "properties": {
+        "client_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Client Id"
+        },
+        "event_types": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Event Types",
+          "type": "array"
+        },
+        "push_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Push Url"
+        },
+        "subscription_id": {
+          "format": "uuid",
+          "title": "Subscription Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscription_id",
+        "event_types"
+      ],
+      "title": "PutEventSubscription",
+      "type": "object"
+    },
+    "PutEventSubscriptionCommand": {
+      "$defs": {
+        "PutEventSubscription": {
+          "additionalProperties": false,
+          "properties": {
+            "client_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Client Id"
+            },
+            "event_types": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Event Types",
+              "type": "array"
+            },
+            "push_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Push Url"
+            },
+            "subscription_id": {
+              "format": "uuid",
+              "title": "Subscription Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "subscription_id",
+            "event_types"
+          ],
+          "title": "PutEventSubscription",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/PutEventSubscription"
+        },
+        "type": {
+          "const": "put_event_subscription",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "PutEventSubscriptionCommand",
+      "type": "object"
+    },
     "PutRelationCommand": {
       "$defs": {
         "PutRelationPayload": {
@@ -24575,6 +25035,131 @@
         "rule_bundle_sha256"
       ],
       "title": "RecordFableAdvicePayload",
+      "type": "object"
+    },
+    "RecordFinding": {
+      "additionalProperties": false,
+      "description": "One finding on a mission. evidence_refs are opaque strings.",
+      "properties": {
+        "evidence_refs": {
+          "items": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "finding_id": {
+          "format": "uuid",
+          "title": "Finding Id",
+          "type": "string"
+        },
+        "mission_id": {
+          "format": "uuid",
+          "title": "Mission Id",
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "finding_id",
+        "mission_id",
+        "severity",
+        "title",
+        "evidence_refs"
+      ],
+      "title": "RecordFinding",
+      "type": "object"
+    },
+    "RecordFindingCommand": {
+      "$defs": {
+        "RecordFinding": {
+          "additionalProperties": false,
+          "description": "One finding on a mission. evidence_refs are opaque strings.",
+          "properties": {
+            "evidence_refs": {
+              "items": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 20,
+              "minItems": 1,
+              "title": "Evidence Refs",
+              "type": "array"
+            },
+            "finding_id": {
+              "format": "uuid",
+              "title": "Finding Id",
+              "type": "string"
+            },
+            "mission_id": {
+              "format": "uuid",
+              "title": "Mission Id",
+              "type": "string"
+            },
+            "severity": {
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "critical"
+              ],
+              "title": "Severity",
+              "type": "string"
+            },
+            "title": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            }
+          },
+          "required": [
+            "finding_id",
+            "mission_id",
+            "severity",
+            "title",
+            "evidence_refs"
+          ],
+          "title": "RecordFinding",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/RecordFinding"
+        },
+        "type": {
+          "const": "record_finding",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "RecordFindingCommand",
       "type": "object"
     },
     "RecordProjectHealthCommand": {

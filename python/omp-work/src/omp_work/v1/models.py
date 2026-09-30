@@ -2038,6 +2038,110 @@ class AnswerMissionDraftCommand(StrictModel):
     payload: AnswerMissionDraftPayload
 
 
+# The eight mission-event types. ops.alarm and ops.digest are subscription
+# streams, not members of this tuple.
+MissionEventType = Literal[
+    "mission.started",
+    "mission.blocked",
+    "mission.completed",
+    "mission.failed",
+    "mission.progressed",
+    "decision.required",
+    "budget.threshold_reached",
+    "important_finding",
+]
+
+MISSION_EVENT_TYPES: tuple[MissionEventType, ...] = (
+    "mission.started",
+    "mission.blocked",
+    "mission.completed",
+    "mission.failed",
+    "mission.progressed",
+    "decision.required",
+    "budget.threshold_reached",
+    "important_finding",
+)
+
+FindingSeverity = Literal["low", "medium", "high", "critical"]
+
+_OPS_SUBSCRIPTION_STREAMS = frozenset({("ops.alarm",), ("ops.digest",)})
+
+
+def validate_subscription_event_types(types: object) -> tuple[str, ...]:
+    """Unique non-empty subset of the eight mission event types, or exactly
+    one ops stream: ``["ops.alarm"]`` or ``["ops.digest"]``."""
+    if isinstance(types, (str, bytes)) or not isinstance(types, (list, tuple)):
+        raise ValueError("event_types must be a sequence of event types")
+    values = tuple(types)
+    if not values:
+        raise ValueError("event_types must not be empty")
+    if any(not isinstance(item, str) for item in values):
+        raise ValueError("event_types must be strings")
+    if len(set(values)) != len(values):
+        raise ValueError("event_types must be unique")
+    if values in _OPS_SUBSCRIPTION_STREAMS:
+        return values
+    allowed = frozenset(MISSION_EVENT_TYPES)
+    if not set(values) <= allowed:
+        raise ValueError(
+            "event_types must be mission event types or exactly one ops stream"
+        )
+    return values
+
+
+class RecordFinding(StrictModel):
+    """One finding on a mission. evidence_refs are opaque strings."""
+
+    finding_id: UUID
+    mission_id: UUID
+    severity: FindingSeverity
+    title: str = Field(min_length=1, max_length=200)
+    evidence_refs: tuple[Annotated[str, Field(min_length=1, max_length=200)], ...] = (
+        Field(min_length=1, max_length=20)
+    )
+
+
+class PutEventSubscription(StrictModel):
+    subscription_id: UUID
+    client_id: UUID | None = None
+    push_url: str | None = None
+    event_types: tuple[str, ...]
+
+    @field_validator("event_types")
+    @classmethod
+    def check_event_types(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return validate_subscription_event_types(value)
+
+
+class DeleteEventSubscription(StrictModel):
+    subscription_id: UUID
+
+
+class AdvanceEventCursor(StrictModel):
+    subscription_id: UUID
+    after_sequence: int = Field(ge=0)
+
+
+class RecordFindingCommand(StrictModel):
+    type: Literal["record_finding"]
+    payload: RecordFinding
+
+
+class PutEventSubscriptionCommand(StrictModel):
+    type: Literal["put_event_subscription"]
+    payload: PutEventSubscription
+
+
+class DeleteEventSubscriptionCommand(StrictModel):
+    type: Literal["delete_event_subscription"]
+    payload: DeleteEventSubscription
+
+
+class AdvanceEventCursorCommand(StrictModel):
+    type: Literal["advance_event_cursor"]
+    payload: AdvanceEventCursor
+
+
 Command = Annotated[
     CreateWorkBatchCommand
     | CreateSameSessionChildCommand
@@ -2102,7 +2206,11 @@ Command = Annotated[
     | CreateDecisionCommand
     | AnswerDecisionCommand
     | DraftMissionIntakeCommand
-    | AnswerMissionDraftCommand,
+    | AnswerMissionDraftCommand
+    | RecordFindingCommand
+    | PutEventSubscriptionCommand
+    | DeleteEventSubscriptionCommand
+    | AdvanceEventCursorCommand,
     Field(discriminator="type"),
 ]
 
@@ -2347,6 +2455,7 @@ class Approval(StrictModel):
         "OMP-403",
         "OMP-426",
         "OMP-403",
+        "OMP-415",
     ]
     attestation: hex64 | None = None
 
