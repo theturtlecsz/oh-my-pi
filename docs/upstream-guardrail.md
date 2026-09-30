@@ -37,8 +37,9 @@ which lists upstream GitHub releases, filters to stable final `vX.Y.Z`
 releases above the accepted baseline version, groups intervening releases into
 the single newest candidate, and resolves its tag to one immutable commit via
 `git ls-remote` with annotated-tag peeling. When a candidate exists the
-workflow creates or refreshes one tracked review issue
-(`Upstream compatibility review: <version>`).
+workflow records the candidate tag, immutable commit, and baseline in the job
+summary (`$GITHUB_STEP_SUMMARY`) and uploads them as a small
+`upstream-candidate` JSON artifact.
 
 ## Ordinary pull requests: inventory consistency
 
