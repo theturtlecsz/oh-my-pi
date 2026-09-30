@@ -75,9 +75,7 @@ describe("upstream-watch workflow contract", () => {
 	test("up to date step reports status when newer is false", async () => {
 		const text = await Bun.file(WORKFLOW_PATH).text();
 		const workflow = Bun.YAML.parse(text) as UpstreamWatchWorkflow;
-		const upToDateStep = workflow.jobs.discover.steps.find(
-			s => s.if === "steps.discovery.outputs.newer != 'true'",
-		);
+		const upToDateStep = workflow.jobs.discover.steps.find(s => s.if === "steps.discovery.outputs.newer != 'true'");
 		expect(upToDateStep).toBeDefined();
 		const run = upToDateStep?.run ?? "";
 		expect(run).toContain("$GITHUB_STEP_SUMMARY");
@@ -139,9 +137,7 @@ describe("upstream-watch step script execution", () => {
 	test("up-to-date step writes summary and exits 0", async () => {
 		const text = await Bun.file(WORKFLOW_PATH).text();
 		const workflow = Bun.YAML.parse(text) as UpstreamWatchWorkflow;
-		const upToDateStep = workflow.jobs.discover.steps.find(
-			s => s.if === "steps.discovery.outputs.newer != 'true'",
-		);
+		const upToDateStep = workflow.jobs.discover.steps.find(s => s.if === "steps.discovery.outputs.newer != 'true'");
 		expect(upToDateStep?.run).toBeDefined();
 
 		const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-watch-test-uptodate-"));
