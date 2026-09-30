@@ -10,6 +10,7 @@ mixes this in; the host supplies _transaction and the workspace/actor claims.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -79,6 +80,31 @@ _POLICY_FIELDS = (
     "resource_types,money_limit_usd,expires_at,decision_id,active,revoked_at"
 )
 _BUDGET_FIELDS = "budget_id,mission_id,ceiling_usd,threshold_usd,decision_id,active"
+
+
+def _disposable_summary(resource_id: str, policy_id: UUID | None) -> str:
+    """Canonical JSON summary whose resource id is matched by equality, not LIKE."""
+    return json.dumps(
+        {
+            "resource_id": resource_id,
+            "policy_id": None if policy_id is None else str(policy_id),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _summary_names_resource(summary: str, resource_id: str) -> bool:
+    """True only when this history summary recorded exactly ``resource_id``.
+
+    A shorter id, or one that differs by a character ``LIKE`` would treat as a
+    wildcard, does not match.
+    """
+    try:
+        parsed = json.loads(summary)
+    except json.JSONDecodeError:
+        return False
+    return isinstance(parsed, dict) and parsed.get("resource_id") == resource_id
 
 
 class ProjectAuthorityRefused(WorkStoreError):
@@ -295,6 +321,62 @@ class ProjectStoreMixin:
                 (workspace_id, history_id, project_id, mission_id, kind, summary),
             )
         return history_id
+
+    def record_disposable_resource(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        project_id: UUID,
+        mission_id: UUID | None,
+        resource_id: str,
+        policy_id: UUID | None,
+    ) -> None:
+        """Append a project_history row naming a disposable resource.
+
+        A tier 2 delete may target only a resource the control plane created
+        under a standing policy and recorded here when it was created
+        (OMP-403): the registry is project_history rows of kind
+        ``disposable_resource``, so no migration is needed.
+        """
+        if not resource_id:
+            raise ProjectAuthorityRefused("resource_required")
+        summary = _disposable_summary(resource_id, policy_id)
+        with self._transaction(workspace_id, actor_id) as cur:
+            self._require_project(cur, workspace_id, project_id)
+            self._write_history(
+                cur,
+                workspace_id,
+                project_id,
+                "disposable_resource",
+                summary,
+                mission_id=mission_id,
+            )
+
+    def is_disposable_resource(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        project_id: UUID,
+        resource_id: str,
+    ) -> bool:
+        """Whether the project recorded a disposable resource with this exact id.
+
+        Matching is equality on the recorded resource id. ``LIKE`` is not used:
+        ``_`` and ``%`` in an id are literal, and a shorter id does not match a
+        longer one that continues after a space.
+        """
+        with self._transaction(workspace_id, actor_id) as cur:
+            self._require_project(cur, workspace_id, project_id)
+            cur.execute(
+                "SELECT summary FROM omp_work.project_history"
+                " WHERE workspace_id=%s AND project_id=%s"
+                " AND kind='disposable_resource'",
+                (workspace_id, project_id),
+            )
+            return any(
+                _summary_names_resource(str(row["summary"]), resource_id)
+                for row in cur.fetchall()
+            )
 
     def count_missing_records(
         self, workspace_id: UUID, actor_id: UUID
@@ -688,7 +770,7 @@ class ProjectStoreMixin:
         now: datetime,
         *,
         approval: Tier3Approval | None = None,
-    ) -> None:
+    ) -> UUID | None:
         """Evaluate one action against its tier and record the verdict.
 
         Tier 1 is allowed. Tier 2 is allowed only when an active standing policy
@@ -700,7 +782,9 @@ class ProjectStoreMixin:
         find_decision; when it verifies, authority is ignored and the allowed
         row names the approval's decision_id. Every verdict appends a
         project_action_records row and a history row; a refusal then raises
-        ProjectAuthorityRefused with the refusal code.
+        ProjectAuthorityRefused with the refusal code. An allowed tier 2 action
+        returns the covering policy's id so the caller can attribute a
+        disposable resource to it; every other verdict returns None.
         """
         code: str | None = None
         policy_id: UUID | None = None
@@ -767,6 +851,7 @@ class ProjectStoreMixin:
             )
         if code is not None:
             raise ProjectAuthorityRefused(code)
+        return policy_id
 
     def record_spend(
         self,

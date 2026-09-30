@@ -43,6 +43,7 @@
 - WorkService authorises proposals through named Run Owner checks, fails closed with a decision record, and only an owner-signed change alters a D35 lock.
 - `draft_mission_intake` routes a bounded intake to a mission: blocking questions clarify, a budgetless mission is held, scope already covered by an approved mission or a standing mandate proceeds without another confirmation, and anything else files one owner decision per revision (OMP-426).
 - Wire `draft_mission_intake` into PostgresWorkStore with standing mandate and spend ceiling resolution (OMP-426).
+- Mission requests pass through typed intake; new or materially changed scope waits for the owner's structured answer (confirm, edit, reject, or a note that produces a new draft), stored with the original instruction and its provenance; drafts inside an approved mission or the standing mandate proceed (OMP-426).
 
 ### Changed
 

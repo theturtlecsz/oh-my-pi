@@ -20,10 +20,11 @@ from omp_work.mission_intake_rules import (
     confirmation_route,
     draft_from_intake,
 )
-from omp_work.mission_scope import TERMINAL_STATUSES
+from omp_work.mission_scope import TERMINAL_STATUSES, material_cases
 from omp_work.standing_mandate import StandingMandate
 
-from .api_models import DraftMissionIntakeResult, MissionView
+from .api_models import AnswerMissionDraftResult, DraftMissionIntakeResult, MissionView
+from .decision_records import find_record
 from .missions import (
     approved_mission_view,
     effective_draft,
@@ -42,7 +43,7 @@ from .models import (
 )
 from .store_shared import WorkStoreError
 
-__all__ = ["draft_mission_intake", "intake_decision"]
+__all__ = ["answer_mission_draft", "draft_mission_intake", "intake_decision"]
 
 _Outcome = Literal["clarify", "held", "awaiting_owner", "proceeded"]
 _Basis = Literal["approved_mission", "standing_mandate"]
@@ -216,3 +217,133 @@ def _event(
             None if instruction is None else instruction.model_dump(mode="json")
         ),
     }
+
+
+def answer_mission_draft(
+    cur: psycopg.Cursor[dict[str, object]],
+    envelope: CommandEnvelope,
+    actor_id: UUID,
+    actor_kind: str,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Apply the owner's answer to one pending mission intake draft."""
+    if actor_kind != "owner":
+        raise WorkStoreError("forbidden")
+
+    payload = envelope.command.payload
+    mission_id = payload.mission_id
+    decision_id = payload.decision_id
+
+    record = find_record(cur, envelope.workspace_id, decision_id)
+    if (
+        record is None
+        or not record.is_intake
+        or str(record.view.get("mission_id")) != str(mission_id)
+    ):
+        raise WorkStoreError("invalid_request", ("decision_not_found",))
+    if record.view.get("status") == "answered":
+        raise WorkStoreError("revision_conflict", ("decision_already_answered",))
+    if record.view.get("status") != "pending":
+        raise WorkStoreError("revision_conflict")
+
+    view = latest_mission(cur, envelope.workspace_id, mission_id)
+    if view is None:
+        raise WorkStoreError("invalid_request", ("decision_not_found",))
+    if view.status.value in TERMINAL_STATUSES:
+        raise WorkStoreError("mission_transition_refused")
+
+    decision_revision: int | None = None
+    for ref in record.view.get("evidence_refs", ()):
+        prefix = f"mission:{mission_id}@"
+        if isinstance(ref, str) and ref.startswith(prefix):
+            try:
+                decision_revision = int(ref[len(prefix):])
+                break
+            except ValueError:
+                pass
+
+    if (
+        payload.revision != view.revision
+        or decision_revision is None
+        or payload.revision != decision_revision
+    ):
+        raise WorkStoreError("revision_conflict")
+
+    answer = payload.answer
+    next_decision: CreateDecisionPayload | None = None
+
+    if answer.kind == "option":
+        if answer.option == "confirm":
+            view = approved_mission_view(
+                cur, view, "decision", str(decision_id), actor_id, actor_kind
+            )
+            outcome = "approved"
+            answer_val = "confirm"
+            note_val = None
+        elif answer.option == "reject":
+            view = status_mission_view(
+                cur,
+                view,
+                MissionStatus.ABANDONED,
+                "decision",
+                str(decision_id),
+                actor_id,
+                actor_kind,
+            )
+            outcome = "rejected"
+            answer_val = "reject"
+            note_val = None
+        else:
+            raise WorkStoreError("invalid_request")
+    elif answer.kind == "edited_draft":
+        revised = revised_mission_view(
+            cur, envelope.workspace_id, view, answer.draft, actor_id, actor_kind
+        )
+        view = approved_mission_view(
+            cur, revised, "decision", str(decision_id), actor_id, actor_kind
+        )
+        outcome = "approved"
+        answer_val = "edited_draft"
+        note_val = None
+    elif answer.kind == "note":
+        draft = effective_draft(view)
+        new_context_refs = (*draft.context_refs, f"owner_note:{decision_id}")
+        note_draft = draft.model_copy(update={"context_refs": new_context_refs})
+        view = revised_mission_view(
+            cur, envelope.workspace_id, view, note_draft, actor_id, actor_kind
+        )
+        approved_envelope = (
+            view.approved_scope.envelope.model_dump(mode="json")
+            if view.approved_scope is not None
+            else None
+        )
+        cases = material_cases(
+            approved_envelope, effective_draft(view).model_dump(mode="json")
+        )
+        next_decision = intake_decision(view, cases, actor_kind)
+        outcome = "noted"
+        answer_val = "note"
+        note_val = answer.text
+    else:
+        raise WorkStoreError("invalid_request")
+
+    result = AnswerMissionDraftResult(
+        type="answer_mission_draft",
+        decision_id=decision_id,
+        mission_id=mission_id,
+        outcome=outcome,
+        mission=view,
+        next_decision_id=None if next_decision is None else next_decision.decision_id,
+        instruction=payload.instruction,
+    ).model_dump(mode="json")
+
+    event = {
+        **result,
+        "instruction": payload.instruction.model_dump(mode="json"),
+        "provenance": payload.instruction.provenance.model_dump(mode="json"),
+        "answer": answer_val,
+        "note": note_val,
+        "mission": view.model_dump(mode="json"),
+        "decision": None if next_decision is None else next_decision.model_dump(mode="json"),
+    }
+    return result, event
+
