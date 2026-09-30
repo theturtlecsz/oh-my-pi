@@ -1273,6 +1273,95 @@
       "title": "Anomaly",
       "type": "object"
     },
+    "AnswerDecisionCommand": {
+      "$defs": {
+        "AnswerDecisionPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "answer": {
+              "minLength": 1,
+              "title": "Answer",
+              "type": "string"
+            },
+            "decision_id": {
+              "format": "uuid",
+              "title": "Decision Id",
+              "type": "string"
+            },
+            "owner_signature": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Owner Signature"
+            }
+          },
+          "required": [
+            "decision_id",
+            "answer"
+          ],
+          "title": "AnswerDecisionPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/AnswerDecisionPayload"
+        },
+        "type": {
+          "const": "answer_decision",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "AnswerDecisionCommand",
+      "type": "object"
+    },
+    "AnswerDecisionPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "answer": {
+          "minLength": 1,
+          "title": "Answer",
+          "type": "string"
+        },
+        "decision_id": {
+          "format": "uuid",
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "owner_signature": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner Signature"
+        }
+      },
+      "required": [
+        "decision_id",
+        "answer"
+      ],
+      "title": "AnswerDecisionPayload",
+      "type": "object"
+    },
     "AnswerIntakeDecisionCommand": {
       "$defs": {
         "AnswerIntakeDecisionPayload": {
@@ -1786,7 +1875,8 @@
             "OMP-407",
             "OMP-406",
             "OMP-405",
-            "OMP-413"
+            "OMP-413",
+            "OMP-414"
           ],
           "title": "Issue",
           "type": "string"
@@ -6290,6 +6380,59 @@
           "title": "Anomaly",
           "type": "object"
         },
+        "AnswerDecisionCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/AnswerDecisionPayload"
+            },
+            "type": {
+              "const": "answer_decision",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "AnswerDecisionCommand",
+          "type": "object"
+        },
+        "AnswerDecisionPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "answer": {
+              "minLength": 1,
+              "title": "Answer",
+              "type": "string"
+            },
+            "decision_id": {
+              "format": "uuid",
+              "title": "Decision Id",
+              "type": "string"
+            },
+            "owner_signature": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Owner Signature"
+            }
+          },
+          "required": [
+            "decision_id",
+            "answer"
+          ],
+          "title": "AnswerDecisionPayload",
+          "type": "object"
+        },
         "AnswerIntakeDecisionCommand": {
           "additionalProperties": false,
           "properties": {
@@ -7897,6 +8040,155 @@
             "kind"
           ],
           "title": "CreateBatchRelation",
+          "type": "object"
+        },
+        "CreateDecisionCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/CreateDecisionPayload"
+            },
+            "type": {
+              "const": "create_decision",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "CreateDecisionCommand",
+          "type": "object"
+        },
+        "CreateDecisionPayload": {
+          "additionalProperties": false,
+          "description": "One owner-facing decision record: the question, why it blocks progress,\nthe bounded option set, and \u2014 for tier-3 actions \u2014 the action class.",
+          "properties": {
+            "action_class": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "merge_protected_branch",
+                    "production_deploy",
+                    "destructive_infra",
+                    "credential_change",
+                    "delete_persistent_data",
+                    "billing_change",
+                    "publish_as_owner",
+                    "broaden_scope",
+                    "outside_secrets",
+                    "disable_safeguards",
+                    "contract_hash",
+                    "unlisted"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Action Class"
+            },
+            "decision_id": {
+              "format": "uuid",
+              "title": "Decision Id",
+              "type": "string"
+            },
+            "default_if_any": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Default If Any"
+            },
+            "evidence_refs": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Evidence Refs",
+              "type": "array"
+            },
+            "mission_id": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Mission Id"
+            },
+            "options": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 10,
+              "minItems": 2,
+              "title": "Options",
+              "type": "array"
+            },
+            "project_id": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            },
+            "question": {
+              "minLength": 1,
+              "title": "Question",
+              "type": "string"
+            },
+            "resume_state": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Resume State"
+            },
+            "risk_of_delay": {
+              "minLength": 1,
+              "title": "Risk Of Delay",
+              "type": "string"
+            },
+            "risk_of_each_choice": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Risk Of Each Choice",
+              "type": "object"
+            },
+            "why_it_matters": {
+              "minLength": 1,
+              "title": "Why It Matters",
+              "type": "string"
+            }
+          },
+          "required": [
+            "decision_id",
+            "project_id",
+            "question",
+            "why_it_matters",
+            "risk_of_delay",
+            "options",
+            "risk_of_each_choice"
+          ],
+          "title": "CreateDecisionPayload",
           "type": "object"
         },
         "CreateResearchCampaignCommand": {
@@ -12029,6 +12321,7 @@
               "activate_cutover": "#/$defs/ActivateCutoverCommand",
               "activate_execution_item": "#/$defs/ActivateExecutionItemCommand",
               "admit_research_campaign": "#/$defs/AdmitResearchCampaignCommand",
+              "answer_decision": "#/$defs/AnswerDecisionCommand",
               "answer_intake_decision": "#/$defs/AnswerIntakeDecisionCommand",
               "append_evidence": "#/$defs/AppendEvidenceCommand",
               "approve_mission": "#/$defs/ApproveMissionCommand",
@@ -12048,6 +12341,7 @@
               "complete_execution_item": "#/$defs/CompleteExecutionItemCommand",
               "complete_work": "#/$defs/CompleteWorkCommand",
               "conclude_research_campaign": "#/$defs/ConcludeResearchCampaignCommand",
+              "create_decision": "#/$defs/CreateDecisionCommand",
               "create_research_campaign": "#/$defs/CreateResearchCampaignCommand",
               "create_same_session_child": "#/$defs/CreateSameSessionChildCommand",
               "create_work_batch": "#/$defs/CreateWorkBatchCommand",
@@ -12269,6 +12563,12 @@
             },
             {
               "$ref": "#/$defs/LinkMissionWorkCommand"
+            },
+            {
+              "$ref": "#/$defs/CreateDecisionCommand"
+            },
+            {
+              "$ref": "#/$defs/AnswerDecisionCommand"
             }
           ],
           "title": "Command"
@@ -15870,6 +16170,287 @@
         "kind"
       ],
       "title": "CreateBatchRelation",
+      "type": "object"
+    },
+    "CreateDecisionCommand": {
+      "$defs": {
+        "CreateDecisionPayload": {
+          "additionalProperties": false,
+          "description": "One owner-facing decision record: the question, why it blocks progress,\nthe bounded option set, and \u2014 for tier-3 actions \u2014 the action class.",
+          "properties": {
+            "action_class": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "merge_protected_branch",
+                    "production_deploy",
+                    "destructive_infra",
+                    "credential_change",
+                    "delete_persistent_data",
+                    "billing_change",
+                    "publish_as_owner",
+                    "broaden_scope",
+                    "outside_secrets",
+                    "disable_safeguards",
+                    "contract_hash",
+                    "unlisted"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Action Class"
+            },
+            "decision_id": {
+              "format": "uuid",
+              "title": "Decision Id",
+              "type": "string"
+            },
+            "default_if_any": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Default If Any"
+            },
+            "evidence_refs": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Evidence Refs",
+              "type": "array"
+            },
+            "mission_id": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Mission Id"
+            },
+            "options": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 10,
+              "minItems": 2,
+              "title": "Options",
+              "type": "array"
+            },
+            "project_id": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            },
+            "question": {
+              "minLength": 1,
+              "title": "Question",
+              "type": "string"
+            },
+            "resume_state": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Resume State"
+            },
+            "risk_of_delay": {
+              "minLength": 1,
+              "title": "Risk Of Delay",
+              "type": "string"
+            },
+            "risk_of_each_choice": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Risk Of Each Choice",
+              "type": "object"
+            },
+            "why_it_matters": {
+              "minLength": 1,
+              "title": "Why It Matters",
+              "type": "string"
+            }
+          },
+          "required": [
+            "decision_id",
+            "project_id",
+            "question",
+            "why_it_matters",
+            "risk_of_delay",
+            "options",
+            "risk_of_each_choice"
+          ],
+          "title": "CreateDecisionPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/CreateDecisionPayload"
+        },
+        "type": {
+          "const": "create_decision",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "CreateDecisionCommand",
+      "type": "object"
+    },
+    "CreateDecisionPayload": {
+      "additionalProperties": false,
+      "description": "One owner-facing decision record: the question, why it blocks progress,\nthe bounded option set, and \u2014 for tier-3 actions \u2014 the action class.",
+      "properties": {
+        "action_class": {
+          "anyOf": [
+            {
+              "enum": [
+                "merge_protected_branch",
+                "production_deploy",
+                "destructive_infra",
+                "credential_change",
+                "delete_persistent_data",
+                "billing_change",
+                "publish_as_owner",
+                "broaden_scope",
+                "outside_secrets",
+                "disable_safeguards",
+                "contract_hash",
+                "unlisted"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Action Class"
+        },
+        "decision_id": {
+          "format": "uuid",
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "default_if_any": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Default If Any"
+        },
+        "evidence_refs": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "mission_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mission Id"
+        },
+        "options": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10,
+          "minItems": 2,
+          "title": "Options",
+          "type": "array"
+        },
+        "project_id": {
+          "format": "uuid",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "question": {
+          "minLength": 1,
+          "title": "Question",
+          "type": "string"
+        },
+        "resume_state": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resume State"
+        },
+        "risk_of_delay": {
+          "minLength": 1,
+          "title": "Risk Of Delay",
+          "type": "string"
+        },
+        "risk_of_each_choice": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Risk Of Each Choice",
+          "type": "object"
+        },
+        "why_it_matters": {
+          "minLength": 1,
+          "title": "Why It Matters",
+          "type": "string"
+        }
+      },
+      "required": [
+        "decision_id",
+        "project_id",
+        "question",
+        "why_it_matters",
+        "risk_of_delay",
+        "options",
+        "risk_of_each_choice"
+      ],
+      "title": "CreateDecisionPayload",
       "type": "object"
     },
     "CreateResearchCampaignCommand": {

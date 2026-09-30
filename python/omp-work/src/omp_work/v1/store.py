@@ -303,6 +303,17 @@ class WorkStore(Protocol):
         actor_id: UUID,
         receipt_id: UUID | str,
     ) -> dict[str, object]: ...
+    def decisions(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        *,
+        status: str | None = None,
+        project_id: UUID | None = None,
+        mission_id: str | None = None,
+        after: tuple[datetime, UUID] | None = None,
+        limit: int = 100,
+    ) -> dict[str, object]: ...
     def work_items(
         self,
         workspace_id: UUID,
@@ -699,6 +710,11 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
                         (envelope.workspace_id,),
                     )
                     result = stop_result(envelope)
+                elif command.type in {"create_decision", "answer_decision"}:
+                    # OMP-414: a decision is recorded as a domain event (no
+                    # migration), but the indexed persistence lands in a later
+                    # slice, so the live store refuses rather than half-write.
+                    raise WorkStoreError("unavailable")
                 else:
                     raise WorkStoreError("unavailable")
                 result_hash = sha256(result)
@@ -6856,6 +6872,21 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
             if not row:
                 raise WorkStoreError("invalid_request")
             return dict(row)
+
+    def decisions(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        *,
+        status: str | None = None,
+        project_id: UUID | None = None,
+        mission_id: str | None = None,
+        after: tuple[datetime, UUID] | None = None,
+        limit: int = 100,
+    ) -> dict[str, object]:
+        # OMP-414 records decisions as domain events; the indexed read lands in a
+        # later slice, so the live store refuses rather than fabricate a page.
+        raise WorkStoreError("unavailable")
 
     def work_items(
         self,

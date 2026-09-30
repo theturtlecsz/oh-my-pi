@@ -5,7 +5,9 @@ from datetime import datetime
 from uuid import UUID
 
 
-from .api_models import StopStatusView
+from pydantic import ValidationError
+
+from .api_models import DecisionsPage, StopStatusView
 from .models import OWNER_APPROVAL_COMMAND_TYPES, CommandEnvelope
 from .store import WorkStore, WorkStoreError
 
@@ -84,6 +86,8 @@ class WorkService:
         "conclude_research_campaign": "work.approve",
         "engage_stop": "work.stop",
         "release_stop": "work.approve",
+        "create_decision": "work.mutate",
+        "answer_decision": "work.approve",
     }
 
     def __init__(self, store: WorkStore) -> None:
@@ -101,6 +105,13 @@ class WorkService:
             )
             raise WorkError("forbidden", status=403)
         if envelope.command.type == "release_stop" and principal.actor_kind != "owner":
+            raise WorkError("forbidden", status=403)
+        # OMP-414: answering a decision is the owner's act — a signature on a
+        # tier-3 action is the owner's alone, so automation never answers.
+        if (
+            envelope.command.type == "answer_decision"
+            and principal.actor_kind != "owner"
+        ):
             raise WorkError("forbidden", status=403)
         if envelope.command.type in {"stage_import_batch", "promote_import_batch"}:
             raise WorkError("unavailable", status=503)
@@ -255,6 +266,47 @@ class WorkService:
             raise WorkError("forbidden", status=403)
         try:
             return self._store.receipt(workspace_id, principal.actor_id, receipt_id)
+        except WorkStoreError as error:
+            statuses = {"invalid_request": 400, "forbidden": 403, "unavailable": 503}
+            raise WorkError(
+                error.code,
+                status=statuses.get(error.code, 409),
+                diagnostics=error.diagnostics,
+            ) from error
+
+    def decisions(
+        self,
+        principal: Principal,
+        workspace_id: UUID,
+        *,
+        status: str | None = None,
+        project_id: UUID | None = None,
+        mission_id: str | None = None,
+        after: tuple[datetime, UUID] | None = None,
+        limit: int = 100,
+    ) -> dict[str, object]:
+        # work.read only: a decision is workspace-wide, never candidate-bounded.
+        if (
+            workspace_id not in principal.workspaces
+            or "work.read" not in principal.scopes
+        ):
+            raise WorkError("forbidden", status=403)
+        if status is not None and status not in ("pending", "answered"):
+            raise WorkError("invalid_request", status=400)
+        try:
+            return DecisionsPage.model_validate(
+                self._store.decisions(
+                    workspace_id,
+                    principal.actor_id,
+                    status=status,
+                    project_id=project_id,
+                    mission_id=mission_id,
+                    after=after,
+                    limit=limit,
+                )
+            ).model_dump(mode="json")
+        except ValidationError as error:
+            raise WorkError("invalid_request", status=400) from error
         except WorkStoreError as error:
             statuses = {"invalid_request": 400, "forbidden": 403, "unavailable": 503}
             raise WorkError(

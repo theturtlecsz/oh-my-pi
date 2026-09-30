@@ -60,17 +60,62 @@ export interface ExecutionWorkspaceManager {
 	cleanup(workspace: ExecutionWorkspace): Promise<{ cleaned: boolean; detail: string }>;
 }
 
-async function materializeExecutionRuntime(primaryRoot: string, worktreePath: string): Promise<void> {
+/** `bun install --frozen-lockfile`, killed if it stalls for 300s (OMP-472). */
+export const EXECUTION_DEPENDENCY_INSTALL = {
+	command: ["bun", "install", "--frozen-lockfile"],
+	timeoutMs: 300_000,
+} as const;
+
+type ExecutionDependencyInstall = {
+	readonly command: readonly string[];
+	readonly timeoutMs: number;
+};
+
+export async function materializeExecutionRuntime(
+	primaryRoot: string,
+	worktreePath: string,
+	install: ExecutionDependencyInstall = EXECUTION_DEPENDENCY_INSTALL,
+): Promise<void> {
 	const worktreeNodeModules = joinPath(worktreePath, "node_modules");
 	if (existsSync(joinPath(worktreePath, "package.json")) && !existsSync(worktreeNodeModules)) {
-		const install = spawnSync("bun", ["install", "--frozen-lockfile"], {
+		// OMP-472: ensure runs this install while /execute awaits it, after beginExecution
+		// and before deliverExecutionMessage. spawnSync froze that event loop for the whole
+		// install; a stall held it until 300s. Bun.spawn yields, and a stall is killed so
+		// this throw stops the grant (execution_workspace_provision_failed).
+		const proc = Bun.spawn([...install.command], {
 			cwd: worktreePath,
-			encoding: "utf8",
-			timeout: 300_000,
-			maxBuffer: 16 * 1024 * 1024,
+			stdin: "ignore",
+			stdout: "ignore",
+			stderr: "pipe",
 		});
-		if (install.status !== 0 || install.error) {
-			throw new Error(`execution workspace dependency install failed: ${(install.stderr ?? install.error?.message ?? "").trim().split("\n")[0]}`);
+		let timedOut = false;
+		const killTimer = setTimeout(() => {
+			timedOut = true;
+			try {
+				proc.kill(9);
+			} catch {
+				// The child already exited.
+			}
+		}, install.timeoutMs);
+		let stderrText = "";
+		let exitCode: number | null = null;
+		try {
+			const stderr = proc.stderr;
+			[stderrText, exitCode] = await Promise.all([
+				new Response(stderr).text(),
+				proc.exited,
+			]);
+		} catch (error) {
+			if (!timedOut) throw error;
+		} finally {
+			clearTimeout(killTimer);
+		}
+		if (timedOut) {
+			throw new Error(`execution workspace dependency install timed out after ${install.timeoutMs / 1000}s`);
+		}
+		if (exitCode !== 0) {
+			const firstLine = stderrText.trim().split("\n")[0] ?? "";
+			throw new Error(`execution workspace dependency install failed: ${firstLine}`);
 		}
 	}
 
@@ -130,6 +175,7 @@ export async function ensureExecutionWorkspace(
 	baseline: string,
 	options: { create?: boolean } = {},
 	worktreesRoot = getWorktreesDir(),
+	install: ExecutionDependencyInstall = EXECUTION_DEPENDENCY_INSTALL,
 ): Promise<ExecutionWorkspace> {
 	if (!/^[0-9a-f]{40,64}$/.test(baseline)) throw new Error(`invalid execution baseline: ${baseline}`);
 	if (!/^[0-9a-f-]{36}$/.test(grantId)) throw new Error(`invalid execution grant id: ${grantId}`);
@@ -148,7 +194,7 @@ export async function ensureExecutionWorkspace(
 		const existing = entries.find(entry => entry.branch === branchRef);
 		if (existing) {
 			const path = await realpath(existing.path);
-			await materializeExecutionRuntime(primaryRoot, path);
+			await materializeExecutionRuntime(primaryRoot, path, install);
 			return { primaryRoot, path, branch, grantId, baseline, reused: true };
 		}
 		if (!(await managedGit.ref.exists(primaryRoot, branchRef))) {
@@ -166,7 +212,7 @@ export async function ensureExecutionWorkspace(
 		await mkdir(dirname(stablePath), { recursive: true });
 		await managedGit.worktree.add(primaryRoot, stablePath, branch);
 		const path = await realpath(stablePath);
-		await materializeExecutionRuntime(primaryRoot, path);
+		await materializeExecutionRuntime(primaryRoot, path, install);
 		return { primaryRoot, path, branch, grantId, baseline, reused: false };
 	});
 }

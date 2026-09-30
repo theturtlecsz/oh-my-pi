@@ -33,6 +33,7 @@ _READS = frozenset(
         "GET /v1/workspaces/{workspace_id}/research-sources/{source_id}/projects/{project_id}",
         "GET /v1/workspaces/{workspace_id}/research-datasets/{dataset_id}",
         "GET /v1/workspaces/{workspace_id}/research-datasets/{dataset_id}/projects/{project_id}",
+        "GET /v1/workspaces/{workspace_id}/decisions",
         "GET /v1/workspaces/{workspace_id}/missions/{mission_id}",
         "GET /v1/workspaces/{workspace_id}/stop",
         "GET /v1/health/live",
@@ -148,6 +149,8 @@ _COMMAND_TYPES = frozenset(
         "approve_mission",
         "set_mission_status",
         "link_mission_work",
+        "create_decision",
+        "answer_decision",
     }
 )
 

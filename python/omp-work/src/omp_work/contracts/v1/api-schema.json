@@ -1084,6 +1084,56 @@
       "title": "AlarmSignalResult",
       "type": "object"
     },
+    "AnswerDecisionResult": {
+      "additionalProperties": false,
+      "properties": {
+        "answer": {
+          "title": "Answer",
+          "type": "string"
+        },
+        "decision_id": {
+          "format": "uuid",
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "mission_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mission Id"
+        },
+        "resume_state": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resume State"
+        },
+        "type": {
+          "const": "answer_decision",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "decision_id",
+        "answer"
+      ],
+      "title": "AnswerDecisionResult",
+      "type": "object"
+    },
     "AnswerIntakeDecisionResult": {
       "additionalProperties": false,
       "properties": {
@@ -4816,6 +4866,56 @@
           "title": "AlarmSignalResult",
           "type": "object"
         },
+        "AnswerDecisionResult": {
+          "additionalProperties": false,
+          "properties": {
+            "answer": {
+              "title": "Answer",
+              "type": "string"
+            },
+            "decision_id": {
+              "format": "uuid",
+              "title": "Decision Id",
+              "type": "string"
+            },
+            "mission_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Mission Id"
+            },
+            "resume_state": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Resume State"
+            },
+            "type": {
+              "const": "answer_decision",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "decision_id",
+            "answer"
+          ],
+          "title": "AnswerDecisionResult",
+          "type": "object"
+        },
         "AnswerIntakeDecisionResult": {
           "additionalProperties": false,
           "properties": {
@@ -6142,6 +6242,77 @@
             "campaign"
           ],
           "title": "ConcludeResearchCampaignResult",
+          "type": "object"
+        },
+        "CreateDecisionResult": {
+          "additionalProperties": false,
+          "properties": {
+            "action_class": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "merge_protected_branch",
+                    "production_deploy",
+                    "destructive_infra",
+                    "credential_change",
+                    "delete_persistent_data",
+                    "billing_change",
+                    "publish_as_owner",
+                    "broaden_scope",
+                    "outside_secrets",
+                    "disable_safeguards",
+                    "contract_hash",
+                    "unlisted"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Action Class"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "decision_id": {
+              "format": "uuid",
+              "title": "Decision Id",
+              "type": "string"
+            },
+            "mission_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Mission Id"
+            },
+            "project_id": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "create_decision",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "decision_id",
+            "project_id",
+            "created_at"
+          ],
+          "title": "CreateDecisionResult",
           "type": "object"
         },
         "CreateResearchCampaignResult": {
@@ -9269,6 +9440,7 @@
               "activate_cutover": "#/$defs/ActivateCutoverResult",
               "activate_execution_item": "#/$defs/ActivateExecutionItemResult",
               "admit_research_campaign": "#/$defs/AdmitResearchCampaignResult",
+              "answer_decision": "#/$defs/AnswerDecisionResult",
               "answer_intake_decision": "#/$defs/AnswerIntakeDecisionResult",
               "append_evidence": "#/$defs/EvidenceResult",
               "assess_bounded_intake": "#/$defs/AssessBoundedIntakeResult",
@@ -9287,6 +9459,7 @@
               "complete_execution_item": "#/$defs/CompleteExecutionItemResult",
               "complete_work": "#/$defs/CompleteWorkResult",
               "conclude_research_campaign": "#/$defs/ConcludeResearchCampaignResult",
+              "create_decision": "#/$defs/CreateDecisionResult",
               "create_research_campaign": "#/$defs/CreateResearchCampaignResult",
               "create_same_session_child": "#/$defs/CreateSameSessionChildResult",
               "create_work_batch": "#/$defs/CreateWorkBatchResult",
@@ -9460,6 +9633,12 @@
             },
             {
               "$ref": "#/$defs/ReleaseStopResult"
+            },
+            {
+              "$ref": "#/$defs/CreateDecisionResult"
+            },
+            {
+              "$ref": "#/$defs/AnswerDecisionResult"
             }
           ],
           "title": "Result"
@@ -10839,6 +11018,77 @@
       "title": "ConcludeResearchCampaignResult",
       "type": "object"
     },
+    "CreateDecisionResult": {
+      "additionalProperties": false,
+      "properties": {
+        "action_class": {
+          "anyOf": [
+            {
+              "enum": [
+                "merge_protected_branch",
+                "production_deploy",
+                "destructive_infra",
+                "credential_change",
+                "delete_persistent_data",
+                "billing_change",
+                "publish_as_owner",
+                "broaden_scope",
+                "outside_secrets",
+                "disable_safeguards",
+                "contract_hash",
+                "unlisted"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Action Class"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "decision_id": {
+          "format": "uuid",
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "mission_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mission Id"
+        },
+        "project_id": {
+          "format": "uuid",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "type": {
+          "const": "create_decision",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "decision_id",
+        "project_id",
+        "created_at"
+      ],
+      "title": "CreateDecisionResult",
+      "type": "object"
+    },
     "CreateResearchCampaignResult": {
       "$defs": {
         "ResearchBlockedDependency": {
@@ -11699,6 +11949,337 @@
         "row_version"
       ],
       "title": "CreatedWorkItem",
+      "type": "object"
+    },
+    "DecisionView": {
+      "additionalProperties": false,
+      "properties": {
+        "action_class": {
+          "anyOf": [
+            {
+              "enum": [
+                "merge_protected_branch",
+                "production_deploy",
+                "destructive_infra",
+                "credential_change",
+                "delete_persistent_data",
+                "billing_change",
+                "publish_as_owner",
+                "broaden_scope",
+                "outside_secrets",
+                "disable_safeguards",
+                "contract_hash",
+                "unlisted"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Action Class"
+        },
+        "answer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Answer"
+        },
+        "answered_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Answered At"
+        },
+        "decision_id": {
+          "format": "uuid",
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "default_if_any": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Default If Any"
+        },
+        "evidence_refs": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "mission_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mission Id"
+        },
+        "options": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Options",
+          "type": "array"
+        },
+        "project_id": {
+          "format": "uuid",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "question": {
+          "title": "Question",
+          "type": "string"
+        },
+        "risk_of_delay": {
+          "title": "Risk Of Delay",
+          "type": "string"
+        },
+        "risk_of_each_choice": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Risk Of Each Choice",
+          "type": "object"
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "answered"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "why_it_matters": {
+          "title": "Why It Matters",
+          "type": "string"
+        }
+      },
+      "required": [
+        "decision_id",
+        "project_id",
+        "status",
+        "question",
+        "why_it_matters",
+        "risk_of_delay",
+        "options",
+        "risk_of_each_choice"
+      ],
+      "title": "DecisionView",
+      "type": "object"
+    },
+    "DecisionsPage": {
+      "$defs": {
+        "DecisionView": {
+          "additionalProperties": false,
+          "properties": {
+            "action_class": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "merge_protected_branch",
+                    "production_deploy",
+                    "destructive_infra",
+                    "credential_change",
+                    "delete_persistent_data",
+                    "billing_change",
+                    "publish_as_owner",
+                    "broaden_scope",
+                    "outside_secrets",
+                    "disable_safeguards",
+                    "contract_hash",
+                    "unlisted"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Action Class"
+            },
+            "answer": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Answer"
+            },
+            "answered_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Answered At"
+            },
+            "decision_id": {
+              "format": "uuid",
+              "title": "Decision Id",
+              "type": "string"
+            },
+            "default_if_any": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Default If Any"
+            },
+            "evidence_refs": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Evidence Refs",
+              "type": "array"
+            },
+            "mission_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Mission Id"
+            },
+            "options": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Options",
+              "type": "array"
+            },
+            "project_id": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            },
+            "question": {
+              "title": "Question",
+              "type": "string"
+            },
+            "risk_of_delay": {
+              "title": "Risk Of Delay",
+              "type": "string"
+            },
+            "risk_of_each_choice": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Risk Of Each Choice",
+              "type": "object"
+            },
+            "status": {
+              "enum": [
+                "pending",
+                "answered"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "why_it_matters": {
+              "title": "Why It Matters",
+              "type": "string"
+            }
+          },
+          "required": [
+            "decision_id",
+            "project_id",
+            "status",
+            "question",
+            "why_it_matters",
+            "risk_of_delay",
+            "options",
+            "risk_of_each_choice"
+          ],
+          "title": "DecisionView",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "decisions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DecisionView"
+          },
+          "title": "Decisions",
+          "type": "array"
+        },
+        "next_created_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Next Created At"
+        },
+        "next_decision_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Next Decision Id"
+        }
+      },
+      "title": "DecisionsPage",
       "type": "object"
     },
     "DomainEventView": {
@@ -22076,6 +22657,56 @@
           "title": "AlarmSignalResult",
           "type": "object"
         },
+        "AnswerDecisionResult": {
+          "additionalProperties": false,
+          "properties": {
+            "answer": {
+              "title": "Answer",
+              "type": "string"
+            },
+            "decision_id": {
+              "format": "uuid",
+              "title": "Decision Id",
+              "type": "string"
+            },
+            "mission_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Mission Id"
+            },
+            "resume_state": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Resume State"
+            },
+            "type": {
+              "const": "answer_decision",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "decision_id",
+            "answer"
+          ],
+          "title": "AnswerDecisionResult",
+          "type": "object"
+        },
         "AnswerIntakeDecisionResult": {
           "additionalProperties": false,
           "properties": {
@@ -23402,6 +24033,77 @@
             "campaign"
           ],
           "title": "ConcludeResearchCampaignResult",
+          "type": "object"
+        },
+        "CreateDecisionResult": {
+          "additionalProperties": false,
+          "properties": {
+            "action_class": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "merge_protected_branch",
+                    "production_deploy",
+                    "destructive_infra",
+                    "credential_change",
+                    "delete_persistent_data",
+                    "billing_change",
+                    "publish_as_owner",
+                    "broaden_scope",
+                    "outside_secrets",
+                    "disable_safeguards",
+                    "contract_hash",
+                    "unlisted"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Action Class"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "decision_id": {
+              "format": "uuid",
+              "title": "Decision Id",
+              "type": "string"
+            },
+            "mission_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Mission Id"
+            },
+            "project_id": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "create_decision",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "decision_id",
+            "project_id",
+            "created_at"
+          ],
+          "title": "CreateDecisionResult",
           "type": "object"
         },
         "CreateResearchCampaignResult": {
@@ -26545,6 +27247,7 @@
                   "activate_cutover": "#/$defs/ActivateCutoverResult",
                   "activate_execution_item": "#/$defs/ActivateExecutionItemResult",
                   "admit_research_campaign": "#/$defs/AdmitResearchCampaignResult",
+                  "answer_decision": "#/$defs/AnswerDecisionResult",
                   "answer_intake_decision": "#/$defs/AnswerIntakeDecisionResult",
                   "append_evidence": "#/$defs/EvidenceResult",
                   "assess_bounded_intake": "#/$defs/AssessBoundedIntakeResult",
@@ -26563,6 +27266,7 @@
                   "complete_execution_item": "#/$defs/CompleteExecutionItemResult",
                   "complete_work": "#/$defs/CompleteWorkResult",
                   "conclude_research_campaign": "#/$defs/ConcludeResearchCampaignResult",
+                  "create_decision": "#/$defs/CreateDecisionResult",
                   "create_research_campaign": "#/$defs/CreateResearchCampaignResult",
                   "create_same_session_child": "#/$defs/CreateSameSessionChildResult",
                   "create_work_batch": "#/$defs/CreateWorkBatchResult",
@@ -26736,6 +27440,12 @@
                 },
                 {
                   "$ref": "#/$defs/ReleaseStopResult"
+                },
+                {
+                  "$ref": "#/$defs/CreateDecisionResult"
+                },
+                {
+                  "$ref": "#/$defs/AnswerDecisionResult"
                 }
               ]
             },
