@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 class _Record(NamedTuple):
     view: dict[str, object]
     resume_state: str | None
+    is_intake: bool = False
 
 
 def create_decision(
@@ -66,16 +67,11 @@ def answer_decision(
 ) -> dict[str, object]:
     payload = envelope.command.payload
     decision_id = str(payload.decision_id)
-    record = next(
-        (
-            item
-            for item in _load(cur, envelope.workspace_id)
-            if str(item.view["decision_id"]) == decision_id
-        ),
-        None,
-    )
+    record = find_record(cur, envelope.workspace_id, decision_id)
     if record is None:
         raise WorkStoreError("invalid_request", ("decision_not_found",))
+    if record.is_intake:
+        raise WorkStoreError("invalid_request", ("answer_with_answer_mission_draft",))
     if record.view["status"] == "answered":
         raise WorkStoreError("revision_conflict", ("decision_already_answered",))
     if payload.answer not in record.view["options"]:
@@ -120,16 +116,25 @@ def answer_decision(
     ).model_dump(mode="json")
 
 
+def find_record(
+    cur: psycopg.Cursor[dict[str, object]],
+    workspace_id: UUID,
+    decision_id: UUID | str,
+) -> _Record | None:
+    target_id = str(decision_id)
+    for record in _load(cur, workspace_id):
+        if str(record.view["decision_id"]) == target_id:
+            return record
+    return None
+
+
 def find_decision(
     cur: psycopg.Cursor[dict[str, object]],
     workspace_id: UUID,
     decision_id: UUID | str,
 ) -> dict[str, object] | None:
-    target_id = str(decision_id)
-    for record in _load(cur, workspace_id):
-        if str(record.view["decision_id"]) == target_id:
-            return record.view
-    return None
+    record = find_record(cur, workspace_id, decision_id)
+    return record.view if record is not None else None
 
 
 def list_decisions(
@@ -163,7 +168,7 @@ def _load(
         "    (aggregate_id = %s "
         "      AND event_type IN ('create_decision', 'answer_decision')) "
         "    OR (aggregate_type = 'mission' "
-        "      AND event_type = 'draft_mission_intake')"
+        "      AND event_type IN ('draft_mission_intake', 'answer_mission_draft'))"
         "  ) "
         "ORDER BY sequence ASC",
         (workspace_id, workspace_id),
@@ -184,10 +189,36 @@ def _load(
             records[decision_id] = _Record(
                 view=_pending_view(decision),
                 resume_state=raw_resume if isinstance(raw_resume, str) else None,
+                is_intake=(event_type == "draft_mission_intake"),
             )
             order.append(decision_id)
             continue
         if event_type == "draft_mission_intake":
+            continue
+        if event_type == "answer_mission_draft":
+            decision_id = str(body["decision_id"])
+            record = records.get(decision_id)
+            if record is not None and record.view["status"] != "answered":
+                occurred_at = row["occurred_at"]
+                record.view["status"] = "answered"
+                record.view["answer"] = body.get("answer")
+                record.view["answered_at"] = (
+                    occurred_at.isoformat()
+                    if hasattr(occurred_at, "isoformat")
+                    else occurred_at
+                )
+                record.view["expires_at"] = body.get("expires_at")
+            if isinstance(body.get("decision"), dict):
+                next_decision = body["decision"]
+                next_id = str(next_decision["decision_id"])
+                if next_id not in records:
+                    raw_resume = next_decision.get("resume_state")
+                    records[next_id] = _Record(
+                        view=_pending_view(next_decision),
+                        resume_state=raw_resume if isinstance(raw_resume, str) else None,
+                        is_intake=True,
+                    )
+                    order.append(next_id)
             continue
         decision_id = str(body["decision_id"])
         record = records.get(decision_id)
