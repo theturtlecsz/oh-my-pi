@@ -13,7 +13,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from omp_work import contract_sha256
+from omp_work import contract_sha256, event_push
 from omp_work.operations.config import OperationsConfig
 from omp_work.operations.database import collect_health, migration_set_sha256
 from omp_work.operations.fingerprints import (
@@ -109,7 +109,15 @@ def create_app(
             status_code=400,
         )
 
-    service = WorkService(store or PostgresWorkStore(config))
+    # Loaded once per process. The checker is looked up on the module at call
+    # time so a patch of event_push.check_destination changes later requests.
+    allowed_hosts = event_push.load_allowed_hosts(config.config_dir)
+    service = WorkService(
+        store or PostgresWorkStore(config),
+        push_destination_check=lambda url: event_push.check_destination(
+            url, allowed_hosts=allowed_hosts
+        ),
+    )
     # OMP-89: writes fail closed when the on-disk source or migration set no
     # longer matches what this process loaded — an editable install can change
     # under a running service, and a stale service burns bounded budgets or

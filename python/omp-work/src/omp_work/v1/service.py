@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -18,9 +19,12 @@ from .api_models import (
 )
 from .models import (
     OWNER_APPROVAL_COMMAND_TYPES,
+    AdvanceEventCursorCommand,
     CommandEnvelope,
     CreateDecisionCommand,
     CreateDecisionPayload,
+    DeleteEventSubscriptionCommand,
+    PutEventSubscriptionCommand,
 )
 from .store import WorkStore, WorkStoreError
 
@@ -28,6 +32,14 @@ from .store import WorkStore, WorkStoreError
 # stored id and the envelope ids stay aligned when the proposal is replayed.
 _MISSING_PROPOSAL_ID = "00000000-0000-0000-0000-000000000000"
 _RECORDED_DECISION = frozenset({"idempotency_conflict", "decision_exists"})
+# A push_url with no checker installed is refused with this reason. The
+# configured checker supplies its own reason string.
+_NO_PUSH_CHECK = "no_check"
+_SUBSCRIPTION_COMMANDS = (
+    PutEventSubscriptionCommand,
+    DeleteEventSubscriptionCommand,
+    AdvanceEventCursorCommand,
+)
 
 
 @dataclass(frozen=True)
@@ -143,10 +155,15 @@ class WorkService:
     }
 
     def __init__(
-        self, store: WorkStore, control_plane: ControlPlane | None = None
+        self,
+        store: WorkStore,
+        control_plane: ControlPlane | None = None,
+        *,
+        push_destination_check: Callable[[str], str | None] | None = None,
     ) -> None:
         self._store = store
         self._control_plane = control_plane
+        self._push_destination_check = push_destination_check
 
     def execute(
         self, principal: Principal, envelope: CommandEnvelope
@@ -176,6 +193,9 @@ class WorkService:
             raise WorkError("forbidden", status=403)
         if envelope.command.type in {"stage_import_batch", "promote_import_batch"}:
             raise WorkError("unavailable", status=503)
+        # OMP-415: another client's subscription needs work.events.admin, and a
+        # push_url is refused before the store writes it.
+        self._enforce_event_subscription(principal, envelope)
         try:
             return self._store.execute(
                 envelope,
@@ -568,6 +588,85 @@ class WorkService:
                 status=statuses.get(error.code, 409),
                 diagnostics=error.diagnostics,
             ) from error
+
+    def _enforce_event_subscription(
+        self, principal: Principal, envelope: CommandEnvelope
+    ) -> None:
+        command = envelope.command
+        if not isinstance(command, _SUBSCRIPTION_COMMANDS):
+            return
+        if "work.events.admin" not in principal.scopes:
+            self._forbid_other_client_subscription(principal, envelope, command)
+        self._refuse_push_destination(command)
+
+    def _forbid_other_client_subscription(
+        self,
+        principal: Principal,
+        envelope: CommandEnvelope,
+        command: PutEventSubscriptionCommand
+        | DeleteEventSubscriptionCommand
+        | AdvanceEventCursorCommand,
+    ) -> None:
+        if isinstance(command, PutEventSubscriptionCommand):
+            named = command.payload.client_id
+            if named is not None and named != principal.actor_id:
+                raise WorkError("forbidden", status=403)
+        # Unknown ids are the store's refusal (subscription_not_found). A
+        # deleted id is absent from the list, so it reaches the store too.
+        owner = self._stored_subscription_client(
+            principal, envelope.workspace_id, command.payload.subscription_id
+        )
+        if owner is not None and owner != principal.actor_id:
+            raise WorkError("forbidden", status=403)
+
+    def _stored_subscription_client(
+        self, principal: Principal, workspace_id: UUID, subscription_id: UUID
+    ) -> UUID | None:
+        try:
+            page = self._store.event_subscriptions(
+                workspace_id, principal.actor_id, client_id=None
+            )
+        except WorkStoreError as error:
+            statuses = {"invalid_request": 400, "forbidden": 403, "unavailable": 503}
+            raise WorkError(
+                error.code,
+                status=statuses.get(error.code, 409),
+                diagnostics=error.diagnostics,
+            ) from error
+        subscriptions = page.get("subscriptions", ()) if isinstance(page, dict) else ()
+        if not isinstance(subscriptions, (list, tuple)):
+            return None
+        target = str(subscription_id)
+        for item in subscriptions:
+            if not isinstance(item, dict) or item.get("deleted") is True:
+                continue
+            if str(item.get("subscription_id")) != target:
+                continue
+            client = item.get("client_id")
+            if client is None:
+                return None
+            return client if isinstance(client, UUID) else UUID(str(client))
+        return None
+
+    def _refuse_push_destination(
+        self,
+        command: PutEventSubscriptionCommand
+        | DeleteEventSubscriptionCommand
+        | AdvanceEventCursorCommand,
+    ) -> None:
+        if not isinstance(command, PutEventSubscriptionCommand):
+            return
+        push_url = command.payload.push_url
+        if push_url is None:
+            return
+        check = self._push_destination_check
+        reason = _NO_PUSH_CHECK if check is None else check(push_url)
+        if reason is not None:
+            raise WorkError(
+                "invalid_request",
+                status=400,
+                diagnostics=("push_destination_refused", reason),
+            )
 
     def event_subscriptions(
         self,
