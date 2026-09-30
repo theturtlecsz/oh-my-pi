@@ -36,6 +36,8 @@ DEFAULT_BASE_URL = "http://127.0.0.1:54322"
 # OMP-405: the stop switch's monitoring principal — engage_stop and the stop
 # status read only; never a mutation scope.
 GROKBOT_SCOPES = ("work.stop",)
+# OMP-415: the push runner. work.events.admin is not an owner scope.
+EVENT_PUSH_SCOPES = ("work.read", "work.events.admin")
 
 
 def _write_secret(path: Path, value: str) -> None:
@@ -187,6 +189,26 @@ def provision_automation(
         actor_kind="automation",
         workspaces=(workspace_id,),
         scopes=AUTOMATION_SCOPES,
+    )
+
+
+def provision_event_push(
+    config: OperationsConfig,
+    workspace_id: UUID,
+    name: str = "event-push",
+) -> Path:
+    """OMP-415: mint the push runner — actor_kind automation, one workspace,
+    work.read and work.events.admin. ``name == "owner"`` would clobber the
+    owner capability, so it is refused. OWNER_SCOPES stays unchanged."""
+    if name == "owner":
+        raise ValueError("event-push capability must not reuse the owner name")
+    return write_capability(
+        config,
+        name,
+        actor_id=uuid4(),
+        actor_kind="automation",
+        workspaces=(workspace_id,),
+        scopes=EVENT_PUSH_SCOPES,
     )
 
 
