@@ -1,0 +1,33 @@
+# NSI component inventory
+
+Point-in-time inventory of the neuro-symbolic-intake (NSI) component owners
+OMP-266 through OMP-270 and OMP-328. One table row per component; the Test
+status cell carries the date, the exact command and the pass/fail/skip counts.
+This inventory records what exists in this repository today. It is not
+qualification, runtime admission, native acceptance or an activation claim.
+
+| Component | What it does | Code paths | Test files | Test status |
+| --- | --- | --- | --- | --- |
+| OMP-266 | Bounded typed-intake (P12) commands. `assess_bounded_intake` evaluates a typed `BoundedIntakeDraft` with deterministic rule classes `contradictory_constraints`, `missing_verification_oracle` and `missing_consequential_authority_or_dependency`, deduplicates/prioritizes them and returns at most two blocking questions plus `ready_for_ratification` and semantic/rule-bundle hashes. `attest_intake_admission` is the sole native admission gate re-reading OMP-249 lineage receipts. `publish_bounded_intake` is owner-only and atomically ratifies one ready draft into an ordinary work item, related OMP-249 edge, planned candidate and `intake_publication` receipt. | `python/omp-work/src/omp_work/v1/semantics.py` (`evaluate_bounded_intake`, `bounded_intake_semantic_sha256`), `python/omp-work/src/omp_work/v1/store.py` (`_assess_bounded_intake`, `_attest_intake_admission`, `_publish_bounded_intake`, `_record_fable_advice`), `python/omp-work/src/omp_work/v1/models.py` (`BoundedIntakeDraft` and command payloads), `python/omp-work/src/omp_work/v1/api_models.py` (result models), `python/omp-work/src/omp_work/v1/service.py` (scope map: `work.approve`) | `python/omp-work/tests/test_bounded_intake_assess.py`, `python/omp-work/tests/test_bounded_intake_semantics.py`, `python/omp-work/tests/test_bounded_intake_models.py`, `python/omp-work/tests/test_bounded_intake_golden.py`, `python/omp-work/tests/test_bounded_intake_fable_advice.py`, `python/omp-work/tests/test_bounded_intake_admission.py`, `python/omp-work/tests/test_bounded_intake_publish.py` | 2026-09-30 — `uv run --project python/omp-work --extra dev pytest python/omp-work/tests/test_bounded_intake_*.py` — 53 passed, 0 failed, 6 skipped (every skip is `set OMP_WORK_POSTGRES_INTEGRATION=1`) |
+| OMP-267 | 03B E1: exploration contracts, generation policy, reviewed frame/profile registry and the documented shared bounded-model-job reuse inventory. The versioned generation projection removes candidate-level comparative `tradeoffs` while comparison stays in the existing synthesis call; `consequence`/`risk` ideation remains allowed. The finite profile requires a positive integer `targetCandidatesPerBranch` no greater than `maxCandidatesPerBranch`, and cross-domain analogy is a reviewed wildcard-family frame/operator without a new enum. Docs only, no runtime code, no tests; runtime requires H0 and qualified NSI-1+2+3. | docs only (`docs/omp-intake-exploration-implementation-plan.md`; native owner OMP-267, revision `5ed47036-ffbe-5aa4-9c0c-f605e3ee6fc0`) | None — docs only, no runtime code, no tests | Not run — docs only, no runtime code, no tests |
+| OMP-268 | 03B E2: durable branch execution, screening, synthesis/deepening, reservation, caps, cancellation, staleness, recovery and containment over the shared bounded-model-job substrate (no second scheduler). Persists the exact ingress/valid/duplicate/shortfall counts and preserves the raw valid pool without padding, deletion or automatic retry/spend. Docs only, no runtime code, no tests; runtime requires qualified E1 and NSI-4. | docs only (`docs/omp-intake-exploration-implementation-plan.md`; native owner OMP-268, revisions `84cc75f8-6f9f-4bcc-9683-cf61b917073b` over `af997771-8a69-5afe-bf82-cb56a79d2128`) | None — docs only, no runtime code, no tests | Not run — docs only, no runtime code, no tests |
+| OMP-269 | 03B E3: neutral exact-answer offers/selection with disposable CLI and generated-Web projections, direct answer/provenance/planning/accessibility. The projections are replayable read-only views of native committed facts and cannot become another ledger, scheduler or mutation authority. Docs only, no runtime code, no tests; runtime requires qualified E2 and NSI-5. | docs only (`docs/omp-intake-exploration-implementation-plan.md`; native owner OMP-269, revision `c56247d2-4aa5-5600-81c5-7a2c9b9f3436`) | None — docs only, no runtime code, no tests | Not run — docs only, no runtime code, no tests |
+| OMP-270 | 03B NSI-E4: focused generation-posture, reviewed structural-frame and candidate-breadth qualification plus outcome/resource evidence, shadow/canary and N4 proof. Preregisters the contrasts, preserves X-A/X-B/X-C0/X-C/X-D controls, measures pre/post-synthesis concept coverage and requires an exact owner-approved run plan and budget for metered runs. Docs only, no runtime code, no tests; runtime evaluation requires qualified E3 plus NSI-6 and the local P12 prerequisite. | docs only (`docs/omp-intake-exploration-implementation-plan.md`; native owner OMP-270, revision `a6014b0d-6886-57a5-82ab-405a5e04bd5c`) | None — docs only, no runtime code, no tests | Not run — docs only, no runtime code, no tests |
+| OMP-328 | Not in repository. No runtime code, docs, tests or owner row for this id exists here. Searched whole-repository `git grep OMP-328` and case-insensitive `OMP 328`/`OMP328` across `docs/` (including `docs/report/omp-full-programme-audit-2026-09-18.md` and `docs/programme/*`), `MASTER.md`, `NOTES-EXTERNAL.md`, `python/`, `packages/`, `scripts/` and `session-system/`; the only NSI owners recorded anywhere are OMP-266..270. | None — not in repository | None — not in repository | Not run — not in repository |
+
+## Gaps for OMP-426
+
+- OMP-266 is implemented and its deterministic tests pass without a database; the six
+  Postgres integration cases in the same files are skipped unless
+  `OMP_WORK_POSTGRES_INTEGRATION=1`, so the store paths (`attest_intake_admission`,
+  `publish_bounded_intake`) are unverified in this run.
+- OMP-267–270 have no runtime code or tests in this repository: their 03B contracts
+  (generation projection, frame registry, counts, branch execution, neutral
+  projections, E4 contrasts) are documented but unimplemented here. No fixture,
+  canary or N4 evidence exists for them.
+- OMP-328 is absent from the repository, so neither its component contract nor its
+  tests can be inventoried; its relationship to the NSI-1..6 chain needs an owner
+  disposition before it can be placed.
+- The runtime entry gates the plan names (H0/OMP-203, NSI-1..6, NSI-4/5/6, the
+  shared bounded-model-job substrate) have no qualified owner or proof recorded in
+  this repository, so no E1–E4 runtime admission can be evidenced from this tree.
