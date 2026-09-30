@@ -37,6 +37,7 @@
 - native research jobs on the shared omp_jobs substrate (worker handshake/drain, capability routing, leases, fencing, descendant cancellation, stable usage ids, outbox delivery, settled-trial gating) (OMP-324).
 - bot-filed new-scope work items are held from flood export until the owner approves them by answering their intake decision (answer_intake_decision); bot-filed follow-ups linked to approved work are not held; the tree read shows scope_class, intake_hold and intake_decision (OMP-407).
 - Per-stage provider, model, and effort from a written routing policy, with per-provider concurrency, retries, and automatic escalation within the item budget.
+- Unattended workers reach the network only through a default-deny egress policy; refusals and research fetches are recorded (OMP-431).
 
 ### Changed
 
