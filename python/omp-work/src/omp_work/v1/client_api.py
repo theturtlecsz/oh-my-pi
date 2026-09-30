@@ -1,7 +1,9 @@
-"""OMP-416: the seven monitoring-client GET reads.
+"""OMP-416: the client contract on HTTP — seven GET reads and ten POST mutations.
 
-Each route authenticates, calls ``WorkService.client_read``, and returns
-``client_body``. A ``WorkError`` becomes ``client_error_body``.
+Each route authenticates (contract header, then principal), calls the service,
+and returns ``client_body``. A ``WorkError`` becomes ``client_error_body``.
+Mutations carry ``{request_id, payload}``; ``WorkService.execute_client``
+builds the envelope and owns the rest of the checks.
 """
 
 from __future__ import annotations
@@ -17,6 +19,14 @@ from .client_response import client_body, client_error_body
 from .service import Principal, WorkError, WorkService
 
 _CLIENT = "/v1/workspaces/{workspace_id}/client"
+# Receipt state -> ClientResponse outcome. A rejected operation never returns
+# a body; keeping the entry maps any future state instead of raising.
+_OUTCOMES = {
+    "applied": "applied",
+    "replayed": "replayed",
+    "pending_approval": "pending_approval",
+    "rejected": "applied",
+}
 
 
 def register_client_reads(
@@ -154,3 +164,184 @@ def _decision_ids(view: dict[str, Any]) -> tuple[UUID, ...]:
         elif value is not None:
             ids.append(UUID(str(value)))
     return tuple(ids)
+
+
+def register_client_mutations(
+    app: FastAPI,
+    service: WorkService,
+    *,
+    authenticate: Callable[[Request], Principal],
+) -> None:
+    """Register the ten client POSTs. ``authenticate`` returns the principal."""
+
+    def mutate(
+        request: Request,
+        workspace_id: UUID,
+        operation: str,
+        body: dict[str, Any],
+        detail: bool,
+        path_ident: UUID | None,
+    ) -> JSONResponse:
+        try:
+            principal = authenticate(request)
+        except WorkError as error:
+            return JSONResponse(
+                client_error_body(
+                    error.code,
+                    error.diagnostics[:8],
+                    detail=detail,
+                ),
+                status_code=error.status,
+            )
+        try:
+            request_id = UUID(str(body.get("request_id")))
+        except (ValueError, TypeError):
+            return JSONResponse(
+                client_error_body("invalid_request", detail=detail),
+                status_code=400,
+            )
+        try:
+            receipt, result = service.execute_client(
+                principal,
+                workspace_id,
+                operation,
+                request_id,
+                body.get("payload"),
+                path_ident,
+            )
+            outcome = _OUTCOMES.get(str(getattr(receipt, "state", "")), "applied")
+            return JSONResponse(
+                client_body(
+                    operation,
+                    result=result,
+                    detail=detail,
+                    outcome=outcome,  # type: ignore[arg-type]
+                )
+            )
+        except WorkError as error:
+            return JSONResponse(
+                client_error_body(
+                    error.code,
+                    error.diagnostics[:8],
+                    request_id=request_id,
+                    correlation_id=request_id,
+                    detail=detail,
+                ),
+                status_code=error.status,
+            )
+
+    @app.post(f"{_CLIENT}/missions")
+    def client_mission_submit(
+        request: Request,
+        workspace_id: UUID,
+        body: dict[str, Any],
+        detail: bool = False,
+    ) -> JSONResponse:
+        return mutate(request, workspace_id, "mission.submit", body, detail, None)
+
+    @app.post(f"{_CLIENT}/mission-intake")
+    def client_mission_intake(
+        request: Request,
+        workspace_id: UUID,
+        body: dict[str, Any],
+        detail: bool = False,
+    ) -> JSONResponse:
+        return mutate(request, workspace_id, "mission.intake", body, detail, None)
+
+    @app.post(f"{_CLIENT}/stop")
+    def client_stop_engage(
+        request: Request,
+        workspace_id: UUID,
+        body: dict[str, Any],
+        detail: bool = False,
+    ) -> JSONResponse:
+        return mutate(request, workspace_id, "stop.engage", body, detail, None)
+
+    @app.post(f"{_CLIENT}/missions/{{mission_id}}/pause")
+    def client_mission_pause(
+        request: Request,
+        workspace_id: UUID,
+        mission_id: UUID,
+        body: dict[str, Any],
+        detail: bool = False,
+    ) -> JSONResponse:
+        return mutate(
+            request, workspace_id, "mission.pause", body, detail, mission_id
+        )
+
+    @app.post(f"{_CLIENT}/missions/{{mission_id}}/resume")
+    def client_mission_resume(
+        request: Request,
+        workspace_id: UUID,
+        mission_id: UUID,
+        body: dict[str, Any],
+        detail: bool = False,
+    ) -> JSONResponse:
+        return mutate(
+            request, workspace_id, "mission.resume", body, detail, mission_id
+        )
+
+    @app.post(f"{_CLIENT}/missions/{{mission_id}}/cancel")
+    def client_mission_cancel(
+        request: Request,
+        workspace_id: UUID,
+        mission_id: UUID,
+        body: dict[str, Any],
+        detail: bool = False,
+    ) -> JSONResponse:
+        return mutate(
+            request, workspace_id, "mission.cancel", body, detail, mission_id
+        )
+
+    @app.post(f"{_CLIENT}/missions/{{mission_id}}/priority")
+    def client_mission_reprioritise(
+        request: Request,
+        workspace_id: UUID,
+        mission_id: UUID,
+        body: dict[str, Any],
+        detail: bool = False,
+    ) -> JSONResponse:
+        return mutate(
+            request, workspace_id, "mission.reprioritise", body, detail, mission_id
+        )
+
+    @app.post(f"{_CLIENT}/missions/{{mission_id}}/scope/confirm")
+    def client_mission_scope_confirm(
+        request: Request,
+        workspace_id: UUID,
+        mission_id: UUID,
+        body: dict[str, Any],
+        detail: bool = False,
+    ) -> JSONResponse:
+        return mutate(
+            request,
+            workspace_id,
+            "mission.scope.confirm",
+            body,
+            detail,
+            mission_id,
+        )
+
+    @app.post(f"{_CLIENT}/missions/{{mission_id}}/scope/edit")
+    def client_mission_scope_edit(
+        request: Request,
+        workspace_id: UUID,
+        mission_id: UUID,
+        body: dict[str, Any],
+        detail: bool = False,
+    ) -> JSONResponse:
+        return mutate(
+            request, workspace_id, "mission.scope.edit", body, detail, mission_id
+        )
+
+    @app.post(f"{_CLIENT}/decisions/{{decision_id}}/answer")
+    def client_decision_answer(
+        request: Request,
+        workspace_id: UUID,
+        decision_id: UUID,
+        body: dict[str, Any],
+        detail: bool = False,
+    ) -> JSONResponse:
+        return mutate(
+            request, workspace_id, "decision.answer", body, detail, decision_id
+        )

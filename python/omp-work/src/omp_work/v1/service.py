@@ -25,8 +25,15 @@ from .models import (
     CreateDecisionCommand,
     CreateDecisionPayload,
     DeleteEventSubscriptionCommand,
+    DraftMissionIntakeCommand,
+    DraftMissionIntakePayload,
+    EngageStopCommand,
     PutEventSubscriptionCommand,
     RelayOwnerIntentCommand,
+    RelayOwnerIntentPayload,
+    StopReasonPayload,
+    SubmitMissionCommand,
+    SubmitMissionPayload,
 )
 from .store import WorkStore, WorkStoreError
 
@@ -53,6 +60,47 @@ CLIENT_READS = (
     "evidence.inspect",
     "stop.status",
 )
+# OMP-416: the ten POST client operations. Each relays one intent or command;
+# the scope is the operation's, never the translated command's.
+CLIENT_MUTATIONS = (
+    "mission.submit",
+    "mission.intake",
+    "stop.engage",
+    "mission.pause",
+    "mission.resume",
+    "mission.cancel",
+    "mission.reprioritise",
+    "mission.scope.confirm",
+    "mission.scope.edit",
+    "decision.answer",
+)
+# operation -> (required scope, relay intent or None)
+_CLIENT_MUTATION_SCOPES: dict[str, str] = {
+    "mission.submit": "work.client",
+    "mission.intake": "work.client",
+    "stop.engage": "work.stop",
+    "mission.pause": "work.client",
+    "mission.resume": "work.client",
+    "mission.cancel": "work.client",
+    "mission.reprioritise": "work.client",
+    "mission.scope.confirm": "work.client",
+    "mission.scope.edit": "work.client",
+    "decision.answer": "work.client",
+}
+_CLIENT_RELAY_INTENTS: dict[str, str] = {
+    "mission.pause": "pause",
+    "mission.resume": "resume",
+    "mission.cancel": "request_cancellation",
+    "mission.reprioritise": "change_priority",
+    "mission.scope.confirm": "confirm_scope",
+    "mission.scope.edit": "edit_scope",
+    "decision.answer": "answer_decision",
+}
+# The alternate scope submit/intake also accept (decision 0019, operation table).
+_CLIENT_MUTATE_ALTERNATES = {
+    "mission.submit": "work.mutate",
+    "mission.intake": "work.mutate",
+}
 
 
 @dataclass(frozen=True)
@@ -105,6 +153,60 @@ def _project_ident(ident: UUID | str | None) -> UUID:
         raise WorkError(
             "invalid_request", status=400, diagnostics=("invalid project ident",)
         ) from error
+
+
+def _client_command(
+    operation: str, payload: object, path_ident: UUID | None
+) -> (
+    SubmitMissionCommand
+    | DraftMissionIntakeCommand
+    | EngageStopCommand
+    | RelayOwnerIntentCommand
+):
+    """Map one client operation's payload to its command (decision 0019)."""
+    if operation == "mission.submit":
+        return SubmitMissionCommand(
+            type="submit_mission",
+            payload=SubmitMissionPayload.model_validate(payload),
+        )
+    if operation == "mission.intake":
+        return DraftMissionIntakeCommand(
+            type="draft_mission_intake",
+            payload=DraftMissionIntakePayload.model_validate(payload),
+        )
+    if operation == "stop.engage":
+        return EngageStopCommand(
+            type="engage_stop", payload=StopReasonPayload.model_validate(payload)
+        )
+    relay = RelayOwnerIntentPayload.model_validate(payload)
+    expected_intent = _CLIENT_RELAY_INTENTS[operation]
+    if relay.intent != expected_intent:
+        raise WorkError(
+            "invalid_request",
+            status=400,
+            diagnostics=(
+                f"intent {relay.intent} does not match operation {operation}",
+            ),
+        )
+    _require_matching_ident(operation, relay, path_ident)
+    return RelayOwnerIntentCommand(type="relay_owner_intent", payload=relay)
+
+
+def _require_matching_ident(
+    operation: str, relay: RelayOwnerIntentPayload, path_ident: UUID | None
+) -> None:
+    """The path id must equal the payload's id; a mismatch is a 400."""
+    if path_ident is None:
+        return
+    body_ident = (
+        relay.decision_id if operation == "decision.answer" else relay.mission_id
+    )
+    if body_ident != path_ident:
+        raise WorkError(
+            "invalid_request",
+            status=400,
+            diagnostics=(f"{operation} path id does not match its payload",),
+        )
 
 
 class WorkService:
@@ -194,11 +296,19 @@ class WorkService:
         self._controller_lookup = controller_lookup
 
     def execute(
-        self, principal: Principal, envelope: CommandEnvelope
+        self,
+        principal: Principal,
+        envelope: CommandEnvelope,
+        *,
+        required_scope: str | None = None,
     ) -> tuple[object, dict[str, object]]:
         if envelope.workspace_id not in principal.workspaces:
             raise WorkError("forbidden", status=403)
-        scope = self._scopes[envelope.command.type]
+        scope = (
+            required_scope
+            if required_scope is not None
+            else self._scopes[envelope.command.type]
+        )
         if scope not in principal.scopes:
             self._record_owner_approval_refusal(
                 principal, envelope, "forbidden", ()
@@ -266,6 +376,53 @@ class WorkService:
                 status=statuses.get(error.code, 409),
                 diagnostics=error.diagnostics,
             ) from error
+
+    def execute_client(
+        self,
+        principal: Principal,
+        workspace_id: UUID,
+        operation: str,
+        request_id: UUID,
+        payload: object,
+        path_ident: UUID | None = None,
+    ) -> tuple[object, dict[str, object]]:
+        """One of the ten OMP-416 client mutations.
+
+        The principal's scope for the *operation* is checked before the
+        envelope exists. The envelope carries a deterministic operation_id, so
+        a repeated request_id is a replay, then ``execute`` owns every further
+        authorization check (workspace, owner-only acts, the designated
+        controller) and the store's status mapping. A relay whose body intent
+        or path id disagrees with the operation is invalid_request (HTTP 400).
+        """
+        if workspace_id not in principal.workspaces:
+            raise WorkError("forbidden", status=403)
+        if operation not in CLIENT_MUTATIONS:
+            raise WorkError("invalid_request", status=400)
+        required = _CLIENT_MUTATION_SCOPES[operation]
+        alternate = _CLIENT_MUTATE_ALTERNATES.get(operation)
+        if required in principal.scopes:
+            matched = required
+        elif alternate is not None and alternate in principal.scopes:
+            matched = alternate
+        else:
+            raise WorkError("forbidden", status=403)
+        try:
+            command = _client_command(operation, payload, path_ident)
+        except ValidationError as error:
+            raise WorkError("invalid_request", status=400) from error
+        envelope = CommandEnvelope(
+            api_version="work.omp.dev/v1",
+            workspace_id=workspace_id,
+            operation_id=uuid5(
+                NAMESPACE_URL,
+                f"client:{workspace_id}:{principal.actor_id}:{operation}:{request_id}",
+            ),
+            request_id=request_id,
+            correlation_id=request_id,
+            command=command,
+        )
+        return self.execute(principal, envelope, required_scope=matched)
 
     def _record_owner_approval_refusal(
         self,
