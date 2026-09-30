@@ -359,6 +359,8 @@ def main(argv: list[str] | None = None) -> int | None:
     check_parser.add_argument("--work-id", default=None)
     check_parser.add_argument("--count", type=int, default=1)
     check_parser.add_argument("--timeout", type=float, default=30.0)
+    check_parser.add_argument("--lease", type=int, default=None)
+    check_parser.add_argument("--sleep", type=float, default=0.0)
 
     reg_parser = jobs_sub.add_parser("register-component")
     reg_parser.add_argument("--config", required=True, type=Path)
@@ -505,6 +507,8 @@ def main(argv: list[str] | None = None) -> int | None:
                 work_id=args.work_id,
                 count=args.count,
                 timeout=args.timeout,
+                lease=args.lease,
+                sleep=args.sleep,
             )
             print(json.dumps(result, indent=2))
             return 0 if result.get("passed") else 1
