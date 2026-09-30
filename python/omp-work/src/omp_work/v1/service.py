@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from ..control_plane import gate
 from ..control_plane.envelope import bind_command
 from ..control_plane.registry import CONTROL_PLANE_CHECKS, ControlPlane
+from ..project_store import ProjectNotFound
 from .api_models import (
     DecisionsPage,
     EventSubscriptionsPage,
@@ -39,6 +40,17 @@ _SUBSCRIPTION_COMMANDS = (
     PutEventSubscriptionCommand,
     DeleteEventSubscriptionCommand,
     AdvanceEventCursorCommand,
+)
+# OMP-416: the seven reads the monitoring client may perform. The names are the
+# client-facing operation strings, resolved to a store method in client_read.
+CLIENT_READS = (
+    "project.list",
+    "project.context",
+    "project.status",
+    "project.decisions",
+    "mission.status",
+    "evidence.inspect",
+    "stop.status",
 )
 
 
@@ -80,6 +92,18 @@ def _check_error_verdict() -> gate.Verdict:
             ),
         )
     )
+
+
+def _project_ident(ident: UUID | str | None) -> UUID:
+    """A project identifier from a client read; anything but a UUID is a 400."""
+    if isinstance(ident, UUID):
+        return ident
+    try:
+        return UUID(str(ident))
+    except (ValueError, TypeError, AttributeError) as error:
+        raise WorkError(
+            "invalid_request", status=400, diagnostics=("invalid project ident",)
+        ) from error
 
 
 class WorkService:
@@ -733,5 +757,82 @@ class WorkService:
                 status=statuses.get(error.code, 409),
                 diagnostics=error.diagnostics,
             ) from error
+
+    def client_read(
+        self,
+        principal: Principal,
+        workspace_id: UUID,
+        operation: str,
+        ident: UUID | str | None = None,
+    ) -> dict[str, object]:
+        """One of the seven OMP-416 client reads (work.read plus work.client)."""
+        # The workspace must be the principal's and it must hold a client-read
+        # scope. A stop-only client reads the stop state through work.read/
+        # work.client here, never through this path with work.stop alone.
+        if workspace_id not in principal.workspaces or not (
+            principal.scopes & {"work.read", "work.client"}
+        ):
+            raise WorkError("forbidden", status=403)
+        if operation not in CLIENT_READS:
+            raise WorkError("invalid_request", status=400)
+        # A project ident reaching the store must be a UUID; a malformed one is
+        # the client's error, not the store's, so it never reaches a store call.
+        project_id = (
+            _project_ident(ident) if _needs_project_ident(operation) else None
+        )
+        try:
+            return self._client_read_store(
+                principal.actor_id, workspace_id, operation, ident, project_id
+            )
+        except ProjectNotFound as error:
+            raise WorkError(
+                "invalid_request", status=400, diagnostics=error.diagnostics
+            ) from error
+        except WorkStoreError as error:
+            # Same mapping receipt() applies to a store read.
+            statuses = {"invalid_request": 400, "forbidden": 403, "unavailable": 503}
+            raise WorkError(
+                error.code,
+                status=statuses.get(error.code, 409),
+                diagnostics=error.diagnostics,
+            ) from error
+
+    def _client_read_store(
+        self,
+        actor_id: UUID,
+        workspace_id: UUID,
+        operation: str,
+        ident: UUID | str | None,
+        project_id: UUID | None,
+    ) -> dict[str, object]:
+        if operation == "project.list":
+            return self._store.list_projects(workspace_id, actor_id)
+        if operation == "project.context":
+            assert project_id is not None
+            return self._store.project_context(workspace_id, actor_id, project_id)
+        if operation == "project.status":
+            assert project_id is not None
+            return self._store.read_project(workspace_id, actor_id, project_id)
+        if operation == "project.decisions":
+            assert project_id is not None
+            return self._store.decisions(
+                workspace_id, actor_id, project_id=project_id
+            )
+        if operation == "mission.status":
+            assert ident is not None
+            return self._store.read(workspace_id, actor_id, "mission", str(ident))
+        if operation == "evidence.inspect":
+            return self._store.receipt(workspace_id, actor_id, ident)
+        return StopStatusView.model_validate(
+            self._store.stop_status(workspace_id, actor_id)
+        ).model_dump(mode="json")
+
+
+def _needs_project_ident(operation: str) -> bool:
+    return operation in {
+        "project.context",
+        "project.status",
+        "project.decisions",
+    }
 
 

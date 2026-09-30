@@ -362,6 +362,23 @@ class WorkStore(Protocol):
         workspace_id: UUID,
         actor_id: UUID,
     ) -> dict[str, object]: ...
+    def list_projects(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+    ) -> dict[str, object]: ...
+    def read_project(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        project_id: UUID,
+    ) -> dict[str, object]: ...
+    def project_context(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        project_id: UUID,
+    ) -> dict[str, object]: ...
 
 
 def _intake_classifications(
