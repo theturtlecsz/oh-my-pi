@@ -36,7 +36,7 @@ def _payload(decision_id: UUID, project_id: UUID, mission_id: str) -> dict[str, 
             "publish": "Irreversible external exposure.",
             "hold": "Missed deadline.",
         },
-        "action_class": "publish_as_owner",
+        "action_class": None,
         "resume_state": "awaiting-publication",
     }
 
@@ -128,7 +128,7 @@ def test_decision_records_persist_answer_and_replay(service) -> None:
     assert view.answer is None
     assert view.answered_at is None
     assert view.mission_id == "OMP-414"
-    assert view.action_class == "publish_as_owner"
+    assert view.action_class is None
     assert pending[0]["options"] == ["publish", "hold"]
     assert "resume_state" not in pending[0]
     assert [

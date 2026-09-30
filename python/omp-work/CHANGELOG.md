@@ -48,6 +48,7 @@
 - Contract approval moved to HOME-147 (`approval.json`); `work.omp.dev/v1` remains pre-cutover and non-authoritative until HOME-148.
 - Stage admission now refuses a policy-routed stage job whose effort is missing or invalid, before any store access or enqueue.
 - Research Best-of-N now scores each generated candidate by its harness metrics instead of a hardcoded number.
+- Answering a tier 3 decision record now requires a valid owner signature; unsigned or badly signed answers are refused and the decision stays pending.
 
 ### Fixed
 

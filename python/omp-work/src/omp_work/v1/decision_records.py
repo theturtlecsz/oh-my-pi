@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 from uuid import UUID
 
 from .api_models import AnswerDecisionResult
 from .models import CommandEnvelope
+from .owner_signature import decision_signature_message, verify_owner_signature
 from .store_shared import WorkStoreError
 
 if TYPE_CHECKING:
@@ -40,6 +42,7 @@ def create_decision(
 def answer_decision(
     cur: psycopg.Cursor[dict[str, object]],
     envelope: CommandEnvelope,
+    owner_allowed_signers: Path,
 ) -> dict[str, object]:
     payload = envelope.command.payload
     decision_id = str(payload.decision_id)
@@ -57,6 +60,22 @@ def answer_decision(
         raise WorkStoreError("revision_conflict", ("decision_already_answered",))
     if payload.answer not in record.view["options"]:
         raise WorkStoreError("invalid_request", ("answer_not_an_option",))
+    action_class = record.view["action_class"]
+    if action_class is not None:
+        if not isinstance(action_class, str):
+            raise WorkStoreError("invalid_request")
+        if payload.owner_signature is None:
+            raise WorkStoreError("approval_required", ("owner_signature_required",))
+        message = decision_signature_message(
+            workspace_id=envelope.workspace_id,
+            decision_id=payload.decision_id,
+            action_class=action_class,
+            answer=payload.answer,
+        )
+        if not verify_owner_signature(
+            owner_allowed_signers, message, payload.owner_signature
+        ):
+            raise WorkStoreError("approval_required", ("owner_signature_invalid",))
     mission_id = record.view["mission_id"]
     return AnswerDecisionResult(
         type="answer_decision",
