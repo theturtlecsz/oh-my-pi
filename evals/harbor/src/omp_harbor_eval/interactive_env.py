@@ -2,9 +2,12 @@
 
 ``run_interactive_env`` loads the task, starts workservice and the worker, applies
 the seed patch and then the solution, points omp at the scripted model, and
-waits. After ``stop`` (or Ctrl-C) it writes ``service-readback.json`` from
-``ExecProbe.read`` and copies the worker session directory. The WorkService is
-only read.
+waits. Stop the environment (readback) before quitting omp: quitting pauses the
+grant, so a readback taken after quit does not match a run read while omp is
+still running. After ``stop`` (or Ctrl-C) it writes ``service-readback.json``
+from ``ExecProbe.read`` and copies ``<home>/omp-sessions`` plus every session
+under ``<home>/.omp/agent/sessions`` (where ``/execute`` writes). The WorkService
+is only read.
 """
 
 from __future__ import annotations
@@ -31,6 +34,8 @@ from .task_env import TaskEnv, load_task
 FIXTURES_ROOT = Path(__file__).resolve().parents[2] / "fixtures"
 _BEARER = "OMP_HARBOR_BEARER"
 _WORKSPACE = "OMP_HARBOR_WORKSPACE_ID"
+_AGENT_SESSIONS = ".omp/agent/sessions"
+_STOP_BEFORE_QUIT = "Stop the environment (readback) before quitting omp."
 
 
 def run_interactive_env(
@@ -134,12 +139,36 @@ def _print_banner(task: TaskEnv, worker: str, session_dir: Path) -> None:
         flush=True,
     )
     print(f"session dir: {session_dir}", flush=True)
+    # A terminal shows this on the banner. A pipe keeps the three stdout lines and
+    # carries the same sentence on stderr, which is what a captured log still shows.
+    print(_STOP_BEFORE_QUIT, file=sys.stdout if sys.stdout.isatty() else sys.stderr, flush=True)
 
 
 def _copy_sessions(docker: str, worker: str, home: str, dest: Path) -> None:
-    """``docker cp`` the session tree. A file-only cp falls back to tar of the same tree."""
+    """Copy ``--session-dir`` and every session ``/execute`` wrote.
 
-    remote = f"{home}/omp-sessions"
+    ``/execute`` stores its transcript under ``<home>/.omp/agent/sessions/<worktree>/``,
+    not in ``--session-dir``. Each jsonl that copy adds is printed so parity
+    capture has a session file to open. A missing tree is skipped.
+    """
+
+    _copy_tree(docker, worker, f"{home}/omp-sessions", dest)
+    before = _session_files(dest)
+    _copy_tree(docker, worker, f"{home}/{_AGENT_SESSIONS}", dest)
+    copied = sorted(path for path in _session_files(dest) - before if path.suffix == ".jsonl")
+    for path in copied:
+        print(f"session file: {path}", flush=True)
+
+
+def _session_files(dest: Path) -> set[Path]:
+    if not dest.is_dir():
+        return set()
+    return {path for path in dest.rglob("*") if path.is_file()}
+
+
+def _copy_tree(docker: str, worker: str, remote: str, dest: Path) -> None:
+    """``docker cp`` one session tree. A file-only cp falls back to tar of the same tree."""
+
     try:
         run(docker, ["cp", f"{worker}:{remote}/.", str(dest)])
     except DockerError:
