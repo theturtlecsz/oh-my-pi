@@ -10,9 +10,22 @@ from uuid import UUID
 import psycopg
 
 from omp_work.mission_budget import admit_mission_budget
+from omp_work.mission_scope import material_cases, outside_envelope, transition_allowed
 
-from .api_models import MissionDrawn, MissionTransition, MissionView
-from .models import CommandEnvelope, MissionStatus, SubmitMissionCommand
+from .api_models import (
+    MissionApprovedScope,
+    MissionDrawn,
+    MissionTransition,
+    MissionView,
+)
+from .models import (
+    ApproveMissionCommand,
+    CommandEnvelope,
+    MissionDraft,
+    MissionStatus,
+    SetMissionStatusCommand,
+    SubmitMissionCommand,
+)
 from .store_shared import WorkStoreError
 
 _MISSION_EVENTS = (
@@ -33,9 +46,21 @@ def execute(
     actor_kind: str,
 ) -> dict[str, object]:
     command = envelope.command
-    if not isinstance(command, SubmitMissionCommand):
-        raise WorkStoreError("unavailable")
-    return _submit(cur, envelope, actor_id, actor_kind)
+    if isinstance(command, SubmitMissionCommand):
+        return _submit(cur, envelope, actor_id, actor_kind)
+    if isinstance(command, ApproveMissionCommand):
+        return _approve(cur, envelope, actor_id, actor_kind)
+    if isinstance(command, SetMissionStatusCommand):
+        return _set_status(cur, envelope, actor_id, actor_kind)
+    raise WorkStoreError("unavailable")
+
+
+def effective_draft(view: MissionView | dict[str, object]) -> MissionDraft:
+    if isinstance(view, dict):
+        view = MissionView.model_validate(view)
+    fields = {k: getattr(view, k) for k in MissionDraft.model_fields}
+    fields["budget_policy"] = view.budget
+    return MissionDraft(**fields)
 
 
 def read_mission(
@@ -149,6 +174,161 @@ def _submit(
     # Store the form CommandResponse will emit, so a later read matches the POST.
     mission = MissionView.model_validate(mission).model_dump(mode="json")
     return {"type": "submit_mission", "mission": mission}
+
+
+def _approve(
+    cur: psycopg.Cursor[dict[str, object]],
+    envelope: CommandEnvelope,
+    actor_id: UUID,
+    actor_kind: str,
+) -> dict[str, object]:
+    command = envelope.command
+    assert isinstance(command, ApproveMissionCommand)
+    payload = command.payload
+    workspace_id = envelope.workspace_id
+
+    raw_mission = _latest_mission(cur, workspace_id, payload.mission_id)
+    if raw_mission is None:
+        raise WorkStoreError("invalid_request")
+    view = MissionView.model_validate(raw_mission)
+
+    if view.status != MissionStatus.AWAITING_CONFIRMATION:
+        raise WorkStoreError("mission_transition_refused")
+    if view.budget is None:
+        raise WorkStoreError("mission_transition_refused")
+    if payload.revision != view.revision:
+        raise WorkStoreError("revision_conflict")
+
+    eff_draft = effective_draft(view)
+    approved_envelope = (
+        view.approved_scope.envelope.model_dump(mode="json")
+        if view.approved_scope is not None
+        else None
+    )
+    cases = material_cases(approved_envelope, eff_draft.model_dump(mode="json"))
+    if outside_envelope(cases) and actor_kind != "owner":
+        raise WorkStoreError("approval_required")
+
+    cur.execute("SELECT clock_timestamp() AS at")
+    created_row = cur.fetchone()
+    if created_row is None:
+        raise WorkStoreError("unavailable")
+    at = created_row["at"]
+
+    if payload.basis_kind == "decision":
+        cause_kind = "decision"
+        cause_id = payload.basis_id
+    elif payload.basis_kind == "standing_mandate":
+        cause_kind = "policy_rule"
+        cause_id = f"standing_mandate:{payload.basis_id}"
+    else:
+        raise WorkStoreError("invalid_request")
+
+    approved_scope = MissionApprovedScope(
+        revision=payload.revision,
+        basis_kind=payload.basis_kind,
+        basis_id=payload.basis_id,
+        approved_by=actor_id,
+        approved_by_actor_kind=actor_kind,
+        approved_at=at,
+        envelope=eff_draft,
+    )
+    transition = MissionTransition(
+        from_status=view.status,
+        to_status=MissionStatus.APPROVED,
+        cause_kind=cause_kind,
+        cause_id=cause_id,
+        actor_id=actor_id,
+        actor_kind=actor_kind,
+        at=at,
+        revision=view.revision,
+    )
+    updated_view = view.model_copy(
+        update={
+            "status": MissionStatus.APPROVED,
+            "approved_scope": approved_scope,
+            "transitions": (*view.transitions, transition),
+        }
+    )
+    mission = updated_view.model_dump(mode="json")
+    mission = MissionView.model_validate(mission).model_dump(mode="json")
+    return {"type": "approve_mission", "mission": mission}
+
+
+def _set_status(
+    cur: psycopg.Cursor[dict[str, object]],
+    envelope: CommandEnvelope,
+    actor_id: UUID,
+    actor_kind: str,
+) -> dict[str, object]:
+    command = envelope.command
+    assert isinstance(command, SetMissionStatusCommand)
+    payload = command.payload
+    workspace_id = envelope.workspace_id
+
+    raw_mission = _latest_mission(cur, workspace_id, payload.mission_id)
+    if raw_mission is None:
+        raise WorkStoreError("invalid_request")
+    view = MissionView.model_validate(raw_mission)
+
+    if not transition_allowed(view.status.value, payload.target_status):
+        raise WorkStoreError("mission_transition_refused")
+
+    if view.budget is None:
+        if payload.target_status != "abandoned":
+            raise WorkStoreError("mission_transition_refused")
+        hold_id = (
+            view.hold_decision.get("decision_id")
+            if isinstance(view.hold_decision, dict)
+            else None
+        )
+        if (
+            payload.cause_kind != "decision"
+            or hold_id is None
+            or str(payload.decision_id) != str(hold_id)
+        ):
+            raise WorkStoreError("mission_transition_refused")
+
+    if payload.target_status in ("running", "paused") and view.approved_scope is None:
+        raise WorkStoreError("mission_transition_refused")
+
+    if payload.cause_kind == "principal":
+        cause_id = str(actor_id)
+    elif payload.cause_kind == "policy_rule":
+        assert payload.policy_rule_id is not None
+        cause_id = payload.policy_rule_id
+    elif payload.cause_kind == "decision":
+        assert payload.decision_id is not None
+        cause_id = str(payload.decision_id)
+    else:
+        raise WorkStoreError("invalid_request")
+
+    cur.execute("SELECT clock_timestamp() AS at")
+    created_row = cur.fetchone()
+    if created_row is None:
+        raise WorkStoreError("unavailable")
+    at = created_row["at"]
+
+    target_status = MissionStatus(payload.target_status)
+    transition = MissionTransition(
+        from_status=view.status,
+        to_status=target_status,
+        cause_kind=payload.cause_kind,
+        cause_id=cause_id,
+        actor_id=actor_id,
+        actor_kind=actor_kind,
+        at=at,
+        revision=view.revision,
+    )
+    updated_view = view.model_copy(
+        update={
+            "status": target_status,
+            "transitions": (*view.transitions, transition),
+        }
+    )
+    mission = updated_view.model_dump(mode="json")
+    mission = MissionView.model_validate(mission).model_dump(mode="json")
+    return {"type": "set_mission_status", "mission": mission}
 
 
 def _standing_budget(provenance: object) -> object | None:
