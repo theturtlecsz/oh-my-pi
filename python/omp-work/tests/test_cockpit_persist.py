@@ -2,8 +2,9 @@
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from omp_work.cockpit_persist import PersistentCockpit
-from omp_work.cockpit_verbs import Cockpit
+sys.path.insert(0, str(Path(__file__).resolve().parents[0]))
+from fixtures.cockpit_demo.cockpit_persist import PersistentCockpit
+from fixtures.cockpit_demo.cockpit_verbs import Cockpit
 
 def test_persist_roundtrip(tmp_path):
     path = tmp_path / "cockpit.json"

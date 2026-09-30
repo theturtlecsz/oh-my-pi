@@ -2,7 +2,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
-from omp_work.cockpit_verbs import Cockpit
+from fixtures.cockpit_demo.cockpit_verbs import Cockpit
 
 
 VERBS = ("submit", "status", "cancel", "resume", "approve", "evidence")

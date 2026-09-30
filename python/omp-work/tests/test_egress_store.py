@@ -192,7 +192,7 @@ def test_owner_create_and_widen_store_each_version(service) -> None:
     ("label", "requested", "answered", "code"),
     [
         ("unanswered", "owner", None, "owner_signature_required"),
-        ("grokbot-answered", "grokbot", "grokbot", "owner_signature_required"),
+        ("client-answered", "client", "client", "owner_signature_required"),
         ("automation-requested", "automation", "owner", "worker_not_permitted"),
         ("task-agent-requested", "task-agent", "owner", "worker_not_permitted"),
         ("model-requested", "model", "owner", "unknown_actor"),
@@ -233,7 +233,7 @@ def test_widen_refused_stores_nothing(
     assert _policy_rows(service, workspace_id, project_id) == before
 
 
-def test_grokbot_narrow_is_stored_and_keeps_the_decision(service) -> None:
+def test_client_narrow_is_stored_and_keeps_the_decision(service) -> None:
     store, workspace_id, project_id = _open(service)
     base_decision = uuid4()
     store.put_project_egress(
@@ -252,7 +252,7 @@ def test_grokbot_narrow_is_stored_and_keeps_the_decision(service) -> None:
         OWNER,
         project_id,
         _egress(registries=(REGISTRY,), decision_id=base_decision),
-        ChangeAuthority(requested_by_kind="grokbot"),
+        ChangeAuthority(requested_by_kind="client"),
     )
     rows = _policy_rows(service, workspace_id, project_id)
     active = [row for row in rows if row["active"]]

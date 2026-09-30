@@ -314,7 +314,7 @@ def _rows(service, sql: str, params: tuple[object, ...]) -> list[dict[str, objec
     ("label", "requested", "answered", "code"),
     [
         ("unanswered", "owner", None, "owner_signature_required"),
-        ("grokbot-answered", "grokbot", "grokbot", "owner_signature_required"),
+        ("client-answered", "client", "client", "owner_signature_required"),
         ("automation-requested", "automation", "owner", "worker_not_permitted"),
         ("task-agent-requested", "task-agent", "owner", "worker_not_permitted"),
     ],

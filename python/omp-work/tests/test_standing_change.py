@@ -21,12 +21,12 @@ def test_owner_signed() -> None:
     )
     assert owner_signed(auth_owner) is True
 
-    auth_grokbot = ChangeAuthority(
-        requested_by_kind="grokbot",
+    auth_client = ChangeAuthority(
+        requested_by_kind="client",
         decision_id="dec-1",
-        answered_by_kind="grokbot",
+        answered_by_kind="client",
     )
-    assert owner_signed(auth_grokbot) is False
+    assert owner_signed(auth_client) is False
 
     auth_none = ChangeAuthority(
         requested_by_kind="owner",
@@ -49,9 +49,9 @@ def test_create_widen_extend_owner_ok(kind: ChangeKind) -> None:
 
 
 @pytest.mark.parametrize("kind", [ChangeKind.create, ChangeKind.widen, ChangeKind.extend])
-def test_create_widen_extend_grokbot_requester_with_owner_signature_ok(kind: ChangeKind) -> None:
+def test_create_widen_extend_client_requester_with_owner_signature_ok(kind: ChangeKind) -> None:
     auth = ChangeAuthority(
-        requested_by_kind="grokbot",
+        requested_by_kind="client",
         decision_id="dec-1",
         answered_by_kind="owner",
     )
@@ -59,11 +59,11 @@ def test_create_widen_extend_grokbot_requester_with_owner_signature_ok(kind: Cha
 
 
 @pytest.mark.parametrize("kind", [ChangeKind.create, ChangeKind.widen, ChangeKind.extend])
-def test_create_widen_extend_grokbot_answer_refused(kind: ChangeKind) -> None:
+def test_create_widen_extend_client_answer_refused(kind: ChangeKind) -> None:
     auth = ChangeAuthority(
-        requested_by_kind="grokbot",
+        requested_by_kind="client",
         decision_id="dec-1",
-        answered_by_kind="grokbot",
+        answered_by_kind="client",
     )
     with pytest.raises(StandingChangeRefused) as exc_info:
         authorize_standing_change(kind, auth)
@@ -117,7 +117,7 @@ def test_create_widen_extend_unknown_actor_refused(kind: ChangeKind) -> None:
 
 
 @pytest.mark.parametrize("kind", [ChangeKind.narrow, ChangeKind.revoke])
-@pytest.mark.parametrize("actor", ["owner", "grokbot", "automation", "task-agent"])
+@pytest.mark.parametrize("actor", ["owner", "client", "automation", "task-agent"])
 def test_narrow_revoke_all_known_actors_ok(kind: ChangeKind, actor: str) -> None:
     auth = ChangeAuthority(
         requested_by_kind=actor,
