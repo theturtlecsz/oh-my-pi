@@ -1,7 +1,7 @@
 """W4 chaos proofs against Cockpit façade."""
 from __future__ import annotations
 from dataclasses import dataclass
-from omp_work.cockpit_verbs import Cockpit
+from fixtures.cockpit_demo.cockpit_verbs import Cockpit
 
 
 @dataclass

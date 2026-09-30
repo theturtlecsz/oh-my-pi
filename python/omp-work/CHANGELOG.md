@@ -47,9 +47,11 @@
 - Mission requests pass through typed intake; new or materially changed scope waits for the owner's structured answer (confirm, edit, reject, or a note that produces a new draft), stored with the original instruction and its provenance; drafts inside an approved mission or the standing mandate proceed (OMP-426).
 - tier-classified control actions — tier 1 runs, tier 2 needs a covering standing policy or budget, tier 3 is held with a pending owner decision and runs once after a signed approval whose target is unchanged; disposable cloud resources are recorded so deleting them stays tier 2.
 - Signed mission-event push: `omp-work events push` delivers each client's subscribed mission events to its registered `push_url` as bearer-less POSTs signed per subscription (Idempotency-Key is the event id) and advances a cursor only past delivered events, and `omp-work events push-key --subscription ID` prints a subscription's signing key (OMP-415).
+- `ops controller message|designate|show` designates the workspace's owner controller: `message` prints the exact bytes to sign, `designate` writes the owner-signed `<config_dir>/owner-controller.json` (mode 0600) and exits 1 without writing when the signature does not verify, and `show` reports the designated controller or null (OMP-416).
 
 ### Changed
 
+- `ops capabilities grokbot` is now `ops capabilities client --name N [--stop-only]`, minting the `client` actor kind with `work.read`, `work.client`, `work.stop` (or `work.stop` alone with `--stop-only`) (OMP-416).
 - PostgreSQL backups now use the dedicated backup role to export every RLS-protected ledger table, and restore drills verify the selected completed backup in an isolated native PostgreSQL 18 instance.
 - Linear exports now use static read-only stream queries, encrypted immutable artifacts, redacted reconciliation summaries, and explicit scoped-OAuth or owner-managed personal-key authentication.
 - Completion now requires a finalized candidate with a non-null full object ID, closeout review evidence, and a push receipt resolving to that exact commit; a negative latest audit permits a new planned-candidate attempt on the same revision, and revision changes still invalidate all prior candidates and receipts.

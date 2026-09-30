@@ -26,7 +26,7 @@ class ChangeKind(StrEnum):
 
 
 KNOWN_ACTOR_KINDS: frozenset[str] = frozenset(
-    {"owner", "grokbot", "automation", "task-agent"}
+    {"owner", "client", "automation", "task-agent"}
 )
 WORKER_ACTOR_KINDS: frozenset[str] = frozenset({"automation", "task-agent"})
 

@@ -3,10 +3,11 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[0]))
 
-from omp_work.cockpit_verbs import Cockpit
-from omp_work.chaos_suite import run_all_chaos
-from omp_work.full_path import exercise_all_verbs, run_full_path, VERBS
+from fixtures.cockpit_demo.cockpit_verbs import Cockpit
+from fixtures.cockpit_demo.chaos_suite import run_all_chaos
+from fixtures.cockpit_demo.full_path import exercise_all_verbs, run_full_path, VERBS
 
 
 def test_six_verbs():
@@ -32,7 +33,7 @@ def test_full_path_twice_with_interrupt():
 
 def test_feature_freeze_marker():
     # D29–30 freeze: this suite must not import new W5 feature modules
-    import omp_work.cockpit_verbs as cv
-    import omp_work.chaos_suite as cs
-    import omp_work.full_path as fp
+    import fixtures.cockpit_demo.cockpit_verbs as cv
+    import fixtures.cockpit_demo.chaos_suite as cs
+    import fixtures.cockpit_demo.full_path as fp
     assert cv and cs and fp

@@ -5,20 +5,26 @@ import json
 import os
 import secrets
 import stat
+import sys
 from pathlib import Path
 from uuid import UUID, uuid4
 
 from psycopg import sql
 
 from omp_work.integration.importer import LinearImporter
+from omp_work.v1.owner_controller import (
+    designated_controller,
+    designation_message,
+    write_designation,
+)
 
 from . import backup
 from .capabilities import (
     _write_secret,
     provision_automation,
     provision_candidate_reader,
+    provision_client,
     provision_event_push,
-    provision_grokbot,
     provision_owner,
     write_client_config,
 )
@@ -130,6 +136,18 @@ def add_parser(parser: argparse.ArgumentParser) -> None:
     credentials.add_parser("init")
     rotate = credentials.add_parser("rotate")
     rotate.add_argument("role")
+    controller = commands.add_parser("controller").add_subparsers(
+        dest="controller_command", required=True
+    )
+    controller_message = controller.add_parser("message")
+    controller_message.add_argument("--workspace-id", required=True)
+    controller_message.add_argument("--actor-id", required=True)
+    controller_designate = controller.add_parser("designate")
+    controller_designate.add_argument("--workspace-id", required=True)
+    controller_designate.add_argument("--actor-id", required=True)
+    controller_designate.add_argument("--signature-file", required=True, type=Path)
+    controller_show = controller.add_parser("show")
+    controller_show.add_argument("--workspace-id", required=True)
     capabilities = commands.add_parser("capabilities").add_subparsers(
         dest="capabilities_command", required=True
     )
@@ -144,9 +162,10 @@ def add_parser(parser: argparse.ArgumentParser) -> None:
     automation = capabilities.add_parser("automation")
     automation.add_argument("--workspace-id", required=True)
     automation.add_argument("--name", default="automation")
-    grokbot = capabilities.add_parser("grokbot")
-    grokbot.add_argument("--workspace-id", required=True)
-    grokbot.add_argument("--name", default="grokbot")
+    client = capabilities.add_parser("client")
+    client.add_argument("--workspace-id", required=True)
+    client.add_argument("--name", default="client")
+    client.add_argument("--stop-only", action="store_true")
     event_push = capabilities.add_parser("event-push")
     event_push.add_argument("--workspace-id", required=True)
     event_push.add_argument("--name", default="event-push")
@@ -211,6 +230,29 @@ def run(args: argparse.Namespace, config: OperationsConfig | None = None) -> Non
             )
         else:
             credentials_rotate(config, args.role)
+    elif command == "controller":
+        workspace_id = UUID(args.workspace_id)
+        if args.controller_command == "message":
+            # Exact designation_message bytes: a trailing newline would be
+            # part of the signed payload and fail designate's verification.
+            sys.stdout.buffer.write(designation_message(workspace_id, UUID(args.actor_id)))
+            sys.stdout.buffer.flush()
+        elif args.controller_command == "designate":
+            actor_id = UUID(args.actor_id)
+            try:
+                signature = args.signature_file.read_text(encoding="utf-8").strip()
+            except (OSError, UnicodeError) as error:
+                print(f"controller: signature file unreadable: {error}", file=sys.stderr)
+                raise SystemExit(1) from None
+            try:
+                path = write_designation(config.config_dir, workspace_id, actor_id, signature)
+            except ValueError as error:
+                print(f"controller: {error}", file=sys.stderr)
+                raise SystemExit(1) from None
+            print(path)
+        else:
+            actor_id = designated_controller(config.config_dir, workspace_id)
+            print(json.dumps({"controller_actor_id": str(actor_id) if actor_id else None}))
     elif command == "capabilities":
         if args.capabilities_command == "init":
             path = provision_owner(
@@ -232,11 +274,12 @@ def run(args: argparse.Namespace, config: OperationsConfig | None = None) -> Non
                 workspace_id=UUID(args.workspace_id),
                 name=args.name,
             )
-        elif args.capabilities_command == "grokbot":
-            path = provision_grokbot(
+        elif args.capabilities_command == "client":
+            path = provision_client(
                 config,
                 workspace_id=UUID(args.workspace_id),
                 name=args.name,
+                stop_only=args.stop_only,
             )
         elif args.capabilities_command == "event-push":
             path = provision_event_push(

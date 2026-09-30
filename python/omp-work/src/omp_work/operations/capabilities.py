@@ -23,8 +23,8 @@ OWNER_SCOPES = (
 # flood writes items and /execute appends evidence and runs execution
 # commands. Intake publication stays owner-only through the existing
 # actor_kind check in the store; finer per-command limits belong to OMP-403
-# (finding E0481). The stop scope is for the owner and grokbot only (OMP-405),
-# so this tuple is not an alias of OWNER_SCOPES.
+# (finding E0481). The stop scope is held only by the owner and the client
+# principal (OMP-405), so this tuple is not an alias of OWNER_SCOPES.
 AUTOMATION_SCOPES = (
     "work.read",
     "work.mutate",
@@ -33,9 +33,10 @@ AUTOMATION_SCOPES = (
     "work.execute",
 )
 DEFAULT_BASE_URL = "http://127.0.0.1:54322"
-# OMP-405: the stop switch's monitoring principal — engage_stop and the stop
-# status read only; never a mutation scope.
-GROKBOT_SCOPES = ("work.stop",)
+# OMP-416: the client principal — a monitoring caller that reads the ledger and
+# engages the agent stop. With --stop-only it is narrowed to work.stop alone.
+CLIENT_SCOPES = ("work.read", "work.client", "work.stop")
+CLIENT_STOP_ONLY_SCOPES = ("work.stop",)
 # OMP-415: the push runner. work.events.admin is not an owner scope.
 EVENT_PUSH_SCOPES = ("work.read", "work.events.admin")
 
@@ -212,20 +213,24 @@ def provision_event_push(
     )
 
 
-def provision_grokbot(
+def provision_client(
     config: OperationsConfig,
     workspace_id: UUID,
-    name: str = "grokbot",
+    name: str = "client",
+    *,
+    stop_only: bool = False,
 ) -> Path:
-    """OMP-405: mint the stop switch's monitoring principal — a distinct
-    actor_id and token with actor_kind "grokbot", one workspace, and
-    ``work.stop`` only, so it can engage the agent stop and read the stop
-    status but never mutate the ledger."""
+    """OMP-416: mint the monitoring principal — a distinct actor_id and token
+    with actor_kind "client", one workspace. A full client can read the ledger
+    (``work.read``), act as a client (``work.client``), and engage the agent
+    stop (``work.stop``); ``stop_only`` narrows it to ``work.stop`` alone, so
+    it can engage the stop and read the stop status but never read the ledger
+    or mutate it."""
     return write_capability(
         config,
         name,
         actor_id=uuid4(),
-        actor_kind="grokbot",
+        actor_kind="client",
         workspaces=(workspace_id,),
-        scopes=GROKBOT_SCOPES,
+        scopes=CLIENT_STOP_ONLY_SCOPES if stop_only else CLIENT_SCOPES,
     )

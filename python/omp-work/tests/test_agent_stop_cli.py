@@ -1,12 +1,13 @@
-"""OMP-405-s05: the ``omp-work stop`` CLI and the grokbot credential class.
+"""OMP-405-s05: the ``omp-work stop`` CLI and the client credential class.
 
 Without a database. The three contracts defended here:
 
 - ``stop check`` maps the workspace stop state to the systemd ``ExecCondition``
   exit codes — 0 running, 1 stopped, 255 when the service cannot be reached;
 - ``stop engage`` submits a fresh ``engage_stop`` envelope carrying the reason;
-- ``omp-work ops capabilities grokbot`` mints a mode-0600 capability whose
-  ``actor_kind`` is ``grokbot`` and whose only scope is ``work.stop``, and that
+- ``omp-work ops capabilities client --name N [--stop-only]`` mints a mode-0600
+  capability whose ``actor_kind`` is ``client`` — ``work.read``/``work.client``/
+  ``work.stop`` by default, ``work.stop`` alone with ``--stop-only`` — and that
   token is accepted by the real WorkService: it engages the stop at the store
   and reads the stop status, while ``release_stop`` is refused 403.
 """
@@ -294,20 +295,46 @@ class _RecordingStore:
         }
 
 
-def test_grokbot_capability_file_shape(
+def test_client_capability_file_shape(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     workspace_id = uuid4()
 
-    assert main(["ops", "capabilities", "grokbot", "--workspace-id", str(workspace_id)]) == 0
-    path = _capability_path(tmp_path, "grokbot")
+    # The default client reads the ledger and engages the stop.
+    assert (
+        main(["ops", "capabilities", "client", "--name", "client", "--workspace-id", str(workspace_id)])
+        == 0
+    )
+    path = _capability_path(tmp_path, "client")
     assert path.stat().st_mode & 0o777 == 0o600
     data = json.loads(path.read_text())
-    assert data["actor_kind"] == "grokbot"
-    assert data["scopes"] == ["work.stop"]
+    assert data["actor_kind"] == "client"
+    assert data["scopes"] == ["work.client", "work.read", "work.stop"]
     assert data["workspaces"] == [str(workspace_id)]
     assert data["token"] and data["actor_id"]
+
+    # --stop-only narrows the same principal to work.stop alone.
+    assert (
+        main(
+            [
+                "ops",
+                "capabilities",
+                "client",
+                "--name",
+                "stop-watch",
+                "--stop-only",
+                "--workspace-id",
+                str(workspace_id),
+            ]
+        )
+        == 0
+    )
+    stop_only = json.loads(_capability_path(tmp_path, "stop-watch").read_text())
+    assert stop_only["actor_kind"] == "client"
+    assert stop_only["scopes"] == ["work.stop"]
+    assert stop_only["workspaces"] == [str(workspace_id)]
+    assert stop_only["token"] and stop_only["actor_id"]
 
 
 def _envelope(command_type: str, reason: str) -> dict[str, object]:
@@ -321,13 +348,27 @@ def _envelope(command_type: str, reason: str) -> dict[str, object]:
     }
 
 
-def test_grokbot_bearer_engages_and_reads_but_cannot_release(
+def test_client_bearer_engages_and_reads_but_cannot_release(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    assert main(["ops", "capabilities", "grokbot", "--workspace-id", str(WORKSPACE)]) == 0
-    capabilities = _capability_path(tmp_path, "grokbot").parent
-    token = json.loads(_capability_path(tmp_path, "grokbot").read_text())["token"]
+    assert (
+        main(
+            [
+                "ops",
+                "capabilities",
+                "client",
+                "--name",
+                "stop-watch",
+                "--stop-only",
+                "--workspace-id",
+                str(WORKSPACE),
+            ]
+        )
+        == 0
+    )
+    capabilities = _capability_path(tmp_path, "stop-watch").parent
+    token = json.loads(_capability_path(tmp_path, "stop-watch").read_text())["token"]
 
     store = _RecordingStore()
     config = OperationsConfig(
@@ -351,7 +392,7 @@ def test_grokbot_bearer_engages_and_reads_but_cannot_release(
     assert store.calls == [
         {
             "command_type": "engage_stop",
-            "actor_kind": "grokbot",
+            "actor_kind": "client",
             "required_scope": "work.stop",
         }
     ]

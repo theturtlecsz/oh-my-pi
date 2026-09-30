@@ -5,7 +5,7 @@ from typing import Any
 import json
 import time
 
-from omp_work.cockpit_verbs import Cockpit, Job
+from fixtures.cockpit_demo.cockpit_verbs import Cockpit, Job
 
 _MUTATORS = frozenset({
     "submit", "cancel", "approve", "resume", "restore", "mark_timeout",
