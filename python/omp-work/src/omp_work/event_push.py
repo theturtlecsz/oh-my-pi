@@ -59,6 +59,15 @@ def _getaddrinfo_ips(host: str) -> tuple[str, ...]:
     return tuple(ips)
 
 
+def _extract_scheme(url: str) -> str:
+    i = url.find(":")
+    if i > 0 and url[0].isascii() and url[0].isalpha():
+        candidate = url[:i]
+        if all(c.isalnum() or c in "+-." for c in candidate):
+            return candidate.lower()
+    return ""
+
+
 def check_destination(
     url: str,
     *,
@@ -71,12 +80,31 @@ def check_destination(
     ``unresolvable``, ``blocked:<reason>`` from ``blocked_address`` on any
     resolved IP.
     """
-    parts = urlsplit(url.strip())
-    if parts.scheme != "https":
+    raw = url.strip()
+    if _extract_scheme(raw) != "https":
         return "scheme"
-    if parts.username is not None or parts.password is not None or "@" in parts.netloc:
+
+    has_userinfo = False
+    host = ""
+    try:
+        parts = urlsplit(raw)
+        has_userinfo = (
+            parts.username is not None
+            or parts.password is not None
+            or "@" in parts.netloc
+        )
+        if not has_userinfo:
+            _ = parts.port
+            host = _host_key(parts.hostname or "")
+    except ValueError:
+        netloc = raw.split("://", 1)[1] if "://" in raw else ""
+        for sep in ("/", "?", "#"):
+            netloc = netloc.split(sep, 1)[0]
+        if "@" in netloc:
+            has_userinfo = True
+
+    if has_userinfo:
         return "userinfo"
-    host = _host_key(parts.hostname or "")
     allowed = {_host_key(item) for item in allowed_hosts if _host_key(item)}
     if not host or host not in allowed:
         return "host_not_allowed"

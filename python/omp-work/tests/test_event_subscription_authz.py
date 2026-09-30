@@ -346,6 +346,12 @@ def test_check_destination_refuses_unsafe_targets_and_accepts_a_public_ip(
     )
     assert (
         check_destination(
+            "http://[", allowed_hosts=allowed, resolve=explode
+        )
+        == "scheme"
+    )
+    assert (
+        check_destination(
             "https://user:secret@allowed.example/hook",
             allowed_hosts=allowed,
             resolve=explode,
@@ -354,7 +360,25 @@ def test_check_destination_refuses_unsafe_targets_and_accepts_a_public_ip(
     )
     assert (
         check_destination(
+            "https://user@[", allowed_hosts=allowed, resolve=explode
+        )
+        == "userinfo"
+    )
+    assert (
+        check_destination(
             "https://other.example/hook", allowed_hosts=allowed, resolve=explode
+        )
+        == "host_not_allowed"
+    )
+    assert (
+        check_destination(
+            "https://[", allowed_hosts=allowed, resolve=explode
+        )
+        == "host_not_allowed"
+    )
+    assert (
+        check_destination(
+            "https://[invalid-ipv6]", allowed_hosts=allowed, resolve=explode
         )
         == "host_not_allowed"
     )
@@ -496,3 +520,43 @@ def test_push_url_without_a_checker_is_400() -> None:
     assert refused.value.code == "invalid_request"
     assert refused.value.diagnostics == ("push_destination_refused", "no_check")
     assert store.executed == []
+
+
+def test_malformed_push_url_is_refused_without_reaching_store(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.config_dir.mkdir(parents=True)
+    destination = config.config_dir / "push-destinations.json"
+    destination.write_text(json.dumps({"allowed_hosts": ["hooks.example"]}))
+    directory = tmp_path / "capabilities"
+    _write_capability(directory, "a", CLIENT_A, ["work.read"])
+    store = _Store()
+    client = TestClient(
+        create_app(config, capabilities_dir=directory, store=store)  # type: ignore[arg-type]
+    )
+
+    r_bracket = _post(client, "a", _put(SUB_A, push_url="https://["))
+    assert r_bracket.status_code == 400
+    assert r_bracket.json()["error"]["code"] == "invalid_request"
+    assert r_bracket.json()["error"]["diagnostics"] == [
+        "push_destination_refused",
+        "host_not_allowed",
+    ]
+
+    r_http_bracket = _post(client, "a", _put(SUB_A, push_url="http://["))
+    assert r_http_bracket.status_code == 400
+    assert r_http_bracket.json()["error"]["code"] == "invalid_request"
+    assert r_http_bracket.json()["error"]["diagnostics"] == [
+        "push_destination_refused",
+        "scheme",
+    ]
+
+    r_user_bracket = _post(client, "a", _put(SUB_A, push_url="https://user@["))
+    assert r_user_bracket.status_code == 400
+    assert r_user_bracket.json()["error"]["code"] == "invalid_request"
+    assert r_user_bracket.json()["error"]["diagnostics"] == [
+        "push_destination_refused",
+        "userinfo",
+    ]
+
+    assert store.executed == []
+
