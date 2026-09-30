@@ -71,6 +71,11 @@ def load_handler(spec: dict[str, Any] | Handler) -> Handler:
 
 @dataclass
 class WorkerConfig:
+    """Configuration for native research job workers.
+
+    Worker `capacity` is a resource-weight admission budget, not a concurrency setting; workers claim and execute one job at a time serially regardless of capacity.
+    """
+
     workspace_id: UUID
     actor_id: UUID
     worker_id: str
@@ -82,7 +87,10 @@ class WorkerConfig:
 
 
 class JobWorker:
-    """Production driver for the native jobs substrate."""
+    """Production driver for the native jobs substrate.
+
+    Worker `capacity` is a resource-weight admission budget, not a concurrency setting; `tick` claims and runs one job at a time and `run_forever` loops tick serially.
+    """
 
     def __init__(
         self,
