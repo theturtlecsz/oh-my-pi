@@ -109,6 +109,18 @@ See `.env.example` for the authoritative variable list. The shipped
 `docker-compose.yml` uses per-service `environment:` allowlists rather
 than `env_file:`, so `GITHUB_TOKEN` only reaches the gh-proxy container.
 
+#### Jev issue prefilter
+
+| Variable | Type | Default | Description |
+| --- | --- | --- | --- |
+| `ROBOMP_JEV_ENABLED` | bool | `False` | Master toggle gating Jev typed decisions in robomp |
+| `ROBOMP_PREFILTER` | bool | `False` | Enables issue prefilter evaluation before worktree and session creation |
+| `ROBOMP_JEV_BASE_URL` | str | `"https://api.typesafe.ai"` | Base URL for Jev typed decision endpoint |
+| `TYPESAFE_API_KEY` | SecretStr \| None | `None` | Authentication key for the Jev decision API |
+| `ROBOMP_PREFILTER_THRESHOLD` | float | `0.90` | Probability threshold for prefilter decision routing |
+
+Confident invalid/question/batch-audit issues get `provisional:<label>` + template reply, no session; final label only from a session's `classify_issue`; calls logged in `jev_calls`.
+
 ## Release sentinel
 
 `ROBOMP_RELEASE_SENTINEL_ENABLED=false` by default because this workflow may
