@@ -85,17 +85,22 @@ _OPENER = urllib.request.build_opener(_DeniedFileAndData)
 
 def send(
     url: str,
-    token: str,
+    token: str | None,
     idempotency_key: str,
     body: Any,
     *,
     timeout: float = 10,
+    headers: dict[str, str] | None = None,
 ) -> None:
     """POST JSON body to Grokbot with authentication and idempotency key.
 
     URL must be https, or http to loopback; otherwise ValueError is raised
     before connecting. The opener rejects file: and data: schemes. Non-2xx
     and network errors raise GrokbotError (status or reason, never the token).
+
+    ``token=None`` sends no Authorization header (OMP-415 signed pushes carry
+    no bearer). ``headers`` are extra request headers, merged without letting
+    them displace the bearer/idempotency/content-type the caller relies on.
     """
     _validate_url(url)
 
@@ -106,18 +111,28 @@ def send(
     else:
         data = json.dumps(body).encode("utf-8")
 
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Idempotency-Key": str(idempotency_key),
-        "Content-Type": "application/json",
-    }
+    request_headers = dict(headers or {})
+    request_headers["Idempotency-Key"] = str(idempotency_key)
+    request_headers["Content-Type"] = "application/json"
+    if token is not None:
+        request_headers["Authorization"] = f"Bearer {token}"
+
+    # Redaction source: the configured token when there is one, plus any
+    # caller-supplied header values (a signing secret must never leak into an
+    # error message).
+    secrets_to_hide = [value for value in (token, *((headers or {}).values())) if value]
 
     req = urllib.request.Request(
         url,
         data=data,
-        headers=headers,
+        headers=request_headers,
         method="POST",
     )
+
+    def hide(text: str) -> str:
+        for secret in secrets_to_hide:
+            text = _sanitize(text, secret)
+        return text
 
     try:
         with _OPENER.open(req, timeout=timeout) as resp:
@@ -130,7 +145,7 @@ def send(
     except urllib.error.HTTPError as exc:
         status_code = exc.code
         reason = str(exc.reason)
-        sanitized_reason = _sanitize(reason, token)
+        sanitized_reason = hide(reason)
         msg = f"HTTP {status_code}: {sanitized_reason}"
         raise GrokbotError(
             msg,
@@ -139,10 +154,10 @@ def send(
         ) from None
     except urllib.error.URLError as exc:
         reason = str(exc.reason) if hasattr(exc, "reason") else str(exc)
-        sanitized_reason = _sanitize(reason, token)
+        sanitized_reason = hide(reason)
         msg = f"Network error: {sanitized_reason}"
         raise GrokbotError(msg, reason=sanitized_reason) from None
     except (TimeoutError, OSError) as exc:
-        sanitized_msg = _sanitize(str(exc), token)
+        sanitized_msg = hide(str(exc))
         msg = f"Network error: {sanitized_msg}"
         raise GrokbotError(msg, reason=sanitized_msg) from None

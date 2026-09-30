@@ -45,6 +45,7 @@
 - Wire `draft_mission_intake` into PostgresWorkStore with standing mandate and spend ceiling resolution (OMP-426).
 - Mission requests pass through typed intake; new or materially changed scope waits for the owner's structured answer (confirm, edit, reject, or a note that produces a new draft), stored with the original instruction and its provenance; drafts inside an approved mission or the standing mandate proceed (OMP-426).
 - tier-classified control actions — tier 1 runs, tier 2 needs a covering standing policy or budget, tier 3 is held with a pending owner decision and runs once after a signed approval whose target is unchanged; disposable cloud resources are recorded so deleting them stays tier 2.
+- Signed mission-event push: `omp-work events push` delivers each client's subscribed mission events to its registered `push_url` as bearer-less POSTs signed per subscription (Idempotency-Key is the event id) and advances a cursor only past delivered events, and `omp-work events push-key --subscription ID` prints a subscription's signing key (OMP-415).
 
 ### Changed
 

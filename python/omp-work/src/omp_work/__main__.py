@@ -217,6 +217,48 @@ def _run_alarms_command(args: argparse.Namespace) -> int:
     return 2
 
 
+def _run_events_command(args: argparse.Namespace) -> int:
+    from . import event_push
+
+    config_dir = OperationsConfig.defaults().config_dir
+    if args.events_command == "push-key":
+        try:
+            master_key = event_push.load_master_key(config_dir)
+        except ValueError as error:
+            print(f"events: {error}", file=sys.stderr)
+            return 2
+        print(event_push.subscription_key(master_key, args.subscription).hex())
+        return 0
+
+    try:
+        client, workspace_id = stop_ops.load_client(
+            args.client_config, args.bearer_file
+        )
+    except Exception as error:  # noqa: BLE001 - credential/transport failure is reported as 255
+        print(f"events: {error}", file=sys.stderr)
+        return 255
+    try:
+        try:
+            master_key = event_push.load_master_key(config_dir)
+        except ValueError as error:
+            print(f"events: {error}", file=sys.stderr)
+            return 2
+        allowed_hosts = event_push.load_allowed_hosts(config_dir)
+        result = event_push.run_push(
+            client,
+            workspace_id=workspace_id,
+            master_key=master_key,
+            allowed_hosts=allowed_hosts,
+        )
+        print(json.dumps(result, sort_keys=True))
+        return 0
+    except Exception as error:  # noqa: BLE001 - surfaced as the CLI failure code
+        print(f"events: {error}", file=sys.stderr)
+        return 255
+    finally:
+        client.close()
+
+
 def _run_stop_command(args: argparse.Namespace) -> int:
     if args.stop_command == "install-guards":
         try:
@@ -348,6 +390,14 @@ def main(argv: list[str] | None = None) -> int | None:
     watch = alarm_commands.add_parser("watch-credentials", parents=[alarm_common])
     watch.add_argument("--root", action="append")
 
+    events = subcommands.add_parser("events")
+    events_sub = events.add_subparsers(dest="events_command", required=True)
+    push_parser = events_sub.add_parser("push")
+    push_parser.add_argument("--client-config", required=True, type=Path)
+    push_parser.add_argument("--bearer-file", type=Path)
+    push_key_parser = events_sub.add_parser("push-key")
+    push_key_parser.add_argument("--subscription", required=True, type=UUID)
+
     owner_key.add_parser(subcommands)
 
     jobs_parser = subcommands.add_parser("jobs")
@@ -373,6 +423,8 @@ def main(argv: list[str] | None = None) -> int | None:
         if args.client_config is None:
             args.client_config = str(_default_client_config())
         return _run_alarms_command(args)
+    if args.command == "events":
+        return _run_events_command(args)
     if args.command == "stop":
         return _run_stop_command(args)
     if args.command == "serve":
