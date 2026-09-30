@@ -8,15 +8,18 @@ resolved address ``egress_policy.blocked_address`` refuses.
 
 ``run_push`` walks every client's subscriptions. A row with no push_url is a
 pull subscription and is skipped, as are ops.* streams other than an
-``ops.alarm`` row. A mission or ``ops.alarm`` row's push_url that
-``check_destination`` refuses returns ``{"refused": reason}`` and nothing is
-sent. A mission row pages mission events from its cursor, sending the
-subscribed types and advancing the cursor only past what was delivered. An
-``ops.alarm`` row replays every domain event, sends only the alerts past its
-cursor, and advances the cursor past what was delivered. Delivery is a signed,
-bearer-less POST (``send_signed``) whose Idempotency-Key is the
-mission_event_id (or the alert's ``idempotency_key``). A redirect is a failed
-delivery: the POST is not replayed to the Location.
+``ops.alarm`` or ``ops.digest`` row. A mission, ``ops.alarm``, or
+``ops.digest`` row's push_url that ``check_destination`` refuses returns
+``{"refused": reason}`` and nothing is sent. A mission row pages mission
+events from its cursor, sending the subscribed types and advancing the cursor
+only past what was delivered. An ``ops.alarm`` row replays every domain event,
+sends only the alerts past its cursor, and advances the cursor past what was
+delivered. An ``ops.digest`` row replays the same events and sends one digest
+per completed UTC day past its own cursor, advancing that cursor to the day's
+last sequence only after the digest is sent. Delivery is a signed, bearer-less
+POST (``send_signed``) whose Idempotency-Key is the mission_event_id, the
+alert's ``idempotency_key``, or ``digest:{workspace_id}:{day}``. A redirect is
+a failed delivery: the POST is not replayed to the Location.
 """
 
 from __future__ import annotations
@@ -28,12 +31,13 @@ import socket
 import stat
 import time
 from collections.abc import Callable, Iterable, Mapping
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from .alarm_classify import AlarmState, classify
+from .alarm_classify import AlarmState, _to_utc_date, build_digest, classify
 from .egress_policy import blocked_address
 from .grokbot import GrokbotError
 from .grokbot import send as grokbot_send
@@ -305,14 +309,16 @@ def run_push(
     allowed_hosts: Iterable[str],
     resolve: Callable[[str], Iterable[str]] = _getaddrinfo_ips,
     send: Callable[..., Any] | None = None,
+    today: date | None = None,
 ) -> dict[str, Any]:
-    """Deliver every client's subscribed mission events or ops.alarm alerts.
+    """Deliver subscribed mission events, ops.alarm alerts, or ops.digest days.
 
     Each ``client.event_subscriptions()`` row is handled in turn. A row with no
     push_url is a pull subscription and is skipped, as is an ``ops.*`` stream
-    other than a row whose event_types are exactly ``["ops.alarm"]``. A mission
-    or ``ops.alarm`` row's push_url ``check_destination`` refuses returns
-    ``{"refused": reason}`` and nothing is sent.
+    other than a row whose event_types are exactly ``["ops.alarm"]`` or
+    ``["ops.digest"]``. A mission, ``ops.alarm``, or ``ops.digest`` row's
+    push_url ``check_destination`` refuses returns ``{"refused": reason}`` and
+    nothing is sent.
 
     A mission row pages mission events from the row's cursor; each event whose
     type is subscribed is sent once (Idempotency-Key is its mission_event_id)
@@ -330,6 +336,15 @@ def run_push(
     sequence minus one when that is past the cursor, then returns
     ``{"failed": reason}``.
 
+    An ``ops.digest`` row replays the same events on its own cursor. Events are
+    grouped by the UTC date of ``occurred_at``. For each day strictly before
+    ``today``, ascending, whose last event sequence is past the cursor, the row
+    sends :func:`alarm_classify.build_digest` for that day (the alert count is
+    the alerts whose ``occurred_at`` falls on that day) with Idempotency-Key
+    ``digest:{workspace_id}:{day}``, then advances the cursor to that day's
+    last sequence. A send failure returns ``{"failed": reason}`` and does not
+    advance the cursor. ``today`` defaults to the current UTC date when None.
+
     Returns ``{"pushed": n}``.
 
     ``send`` defaults to the module-level :func:`send_signed` and is looked up
@@ -337,6 +352,8 @@ def run_push(
     """
     if send is None:
         send = send_signed
+    if today is None:
+        today = datetime.now(timezone.utc).date()
     allowed = frozenset(allowed_hosts)
     pushed = 0
     page = client.event_subscriptions()
@@ -346,7 +363,7 @@ def run_push(
         is_ops = bool(event_types) and all(
             isinstance(item, str) and item.startswith("ops.") for item in event_types
         )
-        if is_ops and event_types != ["ops.alarm"]:
+        if is_ops and event_types != ["ops.alarm"] and event_types != ["ops.digest"]:
             continue
         destination = _field(subscription, "push_url")
         if not isinstance(destination, str) or not destination.strip():
@@ -367,6 +384,21 @@ def run_push(
                 cursor=cursor,
                 key=key,
                 send=send,
+            )
+            if "failed" in outcome:
+                return {"failed": outcome["failed"]}
+            pushed += outcome["pushed"]
+            continue
+        if event_types == ["ops.digest"]:
+            outcome = _push_ops_digest(
+                client,
+                workspace_id=workspace_id,
+                sub_id=sub_id,
+                destination=destination,
+                cursor=cursor,
+                key=key,
+                send=send,
+                today=today,
             )
             if "failed" in outcome:
                 return {"failed": outcome["failed"]}
@@ -444,6 +476,62 @@ def _push_ops_alarm(
         pushed += 1
     if last_scanned > cursor:
         _advance(client, workspace_id, sub_id, last_scanned)
+    return {"pushed": pushed}
+
+
+def _push_ops_digest(
+    client: Any,
+    *,
+    workspace_id: UUID,
+    sub_id: str,
+    destination: str,
+    cursor: int,
+    key: bytes,
+    send: Callable[..., Any],
+    today: date,
+) -> dict[str, Any]:
+    """Send one digest per completed UTC day past ``cursor`` and advance it.
+
+    Replays every domain event (see :func:`_replay_ops`) and groups those
+    events by the UTC date of ``occurred_at``. A day's last sequence is the
+    maximum event sequence that day. For each day strictly before ``today``,
+    ascending, whose last sequence is past ``cursor``, sends
+    :func:`alarm_classify.build_digest` with Idempotency-Key
+    ``digest:{workspace_id}:{day}`` and advances the cursor to that day's last
+    sequence, which is then the cursor for the next day. The digest's alert
+    count is the number of alerts whose ``occurred_at`` falls on that day. A
+    send exception returns ``{"failed": reason}`` and does not advance the
+    cursor. Returns ``{"pushed": n}``.
+    """
+    alerts, rest, events = _replay_ops(client)
+    last_by_day: dict[date, int] = {}
+    for event in events:
+        day = _to_utc_date(_field(event, "occurred_at"))
+        sequence = int(_field(event, "sequence"))
+        previous = last_by_day.get(day)
+        if previous is None or sequence > previous:
+            last_by_day[day] = sequence
+    alerts_by_day: dict[date, int] = {}
+    for alert in alerts:
+        day = _to_utc_date(alert.occurred_at)
+        alerts_by_day[day] = alerts_by_day.get(day, 0) + 1
+
+    pushed = 0
+    for day in sorted(last_by_day):
+        if day >= today:
+            continue
+        last_sequence = last_by_day[day]
+        if last_sequence <= cursor:
+            continue
+        body = build_digest(workspace_id, day, rest, alerts_by_day.get(day, 0))
+        idem = f"digest:{workspace_id}:{day.isoformat()}"
+        try:
+            send(destination, idem, body, key=key)
+        except Exception as error:  # noqa: BLE001 - surfaced as the failed reason
+            return {"failed": str(error)}
+        pushed += 1
+        _advance(client, workspace_id, sub_id, last_sequence)
+        cursor = last_sequence
     return {"pushed": pushed}
 
 
