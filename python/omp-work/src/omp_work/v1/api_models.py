@@ -872,3 +872,15 @@ class StopStatusView(StrictModel):
     changed_by_actor_kind: str | None = None
 
 
+class ClientResponse(StrictModel):
+    outcome: Literal["read", "applied", "replayed", "pending_approval"]
+    state: str | None = None
+    evidence: tuple[str, ...] = ()
+    blockers: tuple[str, ...] = ()
+    decisions: tuple[UUID, ...] = ()
+    artifacts: tuple[str, ...] = ()
+    operation: str = Field(min_length=1)
+    contract: Literal["client.omp.dev/v1"] = "client.omp.dev/v1"
+    result: dict[str, Any] | None = None
+    detail: dict[str, Any] | None = None
+
