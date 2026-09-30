@@ -25,6 +25,12 @@ export interface FakeRouterReply {
 	cost?: number;
 	/** `usage.cost_details.upstream_inference_cost`, when a reply reports only that. */
 	upstreamInferenceCost?: number;
+	/**
+	 * Completion hit the token budget: answer `finish_reason: "length"` with
+	 * `content: null`, the shape a reasoning model returns when the cap is too
+	 * small for its reasoning preamble.
+	 */
+	truncate?: boolean;
 }
 
 export interface RecordedRouterRequest {
@@ -156,7 +162,12 @@ export class FakeOpenRouterTransport {
 					return Response.json({
 						id: reply.id ?? "gen-1",
 						model: reply.routedModel ?? "openai/gpt-5-mini",
-						choices: [{ message: { role: "assistant", content: reply.text ?? "medium" } }],
+						choices: [
+							{
+								message: { role: "assistant", content: reply.truncate ? null : (reply.text ?? "medium") },
+								finish_reason: reply.truncate ? "length" : "stop",
+							},
+						],
 						usage,
 					});
 				}

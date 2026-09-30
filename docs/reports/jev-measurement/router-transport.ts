@@ -38,7 +38,13 @@ export const ROUTER_ENV_DIR = "omp";
 /** Env file name inside {@link ROUTER_ENV_DIR}. */
 export const ROUTER_ENV_FILE = "jev.env";
 
-export type RouterOutcome = "ok" | "http_error" | "network_error" | "timeout" | "malformed";
+/**
+ * Terminal outcome of a routed call. `truncated` is its own outcome: the
+ * completion hit the completion-token budget (`finish_reason=length`) before
+ * emitting any content, which is a cap on this harness, not a router answer, so
+ * it must not be folded into `malformed`.
+ */
+export type RouterOutcome = "ok" | "http_error" | "network_error" | "timeout" | "malformed" | "truncated";
 
 /**
  * Where a call's USD cost was read. `completion-usage` is the chat completion's
@@ -97,6 +103,12 @@ export interface OpenRouterRouteDeps {
 	model?: string;
 	maxAttempts?: number;
 	/**
+	 * Completion-token budget for the routed call. Defaults to
+	 * {@link ROUTER_MAX_TOKENS}; a test may lower it to drive a truncated
+	 * completion without touching the live budget.
+	 */
+	maxTokens?: number;
+	/**
 	 * Read the OpenRouter generation record for a completed call, to read the
 	 * router's reasoning metadata and — when the completion carried no cost —
 	 * the charged cost. Off by default: the owner slice enables it (one GET per
@@ -128,6 +140,15 @@ export interface OpenRouterRouteDeps {
 export const ROUTER_BUDGET_MS = 30_000;
 /** At most one retry per call. */
 export const ROUTER_MAX_ATTEMPTS = 2;
+/**
+ * Completion-token budget for a routed call. Jev Router forwards to reasoning
+ * models, which spend the completion budget on reasoning tokens before they
+ * emit content: a small cap (the original 32) returns `finish_reason=length`
+ * with `content: null` on every real prompt, measuring the harness's cap instead
+ * of the router. 1024 tokens is enough for the reasoning preamble plus the
+ * single label.
+ */
+export const ROUTER_MAX_TOKENS = 1024;
 /** Default wait for a generation record: OpenRouter needs ~10 s after a completion. */
 export const GENERATION_RECORD_WAIT_MS = 15_000;
 /** Default first retry delay for generation-record backoff. */
@@ -215,6 +236,21 @@ function stringField(obj: unknown, key: string): string | undefined {
 }
 
 /**
+ * The first choice's `finish_reason`. `length` means the completion stopped at
+ * its token budget, so any answer it did not emit is a cap artifact rather than
+ * a router failure.
+ */
+function firstFinishReason(json: unknown): string | undefined {
+	if (!json || typeof json !== "object") return undefined;
+	const choices = (json as { choices?: unknown }).choices;
+	if (!Array.isArray(choices) || choices.length === 0) return undefined;
+	const choice = choices[0];
+	if (!choice || typeof choice !== "object") return undefined;
+	const finishReason = (choice as { finish_reason?: unknown }).finish_reason;
+	return typeof finishReason === "string" ? finishReason : undefined;
+}
+
+/**
  * The USD OpenRouter charged for one completion, read from the response's own
  * `usage`. `usage.cost` is the charged total; some responses report only
  * `usage.cost_details.upstream_inference_cost`, which is read as a fallback.
@@ -241,6 +277,7 @@ export async function routeCompletion(prompt: string, deps: OpenRouterRouteDeps)
 	const model = deps.model ?? OPENROUTER_JEV_ROUTER_MODEL;
 	const budgetMs = deps.budgetMs ?? ROUTER_BUDGET_MS;
 	const maxAttempts = deps.maxAttempts ?? ROUTER_MAX_ATTEMPTS;
+	const maxTokens = deps.maxTokens ?? ROUTER_MAX_TOKENS;
 	if (model !== OPENROUTER_JEV_ROUTER_MODEL) {
 		throw new RouterTransportError(`Router side may only send ${OPENROUTER_JEV_ROUTER_MODEL}; refused ${model}`);
 	}
@@ -285,7 +322,7 @@ export async function routeCompletion(prompt: string, deps: OpenRouterRouteDeps)
 				body: JSON.stringify({
 					model,
 					messages: [{ role: "user", content: prompt }],
-					max_tokens: 32,
+					max_tokens: maxTokens,
 					temperature: 0,
 				}),
 				signal: controller.signal,
@@ -304,7 +341,14 @@ export async function routeCompletion(prompt: string, deps: OpenRouterRouteDeps)
 				routedModel = stringField(json, "model");
 				usage = (json as { usage?: unknown }).usage;
 				text = firstMessageText(json);
-				outcome = text === undefined ? "malformed" : "ok";
+				// A completion that stopped at its token cap and emitted no
+				// content is a truncated answer, not a malformed one: the
+				// harness must count the cap separately from unparseable.
+				if (text === undefined && firstFinishReason(json) === "length") {
+					outcome = "truncated";
+				} else {
+					outcome = text === undefined ? "malformed" : "ok";
+				}
 			}
 		} catch {
 			outcome = controller.signal.aborted ? "timeout" : "network_error";
@@ -320,7 +364,7 @@ export async function routeCompletion(prompt: string, deps: OpenRouterRouteDeps)
 			status,
 			latencyMs: now() - started,
 			stateChars: prompt.length,
-			truncated: false,
+			truncated: outcome === "truncated",
 			attempt,
 			promptTokens: numberField(usage, "prompt_tokens"),
 			completionTokens: numberField(usage, "completion_tokens"),
@@ -368,6 +412,8 @@ export async function routeCompletion(prompt: string, deps: OpenRouterRouteDeps)
 		if (outcome === "timeout") break;
 		if (outcome === "http_error" && status !== undefined && status < 500) break;
 		if (outcome === "malformed") break;
+		// A truncation is terminal: the next attempt would hit the same cap.
+		if (outcome === "truncated") break;
 	}
 
 	if (!lastEntry) {

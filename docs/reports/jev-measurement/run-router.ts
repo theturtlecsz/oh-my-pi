@@ -99,6 +99,8 @@ export function renderRouterReport(results: RouterMeasurementResults, template: 
 		fill(`${prefix}_cost`, formatUsd(metrics.costPer1000Usd));
 		fill(`${prefix}_cost_source`, metrics.costSource);
 		fill(`${prefix}_unparseable`, formatPercent(metrics.unparseableRate));
+		fill(`${prefix}_truncated`, formatPercent(metrics.truncatedRate));
+		fill(`${prefix}_excluded`, formatHistogram(metrics.excludedLabels));
 		fill(`${prefix}_transport_failure`, formatPercent(metrics.transportFailureRate));
 		fill(`${prefix}_routed_models`, formatHistogram(metrics.routedModels));
 		fill(`${prefix}_routed_effort`, formatHistogram(metrics.routedEffort));
