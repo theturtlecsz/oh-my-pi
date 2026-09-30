@@ -6,6 +6,7 @@
 
 - Added an opt-in Jev classifier for auto thinking effort.
 - Added an opt-in Jev unexpected-stop classifier with a configurable threshold.
+- Added an opt-in Jev judge for hypothesis tournaments with a `{A, B, tie}` choice, kept alongside the chat judge as a second family for bias checks.
 - Added a host-selected configuration root so managed installations can keep candidate settings, extensions, agents, and Advisor configuration separate from the workspace being edited.
 - Added `omp tokens count` streaming token counter CLI command.
 - Added `taskDepth` to `ExtensionContext`, letting extensions distinguish the owner-facing main session (0) from model-spawned subagent sessions (>0) — e.g. to restrict owner-only authorization flows to the main session.

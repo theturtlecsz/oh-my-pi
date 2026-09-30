@@ -10,10 +10,19 @@ import { runTournament } from "../../src/autoresearch/tournament/runner";
 import { maxJudgeCalls } from "../../src/autoresearch/tournament/schedule";
 import { TOURNAMENT_LABEL, type Tournament, type TournamentJudge } from "../../src/autoresearch/tournament/types";
 import type { AutoresearchToolFactoryOptions } from "../../src/autoresearch/types";
-import { Settings } from "../../src/config/settings";
-import type { ExtensionContext } from "../../src/extensibility/extensions";
+import { resetSettingsForTest, Settings } from "../../src/config/settings";
+import type { ExtensionAPI, ExtensionContext } from "../../src/extensibility/extensions";
 import type { JevUsageEntry } from "../../src/tiny/jev-client";
 import { type StubJevServer, startStubJevServer } from "./stub-jev-server";
+
+/** Minimal ExtensionAPI stub: the Jev judge path only calls `appendEntry`. */
+function makePiStub(): { pi: ExtensionAPI; entries: Array<{ customType: string; data: unknown }> } {
+	const entries: Array<{ customType: string; data: unknown }> = [];
+	const pi = {
+		appendEntry: (customType: string, data?: unknown) => entries.push({ customType, data }),
+	} as unknown as ExtensionAPI;
+	return { pi, entries };
+}
 
 describe("parseJevJudgeOutcome", () => {
 	it("maps highest probability to outcome A", () => {
@@ -162,10 +171,22 @@ describe("hypothesis_tournament tool with Jev judge selected", () => {
 	beforeEach(async () => {
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ht-jev-tool-"));
 		stub = startStubJevServer();
+		// The tool reads the global settings singleton (ExtensionContext exposes
+		// no settings handle); initialize it for this file's tool tests.
+		resetSettingsForTest();
+		await Settings.init({
+			inMemory: true,
+			overrides: {
+				"autoresearch.tournament.judgeModel": "jev",
+				"jev.enabled": true,
+				"jev.baseUrl": stub.baseUrl,
+			},
+		});
 	});
 
 	afterEach(async () => {
 		stub.stop();
+		resetSettingsForTest();
 		await fs.rm(tempDir, { recursive: true, force: true });
 	});
 
@@ -188,16 +209,11 @@ describe("hypothesis_tournament tool with Jev judge selected", () => {
 			},
 		};
 
-		const isolatedSettings = Settings.isolated({
-			"autoresearch.tournament.judgeModel": "jev",
-			"jev.enabled": true,
-			"jev.baseUrl": stub.baseUrl,
-		});
-
+		const { pi, entries } = makePiStub();
 		const options: AutoresearchToolFactoryOptions = {
 			dashboard: {} as any,
 			getRuntime: () => ({}) as any,
-			pi: {} as any,
+			pi,
 		};
 
 		const tool = createHypothesisTournamentTool(options, {
@@ -208,10 +224,10 @@ describe("hypothesis_tournament tool with Jev judge selected", () => {
 			cwd: tempDir,
 			sessionManager: {
 				getSessionId: () => "sess-jev-1",
-				appendCustomEntry: () => {},
 			} as any,
 			modelRegistry: {
 				getApiKey: async () => "test-typesafe-key",
+				getApiKeyForProvider: async () => "test-typesafe-key",
 			} as any,
 			models: {
 				resolve: (spec: string) => ({ id: spec, api: "mock" }) as any,
@@ -220,7 +236,6 @@ describe("hypothesis_tournament tool with Jev judge selected", () => {
 				current: () => undefined,
 			},
 		};
-		(mockCtx as any).settings = isolatedSettings;
 
 		const result = await tool.execute(
 			"call_jev_1",
@@ -243,6 +258,10 @@ describe("hypothesis_tournament tool with Jev judge selected", () => {
 
 		const replayed = replayTournament(tournamentJson);
 		expect(JSON.stringify(replayed)).toBe(JSON.stringify(details.result));
+
+		// The default judges path records each Jev attempt through pi.appendEntry.
+		expect(entries.length).toBeGreaterThan(0);
+		expect(entries.every(entry => entry.customType === "jev_usage")).toBe(true);
 	});
 
 	it("runs dual-judge tournament with Jev and chat judge families for bias checks", async () => {
@@ -279,7 +298,6 @@ describe("hypothesis_tournament tool with Jev judge selected", () => {
 			cwd: tempDir,
 			sessionManager: {
 				getSessionId: () => "sess-dual-1",
-				appendCustomEntry: () => {},
 			} as any,
 			modelRegistry: {
 				getApiKey: async () => "key",
@@ -291,8 +309,9 @@ describe("hypothesis_tournament tool with Jev judge selected", () => {
 				current: () => undefined,
 			},
 		};
-		(mockCtx as any).settings = isolatedSettings;
 
+		// This test injects its own judges, so the pi stub is inert; only the
+		// explicit Jev judge deps below drive the stub Jev server.
 		const tool = createHypothesisTournamentTool({} as any, {
 			createSummarizer: async () => stubSummarizer,
 			createJudges: async () => {
