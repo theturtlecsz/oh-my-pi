@@ -45,7 +45,29 @@ async function createGitRepo(): Promise<string> {
 	const repo = await fs.mkdtemp(path.join(os.tmpdir(), "omp-worktree-"));
 	tempDirs.push(repo);
 	await runGit(repo, ["init", "-q", "-b", "main"]);
+	await disableAutoMaintenance(repo);
 	return repo;
+}
+
+/**
+ * Turn off git's automatic maintenance in a fixture repository.
+ *
+ * With maintenance enabled (the default), every commit spawns a detached
+ * `git maintenance run --auto`, which briefly takes
+ * `<repo>/.git/objects/maintenance.lock`. The recursive `.git` copies and
+ * removals these tests perform then race that transient file: an entry listed
+ * by one `readdir` is gone by the next `lstat`, and the walk fails with
+ * `ENOENT … /objects/maintenance.lock`. The lock is not part of any fixture,
+ * so we stop it at the source.
+ *
+ * The setting is stored in the repository's own config, so the `fs.cp` fixture
+ * copies inherit it and the linked temp worktrees the product commits into
+ * (whose `gc.auto`/`maintenance.auto` resolve through the shared common dir)
+ * observe it too — not just the `git` invocations made through {@link runGit}.
+ */
+async function disableAutoMaintenance(repo: string): Promise<void> {
+	await runGit(repo, ["config", "gc.auto", "0"]);
+	await runGit(repo, ["config", "maintenance.auto", "false"]);
 }
 
 afterEach(async () => {
@@ -137,6 +159,7 @@ describe("worktree isolation helpers", () => {
 		beforeAll(async () => {
 			repo = await fs.mkdtemp(path.join(os.tmpdir(), "omp-worktree-"));
 			await runGit(repo, ["init", "-q", "-b", BASE_BRANCH]);
+			await disableAutoMaintenance(repo);
 			await runGit(repo, ["config", "user.email", "test@example.com"]);
 			await runGit(repo, ["config", "user.name", "Test User"]);
 			await Promise.all([
@@ -589,6 +612,7 @@ describe("getRepoRoot", () => {
 		const inner = path.join(outer, "vendor");
 		await fs.mkdir(inner, { recursive: true });
 		await runGit(inner, ["init", "-q", "-b", "main"]);
+		await disableAutoMaintenance(inner);
 
 		expect(await getRepoRoot(inner)).toBe(inner);
 	});
@@ -603,6 +627,7 @@ describe("detachGitDir", () => {
 		const main = await fs.mkdtemp(path.join(os.tmpdir(), "omp-detach-main-"));
 		tempDirs.push(main);
 		await runGit(main, ["init", "-q", "-b", "main"]);
+		await disableAutoMaintenance(main);
 		await runGit(main, ["config", "user.email", "src@example.com"]);
 		await runGit(main, ["config", "user.name", "Source User"]);
 		await fs.writeFile(path.join(main, "file.txt"), "base\n");
@@ -693,6 +718,7 @@ describe("detachGitDir", () => {
 		const src = await fs.mkdtemp(path.join(os.tmpdir(), "omp-detach-src-"));
 		tempDirs.push(src);
 		await runGit(src, ["init", "-q", "-b", "main"]);
+		await disableAutoMaintenance(src);
 		await runGit(src, ["config", "user.email", "src@example.com"]);
 		await runGit(src, ["config", "user.name", "Source User"]);
 		await fs.writeFile(path.join(src, "file.txt"), "base\n");
@@ -775,6 +801,7 @@ describe("detachGitDir", () => {
 		const origin = await fs.mkdtemp(path.join(os.tmpdir(), "omp-detach-origin-"));
 		tempDirs.push(origin);
 		await runGit(origin, ["init", "-q", "-b", "main"]);
+		await disableAutoMaintenance(origin);
 		await runGit(origin, ["config", "user.email", "src@example.com"]);
 		await runGit(origin, ["config", "user.name", "Source User"]);
 		await fs.writeFile(path.join(origin, "one.txt"), "one\n");
@@ -883,6 +910,7 @@ describe("applyNestedPatches", () => {
 	beforeAll(async () => {
 		fixtureParent = await fs.mkdtemp(path.join(os.tmpdir(), "omp-nested-fixture-"));
 		await runGit(fixtureParent, ["init", "-q", "-b", "main"]);
+		await disableAutoMaintenance(fixtureParent);
 		await runGit(fixtureParent, ["config", "user.email", "test@example.com"]);
 		await runGit(fixtureParent, ["config", "user.name", "Test User"]);
 		await fs.writeFile(path.join(fixtureParent, ".gitignore"), "sub/\n");
@@ -892,6 +920,7 @@ describe("applyNestedPatches", () => {
 		const fixtureNested = path.join(fixtureParent, nestedRel);
 		await fs.mkdir(fixtureNested, { recursive: true });
 		await runGit(fixtureNested, ["init", "-q", "-b", "main"]);
+		await disableAutoMaintenance(fixtureNested);
 		await runGit(fixtureNested, ["config", "user.email", "test@example.com"]);
 		await runGit(fixtureNested, ["config", "user.name", "Test User"]);
 		await fs.writeFile(path.join(fixtureNested, "file.txt"), "v1\n");
@@ -1006,6 +1035,7 @@ describe("commitToBranch preserves agent commits", () => {
 	beforeAll(async () => {
 		fixtureRepo = await fs.mkdtemp(path.join(os.tmpdir(), "omp-commit-fixture-"));
 		await runGit(fixtureRepo, ["init", "-q", "-b", "main"]);
+		await disableAutoMaintenance(fixtureRepo);
 		await runGit(fixtureRepo, ["config", "user.email", "test@example.com"]);
 		await runGit(fixtureRepo, ["config", "user.name", "Test User"]);
 		await fs.writeFile(
