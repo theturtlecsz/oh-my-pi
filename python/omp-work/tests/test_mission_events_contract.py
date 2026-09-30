@@ -1,7 +1,9 @@
 """OMP-415: mission-event contract — commands, reads, views, and subscription rules.
 
-The two GET routes return the store dict as the store wrote it. Page and
-result views validate the shapes a later read slice will serve.
+The two GET routes validate the store page through MissionEventsPage /
+EventSubscriptionsPage and return the JSON dump, so a store row with an
+unknown event type or an empty event_types list is a 400. WorkClient reaches
+both routes through the bound workspace and validates the pages.
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import TypeAdapter, ValidationError
@@ -29,6 +32,7 @@ from omp_work.v1.api_models import (
     MissionEventsPage,
     RecordFindingResult,
 )
+from omp_work.v1.client import WorkClient
 from omp_work.v1.models import (
     MISSION_EVENT_TYPES,
     AdvanceEventCursor,
@@ -215,9 +219,18 @@ def test_scope_mapping() -> None:
 
 
 class _RecordingStore:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        mission_events_page: dict[str, object] | None = None,
+        subscriptions_page: dict[str, object] | None = None,
+    ) -> None:
         self.mission_events_calls: list[dict[str, object]] = []
         self.subscription_calls: list[dict[str, object]] = []
+        self.mission_events_page = mission_events_page or _mission_events_page()
+        self.subscriptions_page = subscriptions_page or {
+            "subscriptions": [_subscription_view()]
+        }
 
     def mission_events(
         self,
@@ -237,7 +250,7 @@ class _RecordingStore:
                 "mission_id": mission_id,
             }
         )
-        return {"mission_events": [{"raw": True}], "after": after}
+        return self.mission_events_page
 
     def event_subscriptions(
         self,
@@ -253,10 +266,7 @@ class _RecordingStore:
                 "client_id": client_id,
             }
         )
-        return {
-            "subscriptions": [{"raw": True}],
-            "client_id": None if client_id is None else str(client_id),
-        }
+        return self.subscriptions_page
 
 
 def _capabilities(tmp_path: Path) -> Path:
@@ -317,7 +327,12 @@ def test_mission_events_route_forwards_filters(tmp_path: Path) -> None:
         mission_id=str(MISSION),
     )
     assert response.status_code == 200
-    assert response.json() == {"mission_events": [{"raw": True}], "after": 4}
+    # The store's well-formed page comes back through the route unchanged.
+    assert MissionEventsPage.model_validate(response.json()) == MissionEventsPage.model_validate(
+        store.mission_events_page
+    )
+    assert response.json()["events"][0]["type"] == "mission.started"
+    assert response.json()["next_after_sequence"] == 1
     assert store.mission_events_calls == [
         {
             "workspace_id": WORKSPACE,
@@ -327,6 +342,16 @@ def test_mission_events_route_forwards_filters(tmp_path: Path) -> None:
             "mission_id": MISSION,
         }
     ]
+
+
+def test_mission_events_page_with_unknown_type_is_400(tmp_path: Path) -> None:
+    page = _mission_events_page()
+    page["events"][0]["type"] = "mission.exploded"  # type: ignore[index]
+    store = _RecordingStore(mission_events_page=page)
+    client = _client(tmp_path, store)
+    response = _get(client, f"/v1/workspaces/{WORKSPACE}/mission-events", "reader")
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_request"
 
 
 def test_mission_events_route_rejects_limit_zero_and_missing_read_scope(
@@ -353,13 +378,14 @@ def test_event_subscriptions_route_forwards_admin_none_and_own_actor(
 
     admin = _get(client, route, "admin")
     assert admin.status_code == 200
-    assert admin.json()["client_id"] is None
+    # The store's well-formed page comes back through the route unchanged.
+    assert admin.json() == store.subscriptions_page
+    assert EventSubscriptionsPage.model_validate(admin.json()).subscriptions[0].client_id == READER
     assert store.subscription_calls[-1]["client_id"] is None
     assert store.subscription_calls[-1]["actor_id"] == ADMIN
 
     reader = _get(client, route, "reader")
     assert reader.status_code == 200
-    assert reader.json()["client_id"] == str(READER)
     assert store.subscription_calls[-1]["client_id"] == READER
 
     named = _get(client, route, "reader", client_id=str(OTHER))
@@ -370,6 +396,18 @@ def test_event_subscriptions_route_forwards_admin_none_and_own_actor(
     admin_named = _get(client, route, "admin", client_id=str(OTHER))
     assert admin_named.status_code == 200
     assert store.subscription_calls[-1]["client_id"] == OTHER
+
+
+def test_event_subscriptions_page_with_empty_event_types_is_400(tmp_path: Path) -> None:
+    store = _RecordingStore(
+        subscriptions_page={"subscriptions": [_subscription_view(event_types=[])]}
+    )
+    client = _client(tmp_path, store)
+    response = _get(
+        client, f"/v1/workspaces/{WORKSPACE}/event-subscriptions", "reader"
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_request"
 
 
 def test_postgres_work_store_reads_are_unavailable(tmp_path: Path) -> None:
@@ -396,6 +434,34 @@ def _subscription_view(**overrides: object) -> dict[str, object]:
         "event_types": ["mission.started", "important_finding"],
         "cursor_sequence": 0,
         "deleted": False,
+    }
+    base.update(overrides)
+    return base
+
+
+def _mission_event_view(**overrides: object) -> dict[str, object]:
+    base: dict[str, object] = {
+        "mission_event_id": str(SUBSCRIPTION),
+        "sequence": 1,
+        "mission_id": str(MISSION),
+        "type": "mission.started",
+        "trigger": "status:approved->running",
+        "occurred_at": "2026-09-30T12:00:00+00:00",
+        "source_event_id": str(SUBSCRIPTION),
+        "evidence_refs": [
+            {"kind": "domain_event", "ref": str(SUBSCRIPTION)},
+        ],
+    }
+    base.update(overrides)
+    return base
+
+
+def _mission_events_page(**overrides: object) -> dict[str, object]:
+    base: dict[str, object] = {
+        "events": [_mission_event_view()],
+        "watermark_sequence": 1,
+        "next_after_sequence": 1,
+        "has_more": False,
     }
     base.update(overrides)
     return base
@@ -495,3 +561,89 @@ def test_derived_mission_event_validates_as_mission_event_view() -> None:
         }
     )
     assert page.events == (view,)
+
+
+def _bearer(tmp_path: Path) -> Path:
+    path = tmp_path / "bearer.json"
+    path.write_text(json.dumps({"token": "events-token"}))
+    path.chmod(0o600)
+    return path
+
+
+def test_work_client_mission_events_sends_bounded_query(tmp_path: Path) -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=_mission_events_page())
+
+    client = WorkClient(
+        "http://127.0.0.1:54322",
+        WORKSPACE,
+        _bearer(tmp_path),
+        transport=httpx.MockTransport(handler),
+    )
+    page = client.mission_events(after_sequence=3, limit=10, mission_id=MISSION)
+    assert isinstance(page, MissionEventsPage)
+    assert page.events[0].type == "mission.started"
+    assert len(seen) == 1
+    assert seen[0].url.path == f"/v1/workspaces/{WORKSPACE}/mission-events"
+    assert dict(seen[0].url.params) == {
+        "after_sequence": "3",
+        "limit": "10",
+        "mission_id": str(MISSION),
+    }
+
+
+def test_work_client_mission_events_omits_mission_id_when_none(tmp_path: Path) -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=_mission_events_page())
+
+    WorkClient(
+        "http://127.0.0.1:54322",
+        WORKSPACE,
+        _bearer(tmp_path),
+        transport=httpx.MockTransport(handler),
+    ).mission_events()
+    assert dict(seen[0].url.params) == {"after_sequence": "0", "limit": "500"}
+
+
+def test_work_client_event_subscriptions_sends_no_client_id_by_default(
+    tmp_path: Path,
+) -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"subscriptions": [_subscription_view()]})
+
+    client = WorkClient(
+        "http://127.0.0.1:54322",
+        WORKSPACE,
+        _bearer(tmp_path),
+        transport=httpx.MockTransport(handler),
+    )
+    page = client.event_subscriptions()
+    assert isinstance(page, EventSubscriptionsPage)
+    assert page.subscriptions[0].subscription_id == SUBSCRIPTION
+    assert seen[0].url.path == f"/v1/workspaces/{WORKSPACE}/event-subscriptions"
+    assert dict(seen[0].url.params) == {}
+
+
+def test_work_client_event_subscriptions_sends_named_client_id(tmp_path: Path) -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"subscriptions": [_subscription_view()]})
+
+    WorkClient(
+        "http://127.0.0.1:54322",
+        WORKSPACE,
+        _bearer(tmp_path),
+        transport=httpx.MockTransport(handler),
+    ).event_subscriptions(client_id=OTHER)
+    assert dict(seen[0].url.params) == {"client_id": str(OTHER)}

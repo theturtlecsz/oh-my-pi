@@ -13,6 +13,8 @@ from omp_work import contract_sha256
 from .api_models import (
     CommandResponse,
     DomainEventsPage,
+    EventSubscriptionsPage,
+    MissionEventsPage,
     StopStatusView,
     StoredOperationView,
     WorkflowView,
@@ -134,6 +136,35 @@ class WorkClient:
         return DomainEventsPage.model_validate(
             self._get(
                 f"/v1/workspaces/{self._workspace_id}/events",
+                params=params,
+            )
+        )
+
+    def mission_events(
+        self,
+        after_sequence: int = 0,
+        limit: int = 500,
+        mission_id: UUID | None = None,
+    ) -> MissionEventsPage:
+        params: dict[str, object] = {"after_sequence": after_sequence, "limit": limit}
+        if mission_id is not None:
+            params["mission_id"] = str(mission_id)
+        return MissionEventsPage.model_validate(
+            self._get(
+                f"/v1/workspaces/{self._workspace_id}/mission-events",
+                params=params,
+            )
+        )
+
+    def event_subscriptions(
+        self, client_id: UUID | None = None
+    ) -> EventSubscriptionsPage:
+        params: dict[str, object] = {}
+        if client_id is not None:
+            params["client_id"] = str(client_id)
+        return EventSubscriptionsPage.model_validate(
+            self._get(
+                f"/v1/workspaces/{self._workspace_id}/event-subscriptions",
                 params=params,
             )
         )

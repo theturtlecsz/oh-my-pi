@@ -10,7 +10,12 @@ from pydantic import ValidationError
 from ..control_plane import gate
 from ..control_plane.envelope import bind_command
 from ..control_plane.registry import CONTROL_PLANE_CHECKS, ControlPlane
-from .api_models import DecisionsPage, StopStatusView
+from .api_models import (
+    DecisionsPage,
+    EventSubscriptionsPage,
+    MissionEventsPage,
+    StopStatusView,
+)
 from .models import (
     OWNER_APPROVAL_COMMAND_TYPES,
     CommandEnvelope,
@@ -545,13 +550,17 @@ class WorkService:
         ):
             raise WorkError("forbidden", status=403)
         try:
-            return self._store.mission_events(
-                workspace_id,
-                principal.actor_id,
-                after=after_sequence,
-                limit=limit,
-                mission_id=mission_id,
-            )
+            return MissionEventsPage.model_validate(
+                self._store.mission_events(
+                    workspace_id,
+                    principal.actor_id,
+                    after=after_sequence,
+                    limit=limit,
+                    mission_id=mission_id,
+                )
+            ).model_dump(mode="json")
+        except ValidationError as error:
+            raise WorkError("invalid_request", status=400) from error
         except WorkStoreError as error:
             statuses = {"invalid_request": 400, "forbidden": 403, "unavailable": 503}
             raise WorkError(
@@ -584,9 +593,13 @@ class WorkService:
             else client_id
         )
         try:
-            return self._store.event_subscriptions(
-                workspace_id, principal.actor_id, client_id=resolved
-            )
+            return EventSubscriptionsPage.model_validate(
+                self._store.event_subscriptions(
+                    workspace_id, principal.actor_id, client_id=resolved
+                )
+            ).model_dump(mode="json")
+        except ValidationError as error:
+            raise WorkError("invalid_request", status=400) from error
         except WorkStoreError as error:
             statuses = {"invalid_request": 400, "forbidden": 403, "unavailable": 503}
             raise WorkError(
