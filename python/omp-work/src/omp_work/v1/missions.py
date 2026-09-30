@@ -485,6 +485,7 @@ def _link(
     """Append one work item and add its published budget to the mission draw.
 
     ``max_subagents`` is a per-item cap against the mission envelope, not a sum.
+    A non-link command raises TypeError so the guard survives python -O.
     """
     command = envelope.command
     if not isinstance(command, LinkMissionWorkCommand):
