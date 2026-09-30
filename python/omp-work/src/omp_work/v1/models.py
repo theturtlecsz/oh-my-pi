@@ -1907,6 +1907,7 @@ class CreateDecisionPayload(StrictModel):
     default_if_any: str | None = None
     risk_of_each_choice: dict[str, str]
     action_class: DecisionActionClass | None = None
+    target_sha256: hex64 | None = None
     resume_state: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
@@ -1930,6 +1931,7 @@ class AnswerDecisionPayload(StrictModel):
     decision_id: UUID
     answer: str = Field(min_length=1)
     owner_signature: str | None = Field(default=None, min_length=1)
+    expires_at: AwareDatetime | None = None
 
 
 class CreateDecisionCommand(StrictModel):
@@ -2342,6 +2344,7 @@ class Approval(StrictModel):
         "OMP-405",
         "OMP-413",
         "OMP-414",
+        "OMP-403",
         "OMP-426",
         "OMP-403",
     ]

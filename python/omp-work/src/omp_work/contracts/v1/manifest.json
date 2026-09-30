@@ -19,6 +19,7 @@
     "decisions/0015-decision-records.md",
     "decisions/0015-mission-record.md",
     "decisions/0016-mission-intake-confirmation.md",
+    "decisions/0017-decision-target-binding.md",
     "examples.json",
     "manifest.json",
     "research-artifact-hash.json",

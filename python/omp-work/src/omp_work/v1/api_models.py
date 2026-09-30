@@ -5,7 +5,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import Field, field_validator
+from pydantic import AwareDatetime, Field, field_validator
 
 from .models import (
     AuditManifest,
@@ -541,6 +541,7 @@ class AnswerDecisionResult(StrictModel):
     mission_id: str | None = None
     answer: str
     resume_state: str | None = None
+    expires_at: AwareDatetime | None = None
 
 
 class DecisionView(StrictModel):
@@ -556,8 +557,10 @@ class DecisionView(StrictModel):
     default_if_any: str | None = None
     risk_of_each_choice: dict[str, str]
     action_class: DecisionActionClass | None = None
+    target_sha256: hex64 | None = None
     answer: str | None = None
     answered_at: datetime | None = None
+    expires_at: AwareDatetime | None = None
 
 
 class DecisionsPage(StrictModel):
