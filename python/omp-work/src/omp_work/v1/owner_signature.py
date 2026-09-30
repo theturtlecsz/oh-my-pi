@@ -11,6 +11,7 @@ import os
 import shutil
 import subprocess  # nosec B404 - ssh-keygen only, resolved via shutil.which, fixed argv, no shell
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
 
@@ -25,6 +26,8 @@ def decision_signature_message(
     decision_id: UUID,
     action_class: str,
     answer: str,
+    target_sha256: str | None = None,
+    expires_at: datetime | None = None,
 ) -> bytes:
     payload = {
         "action_class": action_class,
@@ -32,6 +35,10 @@ def decision_signature_message(
         "decision_id": str(decision_id),
         "workspace_id": str(workspace_id),
     }
+    if target_sha256 is not None:
+        payload["target_sha256"] = target_sha256
+    if expires_at is not None:
+        payload["expires_at"] = expires_at.astimezone(timezone.utc).isoformat()
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
