@@ -1713,6 +1713,17 @@
               "title": "Effort Policy",
               "type": "string"
             },
+            "kind": {
+              "default": "engineering.execute",
+              "enum": [
+                "research.run",
+                "engineering.execute",
+                "architecture.review",
+                "change.review"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
             "objective": {
               "maxLength": 4000,
               "minLength": 1,
@@ -2027,6 +2038,17 @@
               "maxLength": 200,
               "minLength": 1,
               "title": "Effort Policy",
+              "type": "string"
+            },
+            "kind": {
+              "default": "engineering.execute",
+              "enum": [
+                "research.run",
+                "engineering.execute",
+                "architecture.review",
+                "change.review"
+              ],
+              "title": "Kind",
               "type": "string"
             },
             "objective": {
@@ -6107,6 +6129,163 @@
         "expected_version"
       ],
       "title": "ClearFocusPayload",
+      "type": "object"
+    },
+    "ClientContract": {
+      "$defs": {
+        "ClientOperation": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Command"
+            },
+            "method": {
+              "enum": [
+                "GET",
+                "POST"
+              ],
+              "title": "Method",
+              "type": "string"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "path": {
+              "title": "Path",
+              "type": "string"
+            },
+            "request": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Request"
+            },
+            "response": {
+              "const": "ClientResponse",
+              "title": "Response",
+              "type": "string"
+            },
+            "scope": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Scope",
+              "type": "array"
+            }
+          },
+          "required": [
+            "name",
+            "method",
+            "path",
+            "scope",
+            "response"
+          ],
+          "title": "ClientOperation",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "operations": {
+          "items": {
+            "$ref": "#/$defs/ClientOperation"
+          },
+          "title": "Operations",
+          "type": "array"
+        },
+        "version": {
+          "const": "client.omp.dev/v1",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "operations"
+      ],
+      "title": "ClientContract",
+      "type": "object"
+    },
+    "ClientOperation": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Command"
+        },
+        "method": {
+          "enum": [
+            "GET",
+            "POST"
+          ],
+          "title": "Method",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "request": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Request"
+        },
+        "response": {
+          "const": "ClientResponse",
+          "title": "Response",
+          "type": "string"
+        },
+        "scope": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Scope",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "method",
+        "path",
+        "scope",
+        "response"
+      ],
+      "title": "ClientOperation",
       "type": "object"
     },
     "CloseAttempt": {
@@ -10588,6 +10767,17 @@
               "title": "Effort Policy",
               "type": "string"
             },
+            "kind": {
+              "default": "engineering.execute",
+              "enum": [
+                "research.run",
+                "engineering.execute",
+                "architecture.review",
+                "change.review"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
             "objective": {
               "maxLength": 4000,
               "minLength": 1,
@@ -10782,6 +10972,17 @@
               "maxLength": 200,
               "minLength": 1,
               "title": "Effort Policy",
+              "type": "string"
+            },
+            "kind": {
+              "default": "engineering.execute",
+              "enum": [
+                "research.run",
+                "engineering.execute",
+                "architecture.review",
+                "change.review"
+              ],
+              "title": "Kind",
               "type": "string"
             },
             "parent_mission": {
@@ -12027,6 +12228,190 @@
           ],
           "title": "RelationKind",
           "type": "string"
+        },
+        "RelayOwnerIntentCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/RelayOwnerIntentPayload"
+            },
+            "type": {
+              "const": "relay_owner_intent",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "RelayOwnerIntentCommand",
+          "type": "object"
+        },
+        "RelayOwnerIntentPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "answer": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Answer"
+            },
+            "decision_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Decision Id"
+            },
+            "draft": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MissionDraft"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "expires_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expires At"
+            },
+            "instruction": {
+              "$ref": "#/$defs/RelayedInstruction"
+            },
+            "intent": {
+              "enum": [
+                "pause",
+                "resume",
+                "request_cancellation",
+                "change_priority",
+                "confirm_scope",
+                "edit_scope",
+                "answer_decision"
+              ],
+              "title": "Intent",
+              "type": "string"
+            },
+            "mission_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Mission Id"
+            },
+            "owner_signature": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Owner Signature"
+            },
+            "priority": {
+              "anyOf": [
+                {
+                  "maximum": 3,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Priority"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            }
+          },
+          "required": [
+            "intent",
+            "instruction"
+          ],
+          "title": "RelayOwnerIntentPayload",
+          "type": "object"
+        },
+        "RelayedInstruction": {
+          "additionalProperties": false,
+          "properties": {
+            "owner_authored": {
+              "const": true,
+              "title": "Owner Authored",
+              "type": "boolean"
+            },
+            "received_at": {
+              "format": "date-time",
+              "title": "Received At",
+              "type": "string"
+            },
+            "source_message_ref": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Source Message Ref",
+              "type": "string"
+            },
+            "text": {
+              "maxLength": 8000,
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "source_message_ref",
+            "owner_authored",
+            "received_at"
+          ],
+          "title": "RelayedInstruction",
+          "type": "object"
         },
         "ReleaseStopCommand": {
           "additionalProperties": false,
@@ -13804,6 +14189,7 @@
               "register_research_component": "#/$defs/RegisterResearchComponentCommand",
               "register_research_dataset": "#/$defs/RegisterResearchDatasetCommand",
               "register_research_source": "#/$defs/RegisterResearchSourceCommand",
+              "relay_owner_intent": "#/$defs/RelayOwnerIntentCommand",
               "release_stop": "#/$defs/ReleaseStopCommand",
               "remove_relation": "#/$defs/RemoveRelationCommand",
               "reserve_auditor_launch": "#/$defs/ReserveAuditorLaunchCommand",
@@ -14028,6 +14414,9 @@
             },
             {
               "$ref": "#/$defs/AdvanceEventCursorCommand"
+            },
+            {
+              "$ref": "#/$defs/RelayOwnerIntentCommand"
             }
           ],
           "title": "Command"
@@ -16792,6 +17181,95 @@
     },
     "Contract": {
       "$defs": {
+        "ClientContract": {
+          "additionalProperties": false,
+          "properties": {
+            "operations": {
+              "items": {
+                "$ref": "#/$defs/ClientOperation"
+              },
+              "title": "Operations",
+              "type": "array"
+            },
+            "version": {
+              "const": "client.omp.dev/v1",
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "version",
+            "operations"
+          ],
+          "title": "ClientContract",
+          "type": "object"
+        },
+        "ClientOperation": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Command"
+            },
+            "method": {
+              "enum": [
+                "GET",
+                "POST"
+              ],
+              "title": "Method",
+              "type": "string"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "path": {
+              "title": "Path",
+              "type": "string"
+            },
+            "request": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Request"
+            },
+            "response": {
+              "const": "ClientResponse",
+              "title": "Response",
+              "type": "string"
+            },
+            "scope": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Scope",
+              "type": "array"
+            }
+          },
+          "required": [
+            "name",
+            "method",
+            "path",
+            "scope",
+            "response"
+          ],
+          "title": "ClientOperation",
+          "type": "object"
+        },
         "DependencyGraph": {
           "additionalProperties": false,
           "properties": {
@@ -16885,6 +17363,13 @@
               "title": "Auditor Scopes",
               "type": "array"
             },
+            "client_scopes": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Client Scopes",
+              "type": "array"
+            },
             "credentials": {
               "const": "operator_managed_mode_0600_host_only_no_agent_or_postgres_dsn",
               "title": "Credentials",
@@ -16958,6 +17443,7 @@
             "importer_scopes",
             "operator_scopes",
             "stop_client_scopes",
+            "client_scopes",
             "rls",
             "credentials"
           ],
@@ -17043,6 +17529,9 @@
       },
       "additionalProperties": false,
       "properties": {
+        "client_contract": {
+          "$ref": "#/$defs/ClientContract"
+        },
         "command_types": {
           "items": {
             "type": "string"
@@ -17104,7 +17593,8 @@
         "workflow_mapping",
         "source_scope",
         "dependency_graph",
-        "security_policy"
+        "security_policy",
+        "client_contract"
       ],
       "title": "Contract",
       "type": "object"
@@ -20028,6 +20518,17 @@
               "title": "Effort Policy",
               "type": "string"
             },
+            "kind": {
+              "default": "engineering.execute",
+              "enum": [
+                "research.run",
+                "engineering.execute",
+                "architecture.review",
+                "change.review"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
             "parent_mission": {
               "anyOf": [
                 {
@@ -20582,6 +21083,17 @@
               "maxLength": 200,
               "minLength": 1,
               "title": "Effort Policy",
+              "type": "string"
+            },
+            "kind": {
+              "default": "engineering.execute",
+              "enum": [
+                "research.run",
+                "engineering.execute",
+                "architecture.review",
+                "change.review"
+              ],
+              "title": "Kind",
               "type": "string"
             },
             "parent_mission": {
@@ -22114,6 +22626,17 @@
           "title": "Effort Policy",
           "type": "string"
         },
+        "kind": {
+          "default": "engineering.execute",
+          "enum": [
+            "research.run",
+            "engineering.execute",
+            "architecture.review",
+            "change.review"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
         "objective": {
           "maxLength": 4000,
           "minLength": 1,
@@ -22290,6 +22813,17 @@
               "maxLength": 200,
               "minLength": 1,
               "title": "Effort Policy",
+              "type": "string"
+            },
+            "kind": {
+              "default": "engineering.execute",
+              "enum": [
+                "research.run",
+                "engineering.execute",
+                "architecture.review",
+                "change.review"
+              ],
+              "title": "Kind",
               "type": "string"
             },
             "objective": {
@@ -22520,6 +23054,17 @@
           "maxLength": 200,
           "minLength": 1,
           "title": "Effort Policy",
+          "type": "string"
+        },
+        "kind": {
+          "default": "engineering.execute",
+          "enum": [
+            "research.run",
+            "engineering.execute",
+            "architecture.review",
+            "change.review"
+          ],
+          "title": "Kind",
           "type": "string"
         },
         "parent_mission": {
@@ -26648,6 +27193,768 @@
       "title": "RelationEdge",
       "type": "object"
     },
+    "RelayOwnerIntentCommand": {
+      "$defs": {
+        "ItemBudget": {
+          "additionalProperties": false,
+          "properties": {
+            "max_subagents": {
+              "minimum": 0,
+              "title": "Max Subagents",
+              "type": "integer"
+            },
+            "tokens": {
+              "exclusiveMinimum": 0,
+              "title": "Tokens",
+              "type": "integer"
+            },
+            "usd": {
+              "title": "Usd",
+              "type": "string"
+            },
+            "wall_clock_seconds": {
+              "exclusiveMinimum": 0,
+              "title": "Wall Clock Seconds",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "usd",
+            "tokens",
+            "wall_clock_seconds",
+            "max_subagents"
+          ],
+          "title": "ItemBudget",
+          "type": "object"
+        },
+        "MissionDraft": {
+          "additionalProperties": false,
+          "description": "D29 mission record: the objective, its envelope, and the policies that\ngovern it. ``created_by``/``created_at`` are service-stamped, never sent.\n\n``risk_policy``, ``approval_policy``, and ``effort_policy`` are policy ids\n(OMP-417/418); ``budget_policy`` is the mission's envelope, from which item\nbudgets (OMP-404) are drawn.",
+          "properties": {
+            "acceptance_criteria": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Acceptance Criteria",
+              "type": "array"
+            },
+            "approval_classes": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Approval Classes",
+              "type": "array"
+            },
+            "approval_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Approval Policy",
+              "type": "string"
+            },
+            "artifact_expectations": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Artifact Expectations",
+              "type": "array"
+            },
+            "budget_policy": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ItemBudget"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "constraints": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Constraints",
+              "type": "array"
+            },
+            "context_refs": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Context Refs",
+              "type": "array"
+            },
+            "continuation_of": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Continuation Of"
+            },
+            "effort_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Effort Policy",
+              "type": "string"
+            },
+            "kind": {
+              "default": "engineering.execute",
+              "enum": [
+                "research.run",
+                "engineering.execute",
+                "architecture.review",
+                "change.review"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "objective": {
+              "maxLength": 4000,
+              "minLength": 1,
+              "title": "Objective",
+              "type": "string"
+            },
+            "parent_mission": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Mission"
+            },
+            "priority": {
+              "default": 2,
+              "maximum": 3,
+              "minimum": 0,
+              "title": "Priority",
+              "type": "integer"
+            },
+            "project_id": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            },
+            "repositories": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Repositories",
+              "type": "array"
+            },
+            "requested_capabilities": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Requested Capabilities",
+              "type": "array"
+            },
+            "risk_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Risk Policy",
+              "type": "string"
+            }
+          },
+          "required": [
+            "project_id",
+            "objective",
+            "risk_policy",
+            "approval_policy",
+            "effort_policy"
+          ],
+          "title": "MissionDraft",
+          "type": "object"
+        },
+        "RelayOwnerIntentPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "answer": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Answer"
+            },
+            "decision_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Decision Id"
+            },
+            "draft": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MissionDraft"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "expires_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expires At"
+            },
+            "instruction": {
+              "$ref": "#/$defs/RelayedInstruction"
+            },
+            "intent": {
+              "enum": [
+                "pause",
+                "resume",
+                "request_cancellation",
+                "change_priority",
+                "confirm_scope",
+                "edit_scope",
+                "answer_decision"
+              ],
+              "title": "Intent",
+              "type": "string"
+            },
+            "mission_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Mission Id"
+            },
+            "owner_signature": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Owner Signature"
+            },
+            "priority": {
+              "anyOf": [
+                {
+                  "maximum": 3,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Priority"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            }
+          },
+          "required": [
+            "intent",
+            "instruction"
+          ],
+          "title": "RelayOwnerIntentPayload",
+          "type": "object"
+        },
+        "RelayedInstruction": {
+          "additionalProperties": false,
+          "properties": {
+            "owner_authored": {
+              "const": true,
+              "title": "Owner Authored",
+              "type": "boolean"
+            },
+            "received_at": {
+              "format": "date-time",
+              "title": "Received At",
+              "type": "string"
+            },
+            "source_message_ref": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Source Message Ref",
+              "type": "string"
+            },
+            "text": {
+              "maxLength": 8000,
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "source_message_ref",
+            "owner_authored",
+            "received_at"
+          ],
+          "title": "RelayedInstruction",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/RelayOwnerIntentPayload"
+        },
+        "type": {
+          "const": "relay_owner_intent",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "RelayOwnerIntentCommand",
+      "type": "object"
+    },
+    "RelayOwnerIntentPayload": {
+      "$defs": {
+        "ItemBudget": {
+          "additionalProperties": false,
+          "properties": {
+            "max_subagents": {
+              "minimum": 0,
+              "title": "Max Subagents",
+              "type": "integer"
+            },
+            "tokens": {
+              "exclusiveMinimum": 0,
+              "title": "Tokens",
+              "type": "integer"
+            },
+            "usd": {
+              "title": "Usd",
+              "type": "string"
+            },
+            "wall_clock_seconds": {
+              "exclusiveMinimum": 0,
+              "title": "Wall Clock Seconds",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "usd",
+            "tokens",
+            "wall_clock_seconds",
+            "max_subagents"
+          ],
+          "title": "ItemBudget",
+          "type": "object"
+        },
+        "MissionDraft": {
+          "additionalProperties": false,
+          "description": "D29 mission record: the objective, its envelope, and the policies that\ngovern it. ``created_by``/``created_at`` are service-stamped, never sent.\n\n``risk_policy``, ``approval_policy``, and ``effort_policy`` are policy ids\n(OMP-417/418); ``budget_policy`` is the mission's envelope, from which item\nbudgets (OMP-404) are drawn.",
+          "properties": {
+            "acceptance_criteria": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Acceptance Criteria",
+              "type": "array"
+            },
+            "approval_classes": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Approval Classes",
+              "type": "array"
+            },
+            "approval_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Approval Policy",
+              "type": "string"
+            },
+            "artifact_expectations": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Artifact Expectations",
+              "type": "array"
+            },
+            "budget_policy": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ItemBudget"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "constraints": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Constraints",
+              "type": "array"
+            },
+            "context_refs": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Context Refs",
+              "type": "array"
+            },
+            "continuation_of": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Continuation Of"
+            },
+            "effort_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Effort Policy",
+              "type": "string"
+            },
+            "kind": {
+              "default": "engineering.execute",
+              "enum": [
+                "research.run",
+                "engineering.execute",
+                "architecture.review",
+                "change.review"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "objective": {
+              "maxLength": 4000,
+              "minLength": 1,
+              "title": "Objective",
+              "type": "string"
+            },
+            "parent_mission": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Mission"
+            },
+            "priority": {
+              "default": 2,
+              "maximum": 3,
+              "minimum": 0,
+              "title": "Priority",
+              "type": "integer"
+            },
+            "project_id": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            },
+            "repositories": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Repositories",
+              "type": "array"
+            },
+            "requested_capabilities": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Requested Capabilities",
+              "type": "array"
+            },
+            "risk_policy": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Risk Policy",
+              "type": "string"
+            }
+          },
+          "required": [
+            "project_id",
+            "objective",
+            "risk_policy",
+            "approval_policy",
+            "effort_policy"
+          ],
+          "title": "MissionDraft",
+          "type": "object"
+        },
+        "RelayedInstruction": {
+          "additionalProperties": false,
+          "properties": {
+            "owner_authored": {
+              "const": true,
+              "title": "Owner Authored",
+              "type": "boolean"
+            },
+            "received_at": {
+              "format": "date-time",
+              "title": "Received At",
+              "type": "string"
+            },
+            "source_message_ref": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Source Message Ref",
+              "type": "string"
+            },
+            "text": {
+              "maxLength": 8000,
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "source_message_ref",
+            "owner_authored",
+            "received_at"
+          ],
+          "title": "RelayedInstruction",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "answer": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Answer"
+        },
+        "decision_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Decision Id"
+        },
+        "draft": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MissionDraft"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expires At"
+        },
+        "instruction": {
+          "$ref": "#/$defs/RelayedInstruction"
+        },
+        "intent": {
+          "enum": [
+            "pause",
+            "resume",
+            "request_cancellation",
+            "change_priority",
+            "confirm_scope",
+            "edit_scope",
+            "answer_decision"
+          ],
+          "title": "Intent",
+          "type": "string"
+        },
+        "mission_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mission Id"
+        },
+        "owner_signature": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner Signature"
+        },
+        "priority": {
+          "anyOf": [
+            {
+              "maximum": 3,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Priority"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        }
+      },
+      "required": [
+        "intent",
+        "instruction"
+      ],
+      "title": "RelayOwnerIntentPayload",
+      "type": "object"
+    },
+    "RelayedInstruction": {
+      "additionalProperties": false,
+      "properties": {
+        "owner_authored": {
+          "const": true,
+          "title": "Owner Authored",
+          "type": "boolean"
+        },
+        "received_at": {
+          "format": "date-time",
+          "title": "Received At",
+          "type": "string"
+        },
+        "source_message_ref": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Source Message Ref",
+          "type": "string"
+        },
+        "text": {
+          "maxLength": 8000,
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "source_message_ref",
+        "owner_authored",
+        "received_at"
+      ],
+      "title": "RelayedInstruction",
+      "type": "object"
+    },
     "ReleaseStopCommand": {
       "$defs": {
         "StopReasonPayload": {
@@ -29315,6 +30622,17 @@
               "title": "Effort Policy",
               "type": "string"
             },
+            "kind": {
+              "default": "engineering.execute",
+              "enum": [
+                "research.run",
+                "engineering.execute",
+                "architecture.review",
+                "change.review"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
             "objective": {
               "maxLength": 4000,
               "minLength": 1,
@@ -29552,6 +30870,17 @@
               "maxLength": 200,
               "minLength": 1,
               "title": "Effort Policy",
+              "type": "string"
+            },
+            "kind": {
+              "default": "engineering.execute",
+              "enum": [
+                "research.run",
+                "engineering.execute",
+                "architecture.review",
+                "change.review"
+              ],
+              "title": "Kind",
               "type": "string"
             },
             "objective": {
@@ -30268,6 +31597,13 @@
           "title": "Auditor Scopes",
           "type": "array"
         },
+        "client_scopes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Client Scopes",
+          "type": "array"
+        },
         "credentials": {
           "const": "operator_managed_mode_0600_host_only_no_agent_or_postgres_dsn",
           "title": "Credentials",
@@ -30341,6 +31677,7 @@
         "importer_scopes",
         "operator_scopes",
         "stop_client_scopes",
+        "client_scopes",
         "rls",
         "credentials"
       ],
@@ -31708,6 +33045,17 @@
               "title": "Effort Policy",
               "type": "string"
             },
+            "kind": {
+              "default": "engineering.execute",
+              "enum": [
+                "research.run",
+                "engineering.execute",
+                "architecture.review",
+                "change.review"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
             "objective": {
               "maxLength": 4000,
               "minLength": 1,
@@ -31922,6 +33270,17 @@
               "maxLength": 200,
               "minLength": 1,
               "title": "Effort Policy",
+              "type": "string"
+            },
+            "kind": {
+              "default": "engineering.execute",
+              "enum": [
+                "research.run",
+                "engineering.execute",
+                "architecture.review",
+                "change.review"
+              ],
+              "title": "Kind",
               "type": "string"
             },
             "objective": {
