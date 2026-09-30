@@ -606,14 +606,14 @@ def run_research_stage(
 ) -> int:
     """Run a research-stage worker in the sandbox.
 
-    Refuses before any process starts: a ``workdir`` with
+    Refuses before any process starts: a ``workdir`` or ``cwd`` with
     ``worktree_not_allowed``, non-empty ``context_paths`` with
     ``context_not_allowed``, and an ``env`` naming anything but ``PATH``,
     ``LANG``, ``TERM``, ``TZ``, or ``LC_*`` with ``credential_not_allowed``.
     Otherwise runs the same body as :func:`run_sandboxed` with config root
     ``research``.
     """
-    if workdir is not None:
+    if workdir is not None or cwd is not None:
         raise ResearchStageRefused("worktree_not_allowed")
     if tuple(context_paths):
         raise ResearchStageRefused("context_not_allowed")
@@ -627,7 +627,7 @@ def run_research_stage(
         argv,
         identity,
         recorder,
-        cwd,
+        None,
         env,
         timeout,
         sockets_root,

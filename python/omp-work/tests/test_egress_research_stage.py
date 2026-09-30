@@ -90,6 +90,84 @@ def test_research_stage_worktree_refused(
     assert not sockets_root.exists()
 
 
+def test_research_stage_cwd_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder = MemoryRecorder()
+    sockets_root = tmp_path / "sockroot"
+    _forbid_processes(monkeypatch)
+
+    with pytest.raises(ResearchStageRefused) as exc:
+        run_research_stage(
+            ["true"],
+            _identity("research"),
+            recorder,
+            None,
+            None,
+            5.0,
+            sockets_root=sockets_root,
+            cwd="/tmp/cwd",
+        )
+
+    assert exc.value.code == "worktree_not_allowed"
+    assert recorder.records == []
+    assert not sockets_root.exists()
+
+
+def test_research_stage_refusal_precedence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder = MemoryRecorder()
+    sockets_root = tmp_path / "sockroot"
+    _forbid_processes(monkeypatch)
+
+    # workdir wins over context and credentials
+    with pytest.raises(ResearchStageRefused) as exc:
+        run_research_stage(
+            ["true"],
+            _identity("research"),
+            recorder,
+            "/tmp/worktree",
+            {"GH_TOKEN": "secret"},
+            5.0,
+            sockets_root=sockets_root,
+            context_paths=("/tmp/context",),
+        )
+    assert exc.value.code == "worktree_not_allowed"
+
+    # cwd wins over context and credentials
+    with pytest.raises(ResearchStageRefused) as exc:
+        run_research_stage(
+            ["true"],
+            _identity("research"),
+            recorder,
+            None,
+            {"GH_TOKEN": "secret"},
+            5.0,
+            sockets_root=sockets_root,
+            cwd="/tmp/cwd",
+            context_paths=("/tmp/context",),
+        )
+    assert exc.value.code == "worktree_not_allowed"
+
+    # context wins over credentials
+    with pytest.raises(ResearchStageRefused) as exc:
+        run_research_stage(
+            ["true"],
+            _identity("research"),
+            recorder,
+            None,
+            {"GH_TOKEN": "secret"},
+            5.0,
+            sockets_root=sockets_root,
+            context_paths=("/tmp/context",),
+        )
+    assert exc.value.code == "context_not_allowed"
+
+    assert recorder.records == []
+    assert not sockets_root.exists()
+
+
 def test_research_stage_context_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -175,7 +253,6 @@ def test_research_stage_hands_helper_research_root(
     captured: list[dict[str, Any]] = []
     _capture_helper_config(monkeypatch, captured)
     recorder = MemoryRecorder()
-    cwd = tmp_path / "research-cwd"
 
     rc = run_research_stage(
         ["true"],
@@ -185,13 +262,35 @@ def test_research_stage_hands_helper_research_root(
         {"PATH": "/usr/bin", "LANG": "C", "TERM": "xterm", "TZ": "UTC", "LC_ALL": "C"},
         5.0,
         sockets_root=tmp_path / "sockroot",
-        cwd=cwd,
     )
 
     assert rc == 0
     assert len(captured) == 1
     assert captured[0]["root"] == "research"
-    assert captured[0]["workdir"] == str(cwd)
+    assert captured[0]["workdir"] is None
+
+
+def test_research_stage_env_none_allowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: list[dict[str, Any]] = []
+    _capture_helper_config(monkeypatch, captured)
+
+    rc = run_research_stage(
+        ["true"],
+        _identity("research"),
+        MemoryRecorder(),
+        None,
+        None,
+        5.0,
+        sockets_root=tmp_path / "sockroot",
+    )
+
+    assert rc == 0
+    assert len(captured) == 1
+    assert captured[0]["root"] == "research"
+    assert captured[0]["env"] is None
+    assert captured[0]["workdir"] is None
 
 
 def test_sandboxed_hands_helper_no_root(
