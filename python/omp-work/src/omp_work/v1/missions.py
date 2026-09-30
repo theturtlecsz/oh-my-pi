@@ -1,5 +1,5 @@
-"""Mission submit and read. State is the mission snapshot on the latest applied
-mission event (no mission table).
+"""Mission submit, revise, approve, status, and read. State is the mission
+snapshot on the latest applied mission event (no mission table).
 """
 
 from __future__ import annotations
@@ -9,8 +9,13 @@ from uuid import UUID
 
 import psycopg
 
-from omp_work.mission_budget import admit_mission_budget
-from omp_work.mission_scope import material_cases, outside_envelope, transition_allowed
+from omp_work.mission_budget import MissionBudgetAdmission, admit_mission_budget
+from omp_work.mission_scope import (
+    TERMINAL_STATUSES,
+    material_cases,
+    outside_envelope,
+    transition_allowed,
+)
 
 from .api_models import (
     MissionApprovedScope,
@@ -23,6 +28,7 @@ from .models import (
     CommandEnvelope,
     MissionDraft,
     MissionStatus,
+    ReviseMissionCommand,
     SetMissionStatusCommand,
     SubmitMissionCommand,
 )
@@ -37,6 +43,8 @@ _MISSION_EVENTS = (
 )
 
 _NEW_SCOPE_RULE = "D29.new_scope"
+_BUDGET_SUPPLIED_RULE = "D29.budget_supplied"
+_MATERIAL_RULE_PREFIX = "D29.material:"
 
 
 def execute(
@@ -48,6 +56,8 @@ def execute(
     command = envelope.command
     if isinstance(command, SubmitMissionCommand):
         return _submit(cur, envelope, actor_id, actor_kind)
+    if isinstance(command, ReviseMissionCommand):
+        return _revise(cur, envelope, actor_id, actor_kind)
     if isinstance(command, ApproveMissionCommand):
         return _approve(cur, envelope, actor_id, actor_kind)
     if isinstance(command, SetMissionStatusCommand):
@@ -106,24 +116,8 @@ def _submit(
     if _has_event(cur, workspace_id, mission_id):
         raise WorkStoreError("revision_conflict")
 
-    if draft.budget_policy is not None:
-        effective: object = draft.budget_policy.model_dump(mode="json")
-        budget_source: str | None = "mission"
-    else:
-        standing = _standing_budget(project["provenance"])
-        if standing is None:
-            effective = None
-            budget_source = None
-        else:
-            effective = standing
-            budget_source = "project"
-
-    admission = admit_mission_budget(
-        {
-            "mission_id": str(mission_id),
-            "project_id": str(draft.project_id),
-            "budget_policy": effective,
-        }
+    admission, budget_source = _budget_admission(
+        draft, project["provenance"], mission_id
     )
     cur.execute("SELECT clock_timestamp() AS created_at")
     created_row = cur.fetchone()
@@ -174,6 +168,143 @@ def _submit(
     # Store the form CommandResponse will emit, so a later read matches the POST.
     mission = MissionView.model_validate(mission).model_dump(mode="json")
     return {"type": "submit_mission", "mission": mission}
+
+
+def _revise(
+    cur: psycopg.Cursor[dict[str, object]],
+    envelope: CommandEnvelope,
+    actor_id: UUID,
+    actor_kind: str,
+) -> dict[str, object]:
+    command = envelope.command
+    assert isinstance(command, ReviseMissionCommand)
+    payload = command.payload
+    draft = payload.draft
+    workspace_id = envelope.workspace_id
+
+    raw_mission = _latest_mission(cur, workspace_id, payload.mission_id)
+    if raw_mission is None:
+        raise WorkStoreError("invalid_request")
+    view = MissionView.model_validate(raw_mission)
+
+    if view.status.value in TERMINAL_STATUSES:
+        raise WorkStoreError("mission_transition_refused")
+    if payload.base_revision != view.revision:
+        raise WorkStoreError("revision_conflict")
+
+    cur.execute(
+        "SELECT provenance FROM omp_work.projects WHERE workspace_id=%s AND project_id=%s",
+        (workspace_id, draft.project_id),
+    )
+    project = cur.fetchone()
+    if project is None:
+        raise WorkStoreError("invalid_request")
+    if draft.continuation_of is not None and not _has_event(
+        cur, workspace_id, draft.continuation_of
+    ):
+        raise WorkStoreError("invalid_request")
+    if draft.parent_mission is not None and not _has_event(
+        cur, workspace_id, draft.parent_mission
+    ):
+        raise WorkStoreError("invalid_request")
+
+    admission, budget_source = _budget_admission(
+        draft, project["provenance"], payload.mission_id
+    )
+    new_revision = view.revision + 1
+    status = view.status
+    hold = view.hold_decision
+    budget = admission.budget
+    source = budget_source
+    cause: tuple[str, str] | None = None
+
+    # No effective budget holds, as submit does. A held mission whose revision
+    # now has a budget leaves hold before materiality. proposed_classification
+    # is not read.
+    if admission.state == "held":
+        held = _json_safe(admission.decision)
+        if not isinstance(held, dict):
+            raise WorkStoreError("unavailable")
+        hold = held
+        budget = None
+        source = None
+        if view.status != MissionStatus.BLOCKED:
+            status = MissionStatus.BLOCKED
+            cause = ("decision", str(hold["decision_id"]))
+    elif view.status == MissionStatus.BLOCKED and view.budget is None:
+        status = MissionStatus.AWAITING_CONFIRMATION
+        hold = None
+        cause = ("policy_rule", _BUDGET_SUPPLIED_RULE)
+    else:
+        eff = effective_draft(
+            {
+                **view.model_dump(mode="json"),
+                **draft.model_dump(mode="json"),
+                "budget": (
+                    None
+                    if admission.budget is None
+                    else admission.budget.model_dump(mode="json")
+                ),
+                "budget_source": budget_source,
+            }
+        )
+        approved_envelope = (
+            view.approved_scope.envelope.model_dump(mode="json")
+            if view.approved_scope is not None
+            else None
+        )
+        cases = material_cases(approved_envelope, eff.model_dump(mode="json"))
+        if cases and view.status != MissionStatus.AWAITING_CONFIRMATION:
+            status = MissionStatus.AWAITING_CONFIRMATION
+            cause = ("policy_rule", _MATERIAL_RULE_PREFIX + ",".join(cases))
+
+    transitions = view.transitions
+    if cause is not None:
+        cause_kind, cause_id = cause
+        cur.execute("SELECT clock_timestamp() AS at")
+        created_row = cur.fetchone()
+        if created_row is None:
+            raise WorkStoreError("unavailable")
+        at = created_row["at"]
+        if cause_kind == "decision":
+            transition = MissionTransition(
+                from_status=view.status,
+                to_status=status,
+                cause_kind="decision",
+                cause_id=cause_id,
+                actor_id=actor_id,
+                actor_kind=actor_kind,
+                at=at,
+                revision=new_revision,
+            )
+        else:
+            transition = MissionTransition(
+                from_status=view.status,
+                to_status=status,
+                cause_kind="policy_rule",
+                cause_id=cause_id,
+                actor_id=actor_id,
+                actor_kind=actor_kind,
+                at=at,
+                revision=new_revision,
+            )
+        transitions = (*view.transitions, transition)
+
+    updated = MissionView.model_validate(
+        {
+            **view.model_dump(mode="json"),
+            **draft.model_dump(mode="json"),
+            "revision": new_revision,
+            "status": status.value,
+            "budget": None if budget is None else budget.model_dump(mode="json"),
+            "budget_source": source,
+            "hold_decision": hold,
+            "transitions": [item.model_dump(mode="json") for item in transitions],
+        }
+    )
+    mission = updated.model_dump(mode="json")
+    mission = MissionView.model_validate(mission).model_dump(mode="json")
+    return {"type": "revise_mission", "mission": mission}
 
 
 def _approve(
@@ -329,6 +460,31 @@ def _set_status(
     mission = updated_view.model_dump(mode="json")
     mission = MissionView.model_validate(mission).model_dump(mode="json")
     return {"type": "set_mission_status", "mission": mission}
+
+
+def _budget_admission(
+    draft: MissionDraft, provenance: object, mission_id: UUID
+) -> tuple[MissionBudgetAdmission, str | None]:
+    """Effective budget for submit and revise: the draft, else the project's standing budget."""
+    if draft.budget_policy is not None:
+        effective: object = draft.budget_policy.model_dump(mode="json")
+        budget_source: str | None = "mission"
+    else:
+        standing = _standing_budget(provenance)
+        if standing is None:
+            effective = None
+            budget_source = None
+        else:
+            effective = standing
+            budget_source = "project"
+    admission = admit_mission_budget(
+        {
+            "mission_id": str(mission_id),
+            "project_id": str(draft.project_id),
+            "budget_policy": effective,
+        }
+    )
+    return admission, budget_source
 
 
 def _standing_budget(provenance: object) -> object | None:
