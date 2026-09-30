@@ -1754,6 +1754,14 @@ class MissionStatus(StrEnum):
     ABANDONED = "abandoned"
 
 
+MissionKind = Literal[
+    "research.run",
+    "engineering.execute",
+    "architecture.review",
+    "change.review",
+]
+
+
 class MissionDraft(StrictModel):
     """D29 mission record: the objective, its envelope, and the policies that
     govern it. ``created_by``/``created_at`` are service-stamped, never sent.
@@ -1779,6 +1787,7 @@ class MissionDraft(StrictModel):
     priority: int = Field(default=2, ge=0, le=3)
     continuation_of: UUID | None = None
     parent_mission: UUID | None = None
+    kind: MissionKind = "engineering.execute"
 
 
 class SubmitMissionPayload(StrictModel):
@@ -1979,6 +1988,7 @@ class MissionIntakeScope(StrictModel):
     priority: int = Field(default=2, ge=0, le=3)
     continuation_of: UUID | None = None
     parent_mission: UUID | None = None
+    kind: MissionKind = "engineering.execute"
 
 
 class MissionDraftOptionAnswer(StrictModel):
@@ -2142,6 +2152,125 @@ class AdvanceEventCursorCommand(StrictModel):
     payload: AdvanceEventCursor
 
 
+RelayIntent = Literal[
+    "pause",
+    "resume",
+    "request_cancellation",
+    "change_priority",
+    "confirm_scope",
+    "edit_scope",
+    "answer_decision",
+]
+
+
+class RelayedInstruction(StrictModel):
+    text: str = Field(min_length=1, max_length=8000)
+    source_message_ref: str = Field(min_length=1, max_length=500)
+    owner_authored: Literal[True]
+    received_at: AwareDatetime
+
+
+class RelayOwnerIntentPayload(StrictModel):
+    intent: RelayIntent
+    instruction: RelayedInstruction
+    owner_signature: str | None = Field(default=None, min_length=1)
+    mission_id: UUID | None = None
+    revision: int | None = Field(default=None, ge=1)
+    priority: int | None = Field(default=None, ge=0, le=3)
+    decision_id: UUID | None = None
+    draft: MissionDraft | None = None
+    answer: str | None = Field(default=None, min_length=1)
+    expires_at: AwareDatetime | None = None
+
+    @model_validator(mode="after")
+    def validate_relay_fields(self) -> RelayOwnerIntentPayload:
+        if self.intent in ("pause", "resume", "request_cancellation"):
+            if self.mission_id is None:
+                raise ValueError(f"mission_id is required for {self.intent}")
+            if any(
+                v is not None
+                for v in (
+                    self.revision,
+                    self.priority,
+                    self.decision_id,
+                    self.draft,
+                    self.answer,
+                    self.expires_at,
+                )
+            ):
+                raise ValueError(f"unused field for {self.intent}")
+        elif self.intent == "change_priority":
+            if self.mission_id is None or self.revision is None or self.priority is None:
+                raise ValueError(
+                    "mission_id, revision, and priority are required for change_priority"
+                )
+            if any(
+                v is not None
+                for v in (
+                    self.decision_id,
+                    self.draft,
+                    self.answer,
+                    self.expires_at,
+                )
+            ):
+                raise ValueError("unused field for change_priority")
+        elif self.intent == "confirm_scope":
+            if self.mission_id is None or self.decision_id is None or self.revision is None:
+                raise ValueError(
+                    "mission_id, decision_id, and revision are required for confirm_scope"
+                )
+            if any(
+                v is not None
+                for v in (
+                    self.priority,
+                    self.draft,
+                    self.answer,
+                    self.expires_at,
+                )
+            ):
+                raise ValueError("unused field for confirm_scope")
+        elif self.intent == "edit_scope":
+            if (
+                self.mission_id is None
+                or self.decision_id is None
+                or self.revision is None
+                or self.draft is None
+            ):
+                raise ValueError(
+                    "mission_id, decision_id, revision, and draft are required for edit_scope"
+                )
+            if any(
+                v is not None
+                for v in (
+                    self.priority,
+                    self.answer,
+                    self.expires_at,
+                )
+            ):
+                raise ValueError("unused field for edit_scope")
+        elif self.intent == "answer_decision":
+            if self.decision_id is None or self.answer is None:
+                raise ValueError(
+                    "decision_id and answer are required for answer_decision"
+                )
+            if any(
+                v is not None
+                for v in (
+                    self.mission_id,
+                    self.revision,
+                    self.priority,
+                    self.draft,
+                )
+            ):
+                raise ValueError("unused field for answer_decision")
+        return self
+
+
+class RelayOwnerIntentCommand(StrictModel):
+    type: Literal["relay_owner_intent"]
+    payload: RelayOwnerIntentPayload
+
+
 Command = Annotated[
     CreateWorkBatchCommand
     | CreateSameSessionChildCommand
@@ -2210,7 +2339,8 @@ Command = Annotated[
     | RecordFindingCommand
     | PutEventSubscriptionCommand
     | DeleteEventSubscriptionCommand
-    | AdvanceEventCursorCommand,
+    | AdvanceEventCursorCommand
+    | RelayOwnerIntentCommand,
     Field(discriminator="type"),
 ]
 
@@ -2261,6 +2391,7 @@ class SecurityPolicy(StrictModel):
     importer_scopes: tuple[Literal["work.import"], ...]
     operator_scopes: tuple[Literal["work.operate"], ...]
     stop_client_scopes: tuple[Literal["work.stop"], ...]
+    client_scopes: tuple[str, ...]
     rls: Literal["force_workspace_actor_claims_no_public_no_bypassrls"]
     credentials: Literal[
         "operator_managed_mode_0600_host_only_no_agent_or_postgres_dsn"
@@ -2279,6 +2410,21 @@ class DependencyGraph(StrictModel):
     home_148: tuple[Literal["HOME-149"], ...] = Field(alias="HOME-148")
 
 
+class ClientOperation(StrictModel):
+    name: str
+    method: Literal["GET", "POST"]
+    path: str
+    command: str | None = None
+    scope: tuple[str, ...]
+    request: str | None = None
+    response: Literal["ClientResponse"]
+
+
+class ClientContract(StrictModel):
+    version: Literal["client.omp.dev/v1"]
+    operations: tuple[ClientOperation, ...]
+
+
 class Contract(StrictModel):
     contract_version: Literal["work.omp.dev/v1"]
     transport: Literal["loopback_http"]
@@ -2290,6 +2436,7 @@ class Contract(StrictModel):
     source_scope: SourceScope
     dependency_graph: DependencyGraph
     security_policy: SecurityPolicy
+    client_contract: ClientContract
 
 
 class ImmutableRevisionExample(StrictModel):

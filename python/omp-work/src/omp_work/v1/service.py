@@ -176,6 +176,7 @@ class WorkService:
         "put_event_subscription": "work.read",
         "delete_event_subscription": "work.read",
         "advance_event_cursor": "work.read",
+        "relay_owner_intent": "work.client",
     }
 
     def __init__(

@@ -40,6 +40,13 @@ _READS = frozenset(
         "GET /v1/health/ready",
         "GET /v1/workspaces/{workspace_id}/mission-events",
         "GET /v1/workspaces/{workspace_id}/event-subscriptions",
+        "GET /v1/workspaces/{workspace_id}/client/projects",
+        "GET /v1/workspaces/{workspace_id}/client/projects/{project_id}/context",
+        "GET /v1/workspaces/{workspace_id}/client/projects/{project_id}/status",
+        "GET /v1/workspaces/{workspace_id}/client/projects/{project_id}/decisions",
+        "GET /v1/workspaces/{workspace_id}/client/missions/{mission_id}",
+        "GET /v1/workspaces/{workspace_id}/client/evidence/{receipt_id}",
+        "GET /v1/workspaces/{workspace_id}/client/stop",
         "GET /v1/work-items/{key}/revisions/{selector}",
         "GET /v1/receipts/{receipt_id}",
         "GET /v1/workspaces/{workspace_id}/work-items",
@@ -88,6 +95,7 @@ _SCOPES = frozenset(
         "work.operate",
         "work.stop",
         "work.events.admin",
+        "work.client",
     }
 )
 _COMMAND_TYPES = frozenset(
@@ -160,6 +168,7 @@ _COMMAND_TYPES = frozenset(
         "put_event_subscription",
         "delete_event_subscription",
         "advance_event_cursor",
+        "relay_owner_intent",
     }
 )
 

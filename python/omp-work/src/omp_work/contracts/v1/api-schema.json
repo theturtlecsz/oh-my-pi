@@ -1373,6 +1373,17 @@
               "title": "Effort Policy",
               "type": "string"
             },
+            "kind": {
+              "default": "engineering.execute",
+              "enum": [
+                "research.run",
+                "engineering.execute",
+                "architecture.review",
+                "change.review"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
             "objective": {
               "maxLength": 4000,
               "minLength": 1,
@@ -1707,6 +1718,17 @@
               ],
               "default": null,
               "title": "Hold Decision"
+            },
+            "kind": {
+              "default": "engineering.execute",
+              "enum": [
+                "research.run",
+                "engineering.execute",
+                "architecture.review",
+                "change.review"
+              ],
+              "title": "Kind",
+              "type": "string"
             },
             "links": {
               "default": [],
@@ -8484,6 +8506,17 @@
               "title": "Effort Policy",
               "type": "string"
             },
+            "kind": {
+              "default": "engineering.execute",
+              "enum": [
+                "research.run",
+                "engineering.execute",
+                "architecture.review",
+                "change.review"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
             "objective": {
               "maxLength": 4000,
               "minLength": 1,
@@ -8843,6 +8876,17 @@
               ],
               "default": null,
               "title": "Hold Decision"
+            },
+            "kind": {
+              "default": "engineering.execute",
+              "enum": [
+                "research.run",
+                "engineering.execute",
+                "architecture.review",
+                "change.review"
+              ],
+              "title": "Kind",
+              "type": "string"
             },
             "links": {
               "default": [],
@@ -14642,6 +14686,17 @@
               "title": "Effort Policy",
               "type": "string"
             },
+            "kind": {
+              "default": "engineering.execute",
+              "enum": [
+                "research.run",
+                "engineering.execute",
+                "architecture.review",
+                "change.review"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
             "objective": {
               "maxLength": 4000,
               "minLength": 1,
@@ -14976,6 +15031,17 @@
               ],
               "default": null,
               "title": "Hold Decision"
+            },
+            "kind": {
+              "default": "engineering.execute",
+              "enum": [
+                "research.run",
+                "engineering.execute",
+                "architecture.review",
+                "change.review"
+              ],
+              "title": "Kind",
+              "type": "string"
             },
             "links": {
               "default": [],
@@ -17202,6 +17268,17 @@
               "title": "Effort Policy",
               "type": "string"
             },
+            "kind": {
+              "default": "engineering.execute",
+              "enum": [
+                "research.run",
+                "engineering.execute",
+                "architecture.review",
+                "change.review"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
             "objective": {
               "maxLength": 4000,
               "minLength": 1,
@@ -17427,6 +17504,17 @@
           "maxLength": 200,
           "minLength": 1,
           "title": "Effort Policy",
+          "type": "string"
+        },
+        "kind": {
+          "default": "engineering.execute",
+          "enum": [
+            "research.run",
+            "engineering.execute",
+            "architecture.review",
+            "change.review"
+          ],
+          "title": "Kind",
           "type": "string"
         },
         "objective": {
@@ -17963,6 +18051,17 @@
               "title": "Effort Policy",
               "type": "string"
             },
+            "kind": {
+              "default": "engineering.execute",
+              "enum": [
+                "research.run",
+                "engineering.execute",
+                "architecture.review",
+                "change.review"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
             "objective": {
               "maxLength": 4000,
               "minLength": 1,
@@ -18297,6 +18396,17 @@
               ],
               "default": null,
               "title": "Hold Decision"
+            },
+            "kind": {
+              "default": "engineering.execute",
+              "enum": [
+                "research.run",
+                "engineering.execute",
+                "architecture.review",
+                "change.review"
+              ],
+              "title": "Kind",
+              "type": "string"
             },
             "links": {
               "default": [],
@@ -18663,6 +18773,17 @@
               "title": "Effort Policy",
               "type": "string"
             },
+            "kind": {
+              "default": "engineering.execute",
+              "enum": [
+                "research.run",
+                "engineering.execute",
+                "architecture.review",
+                "change.review"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
             "objective": {
               "maxLength": 4000,
               "minLength": 1,
@@ -18997,6 +19118,17 @@
           ],
           "default": null,
           "title": "Hold Decision"
+        },
+        "kind": {
+          "default": "engineering.execute",
+          "enum": [
+            "research.run",
+            "engineering.execute",
+            "architecture.review",
+            "change.review"
+          ],
+          "title": "Kind",
+          "type": "string"
         },
         "links": {
           "default": [],
@@ -30479,6 +30611,17 @@
               "title": "Effort Policy",
               "type": "string"
             },
+            "kind": {
+              "default": "engineering.execute",
+              "enum": [
+                "research.run",
+                "engineering.execute",
+                "architecture.review",
+                "change.review"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
             "objective": {
               "maxLength": 4000,
               "minLength": 1,
@@ -30838,6 +30981,17 @@
               ],
               "default": null,
               "title": "Hold Decision"
+            },
+            "kind": {
+              "default": "engineering.execute",
+              "enum": [
+                "research.run",
+                "engineering.execute",
+                "architecture.review",
+                "change.review"
+              ],
+              "title": "Kind",
+              "type": "string"
             },
             "links": {
               "default": [],
