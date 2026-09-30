@@ -25,3 +25,8 @@ No role below runs as a standing LLM agent. A role persists only when a recorded
 | Status Desk | Query (`project.get_status`, `mission.status`) plus report (daily digest, OMP-406) | No | Presents native state only: derived from ledger records (D6) | A query cannot drift from the ledger |
 | Loop Auditor | Scheduled job running an evaluator over recent missions, filing findings | No | Read-only: files findings, never mutates | A periodic check needs no standing identity |
 | Deep Research | Capability (`research.run`) executed by temporary workers under an admitted campaign | No | Cannot start a campaign alone: admission via WorkService | Research runs per campaign |
+| Deterministic supervisor | Service: the mission orchestrator (software, OMP-417) | No | One coherent assignment per cycle; failures preserved unchanged; no model decides stage order or coordinates workers (D33) | A process must claim jobs, but its state is durable, so it is a restartable service, not an agent |
+| Native reviewer (`@audit`) | Evaluator, spawned per candidate | No | Maker/checker separation, checked by the control plane's acceptance_semantics check (OMP-421); no new model-family rule | Review is per change |
+| Persistent planners | Temporary worker (same as Programme Design) | No | Plan stamped before execution | Plans are per mission; nothing needs to persist between them |
+
+D33 (2026-09-28) supersedes the reconciliation tab's model for supervisor coordination judgment.
