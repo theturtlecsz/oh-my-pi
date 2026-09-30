@@ -74,6 +74,11 @@ from .decision_records import answer_decision, create_decision, list_decisions
 from .missions import execute as execute_mission
 from .missions import read_mission, unconfirmed_missions_for_work
 from .mission_intake import answer_mission_draft, draft_mission_intake
+from .mission_event_store import (
+    DOMAIN_EVENTS_WINDOW_QUERY,
+    mission_events as _mission_events_dispatch,
+    record_finding as _record_finding,
+)
 from .semantics import (
     BOUNDED_INTAKE_RULE_BUNDLE_SHA256,
     bounded_intake_semantic_sha256,
@@ -561,6 +566,7 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
             "link_mission_work",
             "draft_mission_intake",
             "answer_mission_draft",
+            "record_finding",
         }
         conflict = False
         with self._transaction(
@@ -778,6 +784,8 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
                     result, event = answer_mission_draft(
                         cur, envelope, actor_id, actor_kind
                     )
+                elif command.type == "record_finding":
+                    result = _record_finding(cur, envelope, actor_id, actor_kind)
                 else:
                     raise WorkStoreError("unavailable")
                 result_hash = sha256(result)
@@ -7044,47 +7052,10 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
             raise WorkStoreError("invalid_request", ("after must be non-negative",))
 
         with self._transaction(workspace_id, actor_id) as cur:
-            query = (
-                "WITH watermark AS ("
-                " SELECT COALESCE(MAX(sequence), 0) AS wm"
-                " FROM omp_audit.domain_events"
-                " WHERE workspace_id = %s"
-                ") "
-                "SELECT "
-                " w.wm AS watermark_sequence, "
-                " e.event_id, "
-                " e.sequence, "
-                " e.workspace_id, "
-                " e.aggregate_type, "
-                " e.aggregate_id, "
-                " e.aggregate_version, "
-                " e.actor_id, "
-                " e.actor_kind, "
-                " e.capability_id, "
-                " e.request_id, "
-                " e.correlation_id, "
-                " e.operation_id, "
-                " e.causation_id, "
-                " e.event_type, "
-                " e.outcome, "
-                " e.payload, "
-                " e.payload_sha256, "
-                " e.previous_event_sha256, "
-                " e.event_sha256, "
-                " e.occurred_at "
-                "FROM watermark w "
-                "LEFT JOIN LATERAL ("
-                " SELECT * "
-                " FROM omp_audit.domain_events "
-                " WHERE workspace_id = %s "
-                "   AND sequence > %s "
-                "   AND sequence <= w.wm "
-                " ORDER BY sequence ASC "
-                " LIMIT %s"
-                ") e ON true "
-                "ORDER BY e.sequence ASC NULLS LAST"
+            cur.execute(
+                DOMAIN_EVENTS_WINDOW_QUERY,
+                (workspace_id, workspace_id, after, limit + 1),
             )
-            cur.execute(query, (workspace_id, workspace_id, after, limit + 1))
             rows = cur.fetchall()
             watermark_sequence = int(rows[0]["watermark_sequence"]) if rows else 0
             if not rows or rows[0]["event_id"] is None:
@@ -7121,11 +7092,18 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
         workspace_id: UUID,
         actor_id: UUID,
         *,
-        after: int,
-        limit: int,
-        mission_id: UUID | None,
+        after: int = 0,
+        limit: int = 500,
+        mission_id: UUID | None = None,
     ) -> dict[str, object]:
-        raise WorkStoreError("unavailable")
+        return _mission_events_dispatch(
+            self,
+            workspace_id,
+            actor_id,
+            after=after,
+            limit=limit,
+            mission_id=mission_id,
+        )
 
     def event_subscriptions(
         self,
