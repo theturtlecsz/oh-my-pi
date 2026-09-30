@@ -22,6 +22,7 @@ from omp_work.operations.fingerprints import (
 )
 
 from .api_models import CommandResponse
+from .client_api import register_client_reads
 from .models import CommandEnvelope, EngageStopCommand, SetExecutionStateCommand
 from .service import Principal, WorkError, WorkService
 from .store import PostgresWorkStore, WorkStore
@@ -567,6 +568,13 @@ def create_app(
                 },
                 status_code=error.status,
             )
+
+    # OMP-416: the seven client GETs, after the work reads. Same handshake.
+    def _client_authenticate(request: Request) -> Principal:
+        _require_contract(request, service_digest)
+        return _principal(request, capabilities_dir)
+
+    register_client_reads(app, service, authenticate=_client_authenticate)
 
     @app.post("/v1/commands")
 
