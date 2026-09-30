@@ -4,7 +4,7 @@ import json
 import stat
 from datetime import datetime
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 
@@ -12,9 +12,11 @@ from omp_work import contract_sha256
 
 from .api_models import (
     CommandResponse,
+    DecisionsPage,
     DomainEventsPage,
     EventSubscriptionsPage,
     MissionEventsPage,
+    MissionView,
     StopStatusView,
     StoredOperationView,
     WorkflowView,
@@ -22,9 +24,30 @@ from .api_models import (
     WorkItemView,
     WorkspaceTree,
 )
-from .models import CommandEnvelope, EvidenceReceipt, FocusSlot, WorkRevision
+from .models import (
+    AnswerMissionDraftCommand,
+    AnswerMissionDraftPayload,
+    Command,
+    CommandEnvelope,
+    DraftMissionIntakeCommand,
+    DraftMissionIntakePayload,
+    EvidenceReceipt,
+    FocusSlot,
+    WorkRevision,
+)
 from .service import WorkError
 
+
+def _envelope(workspace_id: UUID, command: Command) -> CommandEnvelope:
+    """One command envelope with fresh operation, request, and correlation ids."""
+    return CommandEnvelope(
+        api_version="work.omp.dev/v1",
+        workspace_id=workspace_id,
+        operation_id=uuid4(),
+        request_id=uuid4(),
+        correlation_id=uuid4(),
+        command=command,
+    )
 
 
 class WorkClient:
@@ -169,6 +192,50 @@ class WorkClient:
             )
         )
 
+    def draft_mission_intake(
+        self, payload: DraftMissionIntakePayload
+    ) -> CommandResponse:
+        """Draft one mission intake and route it to proceed, hold, or owner decision."""
+        return self.execute(
+            _envelope(
+                self._workspace_id,
+                DraftMissionIntakeCommand(type="draft_mission_intake", payload=payload),
+            )
+        )
+
+    def answer_mission_draft(
+        self, payload: AnswerMissionDraftPayload
+    ) -> CommandResponse:
+        """Apply the owner's structured answer to one pending mission draft."""
+        return self.execute(
+            _envelope(
+                self._workspace_id,
+                AnswerMissionDraftCommand(type="answer_mission_draft", payload=payload),
+            )
+        )
+
+    def decisions(
+        self,
+        *,
+        status: str | None = None,
+        mission_id: str | None = None,
+    ) -> DecisionsPage:
+        params: dict[str, object] = {}
+        if status is not None:
+            params["status"] = status
+        if mission_id is not None:
+            params["mission_id"] = mission_id
+        return DecisionsPage.model_validate(
+            self._get(
+                f"/v1/workspaces/{self._workspace_id}/decisions",
+                params=params,
+            )
+        )
+
+    def mission(self, mission_id: UUID) -> MissionView:
+        return MissionView.model_validate(
+            self._get(f"/v1/workspaces/{self._workspace_id}/missions/{mission_id}")
+        )
 
     def _get(
         self, path: str, *, params: dict[str, object] | None = None
