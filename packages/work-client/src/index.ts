@@ -1111,6 +1111,126 @@ export type StopStatusView = {
 	changed_by_actor_kind: string | null;
 };
 
+/** Serialized client-contract body (omp_work.v1.api_models.ClientResponse). */
+export type ClientResponse = {
+	outcome: "read" | "applied" | "replayed" | "pending_approval";
+	state: string | null;
+	evidence: string[];
+	blockers: string[];
+	decisions: UUID[];
+	artifacts: string[];
+	operation: string;
+	contract: "client.omp.dev/v1";
+	result: Record<string, unknown> | null;
+	detail: Record<string, unknown> | null;
+};
+
+export type IntakeSourceSpan = {
+	id: string;
+	start: number;
+	end: number;
+	exact_text_sha256: string;
+};
+
+export type IntakeSource = {
+	text: string;
+	sha256: string;
+	spans: IntakeSourceSpan[];
+};
+
+export type KnownIntakeValue = { kind: "known"; value: string | number | boolean };
+export type UnknownIntakeValue = { kind: "unknown" };
+export type IntakeValue = KnownIntakeValue | UnknownIntakeValue;
+
+export type IntakeGoal = {
+	id: string;
+	statement: string;
+	source_span_ids?: string[];
+};
+
+export type IntakeConstraint = {
+	id: string;
+	statement: string;
+	source_span_ids?: string[];
+	key: string;
+	value: IntakeValue;
+	polarity: "positive" | "negative";
+};
+
+export type IntakeUnknown = {
+	id: string;
+	statement: string;
+	source_span_ids?: string[];
+	kind: "authority_or_dependency" | "routine_choice";
+	material: boolean;
+};
+
+export type IntakeAcceptanceCriterion = {
+	id: string;
+	statement: string;
+	source_span_ids?: string[];
+	observable_outcome: string;
+	oracle?: "automated_test" | "static_check" | "manual_inspection" | "external_receipt" | null;
+};
+
+export type ItemBudget = {
+	usd: string;
+	tokens: number;
+	wall_clock_seconds: number;
+	max_subagents: number;
+};
+
+/** omp_work.v1.models.BoundedIntakeDraft. */
+export type BoundedIntakeDraft = {
+	archetype: "small_code_change";
+	source: IntakeSource;
+	goal: IntakeGoal;
+	constraints?: IntakeConstraint[];
+	unknowns?: IntakeUnknown[];
+	acceptance_criteria?: IntakeAcceptanceCriterion[];
+	budget?: ItemBudget | null;
+};
+
+export type MissionKind = "research.run" | "engineering.execute" | "architecture.review" | "change.review";
+
+/** MissionDraft minus the fields the owner confirms (objective, acceptance, constraints). */
+export type MissionIntakeScope = {
+	project_id: UUID;
+	context_refs?: string[];
+	artifact_expectations?: string[];
+	requested_capabilities?: string[];
+	repositories?: string[];
+	approval_classes?: string[];
+	risk_policy: string;
+	approval_policy: string;
+	effort_policy: string;
+	budget_policy?: ItemBudget | null;
+	priority?: number;
+	continuation_of?: UUID | null;
+	parent_mission?: UUID | null;
+	kind?: MissionKind;
+};
+
+export type InstructionProvenance = {
+	channel: string;
+	message_ref: string;
+	received_at: string;
+};
+
+export type OwnerInstruction = {
+	text: string;
+	provenance: InstructionProvenance;
+};
+
+/** omp_work.v1.models.DraftMissionIntakePayload. */
+export type DraftMissionIntakePayload = {
+	mission_id: UUID;
+	base_revision?: number | null;
+	intake: BoundedIntakeDraft;
+	scope: MissionIntakeScope;
+	instruction?: OwnerInstruction | null;
+};
+
 /** /center recent-activity projection (OMP-25) — normalized event metadata
  *  only; receipt bodies and audit payloads never cross this read. */
 export type ActivityKind = EvidenceKind | "close_proposed" | "completed" | "evidence";
@@ -1388,6 +1508,22 @@ export class WorkClient {
 	healthReady(): Promise<HealthView> {
 		return this.request("GET", "/v1/health/ready", undefined, false) as Promise<HealthView>;
 	}
+
+	/** POST /v1/workspaces/{workspace_id}/client/mission-intake — body {request_id, payload}. */
+	missionIntake(
+		requestId: UUID,
+		payload: DraftMissionIntakePayload,
+		options: { detail?: boolean } = {},
+	): Promise<ClientResponse> {
+		const params = new URLSearchParams();
+		if (options.detail) params.set("detail", "true");
+		const query = params.size > 0 ? `?${params}` : "";
+		return this.request("POST", `/v1/workspaces/${this.workspaceId}/client/mission-intake${query}`, {
+			request_id: requestId,
+			payload,
+		}) as Promise<ClientResponse>;
+	}
+
 	execution(grantIdOrKey?: string): Promise<ExecutionView> {
 		const suffix = grantIdOrKey ? `/${encodeURIComponent(grantIdOrKey)}` : "";
 		return this.request("GET", `/v1/workspaces/${this.workspaceId}/execution${suffix}`) as Promise<ExecutionView>;

@@ -12,16 +12,20 @@ import { randomUUID } from "node:crypto";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import {
+	type BoundedIntakeDraft,
 	type Candidate,
+	type ClientResponse,
 	type CloseAttempt,
 	type CloseAttemptEvent,
 	type Command,
 	type CommandEnvelope,
 	type CommandResult,
 	type CompletionEvidence,
+	type DraftMissionIntakePayload,
 	type EvidenceKind as ServiceEvidenceKind,
 	type EvidenceReceipt,
 	type Fetch,
+	type MissionIntakeScope,
 	payloadHash,
 	type ProjectHealth,
 	sha256Hex,
@@ -53,6 +57,7 @@ import {
 	type CloseAttemptSnapshot,
 	type CloseEventView,
 	type CreateBatchInput,
+	type DraftMissionResult,
 	type EvidenceKind,
 	extractOwnerQuestion,
 	setOwnerQuestion,
@@ -589,6 +594,35 @@ export function matchStoredOperation(
 	return { result: stored.result };
 }
 
+
+const MISSION_DRAFT_OUTCOMES = new Set<DraftMissionResult["outcome"]>(["clarify", "held", "awaiting_owner", "proceeded"]);
+
+function missionDraftResult(response: ClientResponse): DraftMissionResult {
+	const result = response.result;
+	const outcome = result && typeof result.outcome === "string" ? result.outcome : "";
+	if (!MISSION_DRAFT_OUTCOMES.has(outcome as DraftMissionResult["outcome"])) {
+		throw new Error(`mission intake returned an unknown outcome: ${outcome || "missing"}`);
+	}
+	const raw = result && Array.isArray(result.questions) ? result.questions : [];
+	const questions: string[] = [];
+	for (const item of raw) {
+		if (!item || typeof item !== "object" || !("statement" in item)) continue;
+		const statement = (item as { statement?: unknown }).statement;
+		if (typeof statement === "string" && statement.length > 0) questions.push(statement);
+	}
+	return { outcome: outcome as DraftMissionResult["outcome"], questions };
+}
+
+type MissionIntakeEnvelope = { request_id: UUID; payload: DraftMissionIntakePayload };
+
+function missionIntakeEnvelope(record: { envelope: unknown }): MissionIntakeEnvelope | null {
+	const envelope = record.envelope;
+	if (!envelope || typeof envelope !== "object") return null;
+	const requestId = (envelope as { request_id?: unknown }).request_id;
+	const payload = (envelope as { payload?: unknown }).payload;
+	if (typeof requestId !== "string" || !payload || typeof payload !== "object") return null;
+	return { request_id: requestId, payload: payload as DraftMissionIntakePayload };
+}
 
 export function createWorkBackend(
 	config: WorkClientConfig,
@@ -1490,6 +1524,63 @@ export function createWorkBackend(
 			});
 			const created = result.items[0];
 			return { id: created.work_id, key: created.key, title: input.title, ...(input.project ? { project: input.project } : {}) };
+		},
+
+		async draftMission(input: { title: string; blueprint: string; project?: string }): Promise<DraftMissionResult> {
+			if (!input.project) throw new Error("draftMission requires a project");
+			const projectId = await projectIdFor(input.project);
+			const criteria = acceptanceFromDescription(input.blueprint);
+			// The claim owns mission_id and request_id: a retry resends those bytes.
+			const intake: BoundedIntakeDraft = {
+				archetype: "small_code_change",
+				source: { text: input.blueprint, sha256: sha256Hex(input.blueprint), spans: [] },
+				goal: { id: "goal", statement: input.title },
+				acceptance_criteria: criteria.map((statement, index) => ({
+					id: `ac-${index + 1}`,
+					statement,
+					observable_outcome: statement,
+				})),
+			};
+			const scope: MissionIntakeScope = {
+				project_id: projectId,
+				risk_policy: "default",
+				approval_policy: "default",
+				effort_policy: "default",
+				kind: "engineering.execute",
+			};
+			const intent = intentFingerprint("intent", config.workspaceId, config.ownerId, "draft_mission_intake", {
+				title: input.title,
+				blueprint: input.blueprint,
+				project: input.project,
+			});
+			const claim = await claimPendingOp(pendingDir, intent, () => ({
+				request_id: randomUUID(),
+				payload: { mission_id: randomUUID(), intake, scope } satisfies DraftMissionIntakePayload,
+			}));
+			if (!claim.record) {
+				throw new Error(
+					`pending-operation claim ${claim.path} is unreadable — repair or remove it manually; refusing to risk a duplicate draft_mission_intake`,
+				);
+			}
+			const record = claim.record;
+			if (record.result !== undefined) return missionDraftResult(record.result as ClientResponse);
+			const envelope = missionIntakeEnvelope(record);
+			if (!envelope) {
+				throw new Error(
+					`pending-operation claim ${claim.path} is unreadable — repair or remove it manually; refusing to risk a duplicate draft_mission_intake`,
+				);
+			}
+			try {
+				const response = await client.missionIntake(envelope.request_id, envelope.payload);
+				const drafted = missionDraftResult(response);
+				await resolvePendingOp(claim.path, record, response);
+				return drafted;
+			} catch (error) {
+				if (error instanceof WorkError && error.status >= 400 && error.status < 500 && NON_APPLYING_CODES.has(error.code)) {
+					await dropPendingOp(claim.path);
+				}
+				throw error;
+			}
 		},
 
 		async createSameSessionChild(input: { parentKey: string; ownerSessionId: string; title: string; description?: string; finding: string; verification: string }): Promise<NowRef> {
