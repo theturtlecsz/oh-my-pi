@@ -66,12 +66,6 @@ export interface DiscoveryOptions {
 	baselinePath?: string;
 	releasesPath?: string;
 	lsRemotePath?: string;
-	json?: boolean;
-}
-
-export interface DiscoveryDependencies {
-	fetchReleases?: (owner: string, repo: string) => Promise<UpstreamRelease[]>;
-	getLsRemoteText?: (upstreamRepo: string, tag: string) => Promise<string>;
 }
 
 export interface DiscoveryResult {
@@ -82,10 +76,7 @@ export interface DiscoveryResult {
 	candidate_commit?: string;
 }
 
-export async function discoverUpstream(
-	options: DiscoveryOptions = {},
-	deps?: DiscoveryDependencies,
-): Promise<DiscoveryResult> {
+export async function discoverUpstream(options: DiscoveryOptions = {}): Promise<DiscoveryResult> {
 	const baselinePath = options.baselinePath || "docs/upstream-baseline.json";
 	let baselineText: string;
 	try {
@@ -112,8 +103,6 @@ export async function discoverUpstream(
 		} catch {
 			throw new Error(`releases fixture missing: ${options.releasesPath}`);
 		}
-	} else if (deps?.fetchReleases) {
-		releases = await deps.fetchReleases(owner, repo);
 	} else {
 		const headers: Record<string, string> = { accept: "application/vnd.github+json" };
 		const token = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
@@ -140,8 +129,6 @@ export async function discoverUpstream(
 		} catch {
 			throw new Error(`ls-remote fixture missing: ${options.lsRemotePath}`);
 		}
-	} else if (deps?.getLsRemoteText) {
-		lsRemoteText = await deps.getLsRemoteText(baseline.upstream_repo, candidate.tag);
 	} else {
 		const proc = Bun.spawn(
 			[
@@ -183,18 +170,19 @@ export async function discoverUpstream(
 // CLI
 // ---------------------------------------------------------------------------
 
-export async function main(argv = process.argv.slice(2)): Promise<void> {
+async function main(): Promise<void> {
+	const argv = process.argv.slice(2);
 	let baselinePath = "docs/upstream-baseline.json";
 	let json = false;
-	let releasesPath = process.env.UPSTREAM_RELEASES_FILE ?? "";
-	let lsRemotePath = process.env.UPSTREAM_LS_REMOTE_FILE ?? "";
+	let releasesPath = "";
+	let lsRemotePath = "";
 
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
 		if (arg === "--json") json = true;
 		else if (arg === "--baseline") baselinePath = argv[++i] ?? "";
-		else if (arg === "--releases" || arg === "--releases-file") releasesPath = argv[++i] ?? "";
-		else if (arg === "--ls-remote" || arg === "--ls-remote-file") lsRemotePath = argv[++i] ?? "";
+		else if (arg === "--releases") releasesPath = argv[++i] ?? "";
+		else if (arg === "--ls-remote") lsRemotePath = argv[++i] ?? "";
 		else {
 			console.error(`usage error: unexpected argument ${arg}`);
 			process.exit(2);
@@ -206,7 +194,6 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
 			baselinePath,
 			releasesPath: releasesPath || undefined,
 			lsRemotePath: lsRemotePath || undefined,
-			json,
 		});
 
 		if (json) {
