@@ -7,13 +7,16 @@ userinfo, a host outside that set, a name that does not resolve, and any
 resolved address ``egress_policy.blocked_address`` refuses.
 
 ``run_push`` walks every client's subscriptions. A row with no push_url is a
-pull subscription and is skipped, as is an ops.* stream. A push_url that
+pull subscription and is skipped, as are ops.* streams other than an
+``ops.alarm`` row. A mission or ``ops.alarm`` row's push_url that
 ``check_destination`` refuses returns ``{"refused": reason}`` and nothing is
-sent. Otherwise it pages mission events from that subscription's cursor,
-sending the subscribed types and advancing the cursor only past what was
-delivered. Delivery is a signed, bearer-less POST (``send_signed``) whose
-Idempotency-Key is the mission_event_id. A redirect is a failed delivery:
-the POST is not replayed to the Location.
+sent. A mission row pages mission events from its cursor, sending the
+subscribed types and advancing the cursor only past what was delivered. An
+``ops.alarm`` row replays every domain event, sends only the alerts past its
+cursor, and advances the cursor past what was delivered. Delivery is a signed,
+bearer-less POST (``send_signed``) whose Idempotency-Key is the
+mission_event_id (or the alert's ``idempotency_key``). A redirect is a failed
+delivery: the POST is not replayed to the Location.
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ from typing import Any
 from urllib.parse import urlsplit
 from uuid import NAMESPACE_URL, UUID, uuid5
 
+from .alarm_classify import AlarmState, classify
 from .egress_policy import blocked_address
 from .grokbot import GrokbotError
 from .grokbot import send as grokbot_send
@@ -302,18 +306,31 @@ def run_push(
     resolve: Callable[[str], Iterable[str]] = _getaddrinfo_ips,
     send: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
-    """Deliver every client's subscribed mission events to its push_url.
+    """Deliver every client's subscribed mission events or ops.alarm alerts.
 
     Each ``client.event_subscriptions()`` row is handled in turn. A row with no
-    push_url is a pull subscription and is skipped, as is an ``ops.*`` stream.
-    A push_url ``check_destination`` refuses returns ``{"refused": reason}``
-    and nothing is sent. Otherwise mission events page from the row's cursor;
-    each event whose type is subscribed is sent once (Idempotency-Key is its
-    mission_event_id) and the cursor advances to ``next_after_sequence`` with
+    push_url is a pull subscription and is skipped, as is an ``ops.*`` stream
+    other than a row whose event_types are exactly ``["ops.alarm"]``. A mission
+    or ``ops.alarm`` row's push_url ``check_destination`` refuses returns
+    ``{"refused": reason}`` and nothing is sent.
+
+    A mission row pages mission events from the row's cursor; each event whose
+    type is subscribed is sent once (Idempotency-Key is its mission_event_id)
+    and the cursor advances to ``next_after_sequence`` with
     ``operation_id = uuid5(NAMESPACE_URL, f"omp-push-cursor:{id}:{seq}")``. A
     send failure returns ``{"failed": reason}`` for the row and stops, after
     advancing the cursor to the last delivered event when that is past the
-    current cursor. Returns ``{"pushed": n}``.
+    current cursor.
+
+    An ``ops.alarm`` row replays every domain event (see :func:`_replay_ops`)
+    and sends each alert whose sequence is past the cursor, in order, with
+    Idempotency-Key ``alert.idempotency_key`` and body ``alert.body()``. If all
+    are sent the cursor advances to the last scanned event sequence when that
+    is past the current cursor; a send failure advances to the failed alert's
+    sequence minus one when that is past the cursor, then returns
+    ``{"failed": reason}``.
+
+    Returns ``{"pushed": n}``.
 
     ``send`` defaults to the module-level :func:`send_signed` and is looked up
     at call time so a monkeypatched ``event_push.send_signed`` takes effect.
@@ -325,10 +342,11 @@ def run_push(
     page = client.event_subscriptions()
     for subscription in _items(_field(page, "subscriptions", ())):
         sub_id = str(_field(subscription, "subscription_id", ""))
-        event_types = set(_items(_field(subscription, "event_types", ())))
-        if event_types and all(
+        event_types = list(_items(_field(subscription, "event_types", ())))
+        is_ops = bool(event_types) and all(
             isinstance(item, str) and item.startswith("ops.") for item in event_types
-        ):
+        )
+        if is_ops and event_types != ["ops.alarm"]:
             continue
         destination = _field(subscription, "push_url")
         if not isinstance(destination, str) or not destination.strip():
@@ -340,6 +358,21 @@ def run_push(
             return {"refused": reason}
         cursor = int(_field(subscription, "cursor_sequence", 0) or 0)
         key = subscription_key(master_key, sub_id)
+        if event_types == ["ops.alarm"]:
+            outcome = _push_ops_alarm(
+                client,
+                workspace_id=workspace_id,
+                sub_id=sub_id,
+                destination=destination,
+                cursor=cursor,
+                key=key,
+                send=send,
+            )
+            if "failed" in outcome:
+                return {"failed": outcome["failed"]}
+            pushed += outcome["pushed"]
+            continue
+        subscribed = set(event_types)
         while True:
             events_page = client.mission_events(after_sequence=cursor, limit=500)
             events = _items(_field(events_page, "events", ()))
@@ -349,7 +382,7 @@ def run_push(
             last_delivered: int | None = None
             try:
                 for event in events:
-                    if _field(event, "type") not in event_types:
+                    if _field(event, "type") not in subscribed:
                         continue
                     event_id = str(_field(event, "mission_event_id", ""))
                     send(
@@ -372,6 +405,74 @@ def run_push(
                 break
             cursor = next_after
     return {"pushed": pushed}
+
+
+def _push_ops_alarm(
+    client: Any,
+    *,
+    workspace_id: UUID,
+    sub_id: str,
+    destination: str,
+    cursor: int,
+    key: bytes,
+    send: Callable[..., Any],
+) -> dict[str, Any]:
+    """Send the ops.alarm alerts past ``cursor`` and advance it.
+
+    Returns ``{"pushed": n}`` when every alert was sent, advancing the cursor
+    to the last scanned event sequence when that is past ``cursor``. On a send
+    exception, advances to the failed alert's sequence minus one when that is
+    past ``cursor`` and returns ``{"failed": reason}``.
+    """
+    alerts, _rest, events = _replay_ops(client)
+    pushed = 0
+    last_scanned = 0
+    for event in events:
+        sequence = _field(event, "sequence")
+        if sequence is not None:
+            last_scanned = max(last_scanned, int(sequence))
+    for alert in alerts:
+        if alert.sequence <= cursor:
+            continue
+        try:
+            send(destination, alert.idempotency_key, alert.body(), key=key)
+        except Exception as error:  # noqa: BLE001 - surfaced as the failed reason
+            failed_to = alert.sequence - 1
+            if failed_to > cursor:
+                _advance(client, workspace_id, sub_id, failed_to)
+            return {"failed": str(error)}
+        pushed += 1
+    if last_scanned > cursor:
+        _advance(client, workspace_id, sub_id, last_scanned)
+    return {"pushed": pushed}
+
+
+def _replay_ops(client: Any) -> tuple[list[Any], list[Any], list[Any]]:
+    """Replay every domain event from sequence 0 into alerts, rest, and events.
+
+    Pages ``client.events(after_sequence=a, limit=500)`` from 0 until
+    ``has_more`` is false or a page carries no events, feeding each page to
+    :func:`alarm_classify.classify` with one fresh :class:`AlarmState` carried
+    across pages. Returns ``(alerts, rest, all_events)``.
+    """
+    state = AlarmState()
+    alerts: list[Any] = []
+    rest: list[Any] = []
+    events: list[Any] = []
+    after = 0
+    while True:
+        page = client.events(after_sequence=after, limit=500)
+        page_events = _items(_field(page, "events", ()))
+        if not page_events:
+            break
+        page_alerts, page_rest, state = classify(page_events, state)
+        alerts.extend(page_alerts)
+        rest.extend(page_rest)
+        events.extend(page_events)
+        if not bool(_field(page, "has_more", False)):
+            break
+        after = state.after_sequence
+    return alerts, rest, events
 
 
 def _advance(

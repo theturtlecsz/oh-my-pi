@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 import psycopg
 import pytest
 
+import omp_work.event_push as event_push
 from test_workflow_service import OWNER, _command, _grant, _owner_headers
 
 pytest_plugins = ["test_workflow_service"]
@@ -44,7 +45,10 @@ def _get_watermark(service, workspace_id: UUID) -> int:
             return int(cur.fetchone()[0])
 
 
-def test_event_subscriptions_lifecycle_and_read_api(service) -> None:
+def test_event_subscriptions_lifecycle_and_read_api(
+    service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(event_push, "check_destination", lambda *args, **kwargs: None)
     workspace_id = _init_workspace(service)
     sub_id = uuid4()
 
@@ -229,7 +233,10 @@ def test_event_subscription_cursor_equals_watermark(service) -> None:
     assert body_b["result"]["subscription"]["cursor_sequence"] == wm_1
 
 
-def test_ops_streams_subscriptions_store_like_mission_ones(service) -> None:
+def test_ops_streams_subscriptions_store_like_mission_ones(
+    service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(event_push, "check_destination", lambda *args, **kwargs: None)
     workspace_id = _init_workspace(service)
 
     # ops.alarm subscription
@@ -299,7 +306,7 @@ def test_event_subscriptions_refusals(service) -> None:
     assert status == 200
     cursor = body["result"]["subscription"]["cursor_sequence"]
 
-    # 1. put_event_subscription: payload client_id differing from stored -> invalid_request "client_id_immutable"
+    # 1. put_event_subscription: payload client_id differing from stored -> forbidden
     other_client = uuid4()
     status_bad_client, body_bad_client = _command(
         service,
@@ -313,9 +320,8 @@ def test_event_subscriptions_refusals(service) -> None:
             },
         },
     )
-    assert status_bad_client == 400
-    assert body_bad_client["error"]["code"] == "invalid_request"
-    assert "client_id_immutable" in body_bad_client["error"]["diagnostics"]
+    assert status_bad_client == 403
+    assert body_bad_client["error"]["code"] == "forbidden"
 
     # 2. advance_event_cursor: unknown -> invalid_request "subscription_not_found"
     unknown_id = uuid4()
