@@ -1,7 +1,12 @@
 """Public-key check for an owner's answer to a tier 3 decision record.
 
 The service holds no private key. Verification shells out to `ssh-keygen -Y
-verify` against an allowed-signers file the owner supplies.
+verify` against the owner_allowed_signers file.
+
+Owner decision D47 (2026-09-30): flood creates and holds the owner signing key
+on this host under ~/.config/omp/owner-signing, not on Chris's own device, so a
+valid owner signature proves flood's approval. Removing that key and
+owner_allowed_signers undoes this.
 """
 
 from __future__ import annotations
