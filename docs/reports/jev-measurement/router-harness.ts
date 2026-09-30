@@ -60,6 +60,37 @@ export class RouterRouteError extends Error {
 
 export const ROUTER_EFFORT_LABELS = ["low", "medium", "high", "xhigh"] as const;
 
+/**
+ * Dataset effort labels outside {@link ROUTER_EFFORT_LABELS} that map onto a
+ * scored label. The session-derived sets record the resolved thinking level,
+ * which on a model exposing the `max` tier can be `max`; the router prompt only
+ * ever offers low|medium|high|xhigh. Scoring `max` verbatim could never succeed
+ * on either side, so it is aliased to the router's top rung instead of leaving
+ * an unwinnable item in the denominator. `minimal` is likewise below the
+ * router's floor.
+ */
+const EFFORT_LABEL_ALIASES: Readonly<Record<string, string>> = {
+	max: "xhigh",
+	minimal: "low",
+};
+
+/**
+ * Normalize a dataset effort label to a scored one. Returns the label when it
+ * is already in {@link ROUTER_EFFORT_LABELS}, an alias target when it is a
+ * known out-of-vocabulary tier, and `undefined` when the label cannot be scored
+ * — the caller then excludes and reports the item instead of scoring it.
+ */
+export function scoreableEffortLabel(raw: string | undefined): string | undefined {
+	const label = (raw ?? "").trim().toLowerCase();
+	if ((ROUTER_EFFORT_LABELS as readonly string[]).includes(label)) return label;
+	return EFFORT_LABEL_ALIASES[label];
+}
+
+/** The excluded-label key a report shows; empty labels get a stable bucket. */
+function excludedLabelKey(raw: string | undefined): string {
+	return (raw ?? "").trim().toLowerCase() || "(empty)";
+}
+
 /** Robomp primary labels, as a router prompt. The typed API's question set is not reproducible. */
 export const ROUTER_ROBOMP_PRIMARY_LABELS = [
 	"bug",
@@ -127,6 +158,21 @@ export interface RouterRouteMetrics {
 	costSource: "completion-usage" | "generation-record" | "provider-usage" | "unavailable";
 	/** Routed answers that carried no allowed label. There is no separate off-list bucket in router mode. */
 	unparseableRate: number;
+	/**
+	 * Routed calls that hit the completion-token cap (`finish_reason=length`)
+	 * and returned no content. A truncated call is counted on its own, not folded
+	 * into {@link unparseableRate}: it measured the harness's budget, not the
+	 * router.
+	 */
+	truncatedRate: number;
+	/**
+	 * Dataset labels outside the scored vocabulary that were excluded from
+	 * scoring, with how many items carried each. An excluded item is not in
+	 * either side's denominator; the report shows the bucket so the exclusion is
+	 * visible rather than silent. Empty for the unexpected-stop and robomp
+	 * routes, whose label sets are fixed.
+	 */
+	excludedLabels: Record<string, number>;
 	transportFailureRate: number;
 	/** Histogram of routed model ids, from the response / generation record. */
 	routedModels: Record<string, number>;
@@ -299,7 +345,12 @@ function summarise(
 	const transportFailures = call.entries.filter(
 		e => e.outcome === "http_error" || e.outcome === "network_error" || e.outcome === "timeout",
 	).length;
-	const unparseable = call.values.filter(v => v === undefined).length;
+	// Truncated calls returned no content because the completion hit its token
+	// budget. They push an undefined value like an unparseable answer, so they
+	// are subtracted back out: the cap gets its own count.
+	const truncated = call.entries.filter(e => e.outcome === "truncated").length;
+	const undefinedValues = call.values.filter(v => v === undefined).length;
+	const unparseable = Math.max(undefinedValues - truncated, 0);
 	const answered = call.values.filter(v => v !== undefined).length;
 	const routedModels: Record<string, number> = {};
 	const routedEffort: Record<string, number> = {};
@@ -341,6 +392,8 @@ function summarise(
 		costPer1000Usd,
 		costSource,
 		unparseableRate: unparseable / total,
+		truncatedRate: truncated / total,
+		excludedLabels: {},
 		transportFailureRate: transportFailures / total,
 		routedModels,
 		routedEffort,
@@ -367,17 +420,46 @@ function assertTransportHealthy(entries: RouterUsageEntry[], feature: string): v
 	}
 }
 
+export interface RouterEffortItems {
+	/** Items whose dataset label is scoreable, with the label normalized. */
+	included: { prompt: string; expected: string }[];
+	/** How many items each excluded dataset label cost, keyed by normalized label. */
+	excluded: Record<string, number>;
+}
+
+/**
+ * Split auto-thinking prompts into the items both sides can be scored on and
+ * the items whose dataset label is outside the scored vocabulary. An excluded
+ * item is not sent to the router and is not in either side's denominator: an
+ * unwinnable label would depress both columns and hide the router behind it.
+ * The excluded counts are returned so the report can show the bucket, and the
+ * current side uses the same partition.
+ */
+export function partitionEffortPrompts(prompts: RouterPromptItem[]): RouterEffortItems {
+	const included: RouterEffortItems["included"] = [];
+	const excluded: Record<string, number> = {};
+	for (const item of prompts) {
+		const raw = item.effort || item.label;
+		const expected = scoreableEffortLabel(raw);
+		if (expected === undefined) {
+			const key = excludedLabelKey(raw);
+			excluded[key] = (excluded[key] ?? 0) + 1;
+			continue;
+		}
+		included.push({ prompt: item.prompt, expected });
+	}
+	return { included, excluded };
+}
+
 export async function measureRouterEffort(
 	prompts: RouterPromptItem[],
 	deps: RouterRouteDeps,
 ): Promise<RouterRouteMetrics> {
-	const items = prompts.map(item => ({
-		prompt: `${EFFORT_PROMPT}${item.prompt}`,
-		expected: (item.effort || item.label || "").toLowerCase(),
-	}));
+	const { included, excluded } = partitionEffortPrompts(prompts);
+	const items = included.map(item => ({ prompt: `${EFFORT_PROMPT}${item.prompt}`, expected: item.expected }));
 	const call = await runRoute(items, deps, text => parseFirstLabel(text, ROUTER_EFFORT_LABELS));
-	const correct = call.values.filter((value, i) => value !== undefined && value === items[i].expected).length;
-	return summarise(call, correct);
+	const correct = call.values.filter((value, i) => value !== undefined && value === included[i].expected).length;
+	return summarise(call, correct, { excludedLabels: excluded });
 }
 
 export async function measureRouterStop(
@@ -456,7 +538,10 @@ async function measureCurrent(
 		const started = performance.now();
 		if (fakeCurrent && mode === "effort" && fakeCurrent.classifyDifficulty) {
 			const res = await fakeCurrent.classifyDifficulty(item.text);
-			value = res.effort?.toLowerCase();
+			// Normalize the classifier's own label the same way the dataset
+			// label was: the current side can return `max`/`minimal`, which are
+			// not in the scored router vocabulary.
+			value = scoreableEffortLabel(res.effort);
 			cost = res.cost ?? 0;
 			latencies.push(res.latencyMs ?? performance.now() - started);
 		} else if (fakeCurrent && mode === "stop" && fakeCurrent.classifyUnexpectedStop) {
@@ -468,7 +553,7 @@ async function measureCurrent(
 			const usageCost = { total: 0 };
 			try {
 				if (mode === "effort") {
-					value = await classifyDifficulty(item.text, {
+					const effort = await classifyDifficulty(item.text, {
 						settings: withoutJevSettings(current.settings),
 						registry: current.registry,
 						model: CURRENT_MODEL,
@@ -476,6 +561,7 @@ async function measureCurrent(
 							usageCost.total += message.usage.cost.total;
 						},
 					});
+					value = scoreableEffortLabel(effort);
 				} else {
 					const stopped = await classifyUnexpectedStop(item.text, {
 						settings: withoutJevSettings(current.settings),
@@ -524,6 +610,8 @@ async function measureCurrent(
 		costPer1000Usd: (costTotal / total) * 1000,
 		costSource: costTotal > 0 ? "provider-usage" : "unavailable",
 		unparseableRate: unparseable / total,
+		truncatedRate: 0,
+		excludedLabels: {},
 		transportFailureRate: 0,
 		routedModels: { [CURRENT_MODEL.id]: items.length },
 		routedEffort: {},
@@ -558,6 +646,8 @@ function emptyRouteMetrics(sampleSize: number): RouterRouteMetrics {
 		costPer1000Usd: null,
 		costSource: "unavailable",
 		unparseableRate: 0,
+		truncatedRate: 0,
+		excludedLabels: {},
 		transportFailureRate: 0,
 		routedModels: {},
 		routedEffort: {},
@@ -591,7 +681,10 @@ export async function runRouterMeasurement(options: RouterMeasurementOptions): P
 	}
 
 	const currentAutoThinking = await measureCurrent(
-		prompts.map(p => ({ text: p.prompt, expected: (p.effort || p.label || "").toLowerCase() })),
+		// Same partition as the router: an item whose dataset label cannot be
+		// scored is excluded from the current side's denominator too, so both
+		// columns are computed over the identical set.
+		partitionEffortPrompts(prompts).included.map(item => ({ text: item.prompt, expected: item.expected })),
 		"effort",
 		{ current: options.current, fakeCurrent: options.fakeCurrent },
 	);

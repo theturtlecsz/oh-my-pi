@@ -23,6 +23,8 @@ Sample size: {{auto_thinking_sample_size}} prompts
 | Cost per 1000 calls ($) | {{auto_thinking_current_cost}} | {{auto_thinking_route_cost}} |
 | Cost source | {{auto_thinking_current_cost_source}} | {{auto_thinking_route_cost_source}} |
 | Unparseable / off-list | — | {{auto_thinking_route_unparseable}} |
+| Truncated (no answer at token cap) | — | {{auto_thinking_route_truncated}} |
+| Excluded (label outside scored set) | — | {{auto_thinking_route_excluded}} |
 | Transport-failure rate | — | {{auto_thinking_route_transport_failure}} |
 
 Routed models picked: {{auto_thinking_route_routed_models}}
@@ -46,6 +48,7 @@ The router has no probability output, so the 0.70 threshold is not applied. A ro
 | Cost per 1000 calls ($) | {{unexpected_stop_current_cost}} | {{unexpected_stop_route_cost}} |
 | Cost source | {{unexpected_stop_current_cost_source}} | {{unexpected_stop_route_cost_source}} |
 | Unparseable / off-list | — | {{unexpected_stop_route_unparseable}} |
+| Truncated (no answer at token cap) | — | {{unexpected_stop_route_truncated}} |
 | Transport-failure rate | — | {{unexpected_stop_route_transport_failure}} |
 
 Routed models picked: {{unexpected_stop_route_routed_models}}
@@ -68,6 +71,7 @@ The router answers the primary classification only. The typed prefilter's yes/no
 | Cost per 1000 calls ($) | {{robomp_route_cost}} |
 | Cost source | {{robomp_route_cost_source}} |
 | Unparseable / off-list | {{robomp_route_unparseable}} |
+| Truncated (no answer at token cap) | {{robomp_route_truncated}} |
 | Transport-failure rate | {{robomp_route_transport_failure}} |
 
 Routed models picked: {{robomp_route_routed_models}}
@@ -77,7 +81,8 @@ Routed reasoning effort reported: {{robomp_route_routed_effort}}
 ## What is not measured
 
 - **Probability maps and calibration.** The router returns text, not distributions. Nothing here measures the typed API's Choice probabilities, its Noul probabilities, or the 0.70 unexpected-stop threshold operating on a probability.
-- **Off-list / off-options behaviour.** The typed API's answer-space validation (`off_list`, `off_options`) has no router equivalent; a routed answer with no allowed label is counted as unparseable, one bucket only.
+- **Off-list / off-options behaviour.** The typed API's answer-space validation (`off_list`, `off_options`) has no router equivalent; a routed answer with no allowed label is counted as unparseable, one bucket only. A call that hit the completion-token cap and returned no content is counted separately as truncated — it measures the harness's budget, not the router.
+- **Auto-thinking labels outside the scored set.** The router prompt offers `low|medium|high|xhigh`; dataset labels outside that set are excluded from both sides' denominators and shown as an Excluded bucket, or aliased to a scored label (`max`→`xhigh`, `minimal`→`low`).
 - **Robomp routed-decision equivalence.** The prefilter's yes/no gates (`batch_audit`, `first_person_failure`, `wanted_different_behavior`, `upstream_cause`, `nondefault_exotic_env`) and its answer/session route are not measured — only the primary label and a derived skip share.
 - **Router internals.** Jev Router's own routing cost and the sub-request it forwards are not visible; the report reads the routed model id and reasoning effort OpenRouter returns. The cost column is the charged cost OpenRouter reported for the call — the completion's own `usage.cost`, or the generation record's `total_cost` when that had to be read — and is `not measured` when neither surface reported a cost.
 - **Cost timeliness.** OpenRouter publishes a generation record several seconds after the completion answers, so a rate-limited or slow run can end with some calls whose record never appeared; those calls still report the completion's own `usage.cost` when it carried one. Nothing here estimates a cost from tokens.
