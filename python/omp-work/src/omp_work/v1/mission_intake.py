@@ -224,9 +224,11 @@ def answer_mission_draft(
     envelope: CommandEnvelope,
     actor_id: UUID,
     actor_kind: str,
+    *,
+    relayed: bool = False,
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Apply the owner's answer to one pending mission intake draft."""
-    if actor_kind != "owner":
+    if not relayed and actor_kind != "owner":
         raise WorkStoreError("forbidden")
 
     payload = envelope.command.payload
