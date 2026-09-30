@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -179,8 +179,15 @@ describe("CI release_metadata workflow detection", () => {
 			.join("\n");
 	});
 
+	const tempDirs: string[] = [];
+
+	afterEach(async () => {
+		await Promise.all(tempDirs.splice(0).map(dir => fs.promises.rm(dir, { recursive: true, force: true })));
+	});
+
 	async function setupGitRepos(): Promise<{ origin: string; local: string }> {
 		const baseTemp = await fs.promises.mkdtemp(path.join(os.tmpdir(), "ci-release-test-"));
+		tempDirs.push(baseTemp);
 		const origin = path.join(baseTemp, "origin.git");
 		const local = path.join(baseTemp, "local");
 
@@ -508,8 +515,15 @@ describe("CI release_metadata workflow detection", () => {
 });
 
 describe("release publishing journey under branch protection", () => {
+	const tempDirs: string[] = [];
+
+	afterEach(async () => {
+		await Promise.all(tempDirs.splice(0).map(dir => fs.promises.rm(dir, { recursive: true, force: true })));
+	});
+
 	async function setupProtectedGitRepos(): Promise<{ origin: string; local: string }> {
 		const baseTemp = await fs.promises.mkdtemp(path.join(os.tmpdir(), "ci-branch-protect-test-"));
+		tempDirs.push(baseTemp);
 		const origin = path.join(baseTemp, "origin.git");
 		const local = path.join(baseTemp, "local");
 

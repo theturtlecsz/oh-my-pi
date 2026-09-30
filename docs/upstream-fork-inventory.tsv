@@ -594,6 +594,7 @@ packages/coding-agent/test/sdk-mcp-instructions.test.ts	shared	modified	90f67385
 packages/coding-agent/test/session-manager/session-id.test.ts	shared	modified	e47db26845a3	OMP-410: reopen of a session file with an embedded id preserves that session id in getSessionId and the header instead of minting a new one	retained
 packages/coding-agent/test/session-stop-continuation-recap.test.ts	shared	modified	0d1dfeda9381	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
 packages/coding-agent/test/session/session-init-instruction-degradation.test.ts	fork-only	added	c887acacf1b3	OMP-248: Test that session_init persists non-empty instructionPrepDegradations and omits the key when empty	retained
+packages/coding-agent/test/shell-snapshot.test.ts	shared	modified	a18ae6406ff3	fork change (describe); OMP-488: remove omp-snap-* fixture directories under os.tmpdir() in afterEach	retained
 packages/coding-agent/test/silent-abort-print-mode.test.ts	shared	modified	1dff55b2148b	fork change (describe); OMP-246: Model required idle waiting without weakening aborted output assertions	retained
 packages/coding-agent/test/snapcompact-savings-journal.test.ts	shared	modified	87884ea1c0ca	OMP-341: remove each snap-savings-journal- temp dir in afterEach so the suite stops leaking it	retained
 packages/coding-agent/test/status-line-overflow.test.ts	shared	modified	6d7cece1a768	feat(coding-agent): inline setStatus placement beside path segment (HOME-130)	retained
@@ -1188,7 +1189,7 @@ scripts/installed-qualification-mode.test.ts	fork-only	added	9513b1787dfb	OMP-33
 scripts/installed-qualification-mode.ts	fork-only	added	a21adfeecbde	OMP-335-s01: select installed qualification mode (subset vs full) and pytest targets based on event, release flag, and protected path changes	retained
 scripts/link-omp.sh	shared	modified	51a84679608b	session candidate: OMP-162	retained
 scripts/musl-release.test.ts	shared	modified	22483952d00e	feat(omp-156): pre-merge inventory oracle and safe update driver	retained
-scripts/release.test.ts	shared	modified	419af93b3443	fix(release): format scripts/release.ts and scripts/release.test.ts; session candidate: OMP-209	retained
+scripts/release.test.ts	shared	modified	14a26a5aedc2	fix(release): format scripts/release.ts and scripts/release.test.ts; session candidate: OMP-209; OMP-488: remove temporary git fixture directories under os.tmpdir() in afterEach	retained
 scripts/release.ts	shared	modified	3781716ccbdb	fix(release): format scripts/release.ts and scripts/release.test.ts; session candidate: OMP-209; OMP-263: describe PR-first release branch workflow — `cmdRelease` pushes the version-bump commit to a release branch for PR review only, and `publish` (run post-merge) verifies local HEAD matches origin/main before pushing the commit to the remote `v*` tag ref and watching the tag-triggered release workflow	retained
 scripts/setup.ts	shared	modified	cc8b8d79bc40	session candidate: OMP-162	retained
 scripts/upstream-discovery.test.ts	fork-only	added	f52befdf0c98	OMP-229 discovery tests: draft/prerelease/non-final exclusion, semver ordering, tag peeling, repo URL parsing	retained

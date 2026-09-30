@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -240,8 +240,20 @@ describe("shell-snapshot fn-env helper", () => {
 });
 
 describe("getOrCreateSnapshot", () => {
+	const tempDirs: string[] = [];
+
+	afterEach(async () => {
+		await Promise.all(
+			tempDirs.splice(0).map(async dir => {
+				await fs.chmod(dir, 0o700).catch(() => {});
+				await fs.rm(dir, { recursive: true, force: true });
+			}),
+		);
+	});
+
 	it("re-exports env vars referenced by snapshotted functions (issue #3470)", async () => {
 		const home = await fs.mkdtemp(path.join(os.tmpdir(), "omp-snap-3470-"));
+		tempDirs.push(home);
 		await fs.writeFile(
 			path.join(home, ".bashrc"),
 			[
@@ -300,6 +312,7 @@ describe("getOrCreateSnapshot", () => {
 		// Fix: JS now pre-creates the file at 0600 (shell `>|`/`>>` preserve the
 		// inode mode) AND the script re-applies `umask 077` after the source.
 		const home = await fs.mkdtemp(path.join(os.tmpdir(), "omp-snap-umask-"));
+		tempDirs.push(home);
 		await fs.writeFile(
 			path.join(home, ".bashrc"),
 			[`umask 022`, `export __MISE_EXE=${REAL_ECHO}`, `mise () { command "$__MISE_EXE" "$@"; }`, ``].join("\n"),
@@ -323,6 +336,7 @@ describe("getOrCreateSnapshot", () => {
 	});
 	it("cleans up the empty snapshot file when the shell exits with a non-zero code", async () => {
 		const testRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-snap-fail-"));
+		tempDirs.push(testRoot);
 		const originalTmpDir = process.env.TMPDIR;
 		process.env.TMPDIR = testRoot;
 		try {
@@ -350,6 +364,7 @@ describe("getOrCreateSnapshot", () => {
 
 	it("cleans up the empty snapshot file when the shell fails to spawn", async () => {
 		const testRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-snap-spawn-fail-"));
+		tempDirs.push(testRoot);
 		const originalTmpDir = process.env.TMPDIR;
 		process.env.TMPDIR = testRoot;
 		try {
@@ -374,6 +389,7 @@ describe("getOrCreateSnapshot", () => {
 
 	it("cleans up the empty snapshot file when the shell execution times out", async () => {
 		const testRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-snap-timeout-"));
+		tempDirs.push(testRoot);
 		const originalTmpDir = process.env.TMPDIR;
 		process.env.TMPDIR = testRoot;
 		try {
@@ -407,6 +423,7 @@ describe("getOrCreateSnapshot", () => {
 		const realBash = REAL_BASH;
 		if (!existsSync(realBash)) return;
 		const testRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-snap-uid-"));
+		tempDirs.push(testRoot);
 		const originalTmpDir = process.env.TMPDIR;
 		process.env.TMPDIR = testRoot;
 		try {
@@ -434,6 +451,7 @@ describe("getOrCreateSnapshot", () => {
 		const realBash = REAL_BASH;
 		if (!existsSync(realBash)) return;
 		const testRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-snap-eacces-"));
+		tempDirs.push(testRoot);
 		const originalTmpDir = process.env.TMPDIR;
 		const shellLink = path.join(testRoot, "bash-omp-eacces");
 		await fs.symlink(realBash, shellLink);
