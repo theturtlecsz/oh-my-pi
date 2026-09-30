@@ -45,6 +45,7 @@ _MISSION_EVENTS = (
     "approve_mission",
     "set_mission_status",
     "link_mission_work",
+    "draft_mission_intake",
 )
 
 _NEW_SCOPE_RULE = "D29.new_scope"
