@@ -267,6 +267,49 @@ def validate_approval_attestation() -> None:
         raise ValueError("approval attestation missing or invalid")
 
 
+def validate_client_contract(contract: Contract) -> None:
+    client_contract = contract.client_contract
+    names: set[str] = set()
+    method_paths: set[tuple[str, str]] = set()
+
+    for op in client_contract.operations:
+        if op.name in names:
+            raise ValueError("client contract closure failed")
+        names.add(op.name)
+
+        method_path = (op.method, op.path)
+        if method_path in method_paths:
+            raise ValueError("client contract closure failed")
+        method_paths.add(method_path)
+
+        if op.method == "GET":
+            if op.command is not None or op.request is not None:
+                raise ValueError("client contract closure failed")
+            read_key = "GET " + op.path
+            if read_key not in contract.reads or read_key not in _READS:
+                raise ValueError("client contract closure failed")
+        elif op.method == "POST":
+            if (
+                op.command not in _COMMAND_TYPES
+                or not op.request
+                or not op.request.strip()
+            ):
+                raise ValueError("client contract closure failed")
+        else:
+            raise ValueError("client contract closure failed")
+
+        for scope in op.scope:
+            if scope not in _SCOPES:
+                raise ValueError("client contract closure failed")
+
+    if contract.security_policy.client_scopes != (
+        "work.read",
+        "work.client",
+        "work.stop",
+    ):
+        raise ValueError("client contract closure failed")
+
+
 def validate_bundle(*, require_approval: bool = True) -> None:
     contract = load_contract()
     examples = load_examples()
@@ -308,6 +351,7 @@ def validate_bundle(*, require_approval: bool = True) -> None:
         "work.stop",
     } or policy.stop_client_scopes != ("work.stop",):
         raise ValueError("capability separation failed")
+    validate_client_contract(contract)
     validate_examples(examples)
     validate_cutover_manifest(
         examples.cutover.anomalies, examples.cutover.parity_differences
@@ -334,4 +378,5 @@ __all__ = [
     "load_examples",
     "validate_approval_attestation",
     "validate_bundle",
+    "validate_client_contract",
 ]
