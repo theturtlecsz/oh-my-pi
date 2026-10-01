@@ -200,38 +200,39 @@ def _run_events_command(args: argparse.Namespace) -> int:
             )
             print(json.dumps(result, sort_keys=True))
             return 0
-        if args.events_command == "subscribe":
-            envelope = CommandEnvelope(
-                api_version="work.omp.dev/v1",
-                workspace_id=workspace_id,
-                operation_id=uuid4(),
-                request_id=uuid4(),
-                correlation_id=uuid4(),
-                command=PutEventSubscriptionCommand(
-                    type="put_event_subscription",
-                    payload=PutEventSubscription(
-                        subscription_id=args.subscription_id,
-                        push_url=args.push_url,
-                        event_types=tuple(args.event_types),
-                    ),
-                ),
-            )
-            response = client.execute(envelope)
-            print(response.model_dump_json())
-            return 0
-        if args.events_command == "subscriptions":
-            page = client.event_subscriptions()
-            print(page.model_dump_json())
-            return 0
+        if args.events_command in ("subscribe", "subscriptions"):
+            try:
+                if args.events_command == "subscribe":
+                    envelope = CommandEnvelope(
+                        api_version="work.omp.dev/v1",
+                        workspace_id=workspace_id,
+                        operation_id=uuid4(),
+                        request_id=uuid4(),
+                        correlation_id=uuid4(),
+                        command=PutEventSubscriptionCommand(
+                            type="put_event_subscription",
+                            payload=PutEventSubscription(
+                                subscription_id=args.subscription_id,
+                                push_url=args.push_url,
+                                event_types=tuple(args.event_types),
+                            ),
+                        ),
+                    )
+                    response = client.execute(envelope)
+                    print(response.model_dump_json())
+                    return 0
+                page = client.event_subscriptions()
+                print(page.model_dump_json())
+                return 0
+            except WorkError as error:
+                diag = (
+                    f" {' '.join(str(d) for d in error.diagnostics)}"
+                    if error.diagnostics
+                    else ""
+                )
+                print(f"events: {error.code}{diag}", file=sys.stderr)
+                return 1
         return 2
-    except WorkError as error:
-        diag = (
-            f" {' '.join(str(d) for d in error.diagnostics)}"
-            if error.diagnostics
-            else ""
-        )
-        print(f"events: {error.code}{diag}", file=sys.stderr)
-        return 1
     except Exception as error:  # noqa: BLE001 - surfaced as the CLI failure code
         print(f"events: {error}", file=sys.stderr)
         return 255

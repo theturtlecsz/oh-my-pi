@@ -8,6 +8,8 @@ Defended contracts:
 - a 400 with diagnostics push_destination_refused: exit 1, empty stdout, stderr names it.
 - missing --push-url exits 2 with no request; load_client raising exits 255.
 - subscriptions issues one GET of the workspace's event-subscriptions and prints that page.
+- a WorkError during subscribe/subscriptions maps to 1, while the same WorkError during
+  push stays on the pre-existing 255 command-failure code.
 - client.close() is called on exit.
 """
 
@@ -23,7 +25,7 @@ import pytest
 
 from omp_work.__main__ import main
 from omp_work.operations import stop as stop_ops
-from omp_work.v1.client import WorkClient
+from omp_work.v1.client import WorkClient, WorkError
 
 WORKSPACE = UUID("00000000-0000-7000-8000-0000000004f0")
 
@@ -454,3 +456,48 @@ def test_subscribe_ops_alarm_stream(
     assert exit_code == 0
     assert len(captured_requests) == 1
     assert captured_requests[0]["command"]["payload"]["event_types"] == ["ops.alarm"]
+
+
+def test_push_command_failure_stays_on_255(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from omp_work import event_push
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    config = tmp_path / "omp" / "work-ledger"
+    config.mkdir(parents=True)
+    key_file = config / "push-signing.key"
+    key_file.write_bytes(bytes(range(32)))
+    key_file.chmod(0o600)
+    (config / "push-destinations.json").write_text(
+        json.dumps({"allowed_hosts": ["hooks.example"]})
+    )
+    client_config, bearer, _ = _setup_configs(tmp_path)
+
+    monkeypatch.setattr(
+        stop_ops,
+        "load_client",
+        lambda cfg, bf=None: (
+            WorkClient(
+                "http://127.0.0.1:54322",
+                WORKSPACE,
+                bearer,
+                transport=httpx.MockTransport(
+                    lambda request: httpx.Response(200, json={"subscriptions": []})
+                ),
+            ),
+            WORKSPACE,
+        ),
+    )
+    monkeypatch.setattr(
+        event_push,
+        "run_push",
+        lambda *args, **kwargs: (_ for _ in ()).throw(WorkError("invalid_request")),
+    )
+
+    exit_code = main(["events", "push", "--client-config", str(client_config)])
+
+    assert exit_code == 255
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "invalid_request" in captured.err
