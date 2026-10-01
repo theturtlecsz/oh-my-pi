@@ -49,7 +49,7 @@ def verify_pack_pin(
     ok = ecc_pin.lower() == computed.lower() or (
         len(ecc_pin) <= 40 and computed.lower().startswith(ecc_pin.lower())
     )
-    # Prefer exact sha256; prefix match only for short git pins documenting upstream — for grokbot we use full sha256
+    # Prefer exact sha256; prefix match only for short git pins documenting upstream — full sha256 preferred
     if len(ecc_pin) == 64:
         ok = ecc_pin.lower() == computed.lower()
     msg = "pin matches manifest sha256" if ok else "pin does not match manifest sha256"

@@ -68,7 +68,7 @@ def _capabilities_dir(tmp_path: Path) -> Path:
     directory = tmp_path / "capabilities"
     directory.mkdir(mode=0o700)
     for name, actor_kind, scopes in (
-        ("grokbot", "grokbot", ["work.stop"]),
+        ("grokbot", "client", ["work.stop"]),
         ("automation", "automation", _AUTOMATION_SCOPES),
         ("owner", "owner", ["work.read", "work.approve"]),
         ("owner-no-stop", "owner", ["work.read", "work.approve", "work.close"]),
@@ -136,7 +136,7 @@ def test_grokbot_engages_but_release_is_refused(tmp_path: Path) -> None:
     assert len(store.calls) == 1
     assert store.calls[0]["command_type"] == "engage_stop"
     assert store.calls[0]["required_scope"] == "work.stop"
-    assert store.calls[0]["actor_kind"] == "grokbot"
+    assert store.calls[0]["actor_kind"] == "client"
 
     refused = _post(client, "grokbot-token", "release_stop", "all clear")
     assert refused.status_code == 403

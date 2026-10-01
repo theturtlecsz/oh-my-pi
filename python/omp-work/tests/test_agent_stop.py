@@ -156,7 +156,7 @@ def test_stop_reason_payload_bounds() -> None:
 def test_grokbot_engages_but_only_the_owner_releases() -> None:
     store = _RecordingStore()
     service = WorkService(store)  # type: ignore[arg-type]
-    grokbot = _principal("grokbot", frozenset({"work.stop"}))
+    grokbot = _principal("client", frozenset({"work.stop"}))
 
     _, result = service.execute(grokbot, _envelope("engage_stop", "runaway"))
     assert result == {"type": "engage_stop", "stopped": True, "reason": "runaway"}
@@ -191,7 +191,7 @@ def _capabilities_dir(tmp_path: Path) -> Path:
     directory = tmp_path / "capabilities"
     directory.mkdir(mode=0o700)
     for name, actor_kind, scopes in (
-        ("grokbot", "grokbot", ["work.stop"]),
+        ("grokbot", "client", ["work.stop"]),
         ("owner", "owner", ["work.read"]),
         ("plain", "automation", ["work.mutate"]),
     ):
