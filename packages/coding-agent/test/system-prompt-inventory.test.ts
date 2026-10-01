@@ -531,7 +531,7 @@ describe("system prompt tool inventory", () => {
 				eagerTasks,
 			});
 			const count = (needle: string) => systemPrompt[0].split(needle).length - 1;
-			return [count("Map unknown code via `task`"), count("Inline first.")];
+			return [count("use `task` to map unknown code"), count("Inline first.")];
 		};
 		expect(await renderDelegation("eager", false)).toEqual([1, 0]);
 		expect(await renderDelegation("eager", true)).toEqual([1, 0]);
