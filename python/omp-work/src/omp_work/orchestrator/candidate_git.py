@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 import fnmatch
+import hashlib
 import os
 from pathlib import Path
 import stat
@@ -15,7 +16,9 @@ __all__ = [
     "CandidateGitError",
     "IntentLog",
     "add_worktree",
+    "audit_inputs",
     "check_envelope",
+    "freeze",
     "git",
     "path_allowed",
 ]
@@ -373,4 +376,166 @@ def _scan(
 
     sorted_violations = sorted(set(violations))
     return sorted_violations, changed_map
+
+
+def _split_author(author: str) -> tuple[str, str]:
+    """Split ``Name <email>`` into the name and email ident fields."""
+    name, sep, rest = author.rpartition(" <")
+    if sep == "" or not rest.endswith(">"):
+        raise CandidateGitError("git_failed")
+    email = rest[:-1]
+    if name == "" or email == "":
+        raise CandidateGitError("git_failed")
+    return name, email
+
+
+def _write_scanned_blob(repo: Path, content: bytes) -> str:
+    """Store ``content`` with ``hash-object -w --no-filters`` and require the scanned id."""
+    scanned_id = _snapshot_blob(repo, content)
+    written_id = git(
+        repo,
+        "hash-object",
+        "-w",
+        "--no-filters",
+        "--stdin",
+        input=content,
+    ).decode("ascii").strip()
+    if written_id != scanned_id:
+        raise CandidateGitError("blob_mismatch")
+    return written_id
+
+
+def _index_tree(
+    repo: Path,
+    base: str,
+    changed: Mapping[str, tuple[str, bytes] | None],
+) -> str:
+    """Build ``base`` plus ``changed`` in a temporary index and return the tree id.
+
+    ``--force-remove`` refuses to run in a bare repository. Its work tree is an
+    empty directory, never the candidate checkout: that checkout's gitfile may
+    name an attacker gitdir.
+    """
+    with tempfile.TemporaryDirectory(prefix="omp-candidate-index-") as tmp:
+        index_path = Path(tmp) / "index"
+        empty_worktree = Path(tmp) / "empty"
+        empty_worktree.mkdir()
+        git(repo, "read-tree", base, index_file=index_path)
+        for path in sorted(changed):
+            entry = changed[path]
+            if entry is None:
+                git(
+                    repo,
+                    "update-index",
+                    "--force-remove",
+                    "--",
+                    path,
+                    index_file=index_path,
+                    extra_env={"GIT_WORK_TREE": str(empty_worktree)},
+                )
+                continue
+            mode, content = entry
+            blob = _write_scanned_blob(repo, content)
+            git(
+                repo,
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                f"{mode},{blob},{path}",
+                index_file=index_path,
+            )
+        return git(repo, "write-tree", index_file=index_path).decode("ascii").strip()
+
+
+def freeze(
+    control_repo: Path | str,
+    worktree: Path | str,
+    base: str,
+    allowed_paths: Iterable[str],
+    *,
+    repository: Path | str,
+    live_checkout: Path | str | None,
+    message: str,
+    author: str,
+) -> str:
+    """Commit the scanned checkout onto ``base`` and return the new commit sha.
+
+    ``repository`` must be the same directory as ``control_repo``. One scan
+    decides the envelope; any violation writes nothing. Blobs are the scanned
+    bytes (``hash-object -w --no-filters --stdin``), parent is ``base``, and
+    author and committer are both ``author`` with the base committer date.
+    No ref moves, and no git command runs in the candidate worktree.
+    """
+    if os.path.realpath(control_repo) != os.path.realpath(repository):
+        raise CandidateGitError("repository_mismatch")
+
+    violations, changed = _scan(
+        worktree,
+        base,
+        allowed_paths,
+        repository=repository,
+        live_checkout=live_checkout,
+    )
+    if violations:
+        raise CandidateGitError("envelope_violation", violations)
+
+    repo = Path(control_repo)
+    tree = _index_tree(repo, base, changed)
+    name, email = _split_author(author)
+    date = git(repo, "log", "-1", "--format=%cI", base).decode("ascii").strip()
+    commit = git(
+        repo,
+        "-c",
+        "commit.gpgSign=false",
+        "commit-tree",
+        tree,
+        "-p",
+        base,
+        "-m",
+        message,
+        extra_env={
+            "GIT_AUTHOR_NAME": name,
+            "GIT_AUTHOR_EMAIL": email,
+            "GIT_AUTHOR_DATE": date,
+            "GIT_COMMITTER_NAME": name,
+            "GIT_COMMITTER_EMAIL": email,
+            "GIT_COMMITTER_DATE": date,
+        },
+    )
+    return commit.decode("ascii").strip()
+
+
+def audit_inputs(control_repo: Path | str, base: str, commit: str) -> dict[str, Any]:
+    """Return the stable diff digest, tree sha, and sorted paths for ``commit``."""
+    diff_bytes = git(
+        control_repo,
+        "diff",
+        "--binary",
+        "--full-index",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+        base,
+        commit,
+    )
+    names = git(
+        control_repo,
+        "diff",
+        "--name-only",
+        "-z",
+        "--no-renames",
+        base,
+        commit,
+    )
+    changed_paths = sorted(
+        part.decode("utf-8", errors="surrogateescape")
+        for part in names.split(b"\0")
+        if part
+    )
+    tree = git(control_repo, "rev-parse", "--verify", f"{commit}^{{tree}}").decode("ascii").strip()
+    return {
+        "diff_sha256": hashlib.sha256(diff_bytes).hexdigest(),
+        "candidate_tree_sha": tree,
+        "changed_paths": changed_paths,
+    }
 

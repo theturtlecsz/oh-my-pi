@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -14,7 +15,9 @@ from omp_work.orchestrator.candidate_git import (
     IntentLog,
     _scan,
     add_worktree,
+    audit_inputs,
     check_envelope,
+    freeze,
     git,
     path_allowed,
 )
@@ -560,4 +563,288 @@ def test_scan_non_utf8_symlink_target_is_preserved(tmp_path: Path) -> None:
 
     _, changed_map = _scan(wt, base, ["link"], repository=ctrl_repo)
     assert changed_map["link"] == ("120000", target_bytes)
+
+
+_CANDIDATE_AUTHOR = "Cand <cand@omp.dev>"
+
+
+def _ls_map(repo: Path, rev: str) -> dict[str, tuple[str, str]]:
+    out = git(repo, "ls-tree", "-r", "-z", rev)
+    entries: dict[str, tuple[str, str]] = {}
+    if not out:
+        return entries
+    for item in out.split(b"\0"):
+        if not item:
+            continue
+        meta, path_b = item.split(b"\t", 1)
+        mode_b, _type_b, sha_b = meta.split(b" ", 2)
+        entries[path_b.decode("utf-8")] = (mode_b.decode("ascii"), sha_b.decode("ascii"))
+    return entries
+
+
+def _make_rich_base(tmp_path: Path) -> tuple[Path, str]:
+    """Base tree with a file to chmod and a directory an inside symlink can live in."""
+    ctrl_repo = tmp_path / "control.git"
+    subprocess.run(["git", "init", "--bare", str(ctrl_repo)], check=True, capture_output=True)
+
+    seed_dir = tmp_path / "seed"
+    subprocess.run(["git", "init", str(seed_dir)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(seed_dir), "config", "user.name", "Seed"], check=True)
+    subprocess.run(["git", "-C", str(seed_dir), "config", "user.email", "seed@omp.dev"], check=True)
+
+    (seed_dir / "app.py").write_text("print('hello world')\n")
+    (seed_dir / "README.md").write_text("# Readme\n")
+    (seed_dir / "script.sh").write_text("#!/bin/sh\necho hi\n")
+    (seed_dir / "dir").mkdir()
+    (seed_dir / "dir" / "inside.txt").write_text("inside\n")
+    subprocess.run(["git", "-C", str(seed_dir), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(seed_dir), "commit", "-m", "initial commit"],
+        check=True,
+        capture_output=True,
+    )
+    base = subprocess.check_output(["git", "-C", str(seed_dir), "rev-parse", "HEAD"]).decode().strip()
+    subprocess.run(
+        ["git", "-C", str(seed_dir), "push", str(ctrl_repo), f"{base}:refs/heads/main"],
+        check=True,
+        capture_output=True,
+    )
+    return ctrl_repo, base
+
+
+def _freeze(ctrl: Path, wt: Path, base: str, message: str, *, repository: Path | None = None) -> str:
+    return freeze(
+        ctrl,
+        wt,
+        base,
+        ["**"],
+        repository=ctrl if repository is None else repository,
+        live_checkout=None,
+        message=message,
+        author=_CANDIDATE_AUTHOR,
+    )
+
+
+def test_freeze_twice_same_sha_and_tree_is_base_plus_edits(tmp_path: Path) -> None:
+    """Two freezes of the same edits are one sha, and the tree is base plus those edits."""
+    ctrl, base = _make_rich_base(tmp_path)
+    wt = add_worktree(ctrl, tmp_path / "worktrees", "wt_freeze", base)
+
+    gpg_marker = tmp_path / "gpg-marker"
+    fake_gpg = tmp_path / "fake-gpg"
+    fake_gpg.write_text(f"#!/bin/sh\ntouch '{gpg_marker}'\nexit 1\n")
+    fake_gpg.chmod(0o755)
+    subprocess.run(["git", "-C", str(ctrl), "config", "commit.gpgsign", "true"], check=True)
+    subprocess.run(["git", "-C", str(ctrl), "config", "gpg.program", str(fake_gpg)], check=True)
+
+    changed = b"print('changed')\n"
+    (wt / "app.py").write_bytes(changed)
+    (wt / "README.md").unlink()
+    (wt / "script.sh").chmod(0o755)
+    (wt / "dir" / "link").symlink_to("inside.txt")
+
+    refs_before = git(ctrl, "show-ref")
+    sha1 = _freeze(ctrl, wt, base, "candidate")
+    sha2 = _freeze(ctrl, wt, base, "candidate")
+    assert sha1 == sha2
+    assert not gpg_marker.exists()
+
+    expected = _ls_map(ctrl, base)
+    app_sha = git(ctrl, "hash-object", "--no-filters", "--stdin", input=changed).decode().strip()
+    expected["app.py"] = ("100644", app_sha)
+    del expected["README.md"]
+    _mode, script_sha = expected["script.sh"]
+    assert _mode == "100644"
+    expected["script.sh"] = ("100755", script_sha)
+    link_sha = git(ctrl, "hash-object", "--no-filters", "--stdin", input=b"inside.txt").decode().strip()
+    expected["dir/link"] = ("120000", link_sha)
+    assert _ls_map(ctrl, sha1) == expected
+
+    assert git(ctrl, "rev-parse", f"{sha1}^").decode().strip() == base
+    assert git(ctrl, "show-ref") == refs_before
+    head = subprocess.check_output(["git", "-C", str(wt), "rev-parse", "HEAD"]).decode().strip()
+    assert head == base
+    assert not (wt / "README.md").exists()
+    assert (wt / "dir" / "link").is_symlink()
+    assert os.readlink(wt / "dir" / "link") == "inside.txt"
+
+    base_date = git(ctrl, "log", "-1", "--format=%cI", base).decode().strip()
+    ident = git(ctrl, "log", "-1", "--format=%an%n%ae%n%cn%n%ce%n%aI%n%cI%n%s", sha1).decode().splitlines()
+    assert ident == [
+        "Cand",
+        "cand@omp.dev",
+        "Cand",
+        "cand@omp.dev",
+        base_date,
+        base_date,
+        "candidate",
+    ]
+
+
+def test_freeze_violation_leaves_control_repo_objects_unchanged(tmp_path: Path) -> None:
+    ctrl, base = _make_control_repo_and_base(tmp_path)
+    wt = add_worktree(ctrl, tmp_path / "worktrees", "wt_freeze_refuse", base)
+    (wt / "app.py").write_text("print('would have been allowed')\n")
+    (wt / "forbidden.txt").write_text("nope\n")
+    (wt / "bad_link").symlink_to("/etc/passwd")
+
+    live = tmp_path / "live"
+    subprocess.run(["git", "clone", str(ctrl), str(live)], check=True, capture_output=True)
+    (live / "untracked.txt").write_text("dirty\n")
+
+    before = git(ctrl, "cat-file", "--batch-all-objects", "--batch-check")
+    refs_before = git(ctrl, "show-ref")
+    with pytest.raises(CandidateGitError) as exc:
+        freeze(
+            ctrl,
+            wt,
+            base,
+            ["app.py"],
+            repository=ctrl,
+            live_checkout=live,
+            message="refused",
+            author=_CANDIDATE_AUTHOR,
+        )
+    assert exc.value.code == "envelope_violation"
+    assert "outside_allowed:forbidden.txt" in exc.value.violations
+    assert "symlink_escape:bad_link" in exc.value.violations
+    assert any(
+        v.startswith("live_checkout_changed:") and "untracked.txt" in v for v in exc.value.violations
+    )
+    assert git(ctrl, "cat-file", "--batch-all-objects", "--batch-check") == before
+    assert git(ctrl, "show-ref") == refs_before
+
+
+def test_freeze_attacker_gitfile_writes_raw_bytes_and_no_marker(tmp_path: Path) -> None:
+    """A hostile gitfile's hooks, fsmonitor, and clean filter must not run or rewrite blobs."""
+    ctrl, base = _make_control_repo_and_base(tmp_path)
+    wt = add_worktree(ctrl, tmp_path / "worktrees", "wt_evil", base)
+
+    marker = tmp_path / "marker"
+    scripts = tmp_path / "evil-scripts"
+    hooks_path = tmp_path / "evil-hooks"
+    scripts.mkdir()
+    hooks_path.mkdir()
+    clean = scripts / "clean.sh"
+    clean.write_text(f"#!/bin/sh\ntouch '{marker}'\nprintf 'FILTERED\\n'\n")
+    clean.chmod(0o755)
+    fsmonitor = scripts / "fsmonitor.sh"
+    fsmonitor.write_text(f"#!/bin/sh\ntouch '{marker}'\nexit 0\n")
+    fsmonitor.chmod(0o755)
+    for hook_name in ("pre-commit", "pre-push"):
+        hook = hooks_path / hook_name
+        hook.write_text(f"#!/bin/sh\ntouch '{marker}'\nexit 0\n")
+        hook.chmod(0o755)
+
+    attacker = tmp_path / "attacker"
+    subprocess.run(["git", "init", str(attacker)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(attacker), "config", "core.hooksPath", str(hooks_path)], check=True)
+    subprocess.run(["git", "-C", str(attacker), "config", "core.fsmonitor", str(fsmonitor)], check=True)
+    subprocess.run(["git", "-C", str(attacker), "config", "filter.evil.clean", str(clean)], check=True)
+    git_dir = attacker / ".git"
+    for hook_name in ("pre-commit", "pre-push"):
+        hook = git_dir / "hooks" / hook_name
+        hook.write_text(f"#!/bin/sh\ntouch '{marker}'\nexit 0\n")
+        hook.chmod(0o755)
+
+    (wt / ".git").write_text(f"gitdir: {git_dir}\n")
+    raw = b"print('raw candidate bytes')\n"
+    (wt / "app.py").write_bytes(raw)
+    attributes = b"* filter=evil\n"
+    (wt / ".gitattributes").write_bytes(attributes)
+
+    # The trap is armed: hashing through the attacker gitdir rewrites the blob.
+    canary = subprocess.run(
+        ["git", "-C", str(wt), "hash-object", "--path", "app.py", "--stdin"],
+        input=raw,
+        capture_output=True,
+        check=False,
+    )
+    assert canary.returncode == 0, canary.stderr
+    assert marker.exists()
+    filtered = subprocess.check_output(
+        ["git", "-C", str(wt), "hash-object", "--stdin"],
+        input=b"FILTERED\n",
+    ).strip()
+    assert canary.stdout.strip() == filtered
+    marker.unlink()
+
+    commit = _freeze(ctrl, wt, base, "raw")
+    audited = audit_inputs(ctrl, base, commit)
+    assert not marker.exists()
+    assert git(ctrl, "cat-file", "blob", f"{commit}:app.py") == raw
+    assert git(ctrl, "cat-file", "blob", f"{commit}:.gitattributes") == attributes
+    assert audited["changed_paths"] == [".gitattributes", "app.py"]
+    assert audited["candidate_tree_sha"] == git(ctrl, "rev-parse", "--verify", f"{commit}^{{tree}}").decode().strip()
+    assert not marker.exists()
+
+
+def test_audit_inputs_stable_and_one_byte_changes_digest(tmp_path: Path) -> None:
+    ctrl, base = _make_control_repo_and_base(tmp_path)
+    wt = add_worktree(ctrl, tmp_path / "worktrees", "wt_audit", base)
+    (wt / "app.py").write_text("print('v1')\n")
+    (wt / "README.md").unlink()
+    (wt / "extra.txt").write_text("extra\n")
+
+    commit = _freeze(ctrl, wt, base, "audit")
+    first = audit_inputs(ctrl, base, commit)
+    second = audit_inputs(ctrl, base, commit)
+    assert first == second
+    assert first["changed_paths"] == ["README.md", "app.py", "extra.txt"]
+    assert first["candidate_tree_sha"] == git(
+        ctrl, "rev-parse", "--verify", f"{commit}^{{tree}}"
+    ).decode().strip()
+    diff = git(
+        ctrl,
+        "diff",
+        "--binary",
+        "--full-index",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+        base,
+        commit,
+    )
+    assert first["diff_sha256"] == hashlib.sha256(diff).hexdigest()
+    assert len(first["diff_sha256"]) == 64
+
+    (wt / "app.py").write_text("print('v2')\n")
+    commit_byte = _freeze(ctrl, wt, base, "audit")
+    changed = audit_inputs(ctrl, base, commit_byte)
+    assert changed["diff_sha256"] != first["diff_sha256"]
+    assert changed["changed_paths"] == first["changed_paths"]
+    assert changed["candidate_tree_sha"] == git(
+        ctrl, "rev-parse", "--verify", f"{commit_byte}^{{tree}}"
+    ).decode().strip()
+    assert changed["candidate_tree_sha"] != first["candidate_tree_sha"]
+
+
+def test_freeze_repository_mismatch(tmp_path: Path) -> None:
+    ctrl, base = _make_control_repo_and_base(tmp_path)
+    wt = add_worktree(ctrl, tmp_path / "worktrees", "wt_mismatch", base)
+    (wt / "app.py").write_text("print('x')\n")
+
+    other = tmp_path / "other.git"
+    subprocess.run(["git", "init", "--bare", str(other)], check=True, capture_output=True)
+    before = git(ctrl, "cat-file", "--batch-all-objects", "--batch-check")
+    with pytest.raises(CandidateGitError) as exc:
+        freeze(
+            ctrl,
+            wt,
+            base,
+            ["**"],
+            repository=other,
+            live_checkout=None,
+            message="nope",
+            author=_CANDIDATE_AUTHOR,
+        )
+    assert exc.value.code == "repository_mismatch"
+    assert exc.value.violations == []
+    assert git(ctrl, "cat-file", "--batch-all-objects", "--batch-check") == before
+
+    link = tmp_path / "ctrl-link"
+    link.symlink_to(ctrl)
+    via_link = _freeze(ctrl, wt, base, "via link", repository=link)
+    via_path = _freeze(ctrl, wt, base, "via link")
+    assert via_link == via_path
 
