@@ -2,10 +2,10 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parseArgs } from "node:util";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { isContained } from "../../packages/coding-agent/src/discovery/contained-path";
-import * as git from "../../packages/coding-agent/src/utils/git";
 import {
 	collectReleaseFiles,
 	type InstalledPythonIdentity,
@@ -86,12 +86,13 @@ export async function stageRelease(options: StageReleaseOptions): Promise<Staged
 	}
 	if (options.nativeAddonPaths.length === 0) throw new Error("At least one explicit native addon is required");
 	const sourceRoot = await fs.realpath(options.sourceRoot);
-	if ((await git.repo.root(sourceRoot)) !== sourceRoot) throw new Error("Source must be a Git repository root");
+	const repo = vcs.git(sourceRoot);
+	if (!repo || repo.info().repoRoot !== sourceRoot) throw new Error("Source must be a Git repository root");
 	const destination = await assertFreshDestination(sourceRoot, options.destination);
-	if ((await git.status(sourceRoot, { untrackedFiles: "all" })).trim()) {
+	if ((await repo.statusPorcelain({ untracked: "all" })).trim()) {
 		throw new Error("Release staging requires a clean source checkout, including untracked files");
 	}
-	const commit = await git.head.sha(sourceRoot);
+	const commit = await repo.headSha();
 	if (!commit) throw new Error("Source HEAD has no commit");
 	const uvPath = await fs.realpath(options.uvPath);
 	const pythonPath = await fs.realpath(options.pythonPath);
@@ -106,7 +107,7 @@ export async function stageRelease(options: StageReleaseOptions): Promise<Staged
 	}
 	const source = path.join(destination, "source");
 	const archivePath = path.join(destination, ".stage-build", "source.tar");
-	await git.archive(sourceRoot, commit, archivePath);
+	await releaseGit.archive(sourceRoot, commit, archivePath);
 	await new Bun.Archive(await Bun.file(archivePath).arrayBuffer()).extract(source);
 	// Validate tracked symlinks before any dependency/build tool can follow them.
 	await collectReleaseFiles(source);
@@ -234,3 +235,13 @@ if (import.meta.main) {
 		})}\n`,
 	);
 }
+
+/** Export an exact commit to a tar file without copying working-tree files or Git configuration. */
+export async function archiveCommit(cwd: string, commitSha: string, outputPath: string): Promise<void> {
+	if (!/^[0-9a-f]{40,64}$/.test(commitSha)) throw new Error("Archive requires a full commit SHA");
+	await fs.mkdir(path.dirname(outputPath), { recursive: true });
+	await $`git archive --format=tar --output=${path.resolve(outputPath)} ${commitSha}`.cwd(cwd).quiet();
+}
+
+/** Git operations release staging performs that pi-vcs does not cover (spy seam for tests). */
+export const releaseGit = { archive: archiveCommit };

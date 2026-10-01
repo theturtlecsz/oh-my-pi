@@ -13,7 +13,8 @@ import { spawnSync } from "node:child_process";
 import { type Dirent, existsSync, lstatSync, readFileSync, statSync } from "node:fs";
 import { copyFile, lstat, mkdir, readdir, realpath, rmdir } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join as joinPath, resolve as resolvePath } from "node:path";
-import * as managedGit from "@oh-my-pi/pi-coding-agent/utils/git";
+import { withRepoLock } from "@oh-my-pi/pi-coding-agent/utils/repo-lock";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { getWorktreesDir, hashPath, isEnoent } from "@oh-my-pi/pi-utils";
 import { cloneDependencyTree } from "./dependency-tree";
 /** Run git in cwd; timeoutMs guards network ops (push). `raw` is untrimmed stdout —
@@ -158,7 +159,7 @@ export async function materializeExecutionRuntime(
 }
 
 export async function executionPrimaryRoot(cwd: string): Promise<string> {
-	const primary = await managedGit.repo.primaryRoot(cwd);
+	const primary = vcs.git(cwd)?.primaryRoot();
 	if (!primary) throw new Error("execution workspace requires a Git repository");
 	return realpath(primary);
 }
@@ -208,19 +209,20 @@ export async function ensureExecutionWorkspace(
 		basename(primaryRoot),
 	);
 
-	return managedGit.withRepoLock(primaryRoot, async () => {
-		const entries = await managedGit.worktree.list(primaryRoot);
+	const repo = vcs.requireGit(primaryRoot);
+	return withRepoLock(primaryRoot, async () => {
+		const entries = await repo.worktrees();
 		const existing = entries.find(entry => entry.branch === branchRef);
 		if (existing) {
 			const path = await realpath(existing.path);
 			await materializeExecutionRuntime(primaryRoot, path, install);
 			return { primaryRoot, path, branch, grantId, baseline, reused: true };
 		}
-		if (!(await managedGit.ref.exists(primaryRoot, branchRef))) {
+		if (!(await repo.refExists(branchRef))) {
 			if (options.create === false) {
 				throw new Error(`execution workspace branch is missing for grant ${grantId}`);
 			}
-			await managedGit.branch.create(primaryRoot, branch, baseline);
+			await repo.createBranch(branch, baseline, false);
 		}
 		try {
 			await lstat(stablePath);
@@ -229,7 +231,7 @@ export async function ensureExecutionWorkspace(
 			if (!isEnoent(error)) throw error;
 		}
 		await mkdir(dirname(stablePath), { recursive: true });
-		await managedGit.worktree.add(primaryRoot, stablePath, branch);
+		await repo.worktreeAdd(stablePath, branch, { detach: false, clone: false });
 		const path = await realpath(stablePath);
 		await materializeExecutionRuntime(primaryRoot, path, install);
 		return { primaryRoot, path, branch, grantId, baseline, reused: false };
@@ -241,17 +243,18 @@ export async function ensureExecutionWorkspace(
 export async function cleanupExecutionWorkspace(
 	workspace: ExecutionWorkspace,
 ): Promise<{ cleaned: boolean; detail: string }> {
-	return managedGit.withRepoLock(workspace.primaryRoot, async () => {
+	const repo = vcs.requireGit(workspace.primaryRoot);
+	return withRepoLock(workspace.primaryRoot, async () => {
 		const resolvedTarget = resolvePath(workspace.path);
-		const entries = await managedGit.worktree.list(workspace.primaryRoot);
+		const entries = await repo.worktrees();
 		const registered = entries.find(entry => resolvePath(entry.path) === resolvedTarget);
 		if (!registered) return { cleaned: false, detail: "execution worktree registration is missing; state preserved" };
 		if (dirtyPaths(workspace.path).length > 0) {
 			return { cleaned: false, detail: "execution worktree is dirty; state preserved" };
 		}
-		const removed = await managedGit.worktree.tryRemove(workspace.primaryRoot, workspace.path, { force: false });
+		const removed = await repo.worktreeRemove(workspace.path, false).catch(() => false);
 		if (!removed) return { cleaned: false, detail: "git refused execution worktree cleanup; state preserved" };
-		await managedGit.branch.tryDelete(workspace.primaryRoot, workspace.branch, { force: true });
+		await repo.deleteBranch(workspace.branch, true).catch(() => false);
 		try {
 			await rmdir(dirname(workspace.path));
 		} catch {

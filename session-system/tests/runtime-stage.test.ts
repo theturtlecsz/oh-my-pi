@@ -3,10 +3,12 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { $ } from "bun";
-import * as git from "../../packages/coding-agent/src/utils/git";
+import type { VcsGitRepo } from "@oh-my-pi/pi-natives";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import {
 	collectReleaseFiles,
 	releaseFileSha256,
+	releaseGit,
 	type StagedReleaseManifest,
 	type StageReleaseOptions,
 	stageRelease,
@@ -134,23 +136,28 @@ describe("release inventory isolation", () => {
 	});
 });
 
+/** A pi-vcs repository stand-in exposing only what release staging reads. */
+function fakeSourceRepo(root: string, status: string, head?: string): VcsGitRepo {
+	return {
+		info: () => ({ repoRoot: root }),
+		statusPorcelain: async () => status,
+		headSha: async () => head,
+	} as unknown as VcsGitRepo;
+}
+
 describe("release staging admission", () => {
 	test("dirty source is refused before any release directory is created", async () => {
 		const { source, release, options } = await fixture();
-		const root = spyOn(git.repo, "root").mockResolvedValue(source);
-		const status = spyOn(git, "status").mockResolvedValue(" M workflow.ts\n");
-		disposers.push(
-			() => root.mockRestore(),
-			() => status.mockRestore(),
-		);
+		const repo = spyOn(vcs, "git").mockReturnValue(fakeSourceRepo(source, " M workflow.ts\n"));
+		disposers.push(() => repo.mockRestore());
 		await expect(stageRelease(options)).rejects.toThrow("clean source checkout");
 		await expect(fs.lstat(release)).rejects.toHaveProperty("code", "ENOENT");
 	});
 
 	test("existing or overlapping destinations preserve existing content", async () => {
 		const { source, release, options } = await fixture();
-		const root = spyOn(git.repo, "root").mockResolvedValue(source);
-		disposers.push(() => root.mockRestore());
+		const repo = spyOn(vcs, "git").mockReturnValue(fakeSourceRepo(source, ""));
+		disposers.push(() => repo.mockRestore());
 		await Bun.write(path.join(release, "keep"), "existing installation");
 		await expect(stageRelease(options)).rejects.toThrow("already exists");
 		await expect(stageRelease({ ...options, destination: path.join(source, "release") })).rejects.toThrow(
@@ -161,19 +168,15 @@ describe("release staging admission", () => {
 
 	test("a Bun version mismatch leaves an incomplete stage without a consumable manifest", async () => {
 		const { source, release, options } = await fixture();
-		const root = spyOn(git.repo, "root").mockResolvedValue(source);
-		const status = spyOn(git, "status").mockResolvedValue("");
-		const head = spyOn(git.head, "sha").mockResolvedValue("a".repeat(40));
-		const archive = spyOn(git, "archive").mockImplementation(async (_cwd, _commit, output) => {
+		const repo = spyOn(vcs, "git").mockReturnValue(fakeSourceRepo(source, "", "a".repeat(40)));
+		const archive = spyOn(releaseGit, "archive").mockImplementation(async (_cwd, _commit, output) => {
 			await Bun.Archive.write(output, {
 				"package.json": JSON.stringify({ packageManager: `bun@${Bun.version}` }),
 				"packages/natives/package.json": JSON.stringify({ version: "18.0.6" }),
 			});
 		});
 		disposers.push(
-			() => root.mockRestore(),
-			() => status.mockRestore(),
-			() => head.mockRestore(),
+			() => repo.mockRestore(),
 			() => archive.mockRestore(),
 		);
 		await expect(stageRelease({ ...options, expectedBunVersion: "0.0.0" })).rejects.toThrow("Bun version mismatch");
