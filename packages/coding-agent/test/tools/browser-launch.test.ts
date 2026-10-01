@@ -12,6 +12,7 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 import { computeExecutablePath, detectBrowserPlatform } from "@oh-my-pi/pi-utils/browsers";
 import { APP_NAME } from "@oh-my-pi/pi-utils/dirs";
 import { PUPPETEER_REVISIONS } from "puppeteer-core/internal/revisions.js";
+import { hostIsolatedEnv } from "../helpers/host-isolation";
 
 const EXECUTABLE_PROBE = path.resolve(import.meta.dir, "../fixtures/browser-executable-probe.ts");
 
@@ -234,17 +235,13 @@ describe("browser executable selection", () => {
 					fs.mkdirSync(path.join(xdg, APP_NAME), { recursive: true });
 				}
 				const env: Record<string, string | undefined> = {
-					...process.env,
-					HOME: home,
+					...hostIsolatedEnv(process.env, home),
 					XDG_CACHE_HOME: xdgCache,
 					XDG_DATA_HOME: path.join(tempDir.path(), "data"),
 					XDG_STATE_HOME: path.join(tempDir.path(), "state"),
 					OMP_BROWSER_PROBE_PLATFORM: "darwin",
 					PUPPETEER_EXECUTABLE_PATH: "",
 				};
-				// An inherited agent-dir override (the CI runner pins one per chunk)
-				// disables XDG resolution, so the child must run in default mode.
-				delete env.PI_CODING_AGENT_DIR;
 
 				// System Google Chrome bundle (com.google.Chrome) — the LaunchServices
 				// hijacker the fix must avoid selecting.
