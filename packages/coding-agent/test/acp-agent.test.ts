@@ -707,7 +707,10 @@ describe("ACP agent", () => {
 		const session = harness.findSession(created.sessionId)!;
 		await harness.agent.setSessionMode({ sessionId: created.sessionId, modeId: "plan" });
 		const approvalEvent = vi.fn(async () => undefined);
-		Object.defineProperty(session, "extensionRunner", { value: { emit: approvalEvent }, configurable: true });
+		Object.defineProperty(session, "extensionRunner", {
+			value: { emit: approvalEvent, getRegisteredCommands: () => [] },
+			configurable: true,
+		});
 
 		const localOptions = {
 			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
@@ -845,7 +848,10 @@ describe("ACP agent", () => {
 		const session = harness.findSession(created.sessionId)!;
 		await harness.agent.setSessionMode({ sessionId: created.sessionId, modeId: "plan" });
 		const approvalEvent = vi.fn(async () => ({ cancel: true, reason: "Linear unavailable" }));
-		Object.defineProperty(session, "extensionRunner", { value: { emit: approvalEvent }, configurable: true });
+		Object.defineProperty(session, "extensionRunner", {
+			value: { emit: approvalEvent, getRegisteredCommands: () => [] },
+			configurable: true,
+		});
 		const localOptions = {
 			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
 			getSessionId: () => session.sessionManager.getSessionId(),
