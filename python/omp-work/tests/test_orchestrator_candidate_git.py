@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path
+import shutil
 import subprocess
 from typing import Any
 
@@ -847,4 +848,53 @@ def test_freeze_repository_mismatch(tmp_path: Path) -> None:
     via_link = _freeze(ctrl, wt, base, "via link", repository=link)
     via_path = _freeze(ctrl, wt, base, "via link")
     assert via_link == via_path
+
+
+def test_freeze_directory_replaced_by_file_or_symlink(tmp_path: Path) -> None:
+    """Directory replaced by a file or inside symlink succeeds without D/F conflict."""
+    # 1. Directory replaced by regular file
+    ctrl, base = _make_rich_base(tmp_path / "case_file")
+    wt = add_worktree(ctrl, tmp_path / "case_file" / "worktrees", "wt_file_repl", base)
+    shutil.rmtree(wt / "dir")
+    file_bytes = b"replaced directory with file\n"
+    (wt / "dir").write_bytes(file_bytes)
+
+    commit_file = _freeze(ctrl, wt, base, "replace dir with file")
+    entries_file = _ls_map(ctrl, commit_file)
+    dir_sha = git(ctrl, "hash-object", "--no-filters", "--stdin", input=file_bytes).decode().strip()
+    assert entries_file["dir"] == ("100644", dir_sha)
+    assert "dir/inside.txt" not in entries_file
+    audited_file = audit_inputs(ctrl, base, commit_file)
+    assert audited_file["changed_paths"] == ["dir", "dir/inside.txt"]
+
+    # 2. Directory replaced by inside symlink
+    ctrl_sym, base_sym = _make_rich_base(tmp_path / "case_sym")
+    wt_sym = add_worktree(ctrl_sym, tmp_path / "case_sym" / "worktrees", "wt_sym_repl", base_sym)
+    shutil.rmtree(wt_sym / "dir")
+    (wt_sym / "dir").symlink_to("app.py")
+
+    commit_sym = _freeze(ctrl_sym, wt_sym, base_sym, "replace dir with symlink")
+    entries_sym = _ls_map(ctrl_sym, commit_sym)
+    sym_sha = git(ctrl_sym, "hash-object", "--no-filters", "--stdin", input=b"app.py").decode().strip()
+    assert entries_sym["dir"] == ("120000", sym_sha)
+    assert "dir/inside.txt" not in entries_sym
+    audited_sym = audit_inputs(ctrl_sym, base_sym, commit_sym)
+    assert audited_sym["changed_paths"] == ["dir", "dir/inside.txt"]
+
+    # 3. File replaced by directory containing a file
+    ctrl_dir, base_dir = _make_rich_base(tmp_path / "case_dir")
+    wt_dir = add_worktree(ctrl_dir, tmp_path / "case_dir" / "worktrees", "wt_dir_repl", base_dir)
+    (wt_dir / "app.py").unlink()
+    (wt_dir / "app.py").mkdir()
+    nested_bytes = b"nested inside former file\n"
+    (wt_dir / "app.py" / "sub.py").write_bytes(nested_bytes)
+
+    commit_dir = _freeze(ctrl_dir, wt_dir, base_dir, "replace file with dir")
+    entries_dir = _ls_map(ctrl_dir, commit_dir)
+    sub_sha = git(ctrl_dir, "hash-object", "--no-filters", "--stdin", input=nested_bytes).decode().strip()
+    assert entries_dir["app.py/sub.py"] == ("100644", sub_sha)
+    assert "app.py" not in entries_dir
+    audited_dir = audit_inputs(ctrl_dir, base_dir, commit_dir)
+    assert audited_dir["changed_paths"] == ["app.py", "app.py/sub.py"]
+
 

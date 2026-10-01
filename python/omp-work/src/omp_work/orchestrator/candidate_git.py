@@ -414,32 +414,37 @@ def _index_tree(
 
     ``--force-remove`` refuses to run in a bare repository. Its work tree is an
     empty directory, never the candidate checkout: that checkout's gitfile may
-    name an attacker gitdir.
+    name an attacker gitdir. Deletions run before additions so directory-to-file
+    and file-to-directory replacements do not conflict with stale index entries.
     """
     with tempfile.TemporaryDirectory(prefix="omp-candidate-index-") as tmp:
         index_path = Path(tmp) / "index"
         empty_worktree = Path(tmp) / "empty"
         empty_worktree.mkdir()
         git(repo, "read-tree", base, index_file=index_path)
-        for path in sorted(changed):
+        deletions = [p for p in sorted(changed) if changed[p] is None]
+        additions = [p for p in sorted(changed) if changed[p] is not None]
+
+        for path in deletions:
+            git(
+                repo,
+                "update-index",
+                "--force-remove",
+                "--",
+                path,
+                index_file=index_path,
+                extra_env={"GIT_WORK_TREE": str(empty_worktree)},
+            )
+        for path in additions:
             entry = changed[path]
-            if entry is None:
-                git(
-                    repo,
-                    "update-index",
-                    "--force-remove",
-                    "--",
-                    path,
-                    index_file=index_path,
-                    extra_env={"GIT_WORK_TREE": str(empty_worktree)},
-                )
-                continue
+            assert entry is not None
             mode, content = entry
             blob = _write_scanned_blob(repo, content)
             git(
                 repo,
                 "update-index",
                 "--add",
+                "--replace",
                 "--cacheinfo",
                 f"{mode},{blob},{path}",
                 index_file=index_path,
