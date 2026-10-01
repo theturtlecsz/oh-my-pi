@@ -613,10 +613,32 @@ export const runBiomeCheck: BiomeRunner = (root, paths) => {
 	return { ok: r.status === 0 && !r.error, output };
 };
 
+/** The repo's required CI lint since upstream 18.x (`check:tools`): oxlint plus
+ *  an oxfmt format check, both from the repository's own toolchain. */
+export const runOxcCheck: BiomeRunner = (root, paths) => {
+	const spawnOptions = { cwd: root, encoding: "utf8", timeout: 120_000, maxBuffer: 16 * 1024 * 1024 } as const;
+	const lint = spawnSync("bun", ["x", "oxlint", "--", ...paths], spawnOptions);
+	const format =
+		lint.status === 0 && !lint.error
+			? spawnSync("bun", ["x", "oxfmt", "--check", "--no-error-on-unmatched-pattern", ...paths], spawnOptions)
+			: undefined;
+	const output = [lint, format]
+		.filter(r => r !== undefined)
+		.map(r => `${r.stdout ?? ""}\n${r.stderr ?? (r.error ? r.error.message : "")}`.trim())
+		.join("\n")
+		.trim();
+	return { ok: lint.status === 0 && !lint.error && format?.status === 0 && !format.error, output };
+};
+
 /** The gate applies only where required CI lint exists: a biome config at the
  *  repository root. Harness fixtures and foreign repos without one skip it. */
 export function hasBiomeConfig(root: string): boolean {
 	return existsSync(joinPath(root, "biome.json")) || existsSync(joinPath(root, "biome.jsonc"));
+}
+
+/** An oxlint config at the repository root marks the oxlint/oxfmt CI lint. */
+export function hasOxcConfig(root: string): boolean {
+	return existsSync(joinPath(root, ".oxlintrc.json"));
 }
 
 /** /summary freeze (HOME-147, OMP-57): owner confirms exact path sets, only
@@ -669,14 +691,15 @@ export async function freezeCandidateCommit(
 			// OMP-218: refuse to freeze a candidate that required CI lint would
 			// reject — every freeze outcome (new commit, idempotent re-freeze,
 			// baseline adoption) is gated on sealed paths present on disk.
-			if (hasBiomeConfig(root)) {
+			const biome = hasBiomeConfig(root);
+			if (biome || hasOxcConfig(root)) {
 				const lintable = [...sealed].filter(p => existsSync(joinPath(root, p)));
 				if (lintable.length > 0) {
-					const lint = (options.biomeRunner ?? runBiomeCheck)(root, lintable);
+					const lint = (options.biomeRunner ?? (biome ? runBiomeCheck : runOxcCheck))(root, lintable);
 					if (!lint.ok) {
 						return refuse(
 							"failed",
-							`execution freeze refused: biome check failed on sealed paths — fix lint/format before review\n${lint.output.slice(0, 2000)}`,
+							`execution freeze refused: ${biome ? "biome" : "oxlint/oxfmt"} check failed on sealed paths — fix lint/format before review\n${lint.output.slice(0, 2000)}`,
 							"error",
 						);
 					}

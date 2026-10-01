@@ -17,7 +17,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 import { type CandidatePathBasis, candidateSha256 } from "@oh-my-pi/pi-work-client";
-import { candidateDrift, cleanupExecutionWorkspace, dirtyPaths, ensureExecutionWorkspace, ensureUpToDateWithDefault, findSecrets, freezeCandidateCommit, type GhPrRunner, forcePushCandidate, parentCommit, parsePorcelain, pushCandidate, rangeDiffSha256, resolveDefaultBranch, runBiomeCheck, sealedSnapshotCandidate, validateExecutionPaths, verifyMergeConfirmation } from "../extensions/workflow/git";
+import { candidateDrift, cleanupExecutionWorkspace, dirtyPaths, ensureExecutionWorkspace, ensureUpToDateWithDefault, findSecrets, freezeCandidateCommit, type GhPrRunner, forcePushCandidate, parentCommit, parsePorcelain, pushCandidate, rangeDiffSha256, resolveDefaultBranch, runOxcCheck, sealedSnapshotCandidate, validateExecutionPaths, verifyMergeConfirmation } from "../extensions/workflow/git";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ss-commit-step-"));
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
@@ -863,12 +863,27 @@ describe("execution freeze (OMP-188)", () => {
 		expect(called).toBe(false);
 	});
 
-	test("default biome runner passes on a known-clean repo file", () => {
-		// Real `bun x biome check` invocation — catches flag/command construction
-		// errors that a fake runner cannot (a typo here would refuse every freeze).
+	test("an oxlint config gates the freeze with its runner when there is no biome config", async () => {
+		const repo = makeRepo();
+		fs.writeFileSync(path.join(repo, ".oxlintrc.json"), "{}\n");
+		Bun.spawnSync(["git", "add", "--", ".oxlintrc.json"], { cwd: repo });
+		Bun.spawnSync(["git", "commit", "-q", "-m", "oxlint config"], { cwd: repo });
+		fs.writeFileSync(path.join(repo, "feat.ts"), "export const feat = true;\n");
+		const outcome = await freezeCandidateCommit(makeUi(true), repo, "OMP-1", "cand-1", [], {
+			mode: "execution",
+			sealedPaths: ["feat.ts"],
+			biomeRunner: () => ({ ok: false, output: "lint error: feat.ts" }),
+		});
+		expect("refused" in outcome ? outcome.reason : "").toContain("oxlint/oxfmt check failed on sealed paths");
+		expect(git(repo, "log", "-1", "--format=%s")).toBe("oxlint config"); // no candidate commit
+	});
+
+	test("default oxc runner passes on a known-clean repo file", () => {
+		// Real oxlint/oxfmt invocation — catches flag/command construction errors
+		// that a fake runner cannot (a typo here would refuse every freeze).
 		const repoRoot = path.resolve(import.meta.dir, "..", "..");
-		const res = runBiomeCheck(repoRoot, ["scripts/release.ts"]);
-		expect(res.ok).toBe(true);
+		const res = runOxcCheck(repoRoot, ["scripts/release.ts"]);
+		expect(res.ok, res.output).toBe(true);
 	});
 });
 
