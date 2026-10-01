@@ -3,8 +3,9 @@ name: Upstream watch
 # Standing upstream-compatibility guardrail, discovery leg (OMP-229).
 # Weekly: find the newest stable upstream release above the accepted baseline,
 # resolve it to one immutable commit, and record the finding in the job summary
-# and a JSON artifact for that candidate. Incorporation itself rides the guarded
-# update path (docs/upstream-guardrail.md); this workflow only watches.
+# and a JSON artifact for that candidate. When a candidate exists, check fork
+# patches against that commit and fail the run if any break (OMP-401).
+# Incorporation itself rides the guarded update path (docs/upstream-guardrail.md).
 
 on:
    schedule:
@@ -72,6 +73,31 @@ jobs:
               path: upstream-candidate.json
               if-no-files-found: error
               retention-days: 30
+         - name: Fetch candidate and baseline commits
+           if: steps.discovery.outputs.newer == 'true'
+           env:
+              COMMIT: ${{ steps.discovery.outputs.commit }}
+           run: |
+              set -euo pipefail
+              repo="$(jq -r .upstream_repo docs/upstream-baseline.json)"
+              target="$(jq -r .target docs/upstream-baseline.json)"
+              git fetch --no-tags --depth=1 "$repo" "$target"
+              git fetch --no-tags --depth=1 "$repo" "$COMMIT"
+         - name: Check fork patches against candidate
+           id: patch-check
+           if: steps.discovery.outputs.newer == 'true'
+           env:
+              COMMIT: ${{ steps.discovery.outputs.commit }}
+              TAG: ${{ steps.discovery.outputs.tag }}
+           run: |
+              set -euo pipefail
+              status=0
+              output="$(bun scripts/upstream-patch-check.ts --target "$COMMIT" 2>&1)" || status=$?
+              {
+                echo "## Fork patches vs $TAG"
+                printf '%s\n' "$output"
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit "$status"
          - name: Report up to date
            if: steps.discovery.outputs.newer != 'true'
            env:
