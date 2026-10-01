@@ -1,16 +1,18 @@
 """Deterministic stage decision for one orchestrator step (OMP-417).
 
-``bounds_for`` reads the recorded retry bound off the routing policy, and
-``decision_for`` builds the single owner-facing decision a pause carries. Both
-are pure: they read only their arguments, so equal inputs give equal results
-and no model output or clock can choose a stage.
+``bounds_for`` reads the recorded retry bound off the routing policy,
+``decision_for`` builds the single owner-facing decision a pause carries, and
+``decide`` applies rules 8-10 (repair, then retry, then capacity and stage
+movement). Gates 1-7 are a later slice. All three are pure: they read only
+their arguments, so equal inputs give equal results and no model output or
+clock can choose a stage.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal, get_args
+from typing import Literal, assert_never, get_args
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from omp_work.routing.policy import RoutingPolicy
@@ -24,6 +26,7 @@ __all__ = [
     "Facts",
     "Step",
     "bounds_for",
+    "decide",
     "decision_for",
 ]
 
@@ -284,4 +287,111 @@ def decision_for(facts: Facts, rule_id: str) -> CreateDecisionPayload:
         target_sha256=target_sha256,
         evidence_refs=(f"orch_step:{facts.mission_id}:{facts.step_index}",),
         resume_state=facts.stage,
+    )
+
+
+def decide(facts: Facts, bounds: Bounds) -> Step:
+    """Rules 8-10, first match within each outcome. Gates 1-7 are a later slice.
+
+    Repair wins over retry, and both win over a busy capacity. A failed or
+    crashed step that is not a repair retries, reroutes, or pauses.
+    """
+    outcome = facts.outcome
+    if outcome == "failed":
+        return _repair_or_retry(facts, bounds)
+    if outcome == "crashed":
+        return _repair_or_retry(facts, bounds)
+    if outcome == "succeeded":
+        return _succeeded(facts, bounds)
+    if outcome == "none":
+        if not facts.capacity_free:
+            return _reschedule(facts)
+        return _step(facts, "dispatch", "stage-dispatch", next_stage=facts.stage)
+    if outcome == "waiting":
+        if not facts.capacity_free:
+            return _reschedule(facts)
+        return _step(facts, "wait", "in-flight", next_stage=facts.stage)
+    assert_never(outcome)
+
+
+def _is_repair(facts: Facts) -> bool:
+    """A failed evaluation, or an audit (succeeded, failed, or crashed) that did not pass."""
+    if facts.stage == "evaluate":
+        return facts.outcome == "failed"
+    if facts.stage == "audit" and facts.verdict != "pass":
+        return facts.outcome in ("succeeded", "failed", "crashed")
+    return False
+
+
+def _repair_or_retry(facts: Facts, bounds: Bounds) -> Step:
+    if _is_repair(facts):
+        return _repair(facts, bounds)
+    return _retry(facts, bounds)
+
+
+def _repair(facts: Facts, bounds: Bounds) -> Step:
+    bound = bounds.repair_rounds
+    if facts.repair_rounds < bounds.repair_rounds:
+        return _step(facts, "repair", "repair-round", next_stage="implement", bound=bound)
+    return _step(
+        facts,
+        "pause",
+        "repair-bound",
+        next_stage=facts.stage,
+        bound=bound,
+        decision=decision_for(facts, "repair-bound"),
+    )
+
+
+def _retry(facts: Facts, bounds: Bounds) -> Step:
+    bound = bounds.max_retries
+    if facts.attempts < bounds.max_retries:
+        return _step(facts, "retry", "retry-policy", next_stage=facts.stage, bound=bound)
+    if facts.alternate is not None:
+        return _step(facts, "reroute", "reroute-alternate", next_stage=facts.stage, bound=bound)
+    return _step(
+        facts,
+        "pause",
+        "retry-bound",
+        next_stage=facts.stage,
+        bound=bound,
+        decision=decision_for(facts, "retry-bound"),
+    )
+
+
+def _succeeded(facts: Facts, bounds: Bounds) -> Step:
+    if _is_repair(facts):
+        return _repair(facts, bounds)
+    if not facts.capacity_free:
+        return _reschedule(facts)
+    if facts.stage == "close":
+        return _step(facts, "end", "mission-complete", next_stage=None)
+    return _step(facts, "advance", "stage-order", next_stage=_following(facts.stage))
+
+
+def _reschedule(facts: Facts) -> Step:
+    return _step(facts, "reschedule", "reschedule-capacity", next_stage=facts.stage)
+
+
+def _following(stage: str) -> str:
+    """The next ``STAGE_ORDER`` entry. ``close`` ends and never advances."""
+    return STAGE_ORDER[STAGE_ORDER.index(stage) + 1]
+
+
+def _step(
+    facts: Facts,
+    kind: StepKind,
+    rule_id: str,
+    *,
+    next_stage: str | None,
+    bound: int | None = None,
+    decision: CreateDecisionPayload | None = None,
+) -> Step:
+    return Step(
+        kind=kind,
+        stage=facts.stage,
+        next_stage=next_stage,
+        rule_id=rule_id,
+        bound=bound,
+        decision=decision,
     )

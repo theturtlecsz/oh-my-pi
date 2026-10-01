@@ -9,7 +9,10 @@ from omp_work.orchestrator.stages import (
     ActionVerdict,
     Bounds,
     Facts,
+    Step,
+    StepKind,
     bounds_for,
+    decide,
     decision_for,
 )
 from omp_work.routing.policy import load_policy
@@ -192,3 +195,118 @@ def test_unknown_rule_raises() -> None:
 def test_unknown_facts_values_raise(overrides: dict[str, object]) -> None:
     with pytest.raises(ValueError):
         facts(**overrides)
+
+
+# ==============================================================================
+# decide: rules 8-10, first match. Only pauses carry a decision.
+# ==============================================================================
+
+_BOUNDS = Bounds(max_retries=2, repair_rounds=3)
+
+
+def _step(
+    fact: Facts,
+    kind: StepKind,
+    rule_id: str,
+    *,
+    next_stage: str | None,
+    bound: int | None = None,
+    decision: bool = False,
+) -> Step:
+    return Step(
+        kind=kind,
+        stage=fact.stage,
+        next_stage=next_stage,
+        rule_id=rule_id,
+        bound=bound,
+        decision=decision_for(fact, rule_id) if decision else None,
+    )
+
+
+def test_evaluate_crashed_retries_and_failed_repairs() -> None:
+    crashed = facts(stage="evaluate", outcome="crashed", attempts=0)
+    assert decide(crashed, _BOUNDS) == _step(
+        crashed, "retry", "retry-policy", next_stage="evaluate", bound=2
+    )
+
+    failed = facts(stage="evaluate", outcome="failed", attempts=0, capacity_free=False)
+    assert decide(failed, _BOUNDS) == _step(
+        failed, "repair", "repair-round", next_stage="implement", bound=3
+    )
+
+    # Retry still wins when capacity is busy: the failure is not a repair.
+    busy = facts(stage="evaluate", outcome="crashed", attempts=0, capacity_free=False)
+    assert decide(busy, _BOUNDS) == _step(busy, "retry", "retry-policy", next_stage="evaluate", bound=2)
+
+
+def test_audit_branches_on_verdict_and_outcome() -> None:
+    crashed = facts(stage="audit", outcome="crashed", verdict="none", repair_rounds=0)
+    assert decide(crashed, _BOUNDS) == _step(
+        crashed, "repair", "repair-round", next_stage="implement", bound=3
+    )
+
+    failed_pass = facts(stage="audit", outcome="failed", verdict="pass", attempts=0)
+    assert decide(failed_pass, _BOUNDS) == _step(
+        failed_pass, "retry", "retry-policy", next_stage="audit", bound=2
+    )
+
+    succeeded_fail = facts(stage="audit", outcome="succeeded", verdict="fail", repair_rounds=0)
+    assert decide(succeeded_fail, _BOUNDS) == _step(
+        succeeded_fail, "repair", "repair-round", next_stage="implement", bound=3
+    )
+
+    succeeded_pass = facts(stage="audit", outcome="succeeded", verdict="pass")
+    assert decide(succeeded_pass, _BOUNDS) == _step(
+        succeeded_pass, "advance", "stage-order", next_stage="merge"
+    )
+
+    pending = facts(stage="audit", outcome="none")
+    assert decide(pending, _BOUNDS) == _step(pending, "dispatch", "stage-dispatch", next_stage="audit")
+
+
+def test_repair_bound_pauses_and_retry_bound_reroutes_or_pauses() -> None:
+    exhausted = facts(stage="evaluate", outcome="failed", repair_rounds=3, attempts=0)
+    assert decide(exhausted, _BOUNDS) == _step(
+        exhausted, "pause", "repair-bound", next_stage="evaluate", bound=3, decision=True
+    )
+
+    # An alternate is consulted only after the retry budget is spent.
+    still_retrying = facts(stage="implement", outcome="failed", attempts=1, alternate="other-route")
+    assert decide(still_retrying, _BOUNDS) == _step(
+        still_retrying, "retry", "retry-policy", next_stage="implement", bound=2
+    )
+
+    alternate = facts(stage="implement", outcome="failed", attempts=2, alternate="other-route")
+    assert decide(alternate, _BOUNDS) == _step(
+        alternate, "reroute", "reroute-alternate", next_stage="implement", bound=2
+    )
+
+    stuck = facts(stage="implement", outcome="failed", attempts=2, alternate=None)
+    assert decide(stuck, _BOUNDS) == _step(
+        stuck, "pause", "retry-bound", next_stage="implement", bound=2, decision=True
+    )
+
+
+def test_no_capacity_reschedules_close_waiting_and_intake() -> None:
+    bounds = Bounds(max_retries=2, repair_rounds=3)
+    for stage, outcome in (("close", "succeeded"), ("implement", "waiting"), ("intake", "none")):
+        busy = facts(stage=stage, outcome=outcome, capacity_free=False)
+        assert decide(busy, bounds) == _step(busy, "reschedule", "reschedule-capacity", next_stage=stage)
+
+
+def test_free_capacity_dispatches_waits_and_ends_without_a_decision() -> None:
+    pending = facts(stage="intake", outcome="none", capacity_free=True)
+    assert decide(pending, _BOUNDS) == _step(pending, "dispatch", "stage-dispatch", next_stage="intake")
+
+    inflight = facts(stage="intake", outcome="waiting", capacity_free=True)
+    assert decide(inflight, _BOUNDS) == _step(inflight, "wait", "in-flight", next_stage="intake")
+
+    done = facts(stage="close", outcome="succeeded", capacity_free=True)
+    assert decide(done, _BOUNDS) == _step(done, "end", "mission-complete", next_stage=None)
+
+
+def test_equal_facts_give_equal_steps() -> None:
+    left = facts(stage="implement", outcome="failed", attempts=2, alternate=None)
+    right = facts(stage="implement", outcome="failed", attempts=2, alternate=None)
+    assert left == right
+    assert decide(left, _BOUNDS) == decide(right, Bounds(max_retries=2, repair_rounds=3))
