@@ -23,6 +23,7 @@ from omp_work.jobs.budget import (
 )
 from omp_work.jobs.cancel import cancel_item_tree
 from omp_work.jobs.store import JobError, NativeJobStore, OperationOutcome
+from omp_work.v1.agent_stop import read_stop_state
 
 _RESOURCE_KEYS = ("cpu", "memory_mib", "gpu", "model_calls")
 _KINDS = frozenset({"model", "compute"})
@@ -278,6 +279,10 @@ def claim_job(
     with a ``trial_id`` is eligible only while the trial is proposed, the
     campaign is admitted or running, and the worker's component is in
     ``compatibility.workers``. No match returns ``job: None``.
+
+    While the workspace's agent stop is engaged the claim leases nothing and
+    returns ``job: None`` without touching any job row; the owner's release
+    resumes from the backlog on the next claim.
     """
     limits = _require_resource_limits(resource_limits)
     if not isinstance(worker_id, str) or not worker_id:
@@ -291,6 +296,8 @@ def claim_job(
     with store.transaction(workspace_id, actor_id) as cur:
 
         def apply() -> dict[str, object]:
+            if read_stop_state(cur, workspace_id)["stopped"]:
+                return {"status": "applied", "job": None}
             cur.execute(
                 """
                 SELECT state, capabilities, capacity, component_sha256
