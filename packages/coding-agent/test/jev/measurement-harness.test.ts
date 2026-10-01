@@ -4,6 +4,8 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
 import { createMockModel, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import {
@@ -12,7 +14,6 @@ import {
 	extractTurnEndsFromSession,
 } from "../../../../docs/reports/jev-measurement/build-sets";
 import {
-	type CurrentSmolHarness,
 	type FakeSmolHandler,
 	JevTransportError,
 	type MeasurementResults,
@@ -21,6 +22,7 @@ import {
 	WP5_VERDICT_WITHHELD,
 } from "../../../../docs/reports/jev-measurement/harness";
 import { renderReport, run } from "../../../../docs/reports/jev-measurement/run";
+import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 import { type StubJevServer, startStubJevServer } from "./stub-jev-server";
 
 const ROBOMP_NOT_MEASURED = "not measured: no robomp history on the measuring machine";
@@ -777,21 +779,13 @@ describe("Jev measurement harness", () => {
 			});
 			registerMockApi("measurement-harness-test");
 			try {
-				const settings = {
-					get: (key: string) => {
-						if (key === "providers.autoThinkingModel") return "online";
-						if (key === "providers.unexpectedStopModel") return "online";
-						return undefined;
-					},
-					getModelRole: (role: string) => (role === "tiny" || role === "smol" ? "mock/mock-model" : undefined),
-					getStorage: () => undefined,
-				} as unknown as CurrentSmolHarness["settings"];
-				const registry = {
-					getAvailable: () => [mock],
-					getApiKey: async () => "test-key",
-					getApiKeyForProvider: async () => "test-key",
-					resolver: () => async () => "test-key",
-				} as unknown as CurrentSmolHarness["registry"];
+				// Upstream's registry-era Settings: the current side reads handles through a real
+				// instance, and its classifier is the `judge` role chain (formerly tiny/smol).
+				const settings = Settings.isolated({ modelRoles: { judge: "mock/mock-model" } });
+				const authStorage = createInMemoryAuthStorage();
+				authStorage.keys.setRuntime("mock", "test-key");
+				const registry = new ModelRegistry(authStorage, "/nonexistent/measurement-harness-models.yml");
+				spyOn(registry, "getAvailable").mockReturnValue([mock]);
 
 				const results = await run({
 					setsDir,
