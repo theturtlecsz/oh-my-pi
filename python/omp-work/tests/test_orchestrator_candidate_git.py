@@ -12,7 +12,9 @@ import pytest
 from omp_work.orchestrator.candidate_git import (
     CandidateGitError,
     IntentLog,
+    _scan,
     add_worktree,
+    check_envelope,
     git,
     path_allowed,
 )
@@ -273,3 +275,289 @@ def test_git_failure_raises_candidate_git_error(tmp_path: Path) -> None:
     with pytest.raises(CandidateGitError) as exc_info:
         git(repo, "invalid-git-command-12345")
     assert exc_info.value.code == "git_failed"
+
+
+def _make_control_repo_and_base(tmp_path: Path) -> tuple[Path, str]:
+    ctrl_repo = tmp_path / "control.git"
+    subprocess.run(["git", "init", "--bare", str(ctrl_repo)], check=True, capture_output=True)
+
+    seed_dir = tmp_path / "seed"
+    subprocess.run(["git", "init", str(seed_dir)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(seed_dir), "config", "user.name", "Seed"], check=True)
+    subprocess.run(["git", "-C", str(seed_dir), "config", "user.email", "seed@omp.dev"], check=True)
+
+    (seed_dir / "app.py").write_text("print('hello world')\n")
+    (seed_dir / "README.md").write_text("# Readme\n")
+    subprocess.run(["git", "-C", str(seed_dir), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(seed_dir), "commit", "-m", "initial commit"], check=True, capture_output=True)
+    base = subprocess.check_output(["git", "-C", str(seed_dir), "rev-parse", "HEAD"]).decode().strip()
+    subprocess.run(["git", "-C", str(seed_dir), "push", str(ctrl_repo), f"{base}:refs/heads/main"], check=True, capture_output=True)
+    return ctrl_repo, base
+
+
+def test_check_envelope_allowed_change_and_scan_snapshot(tmp_path: Path) -> None:
+    ctrl_repo, base = _make_control_repo_and_base(tmp_path)
+    wt = add_worktree(ctrl_repo, tmp_path / "worktrees", "wt_allowed", base)
+
+    # Modify allowed file
+    (wt / "app.py").write_text("print('modified')\n")
+    # Add new allowed file
+    (wt / "src").mkdir()
+    (wt / "src" / "helper.py").write_text("def helper(): pass\n")
+    # Delete allowed file
+    (wt / "README.md").unlink()
+
+    violations = check_envelope(wt, base, ["app.py", "src/**", "README.md"], repository=ctrl_repo)
+    assert violations == []
+
+    # Also test _scan return value contract
+    scan_violations, changed_map = _scan(wt, base, ["app.py", "src/**", "README.md"], repository=ctrl_repo)
+    assert scan_violations == []
+    assert changed_map["app.py"] == ("100644", b"print('modified')\n")
+    assert changed_map["src/helper.py"] == ("100644", b"def helper(): pass\n")
+    assert changed_map["README.md"] is None
+
+
+def test_check_envelope_outside_allowed(tmp_path: Path) -> None:
+    ctrl_repo, base = _make_control_repo_and_base(tmp_path)
+    wt = add_worktree(ctrl_repo, tmp_path / "worktrees", "wt_outside", base)
+
+    (wt / "app.py").write_text("print('modified')\n")
+    (wt / "outside.txt").write_text("disallowed\n")
+
+    violations = check_envelope(wt, base, ["src/**"], repository=ctrl_repo)
+    assert "outside_allowed:app.py" in violations
+    assert "outside_allowed:outside.txt" in violations
+
+
+def test_check_envelope_refuses_src_git_symlink_to_outside(tmp_path: Path) -> None:
+    ctrl_repo, base = _make_control_repo_and_base(tmp_path)
+    wt = add_worktree(ctrl_repo, tmp_path / "worktrees", "wt_src_git", base)
+
+    outside_dir = tmp_path / "outside_dir"
+    outside_dir.mkdir()
+    (wt / "src").mkdir()
+    os.symlink(str(outside_dir), str(wt / "src" / ".git"))
+
+    violations = check_envelope(wt, base, ["**"], repository=ctrl_repo)
+    assert "git_metadata:src/.git" in violations
+    assert "symlink_escape:src/.git" in violations
+
+
+def test_check_envelope_refuses_root_git_dir_holding_escape(tmp_path: Path) -> None:
+    ctrl_repo, base = _make_control_repo_and_base(tmp_path)
+    wt = add_worktree(ctrl_repo, tmp_path / "worktrees", "wt_root_git_dir", base)
+
+    (wt / ".git").unlink()
+    (wt / ".git").mkdir()
+    (wt / ".git" / "escape").symlink_to("/etc/passwd")
+
+    violations = check_envelope(wt, base, ["**"], repository=ctrl_repo)
+    assert "git_metadata:.git" in violations
+    assert "symlink_escape:.git/escape" in violations
+
+
+def test_check_envelope_root_gitfile_plain_and_hardlinked(tmp_path: Path) -> None:
+    ctrl_repo, base = _make_control_repo_and_base(tmp_path)
+    wt = add_worktree(ctrl_repo, tmp_path / "worktrees", "wt_gitfile", base)
+
+    # Plain gitfile -> no violation
+    violations_plain = check_envelope(wt, base, ["**"], repository=ctrl_repo)
+    assert "hardlink:.git" not in violations_plain
+    assert violations_plain == []
+
+    # Hardlinked elsewhere -> hardlink:.git
+    other_link = tmp_path / "other_gitfile"
+    os.link(wt / ".git", other_link)
+
+    violations_hardlinked = check_envelope(wt, base, ["**"], repository=ctrl_repo)
+    assert "hardlink:.git" in violations_hardlinked
+
+
+def test_check_envelope_regular_file_hardlink(tmp_path: Path) -> None:
+    ctrl_repo, base = _make_control_repo_and_base(tmp_path)
+    wt = add_worktree(ctrl_repo, tmp_path / "worktrees", "wt_hardlink_reg", base)
+
+    (wt / "file1.txt").write_text("hello\n")
+    os.link(wt / "file1.txt", wt / "file2.txt")
+
+    violations = check_envelope(wt, base, ["**"], repository=ctrl_repo)
+    assert "hardlink:file1.txt" in violations
+    assert "hardlink:file2.txt" in violations
+
+
+def test_check_envelope_unsupported_fifo(tmp_path: Path) -> None:
+    ctrl_repo, base = _make_control_repo_and_base(tmp_path)
+    wt = add_worktree(ctrl_repo, tmp_path / "worktrees", "wt_unsupported", base)
+
+    os.mkfifo(wt / "my_fifo")
+
+    violations = check_envelope(wt, base, ["**"], repository=ctrl_repo)
+    assert "unsupported:my_fifo" in violations
+
+
+def test_check_envelope_symlink_escape_non_git(tmp_path: Path) -> None:
+    ctrl_repo, base = _make_control_repo_and_base(tmp_path)
+    wt = add_worktree(ctrl_repo, tmp_path / "worktrees", "wt_symlink_esc", base)
+
+    (wt / "bad_link").symlink_to("/etc/passwd")
+    (wt / "safe_link").symlink_to("app.py")
+
+    violations = check_envelope(wt, base, ["**"], repository=ctrl_repo)
+    assert "symlink_escape:bad_link" in violations
+    assert "symlink_escape:safe_link" not in violations
+
+
+def test_check_envelope_live_checkout_changed(tmp_path: Path) -> None:
+    ctrl_repo, base = _make_control_repo_and_base(tmp_path)
+
+    # Set up live checkout
+    live_dir = tmp_path / "live_checkout"
+    subprocess.run(["git", "clone", str(ctrl_repo), str(live_dir)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(live_dir), "config", "user.name", "Live"], check=True)
+    subprocess.run(["git", "-C", str(live_dir), "config", "user.email", "live@omp.dev"], check=True)
+
+    wt = add_worktree(ctrl_repo, tmp_path / "worktrees", "wt_live", base)
+
+    # Clean live checkout -> no violation
+    clean_violations = check_envelope(wt, base, ["**"], repository=ctrl_repo, live_checkout=live_dir)
+    assert clean_violations == []
+
+    # 1. Tracked edit
+    (live_dir / "app.py").write_text("print('live edit')\n")
+    # 2. Untracked file
+    (live_dir / "untracked.txt").write_text("untracked\n")
+    # 3. Ignored file
+    (live_dir / ".gitignore").write_text("ignored.txt\n")
+    subprocess.run(["git", "-C", str(live_dir), "add", ".gitignore"], check=True)
+    subprocess.run(["git", "-C", str(live_dir), "commit", "-m", "ignore rule"], check=True, capture_output=True)
+    (live_dir / "ignored.txt").write_text("ignored content\n")
+
+    violations = check_envelope(wt, base, ["**"], repository=ctrl_repo, live_checkout=live_dir)
+    assert any(v.startswith("live_checkout_changed:") and "app.py" in v for v in violations)
+    assert any(v.startswith("live_checkout_changed:") and "untracked.txt" in v for v in violations)
+    assert any(v.startswith("live_checkout_changed:") and "ignored.txt" in v for v in violations)
+
+
+def test_check_envelope_attacker_git_replace_hiding_outside_txt(tmp_path: Path) -> None:
+    ctrl_repo, base = _make_control_repo_and_base(tmp_path)
+    wt = add_worktree(ctrl_repo, tmp_path / "worktrees", "wt_attacker", base)
+
+    # Create attacker repository with git replace ref hiding outside.txt
+    attacker_repo = tmp_path / "attacker.git"
+    subprocess.run(["git", "clone", "--bare", str(ctrl_repo), str(attacker_repo)], check=True, capture_output=True)
+
+    scratch = tmp_path / "attacker_scratch"
+    subprocess.run(["git", "clone", str(attacker_repo), str(scratch)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(scratch), "config", "user.name", "Attacker"], check=True)
+    subprocess.run(["git", "-C", str(scratch), "config", "user.email", "attacker@omp.dev"], check=True)
+    (scratch / "outside.txt").write_text("attacker content\n")
+    subprocess.run(["git", "-C", str(scratch), "add", "outside.txt"], check=True)
+    subprocess.run(["git", "-C", str(scratch), "commit", "-m", "add outside"], check=True, capture_output=True)
+
+    base_tree = subprocess.check_output(["git", "-C", str(scratch), "rev-parse", f"{base}^{{tree}}"]).decode().strip()
+    replaced_tree = subprocess.check_output(["git", "-C", str(scratch), "rev-parse", "HEAD^{tree}"]).decode().strip()
+    subprocess.run(["git", "-C", str(scratch), "push", "origin", "HEAD:refs/heads/outside"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(attacker_repo), "replace", base_tree, replaced_tree], check=True, capture_output=True)
+
+    # Point worktree .git to attacker repo
+    (wt / ".git").write_text(f"gitdir: {attacker_repo}\n")
+    (wt / "outside.txt").write_text("attacker content\n")
+
+    # check_envelope queries control_repo, ignoring attacker's git replace
+    violations = check_envelope(wt, base, ["app.py"], repository=ctrl_repo)
+    assert "outside_allowed:outside.txt" in violations
+
+
+def test_check_envelope_refusal_leaves_control_repo_objects_unchanged(tmp_path: Path) -> None:
+    ctrl_repo, base = _make_control_repo_and_base(tmp_path)
+    wt = add_worktree(ctrl_repo, tmp_path / "worktrees", "wt_refuse", base)
+
+    (wt / "forbidden.txt").write_text("disallowed\n")
+
+    before_objects = git(ctrl_repo, "cat-file", "--batch-all-objects", "--batch-check")
+    violations = check_envelope(wt, base, ["app.py"], repository=ctrl_repo)
+    assert violations == ["outside_allowed:forbidden.txt"]
+    after_objects = git(ctrl_repo, "cat-file", "--batch-all-objects", "--batch-check")
+
+    assert before_objects == after_objects
+
+
+def test_check_envelope_every_code_produced(tmp_path: Path) -> None:
+    ctrl_repo, base = _make_control_repo_and_base(tmp_path)
+    wt = add_worktree(ctrl_repo, tmp_path / "worktrees", "wt_codes", base)
+
+    # 1. outside_allowed
+    (wt / "outside.txt").write_text("outside\n")
+    v_outside = check_envelope(wt, base, ["app.py"], repository=ctrl_repo)
+    assert any(v.startswith("outside_allowed:") for v in v_outside)
+    (wt / "outside.txt").unlink()
+
+    # 2. git_metadata
+    (wt / "src").mkdir()
+    (wt / "src" / ".git").mkdir()
+    v_meta = check_envelope(wt, base, ["**"], repository=ctrl_repo)
+    assert any(v.startswith("git_metadata:") for v in v_meta)
+    (wt / "src" / ".git").rmdir()
+
+    # 3. symlink_escape
+    (wt / "escape_link").symlink_to("/etc/passwd")
+    v_esc = check_envelope(wt, base, ["**"], repository=ctrl_repo)
+    assert any(v.startswith("symlink_escape:") for v in v_esc)
+    (wt / "escape_link").unlink()
+
+    # 4. hardlink
+    (wt / "h1.txt").write_text("h\n")
+    os.link(wt / "h1.txt", wt / "h2.txt")
+    v_hard = check_envelope(wt, base, ["**"], repository=ctrl_repo)
+    assert any(v.startswith("hardlink:") for v in v_hard)
+    (wt / "h1.txt").unlink()
+    (wt / "h2.txt").unlink()
+
+    # 5. unsupported
+    os.mkfifo(wt / "my_fifo")
+    v_unsup = check_envelope(wt, base, ["**"], repository=ctrl_repo)
+    assert any(v.startswith("unsupported:") for v in v_unsup)
+    (wt / "my_fifo").unlink()
+
+    # 6. live_checkout_changed
+    live_dir = tmp_path / "live_codes"
+    subprocess.run(["git", "clone", str(ctrl_repo), str(live_dir)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(live_dir), "config", "user.name", "Live"], check=True)
+    subprocess.run(["git", "-C", str(live_dir), "config", "user.email", "live@omp.dev"], check=True)
+    (live_dir / "untracked.txt").write_text("new\n")
+    v_live = check_envelope(wt, base, ["**"], repository=ctrl_repo, live_checkout=live_dir)
+    assert any(v.startswith("live_checkout_changed:") for v in v_live)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses directory permissions")
+def test_scan_unreadable_disallowed_file_fails_closed(tmp_path: Path) -> None:
+    """An unreadable file must abort the scan, never be dropped into an approval."""
+    ctrl_repo, base = _make_control_repo_and_base(tmp_path)
+    wt = add_worktree(ctrl_repo, tmp_path / "worktrees", "wt_unreadable", base)
+
+    (wt / "app.py").write_text("print('changed')\n")
+    secret = wt / "secret.txt"
+    secret.write_text("unreadable\n")
+    secret.chmod(0o000)
+    try:
+        with pytest.raises(PermissionError):
+            _scan(wt, base, ["app.py"], repository=ctrl_repo)
+    finally:
+        secret.chmod(0o644)
+
+
+def test_scan_non_utf8_symlink_target_is_preserved(tmp_path: Path) -> None:
+    """Non-UTF-8 link bytes round-trip instead of crashing the UTF-8 encode."""
+    ctrl_repo, base = _make_control_repo_and_base(tmp_path)
+    wt = add_worktree(ctrl_repo, tmp_path / "worktrees", "wt_nonutf8", base)
+
+    target_bytes = b"app.py\xff\xfe"
+    os.symlink(target_bytes, os.fsencode(str(wt / "link")))
+
+    violations = check_envelope(wt, base, ["link"], repository=ctrl_repo)
+    assert violations == []
+
+    _, changed_map = _scan(wt, base, ["link"], repository=ctrl_repo)
+    assert changed_map["link"] == ("120000", target_bytes)
+
