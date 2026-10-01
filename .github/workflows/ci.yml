@@ -280,12 +280,17 @@ jobs:
               fetch_commit "$baseline" "$(record_pin "$baseline" target)"
               bun scripts/upstream-inventory.ts
               # gh pr diff (and the list-files API) cap the file count, and every
-              # upstream intake PR exceeds it, so diff the checked-out PR merge ref
-              # against its first parent (the base) locally. Capture separately so
-              # a git failure fails the step (set -e) instead of silently skipping
-              # the strict review via an empty pipe.
-              git cat-file -e "$GITHUB_SHA^1^{commit}" 2>/dev/null || git fetch --no-tags --depth=2 origin "$GITHUB_SHA"
-              changed_files="$(git diff --name-only "$GITHUB_SHA^1" "$GITHUB_SHA")"
+              # upstream intake PR exceeds it. Diff the PR's own changes, the
+              # three-dot range between the merge parents
+              # ($GITHUB_SHA^1...$GITHUB_SHA^2): a diff of the merge result
+              # against the first parent misses a file the base already has.
+              # A shallow checkout has neither parent nor their merge-base, so
+              # unshallow that commit. No `|| true`, so set -e fails the step
+              # on a fetch or git error instead of skipping the strict review.
+              if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+                git fetch --no-tags --unshallow origin "$GITHUB_SHA"
+              fi
+              changed_files="$(git diff --name-only "$GITHUB_SHA^1...$GITHUB_SHA^2")"
               if grep -qx "$baseline" <<<"$changed_files"; then
                 echo "baseline record changed — running the full standing-guardrail review (strict)"
                 run_strict_review "$baseline"
