@@ -101,6 +101,21 @@ const SUPPRESSED_NORMALIZED_PHRASES: Record<string, true> = {
  */
 const DEFAULT_HISTORY_CAPACITY = 4096;
 
+function screenAdvisorKey(key: string): "empty" | "noise" | undefined {
+	if (!key) return "empty";
+	return SUPPRESSED_NORMALIZED_PHRASES[key] ? "noise" : undefined;
+}
+
+/**
+ * The guard's stateless content screen: `empty` when nothing survives
+ * normalization, `noise` for a content-free filler phrase, else `undefined`.
+ * {@link AdvisorEmissionGuard.admit} applies it first; the structured
+ * supervision gate applies it before parsing a note into a proposal.
+ */
+export function screenAdvisorNote(note: string): "empty" | "noise" | undefined {
+	return screenAdvisorKey(normalizeAdvisorNote(note));
+}
+
 /** Maximum non-blocker advise notes allowed per update cycle across all configurations. */
 export const ADVISOR_MAX_BUDGET_PER_UPDATE = 32;
 
@@ -282,8 +297,8 @@ export class AdvisorEmissionGuard {
 	 */
 	admit(note: string, opts: { rank: number; pending: boolean }): AdvisorAdmission {
 		const key = normalizeAdvisorNote(note);
-		if (!key) return { accepted: false, reason: "empty" };
-		if (SUPPRESSED_NORMALIZED_PHRASES[key]) return { accepted: false, reason: "noise" };
+		const screened = screenAdvisorKey(key);
+		if (screened) return { accepted: false, reason: screened };
 		const rank = opts.rank;
 		const seenRank = this.#seen.get(key) ?? 0;
 		if (rank <= seenRank) return { accepted: false, reason: "duplicate" };

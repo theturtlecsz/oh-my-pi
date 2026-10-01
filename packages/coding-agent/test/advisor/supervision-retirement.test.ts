@@ -360,7 +360,7 @@ describe("advisor supervision retirement (OMP-208-s08)", () => {
 
 			await settlePrimary(session);
 			expect(await advise(session, { note: REAL_CONCERN, severity: "concern", category: "semantic-concern" })).toBe(
-				"Recorded.",
+				"Delivered.",
 			);
 
 			const [after] = session.getAdvisorSupervisionReport();

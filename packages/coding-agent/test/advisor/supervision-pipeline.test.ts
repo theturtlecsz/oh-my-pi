@@ -15,7 +15,7 @@ import { AdvisorSupervisionPipeline } from "../../src/advisor/supervision-pipeli
 
 class DropSemanticConcern extends AdvisorSupervisionGate {
 	override decide(input: AdvisorSupervisionInput): AdvisorSupervisionDecision {
-		if (input.category === "semantic-concern") return { deliver: false, reason: "duplicate-rank" };
+		if (input.category === "semantic-concern") return { deliver: false, reason: "duplicate" };
 		return super.decide(input);
 	}
 }
@@ -50,7 +50,7 @@ function pushDelivery(
 	delivered.push({ note, severity, category, index });
 }
 
-/** The pre-gate pair: AdviseTool rank map, then AdvisorEmissionGuard. */
+/** The legacy arm: AdviseTool admitting through the stock AdvisorEmissionGuard. */
 async function runLegacy(ops: readonly Op[]): Promise<{ delivered: Delivery[]; texts: string[] }> {
 	const guard = new AdvisorEmissionGuard();
 	const delivered: Delivery[] = [];
@@ -167,7 +167,7 @@ describe("AdvisorSupervisionPipeline", () => {
 			if (delivered.length === 0) resolvedBeforeDeliver = true;
 		});
 		const recorded = await pending;
-		expect(toolText(recorded)).toBe("Recorded.");
+		expect(toolText(recorded)).toBe("Delivered.");
 		expect(resolvedBeforeDeliver).toBe(false);
 		expect(delivered).toEqual([
 			{
@@ -183,7 +183,7 @@ describe("AdvisorSupervisionPipeline", () => {
 			severity: "blocker",
 			category: "gate-defect",
 		});
-		expect(toolText(stop)).toBe("Recorded.");
+		expect(toolText(stop)).toBe("Dropped: nothing actionable.");
 		expect(
 			toolText(
 				await pipeline.tool.execute("tc-3", {
@@ -192,7 +192,7 @@ describe("AdvisorSupervisionPipeline", () => {
 					category: "possible-false-positive",
 				}),
 			),
-		).toBe("Recorded.");
+		).toBe("Dropped: empty note.");
 		expect(delivered).toHaveLength(1);
 
 		delivered.length = 0;
@@ -203,7 +203,7 @@ describe("AdvisorSupervisionPipeline", () => {
 			severity: "nit",
 			category: "semantic-concern",
 		});
-		expect(toolText(deferred)).toContain("Deferred");
+		expect(toolText(deferred)).toBe("Queued for the end of the turn. Do not re-raise.");
 		expect(delivered).toEqual([]);
 		cursor = 40;
 		pipeline.beginUpdate(false);
@@ -291,8 +291,9 @@ describe("AdvisorSupervisionPipeline", () => {
 		const pipeline = new AdvisorSupervisionPipeline({
 			path: "canary",
 			canaryMaxDivergences: 0,
+			budgetPerUpdate: 1,
 			transcriptIndex: () => cursor,
-			structuredGate: new DropSemanticConcern(),
+			structuredGate: new DropSemanticConcern({ budgetPerUpdate: 1 }),
 			deliver: (note, severity, category, index) => pushDelivery(delivered, note, severity, category, index),
 		});
 		const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
@@ -303,7 +304,7 @@ describe("AdvisorSupervisionPipeline", () => {
 				severity: "nit",
 				category: "semantic-concern",
 			});
-			expect(toolText(first)).toBe("Recorded.");
+			expect(toolText(first)).toBe("Delivered.");
 			expect(delivered).toEqual([
 				{
 					note: "Check the retry queue bounds.",
@@ -324,7 +325,7 @@ describe("AdvisorSupervisionPipeline", () => {
 				severity: "concern",
 				category: "semantic-concern",
 			});
-			expect(toolText(second)).toBe("Recorded.");
+			expect(toolText(second)).toBe("Dropped: this update's advice budget is spent.");
 			expect(delivered).toHaveLength(1);
 
 			pipeline.beginUpdate(false);
@@ -334,7 +335,7 @@ describe("AdvisorSupervisionPipeline", () => {
 				severity: "concern",
 				category: "semantic-concern",
 			});
-			expect(toolText(third)).toBe("Recorded.");
+			expect(toolText(third)).toBe("Delivered.");
 			expect(delivered).toEqual([
 				{
 					note: "Check the retry queue bounds.",
@@ -366,7 +367,7 @@ describe("AdvisorSupervisionPipeline", () => {
 				severity: "blocker",
 				category: "semantic-concern",
 			});
-			expect(toolText(fourth)).toBe("Recorded.");
+			expect(toolText(fourth)).toBe("Delivered.");
 			expect(delivered.at(-1)).toEqual({
 				note: "Move retries into the queue, not the request path.",
 				severity: "blocker",
@@ -397,7 +398,7 @@ describe("AdvisorSupervisionPipeline", () => {
 				severity: "nit",
 				category: "semantic-concern",
 			});
-			expect(toolText(first)).toBe("Duplicate advice ignored.");
+			expect(toolText(first)).toBe("Dropped: already raised.");
 			expect(delivered).toEqual([]);
 			expect(pipeline.report().divergences).toBe(1);
 			expect(pipeline.report().canaryBudgetExceeded).toBe(false);
@@ -411,7 +412,7 @@ describe("AdvisorSupervisionPipeline", () => {
 				severity: "concern",
 				category: "semantic-concern",
 			});
-			expect(toolText(second)).toBe("Recorded.");
+			expect(toolText(second)).toBe("Delivered.");
 			expect(delivered).toEqual([
 				{
 					note: "Concrete: read race in #handleRetry.",
@@ -449,7 +450,10 @@ describe("AdvisorSupervisionPipeline", () => {
 				severity: "nit",
 				category: "semantic-concern",
 			});
-			expect(toolText(deferred)).toContain("Deferred");
+			// Admission happens at execute: the structured arm (still authoritative)
+			// drops the note while the legacy arm queues it. Neither buffer holds a
+			// delivery yet, so the divergence surfaces only at the flush.
+			expect(toolText(deferred)).toBe("Dropped: already raised.");
 			expect(delivered).toEqual([]);
 			expect(pipeline.report().divergences).toBe(0);
 			expect(pipeline.report().authority).toBe("structured");

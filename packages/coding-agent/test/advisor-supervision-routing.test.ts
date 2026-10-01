@@ -143,7 +143,7 @@ describe("advisor supervision routing", () => {
 			await withHarness({ path }, async ({ session }) => {
 				expect(session.setAdvisorEnabled(true)).toBe(true);
 				expect(await advise(session, { note: "Stop.", severity: "blocker", category: "gate-defect" })).toBe(
-					"Recorded.",
+					"Dropped: nothing actionable.",
 				);
 				expect(deliveredNotes(session)).toEqual([]);
 				const [entry] = session.getAdvisorSupervisionReport();
@@ -163,18 +163,18 @@ describe("advisor supervision routing", () => {
 				await settlePrimary(session);
 				expect(session.setAdvisorEnabled(true)).toBe(true);
 				expect(await advise(session, { note: "Stop.", severity: "blocker", category: "gate-defect" })).toBe(
-					"Recorded.",
+					"Dropped: nothing actionable.",
 				);
 				expect(
 					await advise(session, { note: REAL_CONCERN, severity: "concern", category: "semantic-concern" }),
-				).toBe("Recorded.");
+				).toBe("Delivered.");
 				expect(
 					await advise(session, {
 						note: REAL_CONCERN_VARIANT,
 						severity: "concern",
 						category: "semantic-concern",
 					}),
-				).toBe("Recorded.");
+				).toBe("Dropped: already raised.");
 				expect(deliveredNotes(session)).toEqual([REAL_CONCERN]);
 				const [entry] = session.getAdvisorSupervisionReport();
 				expect(entry?.report.authority).toBe(authorityFor(path));

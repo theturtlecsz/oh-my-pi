@@ -183,7 +183,7 @@ async function writeCorpus(dir: string, specs: SessionSpec[]): Promise<void> {
 class DropPolicyAmbiguityGate extends AdvisorSupervisionGate {
 	override decide(input: AdvisorSupervisionInput): AdvisorSupervisionDecision {
 		if (input.category === "policy-ambiguity") {
-			return { deliver: false, reason: "duplicate-rank" };
+			return { deliver: false, reason: "duplicate" };
 		}
 		return super.decide(input);
 	}

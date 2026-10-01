@@ -170,7 +170,7 @@ export function deriveAdvisorTelemetry(
  */
 export const ADVISOR_DEFAULT_TOOL_NAMES: ReadonlySet<string> = new Set(["read", "grep", "glob"]);
 
-/** Normalized key for rank dedupe. Shared with {@link AdvisorSupervisionGate}. */
+/** Normalized key for rank dedupe: the same key {@link AdvisorEmissionGuard} admits on. */
 export function advisorNoteDedupeKey(note: string): string {
 	return normalizeAdvisorNote(note);
 }
