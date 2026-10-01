@@ -61,7 +61,8 @@ describe("AgentSession concurrent prompt dispatch", () => {
 		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
 
 		const agent = new Agent({
-			getApiKey: () => "test-key",
+			// Fork OMP-176: the session validates the key through the agent's resolver, so route it via the spied registry.
+			getApiKey: m => modelRegistry.getApiKey(m),
 			initialState: {
 				model,
 				systemPrompt: ["Test"],

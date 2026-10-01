@@ -177,7 +177,8 @@ describe("collab host registry lifecycle (#6099)", () => {
 			manager.appendMessage({ role: "user", content: "Retained", timestamp: 1 });
 			const abandoned = manager.appendMessage({ role: "user", content: "Abandoned", timestamp: 2 });
 			const agent = new Agent({
-				getApiKey: () => "test-key",
+				// Fork OMP-176: the session validates the key through the agent's resolver, so route it via the spied registry.
+				getApiKey: m => models.getApiKey(m),
 				initialState: {
 					model,
 					systemPrompt: ["Test"],
