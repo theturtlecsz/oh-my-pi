@@ -756,6 +756,21 @@ jobs:
               OMP_TEST_SHARD: ${{ matrix.shard }}
            run: bun run ci:test:coding-agent:native
 
+   # Fork branch protection requires a check named "Test coding-agent native/unit (TS)". Upstream 18.4.8 sharded that
+   # job (per-shard names), so this job reports the required name and passes only when every shard passed.
+   test_coding_agent_native_required:
+      name: Test coding-agent native/unit (TS)
+      runs-on: ubuntu-22.04
+      needs: [test_coding_agent_native]
+      if: ${{ always() }}
+      steps:
+         - name: Require every native/unit shard to pass
+           env:
+              SHARDS_RESULT: ${{ needs.test_coding_agent_native.result }}
+           run: |
+              echo "native/unit shards: $SHARDS_RESULT"
+              test "$SHARDS_RESULT" = success
+
    test_workspace:
       name: Test TS workspace fast
       runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-22.04' || 'rust' }}
