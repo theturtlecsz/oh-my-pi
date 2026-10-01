@@ -26,6 +26,7 @@ from test_workflow_service import _create
 from omp_work.__main__ import main
 from omp_work.jobs.budget_relay import relay_budget_alerts
 from omp_work.jobs.store import NativeJobStore
+from omp_work.operations.config import OperationsConfig
 from omp_work.v1.canonical import sha256
 from omp_work.v1.store import PostgresWorkStore, WorkStoreError
 
@@ -34,6 +35,17 @@ pytestmark = pytest.mark.skipif(
     reason="set OMP_WORK_POSTGRES_INTEGRATION=1",
 )
 pytest_plugins = ("test_workflow_service",)
+
+
+@pytest.fixture(autouse=True)
+def _bind_defaults_to_fixture(native_jobs, monkeypatch) -> None:  # noqa: F811
+    """Point OperationsConfig.defaults() at the fixture service so main() uses it."""
+    monkeypatch.setattr(
+        OperationsConfig,
+        "defaults",
+        classmethod(lambda cls: native_jobs.service.config),  # noqa: ARG005
+    )
+
 
 
 def _store(native_jobs) -> NativeJobStore:
@@ -324,14 +336,68 @@ def test_store_error_leaves_row_failed_then_next_call_records_same_operation_id(
     assert relayed_3 == 0
 
 
-def test_cli_budget_alerts_prints_json_count(native_jobs, capsys) -> None:
-    """The budget-alerts CLI command prints JSON count without requiring grokbot env."""
+def test_malformed_payload_fails_row_without_inventing_alarm(native_jobs) -> None:
+    """A non-object payload fails the row and records no alarm signal."""
+    job_store = _store(native_jobs)
+    work_store = _work_store(native_jobs)
     workspace_id = native_jobs.workspace_id
     actor_id = native_jobs.actor_id
+
+    event_id = sha256({"malformed": "budget-alert"})
+    _insert_outbox(job_store, workspace_id, actor_id, event_id, "not-an-object")
+
+    assert (
+        relay_budget_alerts(
+            job_store, work_store, workspace_id=workspace_id, actor_id=actor_id
+        )
+        == 0
+    )
+
+    row = _outbox_rows(native_jobs, workspace_id)[event_id]
+    assert row["state"] == "failed"
+    expected_op_id = uuid5(NAMESPACE_URL, f"omp-work:budget-alert:{event_id}")
+    recorded = [
+        ev
+        for ev in _domain_events(job_store, workspace_id, actor_id)
+        if UUID(str(ev["operation_id"])) == expected_op_id
+    ]
+    assert recorded == []
+
+
+def test_cli_budget_alerts_prints_json_count(native_jobs, capsys) -> None:
+    """The budget-alerts CLI sweeps and relays the fixture workspace's pending rows."""
+    workspace_id = native_jobs.workspace_id
+    actor_id = native_jobs.actor_id
+    job_store = _store(native_jobs)
+
+    item = _create(native_jobs.service, workspace_id, "cli budget item")
+    work_id = UUID(item["work_id"])
+    payload = {
+        "event": "budget.exceeded",
+        "dimension": "tokens",
+        "threshold_percent": 100,
+        "spent": 1000,
+        "limit": 1000,
+        "work_id": str(work_id),
+    }
+    event_id = _event_id(workspace_id, work_id, 100)
+    expected_op_id = uuid5(NAMESPACE_URL, f"omp-work:budget-alert:{event_id}")
+    _insert_outbox(job_store, workspace_id, actor_id, event_id, payload)
 
     code = main(
         ["budget-alerts", "--workspace", str(workspace_id), "--actor", str(actor_id)]
     )
     assert code == 0
     captured = capsys.readouterr()
-    assert json.loads(captured.out) == 0
+    assert json.loads(captured.out) == 1
+
+    # The fixture row was relayed: it is closed and its alarm signal recorded.
+    assert _outbox_rows(native_jobs, workspace_id)[event_id]["state"] == "closed"
+    recorded = [
+        ev
+        for ev in _domain_events(job_store, workspace_id, actor_id)
+        if UUID(str(ev["operation_id"])) == expected_op_id
+    ]
+    assert len(recorded) == 1
+    assert recorded[0]["payload"]["signal"] == "budget_exceeded"
+    assert recorded[0]["payload"]["subject"] == "tokens budget 100% reached"

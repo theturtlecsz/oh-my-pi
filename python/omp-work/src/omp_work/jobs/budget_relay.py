@@ -67,16 +67,13 @@ def relay_budget_alerts(
             if record.state == "failed":
                 record = recovery.apply_commit(record)
 
-            raw_payload = row["payload"]
-            if isinstance(raw_payload, str):
-                try:
-                    payload = json.loads(raw_payload)
-                except json.JSONDecodeError:
-                    payload = {}
-            elif isinstance(raw_payload, dict):
-                payload = raw_payload
-            else:
-                payload = {}
+            payload = _decode_payload(row["payload"])
+            if payload is None:
+                failed = recovery.recover_unacked_commit(
+                    record, evidence_trusted=False
+                )
+                _persist(cur, workspace_id, failed)
+                continue
 
             event = payload.get("event")
             signal = (
@@ -135,6 +132,16 @@ def relay_budget_alerts(
             relayed += 1
 
     return relayed
+
+
+def _decode_payload(raw: Any) -> dict[str, Any] | None:
+    """Decode an outbox payload; None when it is not a JSON object."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+    return raw if isinstance(raw, dict) else None
 
 
 def _persist(cur: Any, workspace_id: UUID, record: recovery.CloseoutRecord) -> None:
