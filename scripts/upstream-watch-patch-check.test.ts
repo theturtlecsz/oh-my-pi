@@ -100,12 +100,16 @@ async function runStep(
 ): Promise<{ exitCode: number; summary: string }> {
 	const summaryFile = path.join(dir, "step_summary.md");
 	await Bun.write(summaryFile, "prior summary\n");
-	const result = await $`bash -c ${script}`.cwd(dir).quiet().nothrow().env({
-		...GIT_ENV,
-		GITHUB_STEP_SUMMARY: summaryFile,
-		COMMIT: commit,
-		TAG: tag,
-	});
+	const result = await $`bash -c ${script}`
+		.cwd(dir)
+		.quiet()
+		.nothrow()
+		.env({
+			...GIT_ENV,
+			GITHUB_STEP_SUMMARY: summaryFile,
+			COMMIT: commit,
+			TAG: tag,
+		});
 	return { exitCode: result.exitCode, summary: await Bun.file(summaryFile).text() };
 }
 
@@ -132,8 +136,11 @@ describe("upstream-watch fork-patch steps", () => {
 		expect(fetchStep?.if).toBe(NEWER);
 		expect(patchStep?.if).toBe(NEWER);
 		expect(patchStep?.name).toBe("Check fork patches against candidate");
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: github actions expression syntax
 		expect(fetchStep?.env?.COMMIT).toBe("${{ steps.discovery.outputs.commit }}");
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: github actions expression syntax
 		expect(patchStep?.env?.COMMIT).toBe("${{ steps.discovery.outputs.commit }}");
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: github actions expression syntax
 		expect(patchStep?.env?.TAG).toBe("${{ steps.discovery.outputs.tag }}");
 
 		const fetchRun = fetchStep?.run ?? "";
