@@ -284,11 +284,9 @@ class RecoveryProvider:
                     name, arguments, call_id = (
                         "yield",
                         {
-                            "result": {
-                                "data": {
-                                    "path": "result.txt",
-                                    "observed": results[-1].get("content"),
-                                }
+                            "data": {
+                                "path": "result.txt",
+                                "observed": results[-1].get("content"),
                             }
                         },
                         "task-child-yield",
