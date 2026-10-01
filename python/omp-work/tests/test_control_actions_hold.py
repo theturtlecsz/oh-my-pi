@@ -18,17 +18,6 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from test_control_actions import (
-    _REPO,
-    NOW,
-    _Executor,
-    _mandate_all_tier3,
-    _open,
-    _resolver_for,
-)
-from test_decision_records_api import _list
-from test_workflow_service import OWNER
-
 from omp_work.action_classify import (
     Operation,
     ResolvedTarget,
@@ -39,6 +28,16 @@ from omp_work.control_actions import HoldDecision, perform
 from omp_work.project_store import ProjectAuthorityRefused
 from omp_work.v1.models import CommandEnvelope
 from omp_work.v1.server import create_app
+from test_control_actions import (
+    _REPO,
+    NOW,
+    _Executor,
+    _mandate_all_tier3,
+    _open,
+    _resolver_for,
+)
+from test_decision_records_api import _list
+from test_workflow_service import OWNER
 
 pytest_plugins = ["test_workflow_service"]
 
@@ -156,8 +155,39 @@ def test_hold_decision_seeds_the_envelope_and_carries_its_content() -> None:
         hold=hold,
     )
     assert replay.decision_id == hold.decision_id
-    assert len(store.decisions()) == 2
     assert store.decisions()[0] == store.decisions()[1]
+
+
+def test_without_hold_uses_independent_uuid4_ids_and_defaults() -> None:
+    store = _FakeStore()
+    workspace_id, actor_id, project_id = uuid4(), uuid4(), uuid4()
+    resolver = _resolver()
+    outcome = perform(
+        store,
+        workspace_id,
+        actor_id,
+        project_id,
+        None,
+        _MERGE,
+        resolver,
+        _Executor(),
+        datetime(2026, 9, 30, 12, 0, tzinfo=UTC),
+    )
+    assert outcome.status == "held"
+    envelopes = store.decisions()
+    assert len(envelopes) == 1
+    envelope = envelopes[0]
+    payload = envelope.command.payload
+    ids = {
+        envelope.operation_id,
+        envelope.request_id,
+        envelope.correlation_id,
+        payload.decision_id,
+    }
+    assert len(ids) == 4
+    assert payload.question == "Authorize this tier 3 action?"
+    assert payload.evidence_refs == ()
+    assert payload.resume_state == "tier3:merge_protected_branch"
 
 
 @_POSTGRES_INTEGRATION

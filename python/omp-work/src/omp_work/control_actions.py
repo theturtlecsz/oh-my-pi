@@ -506,13 +506,18 @@ def _decision_envelope(
         target_sha256=classification.target_sha256,
         resume_state=resume_state,
     )
-    operation_id = uuid4() if hold is None else hold.decision_id
+    if hold is None:
+        operation_id = uuid4()
+        request_id = uuid4()
+        correlation_id = uuid4()
+    else:
+        operation_id = request_id = correlation_id = hold.decision_id
     return CommandEnvelope(
         api_version="work.omp.dev/v1",
         workspace_id=workspace_id,
         operation_id=operation_id,
-        request_id=operation_id,
-        correlation_id=operation_id,
+        request_id=request_id,
+        correlation_id=correlation_id,
         command=CreateDecisionCommand(type="create_decision", payload=payload),
     )
 
