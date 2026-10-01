@@ -38,7 +38,7 @@ _EVENT_TYPES = ",".join(MISSION_EVENT_TYPES)
 def _install_seams(
     monkeypatch: pytest.MonkeyPatch,
 ) -> list[tuple[str, str | None, str, dict[str, str], object]]:
-    """Record grokbot_send and answer the two push hosts from getaddrinfo.
+    """Record push_send and answer the two push hosts from getaddrinfo.
 
     The recorder keeps the arguments send_signed passed. check_destination,
     run_push, send_signed, and signature stay on their real implementations.
@@ -80,7 +80,7 @@ def _install_seams(
             ]
         return real_getaddrinfo(host, port, *args, **kwargs)
 
-    monkeypatch.setattr(event_push, "grokbot_send", record_send)
+    monkeypatch.setattr(event_push, "push_send", record_send)
     monkeypatch.setattr(event_push.socket, "getaddrinfo", getaddrinfo)
     return captures
 
