@@ -130,6 +130,9 @@ async function main(): Promise<void> {
 		"merge-tree",
 		"--write-tree",
 		"--no-messages",
+		// Conflict paths must match inventory paths.
+		"-X",
+		"no-renames",
 		"--merge-base",
 		baseline.target,
 		args.head,
