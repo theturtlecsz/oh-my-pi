@@ -48,7 +48,6 @@ import {
 	ADVISOR_MAX_BUDGET_PER_UPDATE,
 	type AdvisorAgent,
 	type AdvisorCategory,
-	type AdvisorConfig,
 	AdvisorLoopGuard,
 	type AdvisorMessageDetails,
 	type AdvisorNote,

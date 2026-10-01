@@ -205,7 +205,13 @@ const ADVISOR_ACK_SUPPRESSED: Record<AdvisorSuppressionReason, string> = {
 export interface AdvisorAdmissionAuthority {
 	admit(
 		note: string,
-		opts: { rank: number; pending: boolean; category?: AdvisorCategory; transcriptIndex?: number },
+		opts: {
+			rank: number;
+			pending: boolean;
+			severity?: AdvisorSeverity;
+			category?: AdvisorCategory;
+			transcriptIndex?: number;
+		},
 	): AdvisorAdmission;
 	escalatePending(note: string, rank: number): void;
 	markRouted(note: string): void;
@@ -316,7 +322,7 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 		const rank = advisorSeverityRank(args.severity);
 		const key = advisorNoteDedupeKey(args.note);
 		const transcriptIndex = this.#transcriptIndex?.();
-		const admission = { rank, category: args.category, transcriptIndex };
+		const admission = { rank, severity: args.severity, category: args.category, transcriptIndex };
 		if (this.#inProgressUpdate && args.severity !== "blocker") {
 			// Withheld, not delivered: reserve for the deterministic flush at the
 			// completed-update transition / terminal boundary.
