@@ -94,6 +94,24 @@ function emptyStartupSelection(persistCurrentVersion: boolean): StartupChangelog
 /** Bucket for release bullets written above any `###` category heading, so the breakdown never loses them. */
 const UNCATEGORIZED_CHANGELOG_CATEGORY = "Other";
 
+/** Longest UTF-16 prefix of `text` whose UTF-8 byte length is within `maxBytes`. */
+function longestUtf8PrefixWithin(text: string, maxBytes: number): string {
+	if (maxBytes <= 0) return "";
+	if (Buffer.byteLength(text) <= maxBytes) return text;
+
+	let low = 0;
+	let high = text.length;
+	while (low < high) {
+		const middle = Math.floor((low + high + 1) / 2);
+		if (Buffer.byteLength(text.slice(0, middle)) <= maxBytes) {
+			low = middle;
+		} else {
+			high = middle - 1;
+		}
+	}
+	return text.slice(0, low);
+}
+
 function summarizeChangelogEntries(entries: readonly ChangelogEntry[]): {
 	changeCount: number;
 	categoryCounts: Record<string, number>;
@@ -104,8 +122,9 @@ function summarizeChangelogEntries(entries: readonly ChangelogEntry[]): {
 	for (const entry of entries) {
 		let category = UNCATEGORIZED_CHANGELOG_CATEGORY;
 		// Count what the renderer shows: top-level list items per `###` section, straight
-		// from the shared lexer. There is no parallel list grammar left here to drift.
-		for (const token of Lexer.lex(entry.content)) {
+		// from the shared lexer, over this entry's startup byte prefix only. There is no
+		// parallel list grammar left here to drift, and text past the cap is not a change.
+		for (const token of Lexer.lex(longestUtf8PrefixWithin(entry.content, STARTUP_CHANGELOG_MAX_BYTES))) {
 			if (token.type === "heading" && token.depth === 3) {
 				const name = token.text.trim();
 				category = name === "" ? UNCATEGORIZED_CHANGELOG_CATEGORY : name;
@@ -374,18 +393,8 @@ export function renderChangelogEntries(
 	}
 
 	const suffix = `\n\n…\n\n${options.truncationHint ?? STARTUP_CHANGELOG_FULL_HINT}`;
-	let low = 0;
-	let high = markdown.length;
-	while (low < high) {
-		const middle = Math.floor((low + high + 1) / 2);
-		if (Buffer.byteLength(markdown.slice(0, middle) + suffix) <= options.maxBytes) {
-			low = middle;
-		} else {
-			high = middle - 1;
-		}
-	}
-
-	return { markdown: markdown.slice(0, low) + suffix, truncated: true };
+	const prefix = longestUtf8PrefixWithin(markdown, options.maxBytes - Buffer.byteLength(suffix));
+	return { markdown: prefix + suffix, truncated: true };
 }
 
 function selectStartupChangelogEntries(
