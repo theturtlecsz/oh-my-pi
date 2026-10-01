@@ -170,7 +170,7 @@ describe("native task recovery session integration", () => {
 						delta = {
 							tool_calls: [
 								call("child-yield", "yield", {
-									result: { data: { path: "result.txt", observed: results.at(-1)!.content } },
+									data: { path: "result.txt", observed: results.at(-1)!.content },
 								}),
 							],
 						};
@@ -578,7 +578,7 @@ describe("native task recovery session integration", () => {
 			expect(logs[0]).toMatchObject({
 				message: "Extension error",
 				context: {
-					path: host === "fresh" ? "<task-executor>" : "<runtime-init>",
+					path: "<runtime-init>",
 					error: "task abort rejected",
 				},
 			});
