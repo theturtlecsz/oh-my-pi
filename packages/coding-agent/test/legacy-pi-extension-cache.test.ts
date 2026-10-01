@@ -92,7 +92,9 @@ test("legacy extension parse cache drops obsolete CommonJS export-analysis colum
 			.map(column => column.name);
 		const schemaVersion = migrated.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version;
 		expect(columns).toEqual(["cache_key", "source_type", "references", "commonjs_syntax"]);
-		expect(schemaVersion).toBe(3);
+		// Fork schema 4: its rollup-style CommonJS detection differs from upstream's, so
+		// rows computed under upstream schema 3 must not be reused.
+		expect(schemaVersion).toBe(4);
 	} finally {
 		migrated.close();
 	}
