@@ -142,6 +142,20 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 ''',
+    "omp-events-push.service": f'''[Unit]
+Description=OMP Work Ledger ops.alarm/ops.digest event push
+
+[Service]
+Type=oneshot
+{environment}
+ExecStart={python_command} -I -B -m omp_work events push --client-config {quoted(xdg_config + '/omp-work/client.json')} --bearer-file {quoted(config + '/capabilities/event-push.json')}
+''',
+    "omp-events-push.timer": '''[Timer]
+OnCalendar=*:0/5
+Persistent=true
+[Install]
+WantedBy=timers.target
+''',
 }
 if render_only == "1":
     for name in units:
