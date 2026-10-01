@@ -352,7 +352,7 @@ therefore completes through the paste-code path.
 
 ### TypeSafe Jev decision service
 
-The Jev decision client (`POST /v1/systemone`) provides opt-in classification for auto-thinking difficulty and unexpected-stop detection. It is gated by the `TYPESAFE_API_KEY` credential and the `jev.*` settings defined in `packages/coding-agent/src/config/settings-schema.ts`. All Jev settings default to off (`false`); each decision attempt records a `jev_usage` session entry. If Jev is disabled, unreachable, or times out, execution falls back to the existing path (the configured smol model).
+The Jev decision client (`POST /v1/systemone`) provides opt-in classification for auto-thinking difficulty and unexpected-stop detection. It is gated by the `TYPESAFE_API_KEY` credential and the `jev.*` settings registered in `packages/coding-agent/src/tiny/jev-settings.ts`. All Jev settings default to off (`false`); each decision attempt records a `jev_usage` session entry. If Jev is disabled, unreachable, or times out, execution falls back to the existing path (the configured smol model).
 
 | Setting | Type | Default | Description |
 | ----------------------------- | ------- | --------------------------- | ------------------------------------------------------------------ |
