@@ -460,8 +460,20 @@ export async function seedReview(options: SeedReviewOptions): Promise<SeedResult
 		git([attrSource, "diff", "--unified=0", "--no-renames", "--no-color", diffRange]),
 		git([attrSource, "diff", "--name-only", "--no-renames", "--no-color", diffRange]),
 		git([attrSource, "diff", "--raw", "--no-renames", "--abbrev=40", "--no-color", targetRange]),
+		// -X no-renames: conflict paths share the --no-renames diffs' path identity.
 		git(
-			[attrSource, "merge-tree", "--write-tree", "--no-messages", "--merge-base", baseSha, forkSha, targetSha],
+			[
+				attrSource,
+				"merge-tree",
+				"--write-tree",
+				"--no-messages",
+				"-X",
+				"no-renames",
+				"--merge-base",
+				baseSha,
+				forkSha,
+				targetSha,
+			],
 			[0, 1],
 		),
 	]);

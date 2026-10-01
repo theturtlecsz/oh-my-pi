@@ -864,8 +864,21 @@ async function main(): Promise<void> {
 		git([attrSource, "diff", "--raw", "--no-renames", "--abbrev=40", "--no-color", targetRange]),
 		// Explicit --merge-base: the pinned base commit removes any dependency on
 		// history connectivity, so depth-1 fetches of the three pins suffice (CI).
+		// -X no-renames keeps conflict paths on the same identity as the --no-renames
+		// diffs: an upstream rename of a fork-changed file conflicts at the fork path.
 		git(
-			[attrSource, "merge-tree", "--write-tree", "--no-messages", "--merge-base", pins.base, pins.fork, pins.target],
+			[
+				attrSource,
+				"merge-tree",
+				"--write-tree",
+				"--no-messages",
+				"-X",
+				"no-renames",
+				"--merge-base",
+				pins.base,
+				pins.fork,
+				pins.target,
+			],
 			[0, 1],
 		),
 	]);
