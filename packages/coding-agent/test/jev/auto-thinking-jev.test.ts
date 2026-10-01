@@ -222,7 +222,10 @@ describe("auto-thinking Jev classifier", () => {
 		// Model ladder tops out at xhigh even with max requested
 		const xhighModel = buildLadderModel("mock-xhigh", XHIGH_LADDER);
 		const cappedModelFixture = createFixture({ model: xhighModel, autoThinkingMaxEffort: "max" });
-		const cappedEffort = await classifyDifficulty({ request: "drop table and migrate in-place" }, cappedModelFixture.deps);
+		const cappedEffort = await classifyDifficulty(
+			{ request: "drop table and migrate in-place" },
+			cappedModelFixture.deps,
+		);
 
 		expect(cappedEffort).toBe(Effort.XHigh);
 	});

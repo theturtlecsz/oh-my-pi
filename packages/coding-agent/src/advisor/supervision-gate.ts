@@ -105,7 +105,10 @@ export class AdvisorSupervisionGate implements AdvisorAdmissionAuthority {
 				? { accepted: true }
 				: { accepted: true, displacedKey: decision.displacedKey };
 		}
-		return { accepted: false, reason: SUPPRESSION_ACK_REASON[decision.reason as Exclude<AdvisorSupervisionReason, "delivered">] };
+		return {
+			accepted: false,
+			reason: SUPPRESSION_ACK_REASON[decision.reason as Exclude<AdvisorSupervisionReason, "delivered">],
+		};
 	}
 
 	escalatePending(note: string, rank: number): void {

@@ -83,13 +83,16 @@ describe("Jev default off", () => {
 			return fetch(`${stub.baseUrl}${url.pathname}${url.search}`, init);
 		};
 
-		const difficultyResult = await classifyDifficulty({ request: "Write a parser for arithmetic expressions" }, {
-			settings,
-			registry,
-			model,
-			recordJevUsage: entry => entries.push(entry),
-			fetch: testFetch,
-		});
+		const difficultyResult = await classifyDifficulty(
+			{ request: "Write a parser for arithmetic expressions" },
+			{
+				settings,
+				registry,
+				model,
+				recordJevUsage: entry => entries.push(entry),
+				fetch: testFetch,
+			},
+		);
 
 		const unexpectedStopResult = await classifyUnexpectedStop("I will run the command now.", {
 			settings,

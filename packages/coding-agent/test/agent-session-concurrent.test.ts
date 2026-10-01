@@ -3941,24 +3941,22 @@ describe("failed attempt retirement", () => {
 		let omitted = false;
 		let observationRestored = false;
 		const actualObserve = TtsrCoordinator.prototype.observeProcessing;
-		const observationSpy = vi.spyOn(TtsrCoordinator.prototype, "observeProcessing").mockImplementation(function (
-			this: TtsrCoordinator,
-			event,
-			processing,
-		) {
-			if (
-				!omitted &&
-				event.type === "message_end" &&
-				event.message.role === "assistant" &&
-				event.message.stopReason === "aborted" &&
-				event.message.timestamp === 1720000000100
-			) {
-				omitted = true;
-				record("fault-omit-first-aborted-observation", { timestamp: event.message.timestamp });
-				return;
-			}
-			return actualObserve.call(this, event, processing);
-		});
+		const observationSpy = vi
+			.spyOn(TtsrCoordinator.prototype, "observeProcessing")
+			.mockImplementation(function (this: TtsrCoordinator, event, processing) {
+				if (
+					!omitted &&
+					event.type === "message_end" &&
+					event.message.role === "assistant" &&
+					event.message.stopReason === "aborted" &&
+					event.message.timestamp === 1720000000100
+				) {
+					omitted = true;
+					record("fault-omit-first-aborted-observation", { timestamp: event.message.timestamp });
+					return;
+				}
+				return actualObserve.call(this, event, processing);
+			});
 		let timers = 0;
 		const schedulerSpy = vi.spyOn(scheduler, "wait").mockImplementation(async (delay, options) => {
 			if (delay === 50) timers++;

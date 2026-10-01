@@ -77,6 +77,7 @@ async function createHarness(
 	const model = getBundledModel("anthropic", "claude-sonnet-4-5") ?? mock;
 	const sessionManager = SessionManager.inMemory(tempDir.path());
 	const tools = [recordTool as AgentTool];
+	// oxlint-disable-next-line prefer-const -- captured by closures before assignment
 	let session: AgentSession | undefined;
 	const agent = new Agent({
 		getApiKey: () => "test-key",

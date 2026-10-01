@@ -2931,7 +2931,7 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 		};
 
 		let shouldFailRestart = false;
-		let healthFp = "prospective-fp-199";
+		const healthFp = "prospective-fp-199";
 		const mockBackend = {
 			cacheFile: repo.cacheFile,
 			markerFile: ".work-project",
@@ -3114,6 +3114,7 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 
 	test("execution delivery checkpoint race and crash-retry use one guarded continuation", async () => {
 		const repo = makeTempRepo();
+		// oxlint-disable-next-line prefer-const -- captured by closures before assignment
 		let ownershipEntry: CustomEntry | undefined;
 		let registeredExecute: ((id: string, params: Record<string, unknown>, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: { type: string; text: string }[] }>) | undefined;
 		const sentMessages: Array<{ customType?: string; content?: string }> = [];

@@ -80,9 +80,8 @@ export async function defaultRun(
 		}
 	}
 
-	let timer: Timer | undefined;
 	const { promise: timeoutPromise, reject } = Promise.withResolvers<never>();
-	timer = setTimeout(() => {
+	const timer = setTimeout(() => {
 		try {
 			proc.kill(9);
 		} catch {

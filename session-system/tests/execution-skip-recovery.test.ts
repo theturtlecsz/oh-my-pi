@@ -136,7 +136,7 @@ async function makeRecoveryHarness(options?: HarnessOptions) {
 		grant_version: options?.grantVersion ?? 4,
 	});
 
-	let execution: ExecutionSnapshot = {
+	const execution: ExecutionSnapshot = {
 		grant,
 		items,
 		activeItem: options?.activeItem !== undefined ? options.activeItem : null,
@@ -186,7 +186,7 @@ async function makeRecoveryHarness(options?: HarnessOptions) {
 
 	let claimsThrow = options?.claimsThrow;
 
-	let hostSessionId = "session-1";
+	const hostSessionId = "session-1";
 	const sessionId = "session-1";
 	let cwd = directory;
 

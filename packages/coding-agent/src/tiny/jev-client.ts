@@ -270,10 +270,7 @@ export async function decide(state: string, questions: JevQuestions, deps: JevDe
 	const apiKey = await resolveApiKey(deps);
 	if (!apiKey) return undefined;
 
-	const baseUrl = (readSetting(deps, cfgJevBaseUrl) ?? JEV_DEFAULT_BASE_URL).replace(
-		/\/+$/,
-		"",
-	);
+	const baseUrl = (readSetting(deps, cfgJevBaseUrl) ?? JEV_DEFAULT_BASE_URL).replace(/\/+$/, "");
 	const url = `${baseUrl}/v1/systemone`;
 	const { state: sentState, truncated } = truncateState(state);
 	const stateChars = state.length;

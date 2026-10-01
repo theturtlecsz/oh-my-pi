@@ -58,7 +58,7 @@ async function makeSkipHarness(options?: {
 	const items = options?.items ? structuredClone(options.items) : [defaultItem1];
 	const activeItem = items.find(i => i.phase === "executing" || i.phase === "criteria_pending" || i.phase === "planning") ?? items[0] ?? null;
 
-	let execution: ExecutionSnapshot = {
+	const execution: ExecutionSnapshot = {
 		grant: {
 			grant_id: "grant-1",
 			workspace_id: "workspace-1",
@@ -121,7 +121,7 @@ async function makeSkipHarness(options?: {
 	const sentMessages: unknown[] = [];
 	const notifications: Array<{ message: string; type?: string }> = [];
 
-	let sessionId = "session-1";
+	const sessionId = "session-1";
 	let hostSessionId = "session-1";
 	let cwd = directory;
 

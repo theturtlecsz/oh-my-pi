@@ -866,18 +866,15 @@ describe("native task recovery session integration", () => {
 		let nativeHash = "";
 		let nativeProof: unknown;
 		const observe = AgentSession.prototype.observeNativeTaskRead;
-		vi.spyOn(AgentSession.prototype, "observeNativeTaskRead").mockImplementation(function (
-			this: AgentSession,
-			id,
-			args,
-			result,
-		) {
-			if (id === "child-read") {
-				nativeHash = taskRecoveryHash(result);
-				nativeProof = structuredClone(nativePlainReadProvenance(result));
-			}
-			observe.call(this, id, args, result);
-		});
+		vi.spyOn(AgentSession.prototype, "observeNativeTaskRead").mockImplementation(
+			function (this: AgentSession, id, args, result) {
+				if (id === "child-read") {
+					nativeHash = taskRecoveryHash(result);
+					nativeProof = structuredClone(nativePlainReadProvenance(result));
+				}
+				observe.call(this, id, args, result);
+			},
+		);
 		let changed = false;
 		installChildExtensions([
 			pi => {
@@ -1072,14 +1069,12 @@ describe("native task recovery session integration", () => {
 		let sdkObserved = false;
 		let startupObserved = false;
 		const append = SessionManager.prototype.appendCustomEntry;
-		vi.spyOn(SessionManager.prototype, "appendCustomEntry").mockImplementation(function (
-			this: SessionManager,
-			type,
-			data,
-		) {
-			if (type === TASK_READ_CONTINUATION_STARTED) claimManager = this;
-			return append.call(this, type, data);
-		});
+		vi.spyOn(SessionManager.prototype, "appendCustomEntry").mockImplementation(
+			function (this: SessionManager, type, data) {
+				if (type === TASK_READ_CONTINUATION_STARTED) claimManager = this;
+				return append.call(this, type, data);
+			},
+		);
 		const sdkConstruction = vi.spyOn(sdk, "createAgentSession").mockImplementation(async options => {
 			if (options?.agentId) {
 				expect(options.sessionManager).toBe(claimManager);
@@ -1227,6 +1222,7 @@ describe("native task recovery session integration", () => {
 		let child: AgentSession | undefined;
 		let target: AssistantMessage | undefined;
 		let partial: AssistantMessage | undefined;
+		// oxlint-disable-next-line prefer-const -- captured by closures before assignment
 		let journal: SessionManager | undefined;
 		let stimulusSent = false;
 		let authorityHeld = false;
@@ -1899,6 +1895,7 @@ describe("native task recovery session integration", () => {
 	}, 15000);
 
 	it("in-memory parent result after actual storage failure cannot authorize marked child revival", async () => {
+		// oxlint-disable-next-line prefer-const -- captured by closures before assignment
 		let parentFile: string | undefined;
 		let failed = false;
 		let block = true;
@@ -1914,38 +1911,31 @@ describe("native task recovery session integration", () => {
 			}
 		};
 		const open = FileSessionStorage.prototype.openWriter;
-		vi.spyOn(FileSessionStorage.prototype, "openWriter").mockImplementation(function (
-			this: FileSessionStorage,
-			file,
-			options,
-		) {
-			const writer = open.call(this, file, options);
-			const append = writer.appendSync!.bind(writer);
-			vi.spyOn(writer, "appendSync").mockImplementation(text => {
-				rejectResult(file, text);
-				append(text);
-			});
-			return writer;
-		});
+		vi.spyOn(FileSessionStorage.prototype, "openWriter").mockImplementation(
+			function (this: FileSessionStorage, file, options) {
+				const writer = open.call(this, file, options);
+				const append = writer.appendSync!.bind(writer);
+				vi.spyOn(writer, "appendSync").mockImplementation(text => {
+					rejectResult(file, text);
+					append(text);
+				});
+				return writer;
+			},
+		);
 		const sync = FileSessionStorage.prototype.writeTextSync;
-		vi.spyOn(FileSessionStorage.prototype, "writeTextSync").mockImplementation(function (
-			this: FileSessionStorage,
-			file,
-			text,
-		) {
-			rejectResult(file, text);
-			sync.call(this, file, text);
-		});
+		vi.spyOn(FileSessionStorage.prototype, "writeTextSync").mockImplementation(
+			function (this: FileSessionStorage, file, text) {
+				rejectResult(file, text);
+				sync.call(this, file, text);
+			},
+		);
 		const atomic = FileSessionStorage.prototype.writeTextAtomic;
-		vi.spyOn(FileSessionStorage.prototype, "writeTextAtomic").mockImplementation(function (
-			this: FileSessionStorage,
-			file,
-			text,
-			options,
-		) {
-			rejectResult(file, text);
-			return atomic.call(this, file, text, options);
-		});
+		vi.spyOn(FileSessionStorage.prototype, "writeTextAtomic").mockImplementation(
+			function (this: FileSessionStorage, file, text, options) {
+				rejectResult(file, text);
+				return atomic.call(this, file, text, options);
+			},
+		);
 		const f = await fixture(false, false, false, false, {
 			extensions: [
 				pi => {
@@ -2119,17 +2109,15 @@ describe("native task recovery session integration", () => {
 			const marker = fault.startsWith("ready") ? TASK_READ_CONTINUATION_READY : TASK_READ_CONTINUATION_STARTED;
 			if (fault.endsWith("append")) {
 				const append = SessionManager.prototype.appendCustomEntry;
-				vi.spyOn(SessionManager.prototype, "appendCustomEntry").mockImplementation(function (
-					this: SessionManager,
-					type,
-					data,
-				) {
-					if (type === marker) {
-						failed = true;
-						throw new Error("Read append failed");
-					}
-					return append.call(this, type, data);
-				});
+				vi.spyOn(SessionManager.prototype, "appendCustomEntry").mockImplementation(
+					function (this: SessionManager, type, data) {
+						if (type === marker) {
+							failed = true;
+							throw new Error("Read append failed");
+						}
+						return append.call(this, type, data);
+					},
+				);
 			} else {
 				const flush = SessionManager.prototype.flush;
 				vi.spyOn(SessionManager.prototype, "flush").mockImplementation(async function (this: SessionManager) {
@@ -2434,19 +2422,16 @@ describe("native task recovery session integration", () => {
 		let validations = 0;
 		let hooks = 0;
 		const capture = AgentSession.prototype.captureTaskCall;
-		vi.spyOn(AgentSession.prototype, "captureTaskCall").mockImplementation(function (
-			this: AgentSession,
-			id,
-			params,
-			signal,
-		) {
-			const original = this.messages.findLast(message => message.role === "assistant");
-			if (original)
-				this.agent.replaceMessages(
-					this.messages.map(message => (message === original ? { ...original } : message)),
-				);
-			return capture.call(this, id, params, signal);
-		});
+		vi.spyOn(AgentSession.prototype, "captureTaskCall").mockImplementation(
+			function (this: AgentSession, id, params, signal) {
+				const original = this.messages.findLast(message => message.role === "assistant");
+				if (original)
+					this.agent.replaceMessages(
+						this.messages.map(message => (message === original ? { ...original } : message)),
+					);
+				return capture.call(this, id, params, signal);
+			},
+		);
 		const f = await fixture(false, true, false, false, {
 			extensions: [
 				pi => {
@@ -2538,17 +2523,15 @@ describe("native task recovery session integration", () => {
 			const append = SessionManager.prototype.appendCustomEntry;
 			let failed = false;
 			let hooks = 0;
-			vi.spyOn(SessionManager.prototype, "appendCustomEntry").mockImplementation(function (
-				this: SessionManager,
-				type,
-				data,
-			) {
-				if (type === failedMarker) {
-					failed = true;
-					throw new Error("Injected journal write failure");
-				}
-				return append.call(this, type, data);
-			});
+			vi.spyOn(SessionManager.prototype, "appendCustomEntry").mockImplementation(
+				function (this: SessionManager, type, data) {
+					if (type === failedMarker) {
+						failed = true;
+						throw new Error("Injected journal write failure");
+					}
+					return append.call(this, type, data);
+				},
+			);
 			const f = await fixture(false, true, false, false, {
 				extensions: [
 					pi => {
@@ -2665,17 +2648,15 @@ describe("native task recovery session integration", () => {
 		const append = SessionManager.prototype.appendMessage;
 		let failed = false;
 		let hooks = 0;
-		vi.spyOn(SessionManager.prototype, "appendMessage").mockImplementation(function (
-			this: SessionManager,
-			message,
-			metadata,
-		) {
-			if (message.role === "toolResult" && message.toolName === "task") {
-				failed = true;
-				throw new Error("Original result journal append failed");
-			}
-			return append.call(this, message, metadata);
-		});
+		vi.spyOn(SessionManager.prototype, "appendMessage").mockImplementation(
+			function (this: SessionManager, message, metadata) {
+				if (message.role === "toolResult" && message.toolName === "task") {
+					failed = true;
+					throw new Error("Original result journal append failed");
+				}
+				return append.call(this, message, metadata);
+			},
+		);
 		const f = await fixture(false, true, false, false, {
 			extensions: [
 				pi => {

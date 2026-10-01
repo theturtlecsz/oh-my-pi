@@ -35,7 +35,12 @@ import {
 	type JevQuestions,
 	type JevUsageEntry,
 } from "../tiny/jev-client";
-import { cfgJevAutoThinking, cfgJevAutoThinkingConfidence, cfgJevAutoThinkingMaxSignal, cfgJevEnabled } from "../tiny/jev-settings";
+import {
+	cfgJevAutoThinking,
+	cfgJevAutoThinkingConfidence,
+	cfgJevAutoThinkingMaxSignal,
+	cfgJevEnabled,
+} from "../tiny/jev-settings";
 import { preprocessTinyMessage } from "../tiny/message-preproc";
 import { type FetchImpl, prompt } from "@oh-my-pi/pi-utils";
 

@@ -84,7 +84,7 @@ async function makeClaimsRecoveryHarness() {
 
 	const items = [structuredClone(defaultItem1), structuredClone(defaultItem2)];
 
-	let execution: ExecutionSnapshot = {
+	const execution: ExecutionSnapshot = {
 		grant: {
 			grant_id: GRANT_ID,
 			workspace_id: WORKSPACE_ID,

@@ -4750,8 +4750,8 @@ export class AgentSession implements SettingsScope {
 			event.type === "tool_execution_end" && event.toolName === "task"
 				? event.toolCallId
 				: (event.type === "message_start" || event.type === "message_end") &&
-						event.message.role === "toolResult" &&
-						event.message.toolName === "task"
+					  event.message.role === "toolResult" &&
+					  event.message.toolName === "task"
 					? event.message.toolCallId
 					: undefined;
 		const attempt = callId ? this.#boundTaskCalls.get(callId)?.original : undefined;
