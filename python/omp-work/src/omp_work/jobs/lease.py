@@ -42,8 +42,7 @@ def renew_lease(
     The reservation is ``{job_id}:{fence}``. A repeated operation id replays
     the stored job and does not extend a second time. While the workspace's
     agent stop is engaged the renewal is refused with ``agent_stop_engaged``
-    and writes nothing, so the worker's renewal loop stops and the job
-    reconciles back to the backlog on lease expiry.
+    and writes nothing. The leased row stays as it is until release.
     """
     worker_id, fence = _require_holder(worker_id, fence)
     request = {
@@ -214,77 +213,369 @@ def reconcile_jobs(
     workspace_id: UUID,
     actor_id: UUID,
 ) -> dict[str, object]:
-    """Return expired admitted native jobs to the backlog.
+    """Reclaim expired leases, except while a stop freezes them.
 
-    Each admitted native job with ``lease_expires_at <= now`` gains one fence,
-    returns to ``backlog``, loses ``worker_id`` and ``lease_expires_at``, has
-    its reservation released as ``lease_expired``, and gains a
-    ``lease_expired`` event. The result is ``{status, job_ids}`` in
-    ``(created_at, job_id)`` order. A second call finds nothing to reclaim.
+    While the workspace's agent stop is engaged this writes nothing for any
+    job and returns no ids: a frozen lease cannot expire, be reclaimed, or be
+    reassigned. After release, the first call handles each job that was leased
+    when that stop was engaged. An active holder keeps the worker and fence,
+    gets ``lease_expires_at = now + lease_seconds``, and one ``lease_resumed``
+    event for that fence and release event. A holder that is not active is
+    recorded as ``lease_recovered``: backlog, fence + 1, reservation released
+    as ``lease_recovered``. A lease that had already expired before the stop
+    is reclaimed as usual (``lease_expired``). With no stop to apply, each
+    admitted native job with ``lease_expires_at <= now`` takes that same
+    reclaim. The result is ``{status, job_ids}`` in ``(created_at, job_id)``
+    order. A second call does not resume the same fence and release again.
     """
     request = {"workspace_id": str(workspace_id)}
 
     with store.transaction(workspace_id, actor_id) as cur:
 
         def apply() -> dict[str, object]:
-            cur.execute(
-                """
-                SELECT job_id, fence, worker_id
-                FROM omp_jobs.jobs
-                WHERE workspace_id=%s AND source='native' AND status='admitted'
-                  AND lease_expires_at <= clock_timestamp()
-                ORDER BY created_at, job_id
-                FOR UPDATE
-                """,
-                (workspace_id,),
-            )
-            expired = list(cur.fetchall())
-            job_ids: list[str] = []
-            for row in expired:
-                job_id = str(row["job_id"])
-                old_fence = int(row["fence"])
-                holder = row["worker_id"]
-                cur.execute(
-                    """
-                    UPDATE omp_jobs.jobs
-                    SET fence=fence + 1,
-                        status='backlog',
-                        worker_id=NULL,
-                        lease_expires_at=NULL,
-                        updated_at=clock_timestamp()
-                    WHERE workspace_id=%s AND job_id=%s AND source='native' AND status='admitted'
-                      AND lease_expires_at <= clock_timestamp()
-                    RETURNING fence
-                    """,
-                    (workspace_id, job_id),
-                )
-                advanced = cur.fetchone()
-                if advanced is None:
-                    continue
-                if isinstance(holder, str):
-                    _release_reservation(
-                        cur, workspace_id, job_id, holder, old_fence, "lease_expired"
-                    )
-                store.append_event(
-                    cur,
-                    workspace_id=workspace_id,
-                    job_id=job_id,
-                    kind="lease_expired",
-                    actor=holder if isinstance(holder, str) else None,
-                    operation_id=operation_id,
-                    payload={
-                        "worker_id": holder,
-                        "fence": old_fence,
-                        "next_fence": int(advanced["fence"]),
-                    },
-                )
-                job_ids.append(job_id)
-            return {"status": "applied", "job_ids": job_ids}
+            if read_stop_state(cur, workspace_id)["stopped"]:
+                return {"status": "applied", "job_ids": []}
+            release = _stop_release(cur, workspace_id)
+            if release is None:
+                return {
+                    "status": "applied",
+                    "job_ids": _reclaim_expired(store, cur, workspace_id, operation_id),
+                }
+            return {
+                "status": "applied",
+                "job_ids": _reconcile_after_release(
+                    store, cur, workspace_id, operation_id, release
+                ),
+            }
 
         outcome = store.run_operation(
             cur, operation_id, workspace_id, "job_reconcile", request, apply
         )
     return _public(operation_id, outcome, "job_ids")
+
+
+def _stop_release(cur: Any, workspace_id: UUID) -> dict[str, Any] | None:
+    """The release that closed the latest stop, or None when there is nothing to apply.
+
+    A still-engaged stop is handled by the caller. This returns the release
+    event id and the engage time it closed, so a later reconcile can tell a
+    lease that was held across that stop from one that expired earlier.
+    """
+    cur.execute(
+        """
+        SELECT event_id, event_type, sequence
+        FROM omp_audit.domain_events
+        WHERE workspace_id=%s AND aggregate_id=%s
+          AND event_type IN ('engage_stop', 'release_stop')
+          AND outcome='applied'
+        ORDER BY sequence DESC
+        LIMIT 1
+        """,
+        (workspace_id, workspace_id),
+    )
+    latest = cur.fetchone()
+    if latest is None or latest["event_type"] != "release_stop":
+        return None
+    cur.execute(
+        """
+        SELECT occurred_at
+        FROM omp_audit.domain_events
+        WHERE workspace_id=%s AND aggregate_id=%s
+          AND event_type='engage_stop' AND outcome='applied'
+          AND sequence < %s
+        ORDER BY sequence DESC
+        LIMIT 1
+        """,
+        (workspace_id, workspace_id, latest["sequence"]),
+    )
+    engage = cur.fetchone()
+    if engage is None:
+        return None
+    return {
+        "release_event_id": str(latest["event_id"]),
+        "engage_at": engage["occurred_at"],
+    }
+
+
+def _reclaim_expired(
+    store: NativeJobStore,
+    cur: Any,
+    workspace_id: UUID,
+    operation_id: str,
+) -> list[str]:
+    cur.execute(
+        """
+        SELECT job_id, fence, worker_id
+        FROM omp_jobs.jobs
+        WHERE workspace_id=%s AND source='native' AND status='admitted'
+          AND lease_expires_at <= clock_timestamp()
+        ORDER BY created_at, job_id
+        FOR UPDATE
+        """,
+        (workspace_id,),
+    )
+    return _reclaim_rows(
+        store,
+        cur,
+        workspace_id,
+        operation_id,
+        list(cur.fetchall()),
+        kind="lease_expired",
+        reason="lease_expired",
+        require_expired=True,
+        extra=None,
+    )
+
+
+def _reconcile_after_release(
+    store: NativeJobStore,
+    cur: Any,
+    workspace_id: UUID,
+    operation_id: str,
+    release: dict[str, Any],
+) -> list[str]:
+    cur.execute(
+        """
+        SELECT job_id, fence, worker_id, lease_expires_at, lease_seconds
+        FROM omp_jobs.jobs
+        WHERE workspace_id=%s AND source='native' AND status='admitted'
+        ORDER BY created_at, job_id
+        FOR UPDATE
+        """,
+        (workspace_id,),
+    )
+    rows = list(cur.fetchall())
+    job_ids: list[str] = []
+    release_event_id = str(release["release_event_id"])
+    engage_at = release["engage_at"]
+    for row in rows:
+        job_id = str(row["job_id"])
+        fence = int(row["fence"])
+        holder = row["worker_id"]
+        if _held_across_stop(cur, row, engage_at, release_event_id):
+            if isinstance(holder, str) and _worker_active(cur, workspace_id, holder):
+                if _resume_lease(
+                    store,
+                    cur,
+                    workspace_id,
+                    operation_id,
+                    job_id,
+                    holder,
+                    fence,
+                    release_event_id,
+                ):
+                    job_ids.append(job_id)
+            else:
+                reclaimed = _reclaim_rows(
+                    store,
+                    cur,
+                    workspace_id,
+                    operation_id,
+                    [row],
+                    kind="lease_recovered",
+                    reason="lease_recovered",
+                    require_expired=False,
+                    extra={"release_event_id": release_event_id},
+                )
+                job_ids.extend(reclaimed)
+            continue
+        if row["lease_expires_at"] is not None and _lease_is_due(cur, job_id):
+            job_ids.extend(
+                _reclaim_rows(
+                    store,
+                    cur,
+                    workspace_id,
+                    operation_id,
+                    [row],
+                    kind="lease_expired",
+                    reason="lease_expired",
+                    require_expired=True,
+                    extra=None,
+                )
+            )
+    return job_ids
+
+
+def _held_across_stop(
+    cur: Any, row: dict[str, Any], engage_at: Any, release_event_id: str
+) -> bool:
+    """True when this admitted lease was still valid at engage and not yet resumed."""
+    holder = row["worker_id"]
+    expires = row["lease_expires_at"]
+    if not isinstance(holder, str) or expires is None or engage_at is None:
+        return False
+    fence = int(row["fence"])
+    if expires <= engage_at:
+        return False
+    if _already_resumed(cur, str(row["job_id"]), fence, release_event_id):
+        return False
+    claimed_at = _claimed_at(cur, str(row["job_id"]), fence)
+    if claimed_at is None or claimed_at > engage_at:
+        return False
+    return True
+
+
+def _already_resumed(cur: Any, job_id: str, fence: int, release_event_id: str) -> bool:
+    cur.execute(
+        """
+        SELECT 1 FROM omp_jobs.job_events
+        WHERE job_id=%s AND kind='lease_resumed'
+          AND payload->>'fence'=%s
+          AND payload->>'release_event_id'=%s
+        LIMIT 1
+        """,
+        (job_id, str(fence), release_event_id),
+    )
+    return cur.fetchone() is not None
+
+
+def _claimed_at(cur: Any, job_id: str, fence: int) -> Any:
+    cur.execute(
+        """
+        SELECT at FROM omp_jobs.job_events
+        WHERE job_id=%s AND kind='claimed' AND payload->>'fence'=%s
+        ORDER BY seq DESC
+        LIMIT 1
+        """,
+        (job_id, str(fence)),
+    )
+    row = cur.fetchone()
+    return None if row is None else row["at"]
+
+
+def _worker_active(cur: Any, workspace_id: UUID, worker_id: str) -> bool:
+    cur.execute(
+        "SELECT state FROM omp_jobs.workers WHERE workspace_id=%s AND worker_id=%s",
+        (workspace_id, worker_id),
+    )
+    row = cur.fetchone()
+    return row is not None and row["state"] == "active"
+
+
+def _lease_is_due(cur: Any, job_id: str) -> bool:
+    cur.execute(
+        """
+        SELECT 1 FROM omp_jobs.jobs
+        WHERE job_id=%s AND lease_expires_at <= clock_timestamp()
+        """,
+        (job_id,),
+    )
+    return cur.fetchone() is not None
+
+
+def _resume_lease(
+    store: NativeJobStore,
+    cur: Any,
+    workspace_id: UUID,
+    operation_id: str,
+    job_id: str,
+    holder: str,
+    fence: int,
+    release_event_id: str,
+) -> bool:
+    cur.execute(
+        """
+        UPDATE omp_jobs.jobs
+        SET lease_expires_at = clock_timestamp() + (lease_seconds * interval '1 second'),
+            updated_at = clock_timestamp()
+        WHERE workspace_id=%s AND job_id=%s AND source='native' AND status='admitted'
+          AND worker_id=%s AND fence=%s
+        RETURNING lease_expires_at
+        """,
+        (workspace_id, job_id, holder, fence),
+    )
+    updated = cur.fetchone()
+    if updated is None:
+        return False
+    cur.execute(
+        """
+        UPDATE omp_jobs.reservations
+        SET expires_at=%s
+        WHERE reservation_id=%s AND workspace_id=%s AND job_id=%s
+          AND worker_id=%s AND fence=%s AND released_at IS NULL
+        """,
+        (
+            updated["lease_expires_at"],
+            f"{job_id}:{fence}",
+            workspace_id,
+            job_id,
+            holder,
+            fence,
+        ),
+    )
+    store.append_event(
+        cur,
+        workspace_id=workspace_id,
+        job_id=job_id,
+        kind="lease_resumed",
+        actor=holder,
+        operation_id=operation_id,
+        payload={
+            "worker_id": holder,
+            "fence": fence,
+            "release_event_id": release_event_id,
+        },
+    )
+    return True
+
+
+def _reclaim_rows(
+    store: NativeJobStore,
+    cur: Any,
+    workspace_id: UUID,
+    operation_id: str,
+    rows: list[dict[str, Any]],
+    *,
+    kind: str,
+    reason: str,
+    require_expired: bool,
+    extra: dict[str, object] | None,
+) -> list[str]:
+    job_ids: list[str] = []
+    expiry_sql = " AND lease_expires_at <= clock_timestamp()" if require_expired else ""
+    for row in rows:
+        job_id = str(row["job_id"])
+        old_fence = int(row["fence"])
+        holder = row["worker_id"]
+        cur.execute(
+            f"""
+            UPDATE omp_jobs.jobs
+            SET fence=fence + 1,
+                status='backlog',
+                worker_id=NULL,
+                lease_expires_at=NULL,
+                updated_at=clock_timestamp()
+            WHERE workspace_id=%s AND job_id=%s AND source='native' AND status='admitted'
+              {expiry_sql}
+            RETURNING fence
+            """,  # nosec B608 - expiry_sql is one of two fixed literals
+            (workspace_id, job_id),
+        )
+        advanced = cur.fetchone()
+        if advanced is None:
+            continue
+        if isinstance(holder, str):
+            _release_reservation(
+                cur, workspace_id, job_id, holder, old_fence, reason
+            )
+        payload: dict[str, object] = {
+            "worker_id": holder,
+            "fence": old_fence,
+            "next_fence": int(advanced["fence"]),
+        }
+        if extra:
+            payload.update(extra)
+        store.append_event(
+            cur,
+            workspace_id=workspace_id,
+            job_id=job_id,
+            kind=kind,
+            actor=holder if isinstance(holder, str) else None,
+            operation_id=operation_id,
+            payload=payload,
+        )
+        job_ids.append(job_id)
+    return job_ids
 
 
 def _public(

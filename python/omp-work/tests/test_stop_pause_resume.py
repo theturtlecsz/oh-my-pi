@@ -6,13 +6,14 @@ PostgreSQL integration (``OMP_WORK_POSTGRES_INTEGRATION=1``). Uses the
 covered by ``test_mission_events_derive.py``.
 
 The contract: a client principal engages the stop while a job holds a one
-second lease. Renewal is refused with ``agent_stop_engaged``; after the lease
-expires ``reconcile_jobs`` returns the job to the backlog (one fence, reason
-``lease_expired``, never failed or cancelled); ``claim_job`` leases nothing
-while stopped; the mission's status and revision are unchanged and the stop
-derives no mission event. The owner's ``release_stop`` lets ``JobWorker.tick``
-claim it once more and resume from saved state through ``observe`` — not
-``run`` — then settle.
+second lease. Renewal is refused with ``agent_stop_engaged`` and writes
+nothing. After the lease expires, ``reconcile_jobs`` reclaims nothing while
+the stop is engaged: the row keeps its worker, fence, and status, and is
+never failed or cancelled. ``claim_job`` leases nothing while stopped. The
+mission's status and revision are unchanged and the stop derives no mission
+event. The owner's ``release_stop`` lets ``JobWorker.tick`` resume that same
+lease through ``observe`` (not ``run``) and settle it, recording
+``lease_resumed`` and ``resume_claimed``.
 """
 
 from __future__ import annotations
@@ -341,20 +342,34 @@ def test_stop_pauses_job_and_release_resumes_from_saved_state(native_jobs) -> No
         )
     assert excinfo.value.code == "agent_stop_engaged"
 
-    # Expire the lease; reconcile returns the job to the backlog (OMP-324 path).
+    # Expire during the stop, after the engage. now-1s can fall before engage
+    # and look like a pre-stop expiry; a millisecond before now stays after it.
     with _connect_admin(native_jobs) as conn:
         conn.execute(
-            "UPDATE omp_jobs.jobs SET lease_expires_at = clock_timestamp() - interval '1 second'"
-            " WHERE job_id=%s",
-            (job_id,),
+            """
+            UPDATE omp_jobs.jobs AS j
+            SET lease_expires_at = GREATEST(
+                e.occurred_at + interval '1 millisecond',
+                clock_timestamp() - interval '1 millisecond'
+            )
+            FROM (
+                SELECT occurred_at FROM omp_audit.domain_events
+                WHERE workspace_id=%s AND aggregate_id=%s
+                  AND event_type='engage_stop' AND outcome='applied'
+                ORDER BY sequence DESC LIMIT 1
+            ) AS e
+            WHERE j.job_id=%s
+            """,
+            (workspace_id, workspace_id, job_id),
         )
+    frozen = _job_row(native_jobs, job_id)
     reconciled = reconcile_jobs(
         store,
         operation_id=str(uuid4()),
         workspace_id=workspace_id,
         actor_id=native_jobs.actor_id,
     )
-    assert reconciled["job_ids"] == [job_id]
+    assert reconciled["job_ids"] == []
 
     # A stopped tick does not settle — it reconciles and then leases nothing.
     assert worker.tick() is None
@@ -362,14 +377,14 @@ def test_stop_pauses_job_and_release_resumes_from_saved_state(native_jobs) -> No
     assert handler.observe_count == 0
 
     row = _job_row(native_jobs, job_id)
-    assert row["status"] == "backlog"
-    assert int(row["fence"]) == fence + 1
-    assert row["worker_id"] is None
-    assert row["lease_expires_at"] is None
+    assert row["status"] == frozen["status"] == "admitted"
+    assert int(row["fence"]) == int(frozen["fence"]) == fence
+    assert row["worker_id"] == frozen["worker_id"] == worker_id
+    assert row["lease_expires_at"] == frozen["lease_expires_at"]
     kinds = _job_event_kinds(native_jobs, job_id)
-    assert kinds == ["enqueued", "claimed", "lease_expired"]
-    assert not any(kind in {"failed", "cancelled", "settled"} for kind in kinds)
-    assert _reservation_reason(native_jobs, job_id) == "lease_expired"
+    assert kinds == ["enqueued", "claimed"]
+    assert not any(kind in {"failed", "cancelled", "settled", "lease_expired"} for kind in kinds)
+    assert _reservation_reason(native_jobs, job_id) is None
 
     # Claiming while stopped gives no job.
     claimed_while_stopped = claim_job(
@@ -400,3 +415,10 @@ def test_stop_pauses_job_and_release_resumes_from_saved_state(native_jobs) -> No
     settled = _job_row(native_jobs, job_id)
     assert settled["status"] == "sealed"
     assert settled["settlement"]["outcome"] == "succeeded"
+    assert _job_event_kinds(native_jobs, job_id) == [
+        "enqueued",
+        "claimed",
+        "lease_resumed",
+        "resume_claimed",
+        "settled",
+    ]
