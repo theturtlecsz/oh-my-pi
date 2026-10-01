@@ -147,7 +147,11 @@ if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
 fi
 ```
 
-Commit any further test repairs as ordinary commits on `scratch/${C:0:12}`. Then run the same commands as `session-system/update.sh` gates 3–12, after the frozen install and native refresh that script runs before its gates. Each command must exit 0. Gate 12's output must contain `PASS`, and the tracked tree must still be clean:
+Commit any further test repairs as ordinary commits on `scratch/${C:0:12}`.
+
+The fork's runner (`scripts/ci-test-ts.ts`) pins `PI_CODING_AGENT_DIR` per test chunk, and the host may carry provider credentials (an `OPENAI_API_KEY` in `~/.env`, profiles under `~/.aws`). Upstream tests that assume an unpinned agent directory and no provider credentials fail here. For an upstream test that reads the agent folder, HOME-relative config, or provider credentials, use the shared helper `packages/coding-agent/test/helpers/host-isolation.ts` instead of a hand repair: `isolateHost()` (restore with `restore()` or `using`) for in-process tests, `hostIsolatedEnv(process.env, home)` for a spawned child's env. Name the repair commit after the test. The tests already moved to it, all under `packages/coding-agent/test/`: `system-prompt-template.test.ts`, `tools/browser-launch.test.ts`, `default-model-ambient-bedrock.test.ts`, and `model-presets.test.ts`.
+
+Then run the same commands as `session-system/update.sh` gates 3–12, after the frozen install and native refresh that script runs before its gates. Each command must exit 0. Gate 12's output must contain `PASS`, and the tracked tree must still be clean:
 
 ```bash
 set -euo pipefail
