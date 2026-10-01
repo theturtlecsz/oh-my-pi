@@ -29,7 +29,7 @@
       "approval_tier": "dynamic",
       "dynamic": true,
       "tiers": [
-        "read",
+        "exec",
         "write"
       ],
       "kind": "builtin"
@@ -57,17 +57,6 @@
       "kind": "builtin"
     },
     {
-      "name": "browser",
-      "source_file": "packages/coding-agent/src/tools/browser.ts",
-      "approval_tier": "exec",
-      "dynamic": false,
-      "tiers": [
-        "exec"
-      ],
-      "kind": "builtin",
-      "description": "Control a headless browser to navigate and interact with web pages"
-    },
-    {
       "name": "checkpoint",
       "source_file": "packages/coding-agent/src/tools/checkpoint.ts",
       "approval_tier": "read",
@@ -78,16 +67,15 @@
       "kind": "builtin"
     },
     {
-      "name": "computer",
-      "source_file": "packages/coding-agent/src/tools/computer.ts",
+      "name": "context_notes",
+      "source_file": "packages/coding-agent/src/tools/context-notes.ts",
       "approval_tier": "dynamic",
       "dynamic": true,
       "tiers": [
-        "exec",
-        "read"
+        "read",
+        "write"
       ],
-      "kind": "builtin",
-      "description": "Control the host desktop with persistent JavaScript and OS accessibility APIs"
+      "kind": "builtin"
     },
     {
       "name": "debug",
@@ -106,7 +94,6 @@
       "approval_tier": "dynamic",
       "dynamic": true,
       "tiers": [
-        "read",
         "write"
       ],
       "kind": "builtin"
@@ -118,6 +105,16 @@
       "dynamic": false,
       "tiers": [
         "exec"
+      ],
+      "kind": "builtin"
+    },
+    {
+      "name": "find",
+      "source_file": "packages/coding-agent/src/tools/jfind/index.ts",
+      "approval_tier": "read",
+      "dynamic": false,
+      "tiers": [
+        "read"
       ],
       "kind": "builtin"
     },
@@ -168,30 +165,20 @@
       "approval_tier": "dynamic",
       "dynamic": true,
       "tiers": [
-        "exec",
-        "read"
+        "exec"
       ],
       "kind": "builtin",
-      "description": "Grep file contents using ripgrep (fast regex search)"
+      "description": "Search file contents by regex"
     },
     {
-      "name": "hub",
-      "source_file": "packages/coding-agent/src/tools/hub/index.ts",
+      "name": "ida",
+      "source_file": "packages/coding-agent/src/tools/ida.ts",
       "approval_tier": "dynamic",
       "dynamic": true,
       "tiers": [
         "exec",
-        "read"
-      ],
-      "kind": "builtin"
-    },
-    {
-      "name": "inspect_image",
-      "source_file": "packages/coding-agent/src/tools/inspect-image.ts",
-      "approval_tier": "read",
-      "dynamic": false,
-      "tiers": [
-        "read"
+        "read",
+        "write"
       ],
       "kind": "builtin"
     },
@@ -204,7 +191,8 @@
         "read",
         "write"
       ],
-      "kind": "builtin"
+      "kind": "builtin",
+      "description": "Capture a reusable lesson to memory (and optionally a managed skill)"
     },
     {
       "name": "lsp",
@@ -235,6 +223,17 @@
       "tiers": [
         "read"
       ],
+      "kind": "builtin",
+      "description": "Update, forget, or invalidate Mnemopi memories"
+    },
+    {
+      "name": "new_context",
+      "source_file": "packages/coding-agent/src/tools/context-notes.ts",
+      "approval_tier": "write",
+      "dynamic": false,
+      "tiers": [
+        "write"
+      ],
       "kind": "builtin"
     },
     {
@@ -256,7 +255,8 @@
       "tiers": [
         "read"
       ],
-      "kind": "builtin"
+      "kind": "builtin",
+      "description": "Search memory for relevant prior context"
     },
     {
       "name": "reflect",
@@ -266,17 +266,20 @@
       "tiers": [
         "read"
       ],
-      "kind": "builtin"
+      "kind": "builtin",
+      "description": "Synthesize an answer from long-term memory"
     },
     {
       "name": "retain",
       "source_file": "packages/coding-agent/src/tools/memory-retain.ts",
-      "approval_tier": "read",
-      "dynamic": false,
+      "approval_tier": "dynamic",
+      "dynamic": true,
       "tiers": [
-        "read"
+        "read",
+        "write"
       ],
-      "kind": "builtin"
+      "kind": "builtin",
+      "description": "Store important facts in long-term memory"
     },
     {
       "name": "rewind",
@@ -391,6 +394,16 @@
       "kind": "vibe"
     },
     {
+      "name": "wait",
+      "source_file": "packages/coding-agent/src/tools/wait.ts",
+      "approval_tier": "read",
+      "dynamic": false,
+      "tiers": [
+        "read"
+      ],
+      "kind": "builtin"
+    },
+    {
       "name": "web_search",
       "source_file": "packages/coding-agent/src/web/search/index.ts",
       "approval_tier": "read",
@@ -416,8 +429,6 @@
       "approval_tier": "dynamic",
       "dynamic": true,
       "tiers": [
-        "exec",
-        "read",
         "write"
       ],
       "kind": "builtin"
@@ -436,7 +447,7 @@
   "extension_surfaces": {
     "extensions": {
       "interface_count": 81,
-      "type_count": 41,
+      "type_count": 35,
       "interfaces": [
         {
           "name": "AfterProviderResponseEvent",
@@ -455,34 +466,34 @@
           ]
         },
         {
-          "name": "AssistantThinkingRenderContext",
+          "name": "AssistantMessageRewriteEvent",
           "kind": "interface",
           "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
           "members": [
             {
-              "name": "contentIndex",
+              "name": "type",
               "kind": "property",
               "optional": false,
-              "type": "number"
+              "type": "\"assistant_message\""
             },
             {
-              "name": "thinkingIndex",
+              "name": "message",
               "kind": "property",
               "optional": false,
-              "type": "number"
-            },
+              "type": "AssistantMessage"
+            }
+          ]
+        },
+        {
+          "name": "AssistantMessageRewriteResult",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
             {
-              "name": "text",
+              "name": "content",
               "kind": "property",
-              "optional": false,
-              "type": "string"
-            },
-            {
-              "name": "requestRender",
-              "kind": "method",
-              "optional": false,
-              "parameters": "",
-              "return_type": "void"
+              "optional": true,
+              "type": "AssistantMessage[\"content\"]"
             }
           ]
         },
@@ -600,6 +611,80 @@
           ]
         },
         {
+          "name": "BeforeSubagentSpawnEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "type",
+              "kind": "property",
+              "optional": false,
+              "type": "\"before_subagent_spawn\""
+            },
+            {
+              "name": "agent",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "invocationKind",
+              "kind": "property",
+              "optional": false,
+              "type": "\"task\" | \"eval\""
+            },
+            {
+              "name": "modelRole",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "name": "patterns",
+              "kind": "property",
+              "optional": false,
+              "type": "string[]"
+            },
+            {
+              "name": "spawnKey",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "BeforeSubagentSpawnEventResult",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "model",
+              "kind": "property",
+              "optional": true,
+              "type": "string | string[]"
+            },
+            {
+              "name": "block",
+              "kind": "property",
+              "optional": true,
+              "type": "boolean"
+            },
+            {
+              "name": "reason",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "name": "note",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            }
+          ]
+        },
+        {
           "name": "CompactOptions",
           "kind": "interface",
           "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
@@ -627,31 +712,12 @@
               "kind": "property",
               "optional": true,
               "type": "string"
-            }
-          ]
-        },
-        {
-          "name": "ComposerShapeDefinition",
-          "kind": "interface",
-          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
-          "members": [
-            {
-              "name": "label",
-              "kind": "property",
-              "optional": false,
-              "type": "string"
             },
             {
-              "name": "description",
+              "name": "suppressContinuation",
               "kind": "property",
               "optional": true,
-              "type": "string"
-            },
-            {
-              "name": "style",
-              "kind": "property",
-              "optional": false,
-              "type": "ComposerStyle"
+              "type": "boolean"
             }
           ]
         },
@@ -665,31 +731,6 @@
               "kind": "property",
               "optional": true,
               "type": "AgentMessage[]"
-            }
-          ]
-        },
-        {
-          "name": "ContextUsage",
-          "kind": "interface",
-          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
-          "members": [
-            {
-              "name": "tokens",
-              "kind": "property",
-              "optional": false,
-              "type": "number"
-            },
-            {
-              "name": "contextWindow",
-              "kind": "property",
-              "optional": false,
-              "type": "number"
-            },
-            {
-              "name": "percent",
-              "kind": "property",
-              "optional": false,
-              "type": "number"
             }
           ]
         },
@@ -714,6 +755,36 @@
               "name": "disabledCause",
               "kind": "property",
               "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "credentialId",
+              "kind": "property",
+              "optional": true,
+              "type": "number"
+            },
+            {
+              "name": "email",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "name": "accountId",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "name": "orgId",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "name": "orgName",
+              "kind": "property",
+              "optional": true,
               "type": "string"
             }
           ]
@@ -1032,6 +1103,43 @@
           ]
         },
         {
+          "name": "ExtensionAgentIdentity",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "kind",
+              "kind": "property",
+              "optional": false,
+              "type": "\"main\" | \"sub\""
+            },
+            {
+              "name": "id",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "name",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "depth",
+              "kind": "property",
+              "optional": false,
+              "type": "number"
+            },
+            {
+              "name": "parentId",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            }
+          ]
+        },
+        {
           "name": "ExtensionAPI",
           "kind": "interface",
           "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
@@ -1126,6 +1234,13 @@
               "name": "on",
               "kind": "method",
               "optional": false,
+              "parameters": "event: \"cache_warming_decision\", handler: ExtensionHandler<CacheWarmingDecisionEvent, CacheWarmingDecisionEventResult>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
               "parameters": "event: \"session_compact\", handler: ExtensionHandler<SessionCompactEvent>",
               "return_type": "void"
             },
@@ -1189,6 +1304,13 @@
               "name": "on",
               "kind": "method",
               "optional": false,
+              "parameters": "event: \"before_subagent_spawn\", handler: ExtensionHandler<BeforeSubagentSpawnEvent, BeforeSubagentSpawnEventResult>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
               "parameters": "event: \"agent_start\", handler: ExtensionHandler<AgentStartEvent>",
               "return_type": "void"
             },
@@ -1239,6 +1361,13 @@
               "kind": "method",
               "optional": false,
               "parameters": "event: \"message_end\", handler: ExtensionHandler<MessageEndEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"assistant_message\", handler: ExtensionHandler<AssistantMessageRewriteEvent, AssistantMessageRewriteResult>",
               "return_type": "void"
             },
             {
@@ -1476,7 +1605,7 @@
               "name": "sendUserMessage",
               "kind": "method",
               "optional": false,
-              "parameters": "content: string | (TextContent | ImageContent)[], options?: { deliverAs?: \"steer\" | \"followUp\" }",
+              "parameters": "content: string | (TextContent | ImageContent)[], options?: SendUserMessageOptions",
               "return_type": "void"
             },
             {
@@ -1610,161 +1739,6 @@
               "kind": "property",
               "optional": false,
               "type": "EventBus"
-            }
-          ]
-        },
-        {
-          "name": "ExtensionAskDialogChatResult",
-          "kind": "interface",
-          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
-          "members": [
-            {
-              "name": "kind",
-              "kind": "property",
-              "optional": false,
-              "type": "\"chat\""
-            }
-          ]
-        },
-        {
-          "name": "ExtensionAskDialogOption",
-          "kind": "interface",
-          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
-          "members": [
-            {
-              "name": "label",
-              "kind": "property",
-              "optional": false,
-              "type": "string"
-            },
-            {
-              "name": "description",
-              "kind": "property",
-              "optional": true,
-              "type": "string"
-            },
-            {
-              "name": "preview",
-              "kind": "property",
-              "optional": true,
-              "type": "string"
-            }
-          ]
-        },
-        {
-          "name": "ExtensionAskDialogQuestion",
-          "kind": "interface",
-          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
-          "members": [
-            {
-              "name": "id",
-              "kind": "property",
-              "optional": false,
-              "type": "string"
-            },
-            {
-              "name": "question",
-              "kind": "property",
-              "optional": false,
-              "type": "string"
-            },
-            {
-              "name": "header",
-              "kind": "property",
-              "optional": true,
-              "type": "string"
-            },
-            {
-              "name": "options",
-              "kind": "property",
-              "optional": false,
-              "type": "ExtensionAskDialogOption[]"
-            },
-            {
-              "name": "multi",
-              "kind": "property",
-              "optional": true,
-              "type": "boolean"
-            },
-            {
-              "name": "recommended",
-              "kind": "property",
-              "optional": true,
-              "type": "number"
-            }
-          ]
-        },
-        {
-          "name": "ExtensionAskDialogResultItem",
-          "kind": "interface",
-          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
-          "members": [
-            {
-              "name": "id",
-              "kind": "property",
-              "optional": false,
-              "type": "string"
-            },
-            {
-              "name": "question",
-              "kind": "property",
-              "optional": false,
-              "type": "string"
-            },
-            {
-              "name": "options",
-              "kind": "property",
-              "optional": false,
-              "type": "string[]"
-            },
-            {
-              "name": "multi",
-              "kind": "property",
-              "optional": false,
-              "type": "boolean"
-            },
-            {
-              "name": "selectedOptions",
-              "kind": "property",
-              "optional": false,
-              "type": "string[]"
-            },
-            {
-              "name": "customInput",
-              "kind": "property",
-              "optional": true,
-              "type": "string"
-            },
-            {
-              "name": "note",
-              "kind": "property",
-              "optional": true,
-              "type": "string"
-            },
-            {
-              "name": "timedOut",
-              "kind": "property",
-              "optional": true,
-              "type": "boolean"
-            }
-          ]
-        },
-        {
-          "name": "ExtensionAskDialogSubmitResult",
-          "kind": "interface",
-          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
-          "members": [
-            {
-              "name": "kind",
-              "kind": "property",
-              "optional": false,
-              "type": "\"submit\""
-            },
-            {
-              "name": "results",
-              "kind": "property",
-              "optional": false,
-              "type": "ExtensionAskDialogResultItem[]"
             }
           ]
         },
@@ -2004,11 +1978,31 @@
               "return_type": "void"
             },
             {
+              "name": "agent",
+              "kind": "property",
+              "optional": false,
+              "type": "ExtensionAgentIdentity"
+            },
+            {
+              "name": "isProjectTrusted",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "boolean"
+            },
+            {
               "name": "getSystemPrompt",
               "kind": "method",
               "optional": false,
               "parameters": "",
               "return_type": "string[]"
+            },
+            {
+              "name": "runEphemeralTurn",
+              "kind": "method",
+              "optional": true,
+              "parameters": "options: EphemeralTurnOptions",
+              "return_type": "Promise<EphemeralTurnResult>"
             },
             {
               "name": "memory",
@@ -2035,6 +2029,13 @@
               "kind": "method",
               "optional": false,
               "parameters": "timer: Timer",
+              "return_type": "void"
+            },
+            {
+              "name": "addAdditionalContext",
+              "kind": "method",
+              "optional": true,
+              "parameters": "context: string",
               "return_type": "void"
             },
             {
@@ -2105,6 +2106,12 @@
               "kind": "property",
               "optional": false,
               "type": "() => string[]"
+            },
+            {
+              "name": "runEphemeralTurn",
+              "kind": "property",
+              "optional": true,
+              "type": "(options: EphemeralTurnOptions) => Promise<EphemeralTurnResult>"
             }
           ]
         },
@@ -2173,6 +2180,63 @@
               "kind": "property",
               "optional": true,
               "type": "boolean"
+            }
+          ]
+        },
+        {
+          "name": "ExtensionDirectoryResolution",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/directory-resolution.ts",
+          "members": [
+            {
+              "name": "declared",
+              "kind": "property",
+              "optional": false,
+              "type": "boolean"
+            },
+            {
+              "name": "files",
+              "kind": "property",
+              "optional": false,
+              "type": "string[]"
+            }
+          ]
+        },
+        {
+          "name": "ExtensionDirectoryResolutionOptions",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/directory-resolution.ts",
+          "members": [
+            {
+              "name": "indexNames",
+              "kind": "property",
+              "optional": false,
+              "type": "readonly string[]"
+            },
+            {
+              "name": "isScanFile",
+              "kind": "method",
+              "optional": false,
+              "parameters": "name: string",
+              "return_type": "boolean"
+            },
+            {
+              "name": "sortChildren",
+              "kind": "property",
+              "optional": true,
+              "type": "boolean"
+            },
+            {
+              "name": "throwUnexpectedStatErrors",
+              "kind": "property",
+              "optional": true,
+              "type": "boolean"
+            },
+            {
+              "name": "onReadError",
+              "kind": "property",
+              "optional": true,
+              "type": "(filePath: string, error: unknown) => void"
             }
           ]
         },
@@ -2672,6 +2736,12 @@
               "kind": "property",
               "optional": true,
               "type": "number"
+            },
+            {
+              "name": "acceptImages",
+              "kind": "property",
+              "optional": true,
+              "type": "boolean"
             }
           ]
         },
@@ -2879,6 +2949,12 @@
               "kind": "property",
               "optional": false,
               "type": "ExtensionRuntime"
+            },
+            {
+              "name": "preparedExtensions",
+              "kind": "property",
+              "optional": true,
+              "type": "PreparedExtension[]"
             }
           ]
         },
@@ -2929,19 +3005,6 @@
               "kind": "property",
               "optional": false,
               "type": "AgentMessage"
-            }
-          ]
-        },
-        {
-          "name": "MessageRenderOptions",
-          "kind": "interface",
-          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
-          "members": [
-            {
-              "name": "expanded",
-              "kind": "property",
-              "optional": false,
-              "type": "boolean"
             }
           ]
         },
@@ -3036,6 +3099,37 @@
               "kind": "property",
               "optional": true,
               "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "PreparedExtension",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "path",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "resolvedPath",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "factory",
+              "kind": "property",
+              "optional": false,
+              "type": "ExtensionFactory | null"
+            },
+            {
+              "name": "error",
+              "kind": "property",
+              "optional": false,
+              "type": "string | null"
             }
           ]
         },
@@ -3172,6 +3266,12 @@
               "type": "number"
             },
             {
+              "name": "preferWebsockets",
+              "kind": "property",
+              "optional": true,
+              "type": "boolean"
+            },
+            {
               "name": "headers",
               "kind": "property",
               "optional": true,
@@ -3276,6 +3376,12 @@
               "kind": "property",
               "optional": false,
               "type": "string"
+            },
+            {
+              "name": "sourceInfo",
+              "kind": "property",
+              "optional": false,
+              "type": "SourceInfo"
             }
           ]
         },
@@ -3453,6 +3559,31 @@
           ]
         },
         {
+          "name": "ToolCallPreflight",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/runner.ts",
+          "members": [
+            {
+              "name": "before",
+              "kind": "property",
+              "optional": true,
+              "type": "(\n\t\ttoolCallId: string,\n\t\ttool: AgentTool,\n\t\targs: unknown,\n\t\tcontext?: AgentToolContext,\n\t) => Promise<{ block?: boolean; reason?: string } | undefined> | { block?: boolean; reason?: string } | undefined"
+            },
+            {
+              "name": "after",
+              "kind": "property",
+              "optional": true,
+              "type": "(\n\t\ttoolCallId: string,\n\t\tresult: AgentToolResult,\n\t\tcontext?: AgentToolContext,\n\t) => Promise<AgentToolResult | undefined> | AgentToolResult | undefined"
+            },
+            {
+              "name": "cancel",
+              "kind": "property",
+              "optional": true,
+              "type": "(toolCallId: string) => void"
+            }
+          ]
+        },
+        {
           "name": "ToolDefinition",
           "kind": "interface",
           "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
@@ -3506,6 +3637,12 @@
               "type": "boolean"
             },
             {
+              "name": "readsSkillUris",
+              "kind": "property",
+              "optional": true,
+              "type": "boolean"
+            },
+            {
               "name": "approval",
               "kind": "property",
               "optional": true,
@@ -3525,6 +3662,12 @@
             },
             {
               "name": "mcpToolName",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "name": "legacyName",
               "kind": "property",
               "optional": true,
               "type": "string"
@@ -3565,6 +3708,18 @@
               "kind": "property",
               "optional": true,
               "type": "(\n\t\tresult: AgentToolResult<TDetails>,\n\t\toptions: ToolRenderResultOptions,\n\t\ttheme: Theme,\n\t\targs?: Static<TParams>,\n\t) => Component"
+            },
+            {
+              "name": "describeCall",
+              "kind": "property",
+              "optional": true,
+              "type": "(args: Static<TParams>, options: ToolRenderResultOptions) => NativeToolView | undefined"
+            },
+            {
+              "name": "describeResult",
+              "kind": "property",
+              "optional": true,
+              "type": "(\n\t\tresult: AgentToolResult<TDetails>,\n\t\toptions: ToolRenderResultOptions,\n\t\targs?: Static<TParams>,\n\t) => NativeToolView | undefined"
             }
           ]
         },
@@ -3927,13 +4082,6 @@
           "definition": "<T = unknown>(customType: string, data?: T) => void"
         },
         {
-          "name": "AssistantThinkingRenderer",
-          "kind": "type",
-          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
-          "members": [],
-          "definition": "(\n\tcontext: AssistantThinkingRenderContext,\n\ttheme: Theme,\n) => Component | undefined"
-        },
-        {
           "name": "AutocompleteProviderFactory",
           "kind": "type",
           "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
@@ -3955,13 +4103,6 @@
           "definition": "(message: ExtensionDeliveryPayload) => Promise<void>"
         },
         {
-          "name": "ExtensionAskDialogResult",
-          "kind": "type",
-          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
-          "members": [],
-          "definition": "ExtensionAskDialogSubmitResult | ExtensionAskDialogChatResult"
-        },
-        {
           "name": "ExtensionErrorListener",
           "kind": "type",
           "source_file": "packages/coding-agent/src/extensibility/extensions/runner.ts",
@@ -3973,7 +4114,7 @@
           "kind": "type",
           "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
           "members": [],
-          "definition": "| ResourcesDiscoverEvent\n\t| SessionEvent\n\t| ContextEvent\n\t| BeforeProviderRequestEvent\n\t| AfterProviderResponseEvent\n\t| BeforeAgentStartEvent\n\t| PlanApprovedEvent\n\t| AgentStartEvent\n\t| AgentEndEvent\n\t| SessionStopEvent\n\t| TurnStartEvent\n\t| TurnEndEvent\n\t| MessageStartEvent\n\t| MessageUpdateEvent\n\t| MessageEndEvent\n\t| ToolExecutionStartEvent\n\t| ToolExecutionUpdateEvent\n\t| ToolExecutionEndEvent\n\t| AutoCompactionStartEvent\n\t| AutoCompactionEndEvent\n\t| AutoRetryStartEvent\n\t| AutoRetryEndEvent\n\t| RetryFallbackAppliedEvent\n\t| RetryFallbackSucceededEvent\n\t| TtsrTriggeredEvent\n\t| TodoReminderEvent\n\t| GoalUpdatedEvent\n\t| CredentialDisabledEvent\n\t| McpNotificationEvent\n\t| UserBashEvent\n\t| UserPythonEvent\n\t| InputEvent\n\t| ToolCallEvent\n\t| ToolResultEvent\n\t| ToolApprovalRequestedEvent\n\t| ToolApprovalResolvedEvent"
+          "definition": "| ResourcesDiscoverEvent\n\t| SessionEvent\n\t| ContextEvent\n\t| CacheWarmingDecisionEvent\n\t| BeforeProviderRequestEvent\n\t| AfterProviderResponseEvent\n\t| BeforeAgentStartEvent\n\t| PlanApprovedEvent\n\t| BeforeSubagentSpawnEvent\n\t| AgentStartEvent\n\t| AgentEndEvent\n\t| SessionStopEvent\n\t| TurnStartEvent\n\t| TurnEndEvent\n\t| MessageStartEvent\n\t| MessageUpdateEvent\n\t| MessageEndEvent\n\t| AssistantMessageRewriteEvent\n\t| ToolExecutionStartEvent\n\t| ToolExecutionUpdateEvent\n\t| ToolExecutionEndEvent\n\t| AutoCompactionStartEvent\n\t| AutoCompactionEndEvent\n\t| AutoRetryStartEvent\n\t| AutoRetryEndEvent\n\t| RetryFallbackAppliedEvent\n\t| RetryFallbackSucceededEvent\n\t| TtsrTriggeredEvent\n\t| TodoReminderEvent\n\t| GoalUpdatedEvent\n\t| CredentialDisabledEvent\n\t| McpNotificationEvent\n\t| UserBashEvent\n\t| UserPythonEvent\n\t| InputEvent\n\t| ToolCallEvent\n\t| ToolResultEvent\n\t| ToolApprovalRequestedEvent\n\t| ToolApprovalResolvedEvent"
         },
         {
           "name": "ExtensionFactory",
@@ -4011,32 +4152,11 @@
           "definition": "\"footer\" | \"inline\""
         },
         {
-          "name": "ExtensionUiComponent",
-          "kind": "type",
-          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
-          "members": [],
-          "definition": "Component & { dispose?(): void }"
-        },
-        {
-          "name": "ExtensionUiComponentFactory",
-          "kind": "type",
-          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
-          "members": [],
-          "definition": "(tui: TUI, theme: Theme) => ExtensionUiComponent"
-        },
-        {
           "name": "ExtensionUISelectItem",
           "kind": "type",
           "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
           "members": [],
           "definition": "string | ExtensionUISelectOption"
-        },
-        {
-          "name": "ExtensionWidgetContent",
-          "kind": "type",
-          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
-          "members": [],
-          "definition": "string[] | ExtensionUiComponentFactory | undefined"
         },
         {
           "name": "GetActiveToolsHandler",
@@ -4081,18 +4201,11 @@
           "definition": "(event: string, error: string, stack?: string) => void"
         },
         {
-          "name": "MessageRenderer",
-          "kind": "type",
-          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
-          "members": [],
-          "definition": "(\n\tmessage: CustomMessage<T>,\n\toptions: MessageRenderOptions,\n\ttheme: Theme,\n) => Component | undefined"
-        },
-        {
           "name": "SendMessageHandler",
           "kind": "type",
           "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
           "members": [],
-          "definition": "<T = unknown>(\n\tmessage: CustomMessagePayload<T>,\n\t/**\n\t * `deliverAs: \"nextTurn\"` queues hidden custom context for the next turn.\n\t * When paired with `triggerTurn: true` during prompt teardown, the session schedules\n\t * an internal continuation without surfacing the message in the editable pending queue.\n\t */\n\toptions?: SendMessageOptions,\n) => void"
+          "definition": "<T = unknown>(\n\tmessage: CustomMessagePayload<T>,\n\t/**\n\t * `deliverAs: \"nextTurn\"` queues hidden custom context for the next turn.\n\t * When paired with `triggerTurn: true` during prompt teardown, the session schedules\n\t * an internal continuation without surfacing the message in the editable pending queue.\n\t * `deliverAs: \"aside\"` injects at the next step boundary without interrupting the in-flight\n\t * tool batch; idle starts a turn regardless of `triggerTurn` (plan mode folds into context).\n\t */\n\toptions?: SendMessageOptions,\n) => void"
         },
         {
           "name": "SendMessageOptions",
@@ -4109,7 +4222,7 @@
               "name": "deliverAs",
               "kind": "property",
               "optional": true,
-              "type": "\"steer\" | \"followUp\" | \"nextTurn\""
+              "type": "\"steer\" | \"followUp\" | \"nextTurn\" | \"aside\""
             },
             {
               "name": "validateDispatch",
@@ -4118,14 +4231,14 @@
               "type": "DispatchAuthorityValidation"
             }
           ],
-          "definition": "{\n\ttriggerTurn?: boolean;\n\tdeliverAs?: \"steer\" | \"followUp\" | \"nextTurn\";\n\t/**\n\t * Optional dispatch-time authority check, honored only for a hidden\n\t * `deliverAs: \"nextTurn\"` message with `triggerTurn: true`. Re-read\n\t * immediately before the queued message would reach the provider and again\n\t * during the turn's first model call; a refusal or throw drops the message\n\t * without a provider request or a session entry.\n\t */\n\tvalidateDispatch?: DispatchAuthorityValidation;\n}"
+          "definition": "{\n\ttriggerTurn?: boolean;\n\tdeliverAs?: \"steer\" | \"followUp\" | \"nextTurn\" | \"aside\";\n\t/**\n\t * Optional dispatch-time authority check, honored only for a hidden\n\t * `deliverAs: \"nextTurn\"` message with `triggerTurn: true`. Re-read\n\t * immediately before the queued message would reach the provider and again\n\t * during the turn's first model call; a refusal or throw drops the message\n\t * without a provider request or a session entry.\n\t */\n\tvalidateDispatch?: DispatchAuthorityValidation;\n}"
         },
         {
           "name": "SendUserMessageHandler",
           "kind": "type",
           "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
           "members": [],
-          "definition": "(\n\tcontent: string | (TextContent | ImageContent)[],\n\toptions?: { deliverAs?: \"steer\" | \"followUp\" },\n) => void"
+          "definition": "(\n\tcontent: string | (TextContent | ImageContent)[],\n\toptions?: SendUserMessageOptions,\n) => void"
         },
         {
           "name": "SetActiveToolsHandler",
@@ -4228,8 +4341,8 @@
       ]
     },
     "hooks": {
-      "interface_count": 20,
-      "type_count": 8,
+      "interface_count": 19,
+      "type_count": 7,
       "interfaces": [
         {
           "name": "BashToolResultEvent",
@@ -4767,19 +4880,6 @@
           ]
         },
         {
-          "name": "HookMessageRenderOptions",
-          "kind": "interface",
-          "source_file": "packages/coding-agent/src/extensibility/hooks/types.ts",
-          "members": [
-            {
-              "name": "expanded",
-              "kind": "property",
-              "optional": false,
-              "type": "boolean"
-            }
-          ]
-        },
-        {
           "name": "HookUIContext",
           "kind": "interface",
           "source_file": "packages/coding-agent/src/extensibility/hooks/types.ts",
@@ -4823,7 +4923,7 @@
               "name": "custom",
               "kind": "method",
               "optional": false,
-              "parameters": "factory: (\n\t\t\ttui: TUI,\n\t\t\ttheme: Theme,\n\t\t\tdone: (result: T) => void,\n\t\t) => (Component & { dispose?(): void }) | Promise<Component & { dispose?(): void }>",
+              "parameters": "factory: (\n\t\t\ttui: TUI,\n\t\t\ttheme: Theme,\n\t\t\tkeybindings: KeybindingsManager,\n\t\t\tdone: (result: T) => void,\n\t\t) => (Component & { dispose?(): void }) | Promise<Component & { dispose?(): void }>",
               "return_type": "Promise<T>"
             },
             {
@@ -5061,13 +5161,6 @@
           "definition": "(event: E, ctx: HookContext) => Promise<R | void> | R | void"
         },
         {
-          "name": "HookMessageRenderer",
-          "kind": "type",
-          "source_file": "packages/coding-agent/src/extensibility/hooks/types.ts",
-          "members": [],
-          "definition": "(\n\tmessage: HookMessage<T>,\n\toptions: HookMessageRenderOptions,\n\ttheme: Theme,\n) => Component | undefined"
-        },
-        {
           "name": "SendMessageHandler",
           "kind": "type",
           "source_file": "packages/coding-agent/src/extensibility/hooks/loader.ts",
@@ -5241,21 +5334,23 @@
     "packages/coding-agent/src/discovery/builtin-rules/ts-redundant-clear-guard.md",
     "packages/coding-agent/src/discovery/builtin-rules/ts-set-map.md",
     "packages/coding-agent/src/edit/auto-repair.md",
-    "packages/coding-agent/src/edit/sloppy.md",
+    "packages/coding-agent/src/edit/hashline-compact.md",
+    "packages/coding-agent/src/extensibility/custom-commands/bundled/annotate/prompts/text-review.md",
+    "packages/coding-agent/src/extensibility/custom-commands/bundled/annotate/prompts/text-summary.md",
+    "packages/coding-agent/src/extensibility/custom-commands/bundled/review/prompts/annotations.md",
     "packages/coding-agent/src/if-bench/prompts/cat-directive.md",
     "packages/coding-agent/src/if-bench/prompts/system.md",
     "packages/coding-agent/src/if-bench/prompts/turn.md",
     "packages/coding-agent/src/live/prompts/agent-final-message.md",
     "packages/coding-agent/src/live/prompts/live-instructions.md",
-    "packages/coding-agent/src/modes/components/snapcompact-shape-preview-doc.md",
     "packages/coding-agent/src/prompts/advisor/active-repo-watchdog.md",
     "packages/coding-agent/src/prompts/advisor/advise-tool.md",
     "packages/coding-agent/src/prompts/advisor/context-files.md",
+    "packages/coding-agent/src/prompts/advisor/memory-context.md",
     "packages/coding-agent/src/prompts/advisor/system.md",
-    "packages/coding-agent/src/prompts/agents/designer.md",
     "packages/coding-agent/src/prompts/agents/frontmatter.md",
     "packages/coding-agent/src/prompts/agents/init.md",
-    "packages/coding-agent/src/prompts/agents/librarian.md",
+    "packages/coding-agent/src/prompts/agents/model-mention.md",
     "packages/coding-agent/src/prompts/agents/reviewer.md",
     "packages/coding-agent/src/prompts/agents/scout.md",
     "packages/coding-agent/src/prompts/agents/security-reviewer.md",
@@ -5274,6 +5369,21 @@
     "packages/coding-agent/src/prompts/goals/goal-mode-context.md",
     "packages/coding-agent/src/prompts/goals/goal-todo-context.md",
     "packages/coding-agent/src/prompts/goals/guided-goal-interview.md",
+    "packages/coding-agent/src/prompts/internal-urls/agent.md",
+    "packages/coding-agent/src/prompts/internal-urls/artifact.md",
+    "packages/coding-agent/src/prompts/internal-urls/cfg.md",
+    "packages/coding-agent/src/prompts/internal-urls/history.md",
+    "packages/coding-agent/src/prompts/internal-urls/issue.md",
+    "packages/coding-agent/src/prompts/internal-urls/local.md",
+    "packages/coding-agent/src/prompts/internal-urls/mcp.md",
+    "packages/coding-agent/src/prompts/internal-urls/memory.md",
+    "packages/coding-agent/src/prompts/internal-urls/omp.md",
+    "packages/coding-agent/src/prompts/internal-urls/proc.md",
+    "packages/coding-agent/src/prompts/internal-urls/rule.md",
+    "packages/coding-agent/src/prompts/internal-urls/security.md",
+    "packages/coding-agent/src/prompts/internal-urls/skill.md",
+    "packages/coding-agent/src/prompts/internal-urls/ssh.md",
+    "packages/coding-agent/src/prompts/internal-urls/vault.md",
     "packages/coding-agent/src/prompts/jev/difficulty.md",
     "packages/coding-agent/src/prompts/jev/irreversible.md",
     "packages/coding-agent/src/prompts/jev/live_cutover.md",
@@ -5283,8 +5393,13 @@
     "packages/coding-agent/src/prompts/memories/consolidation.md",
     "packages/coding-agent/src/prompts/memories/consolidation_system.md",
     "packages/coding-agent/src/prompts/memories/read-path.md",
+    "packages/coding-agent/src/prompts/memories/sharpshooter-consolidate-input.md",
+    "packages/coding-agent/src/prompts/memories/sharpshooter-consolidate-system.md",
+    "packages/coding-agent/src/prompts/memories/sharpshooter-extract-input.md",
+    "packages/coding-agent/src/prompts/memories/sharpshooter-extract-system.md",
     "packages/coding-agent/src/prompts/memories/stage_one_input.md",
     "packages/coding-agent/src/prompts/memories/stage_one_system.md",
+    "packages/coding-agent/src/prompts/ratchet-kickoff.md",
     "packages/coding-agent/src/prompts/review-custom-request.md",
     "packages/coding-agent/src/prompts/review-headless-request.md",
     "packages/coding-agent/src/prompts/review-request.md",
@@ -5293,15 +5408,18 @@
     "packages/coding-agent/src/prompts/security/validate-request.md",
     "packages/coding-agent/src/prompts/session/launch-completion.md",
     "packages/coding-agent/src/prompts/skills/autoload.md",
+    "packages/coding-agent/src/prompts/skills/compress-description.md",
     "packages/coding-agent/src/prompts/skills/user-invocation.md",
     "packages/coding-agent/src/prompts/steering/parent-irc.md",
     "packages/coding-agent/src/prompts/steering/user-interjection.md",
     "packages/coding-agent/src/prompts/system/active-repo-context.md",
     "packages/coding-agent/src/prompts/system/agent-creation-architect.md",
     "packages/coding-agent/src/prompts/system/agent-creation-user.md",
+    "packages/coding-agent/src/prompts/system/anthropic-usage-wrap-up.md",
     "packages/coding-agent/src/prompts/system/auto-continue.md",
-    "packages/coding-agent/src/prompts/system/auto-thinking-difficulty-local.md",
-    "packages/coding-agent/src/prompts/system/auto-thinking-difficulty.md",
+    "packages/coding-agent/src/prompts/system/auto-thinking-bucket-question.md",
+    "packages/coding-agent/src/prompts/system/auto-thinking-level-question.md",
+    "packages/coding-agent/src/prompts/system/auto-thinking-solution-space-question.md",
     "packages/coding-agent/src/prompts/system/autolearn-guidance-learn.md",
     "packages/coding-agent/src/prompts/system/autolearn-guidance.md",
     "packages/coding-agent/src/prompts/system/autolearn-nudge-autocontinue.md",
@@ -5309,21 +5427,32 @@
     "packages/coding-agent/src/prompts/system/btw-user.md",
     "packages/coding-agent/src/prompts/system/checkpoint-active-notice.md",
     "packages/coding-agent/src/prompts/system/commit-message-system.md",
-    "packages/coding-agent/src/prompts/system/computer-safety.md",
+    "packages/coding-agent/src/prompts/system/computer-use.md",
+    "packages/coding-agent/src/prompts/system/context-notes.md",
     "packages/coding-agent/src/prompts/system/custom-system-prompt.md",
     "packages/coding-agent/src/prompts/system/date-cwd-reminder.md",
     "packages/coding-agent/src/prompts/system/eager-task.md",
     "packages/coding-agent/src/prompts/system/eager-todo.md",
     "packages/coding-agent/src/prompts/system/empty-stop-retry.md",
+    "packages/coding-agent/src/prompts/system/eval-prelude-notice.md",
+    "packages/coding-agent/src/prompts/system/eval-state-context.md",
+    "packages/coding-agent/src/prompts/system/experimental-context-notes-reminder.md",
+    "packages/coding-agent/src/prompts/system/experimental-context-rollover.md",
     "packages/coding-agent/src/prompts/system/gemini-tool-call-reminder.md",
+    "packages/coding-agent/src/prompts/system/hindsight-instructions.md",
+    "packages/coding-agent/src/prompts/system/image-attachment.md",
     "packages/coding-agent/src/prompts/system/interrupted-thinking.md",
-    "packages/coding-agent/src/prompts/system/irc-autoreply.md",
     "packages/coding-agent/src/prompts/system/irc-incoming.md",
+    "packages/coding-agent/src/prompts/system/jevify-notice.md",
+    "packages/coding-agent/src/prompts/system/judgment-local.md",
+    "packages/coding-agent/src/prompts/system/length-stop-retry.md",
+    "packages/coding-agent/src/prompts/system/malformed-function-call-retry.md",
     "packages/coding-agent/src/prompts/system/manual-continue.md",
     "packages/coding-agent/src/prompts/system/mcp-xdev-guidance.md",
     "packages/coding-agent/src/prompts/system/memory-consolidation-system.md",
     "packages/coding-agent/src/prompts/system/memory-extraction-system.md",
     "packages/coding-agent/src/prompts/system/mid-run-todo-nudge.md",
+    "packages/coding-agent/src/prompts/system/mnemopi-instructions.md",
     "packages/coding-agent/src/prompts/system/omfg-user.md",
     "packages/coding-agent/src/prompts/system/orchestrate-notice.md",
     "packages/coding-agent/src/prompts/system/personalities/default.md",
@@ -5344,13 +5473,17 @@
     "packages/coding-agent/src/prompts/system/recap-user.md",
     "packages/coding-agent/src/prompts/system/resolve-device-reminder.md",
     "packages/coding-agent/src/prompts/system/rewind-report.md",
+    "packages/coding-agent/src/prompts/system/session-agent-notice.md",
+    "packages/coding-agent/src/prompts/system/session-stop-blocked.md",
     "packages/coding-agent/src/prompts/system/side-channel-no-tools.md",
+    "packages/coding-agent/src/prompts/system/skillful-notice.md",
     "packages/coding-agent/src/prompts/system/snapcompact-context-frames-note.md",
     "packages/coding-agent/src/prompts/system/snapcompact-context-stub.md",
     "packages/coding-agent/src/prompts/system/snapcompact-system-frames-note.md",
     "packages/coding-agent/src/prompts/system/snapcompact-system-stub.md",
     "packages/coding-agent/src/prompts/system/snapcompact-toolresult-note.md",
     "packages/coding-agent/src/prompts/system/speech-rewrite.md",
+    "packages/coding-agent/src/prompts/system/stream-stall-continue.md",
     "packages/coding-agent/src/prompts/system/subagent-async-pending.md",
     "packages/coding-agent/src/prompts/system/subagent-system-prompt.md",
     "packages/coding-agent/src/prompts/system/subagent-user-prompt.md",
@@ -5362,16 +5495,18 @@
     "packages/coding-agent/src/prompts/system/title-marker-instruction.md",
     "packages/coding-agent/src/prompts/system/title-system.md",
     "packages/coding-agent/src/prompts/system/tool-call-loop-redirect.md",
+    "packages/coding-agent/src/prompts/system/tool-roster-notice.md",
     "packages/coding-agent/src/prompts/system/ttsr-interrupt.md",
     "packages/coding-agent/src/prompts/system/ttsr-tool-reminder.md",
+    "packages/coding-agent/src/prompts/system/ttsr-warning.md",
     "packages/coding-agent/src/prompts/system/ultrathink-notice.md",
-    "packages/coding-agent/src/prompts/system/unexpected-stop-classifier.md",
     "packages/coding-agent/src/prompts/system/unexpected-stop-retry.md",
+    "packages/coding-agent/src/prompts/system/user-append.md",
     "packages/coding-agent/src/prompts/system/vibe-mode-active.md",
+    "packages/coding-agent/src/prompts/system/video-attachment.md",
     "packages/coding-agent/src/prompts/system/web-search.md",
     "packages/coding-agent/src/prompts/system/workflow-notice.md",
     "packages/coding-agent/src/prompts/system/xdev-mount-notice.md",
-    "packages/coding-agent/src/prompts/tools/apply-patch.md",
     "packages/coding-agent/src/prompts/tools/approve.md",
     "packages/coding-agent/src/prompts/tools/ask.md",
     "packages/coding-agent/src/prompts/tools/ast-edit.md",
@@ -5379,37 +5514,55 @@
     "packages/coding-agent/src/prompts/tools/async-result.md",
     "packages/coding-agent/src/prompts/tools/bash.md",
     "packages/coding-agent/src/prompts/tools/browser.md",
+    "packages/coding-agent/src/prompts/tools/cfg-approval-timeout.md",
+    "packages/coding-agent/src/prompts/tools/cfg-env-shadowed.md",
+    "packages/coding-agent/src/prompts/tools/cfg-write-result.md",
     "packages/coding-agent/src/prompts/tools/checkpoint.md",
     "packages/coding-agent/src/prompts/tools/computer.md",
+    "packages/coding-agent/src/prompts/tools/context-notes.md",
     "packages/coding-agent/src/prompts/tools/debug.md",
+    "packages/coding-agent/src/prompts/tools/eval-agents.md",
     "packages/coding-agent/src/prompts/tools/eval-code-mode.md",
+    "packages/coding-agent/src/prompts/tools/eval-helpers.md",
+    "packages/coding-agent/src/prompts/tools/eval-judge.md",
     "packages/coding-agent/src/prompts/tools/eval.md",
+    "packages/coding-agent/src/prompts/tools/find-name-question.md",
+    "packages/coding-agent/src/prompts/tools/find-passage-question.md",
+    "packages/coding-agent/src/prompts/tools/find-sketch-question.md",
+    "packages/coding-agent/src/prompts/tools/find.md",
     "packages/coding-agent/src/prompts/tools/github.md",
     "packages/coding-agent/src/prompts/tools/glob.md",
     "packages/coding-agent/src/prompts/tools/goal.md",
     "packages/coding-agent/src/prompts/tools/grep.md",
-    "packages/coding-agent/src/prompts/tools/hub.md",
+    "packages/coding-agent/src/prompts/tools/ida.md",
     "packages/coding-agent/src/prompts/tools/image-attachment-describe-system.md",
     "packages/coding-agent/src/prompts/tools/image-attachment-describe.md",
     "packages/coding-agent/src/prompts/tools/image-gen.md",
-    "packages/coding-agent/src/prompts/tools/inspect-image-system.md",
-    "packages/coding-agent/src/prompts/tools/inspect-image.md",
+    "packages/coding-agent/src/prompts/tools/image-question-system.md",
+    "packages/coding-agent/src/prompts/tools/isolation-error.md",
+    "packages/coding-agent/src/prompts/tools/isolation-recovery-hint.md",
+    "packages/coding-agent/src/prompts/tools/isolation-summary.md",
     "packages/coding-agent/src/prompts/tools/learn.md",
     "packages/coding-agent/src/prompts/tools/lsp-late-diagnostic.md",
     "packages/coding-agent/src/prompts/tools/lsp.md",
     "packages/coding-agent/src/prompts/tools/manage-skill.md",
     "packages/coding-agent/src/prompts/tools/memory-edit.md",
-    "packages/coding-agent/src/prompts/tools/patch.md",
+    "packages/coding-agent/src/prompts/tools/new-context.md",
+    "packages/coding-agent/src/prompts/tools/ratchet.md",
     "packages/coding-agent/src/prompts/tools/read.md",
     "packages/coding-agent/src/prompts/tools/recall.md",
     "packages/coding-agent/src/prompts/tools/reflect.md",
-    "packages/coding-agent/src/prompts/tools/replace.md",
     "packages/coding-agent/src/prompts/tools/retain.md",
     "packages/coding-agent/src/prompts/tools/rewind.md",
     "packages/coding-agent/src/prompts/tools/rewrite.md",
+    "packages/coding-agent/src/prompts/tools/salvaged-child-hint.md",
     "packages/coding-agent/src/prompts/tools/security-publish.md",
     "packages/coding-agent/src/prompts/tools/security-scan.md",
     "packages/coding-agent/src/prompts/tools/task-async-contract.md",
+    "packages/coding-agent/src/prompts/tools/task-coordination-advisory.md",
+    "packages/coding-agent/src/prompts/tools/task-follow-up.md",
+    "packages/coding-agent/src/prompts/tools/task-spawn-feedback.md",
+    "packages/coding-agent/src/prompts/tools/task-specialization-advisory.md",
     "packages/coding-agent/src/prompts/tools/task-summary.md",
     "packages/coding-agent/src/prompts/tools/task.md",
     "packages/coding-agent/src/prompts/tools/todo.md",
@@ -5420,7 +5573,12 @@
     "packages/coding-agent/src/prompts/tools/vibe-spawn.md",
     "packages/coding-agent/src/prompts/tools/vibe-turn-result.md",
     "packages/coding-agent/src/prompts/tools/vibe-wait.md",
+    "packages/coding-agent/src/prompts/tools/wait-no-message.md",
+    "packages/coding-agent/src/prompts/tools/wait.md",
     "packages/coding-agent/src/prompts/tools/web-search.md",
+    "packages/coding-agent/src/prompts/tools/workpool-batch.md",
+    "packages/coding-agent/src/prompts/tools/workpool-turn-result.md",
+    "packages/coding-agent/src/prompts/tools/write-device-only.md",
     "packages/coding-agent/src/prompts/tools/write.md",
     "packages/coding-agent/src/prompts/tools/yield.md"
   ],
@@ -5429,6 +5587,7 @@
       "packages/coding-agent/src/prompts/advisor/active-repo-watchdog.md",
       "packages/coding-agent/src/prompts/advisor/advise-tool.md",
       "packages/coding-agent/src/prompts/advisor/context-files.md",
+      "packages/coding-agent/src/prompts/advisor/memory-context.md",
       "packages/coding-agent/src/prompts/advisor/system.md"
     ],
     "session_system": {
