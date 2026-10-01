@@ -50,6 +50,56 @@ interface Arm {
 	buffer: BufferedNote[];
 }
 
+type AdviseExecute = AdviseTool["execute"];
+
+/**
+ * The advise tool an advisor loop registers for a pipeline: each call fans out
+ * to the pipeline's arms, and it carries the same update-boundary surface as a
+ * bare {@link AdviseTool} (`beginUpdate`, `flushDeferredNotes`,
+ * `resetDeliveredNotes`), applied to every arm through the pipeline.
+ */
+export class AdvisorSupervisionTool implements AgentTool<AdviseTool["parameters"], AdviseDetails> {
+	readonly name: string;
+	readonly label: string;
+	readonly description: string;
+	readonly parameters: AdviseTool["parameters"];
+	readonly intent: AdviseTool["intent"];
+	readonly #pipeline: AdvisorSupervisionPipeline;
+	readonly #dispatch: AdviseExecute;
+
+	constructor(prototype: AdviseTool, pipeline: AdvisorSupervisionPipeline, dispatch: AdviseExecute) {
+		this.name = prototype.name;
+		this.label = prototype.label;
+		this.description = prototype.description;
+		this.parameters = prototype.parameters;
+		this.intent = prototype.intent;
+		this.#pipeline = pipeline;
+		this.#dispatch = dispatch;
+	}
+
+	execute(
+		toolCallId: string,
+		args: AdviseParams,
+		signal?: AbortSignal,
+		onUpdate?: AgentToolUpdateCallback<AdviseDetails>,
+		context?: AgentToolContext,
+	): Promise<AgentToolResult<AdviseDetails>> {
+		return this.#dispatch(toolCallId, args, signal, onUpdate, context);
+	}
+
+	beginUpdate(inProgress: boolean): void {
+		this.#pipeline.beginUpdate(inProgress);
+	}
+
+	flushDeferredNotes(): void {
+		this.#pipeline.flushDeferredNotes();
+	}
+
+	resetDeliveredNotes(): void {
+		this.#pipeline.reset();
+	}
+}
+
 function sameNotes(left: readonly BufferedNote[], right: readonly BufferedNote[]): boolean {
 	if (left.length !== right.length) return false;
 	const rightIterator = right[Symbol.iterator]();
@@ -84,7 +134,7 @@ function sameNotes(left: readonly BufferedNote[], right: readonly BufferedNote[]
  * `invocations` counts `execute` calls, not flushes.
  */
 export class AdvisorSupervisionPipeline {
-	readonly tool: AgentTool<any, AdviseDetails>;
+	readonly tool: AdvisorSupervisionTool;
 	readonly #path: AdvisorSupervisionPath;
 	readonly #canaryMaxDivergences: number;
 	readonly #deliver: AdvisorSupervisionPipelineOptions["deliver"];
@@ -131,15 +181,9 @@ export class AdvisorSupervisionPipeline {
 
 		const prototype = (this.#legacy ?? this.#structured)?.tool;
 		if (!prototype) throw new Error(`advisor supervision path ${opts.path} built no arm`);
-		this.tool = {
-			name: prototype.name,
-			label: prototype.label,
-			description: prototype.description,
-			parameters: prototype.parameters,
-			intent: prototype.intent,
-			execute: (toolCallId, args, signal, onUpdate, context) =>
-				this.#execute(toolCallId, args, signal, onUpdate, context),
-		};
+		this.tool = new AdvisorSupervisionTool(prototype, this, (toolCallId, args, signal, onUpdate, context) =>
+			this.#execute(toolCallId, args, signal, onUpdate, context),
+		);
 	}
 
 	/**

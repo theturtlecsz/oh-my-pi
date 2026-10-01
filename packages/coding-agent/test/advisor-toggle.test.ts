@@ -1165,7 +1165,8 @@ describe("AgentSession advisor toggle", () => {
 			unsubscribe();
 
 			const adviseTool = advisorAgent.state.tools.find(tool => tool.name === "advise");
-			if (!(adviseTool instanceof advisorModule.AdviseTool)) throw new Error("Expected advisor advise tool");
+			if (!(adviseTool instanceof advisorModule.AdvisorSupervisionTool))
+				throw new Error("Expected advisor advise tool");
 			adviseTool.beginUpdate(true);
 			const deferred = await adviseTool.execute("deferred-before-quota", {
 				note: "The final result still needs a regression test.",
@@ -1231,7 +1232,7 @@ describe("AgentSession advisor toggle", () => {
 			const advisor = session.getAdvisorAgent();
 			if (!advisor) throw new Error("Expected advisor agent");
 			const tool = advisor.state.tools?.find(candidate => candidate.name === "advise");
-			if (!(tool instanceof advisorModule.AdviseTool)) throw new Error("Expected advise tool");
+			if (!(tool instanceof advisorModule.AdvisorSupervisionTool)) throw new Error("Expected advise tool");
 
 			tool.beginUpdate(true);
 			for (let i = 1; i <= budget; i++) {
