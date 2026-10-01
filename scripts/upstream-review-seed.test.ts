@@ -884,6 +884,71 @@ describe("upstream-review-seed --settle mode", () => {
 		expect(fRow?.proof).toBe(`pending:git diff --exit-code ${fork12} HEAD -- f.txt`);
 	});
 
+	test("re-seeding a newer fork leaves an older fork prefix pending, and a non-fork-only row is untouched", async () => {
+		const { dir, targetSha, forkSha } = await createFixtureRepo();
+		const target12 = targetSha.slice(0, 12);
+		const fork12 = forkSha.slice(0, 12);
+
+		await seedReview({
+			target: targetSha,
+			version: "1.0.2",
+			fork: forkSha,
+			dir: "docs",
+			cwd: dir,
+		});
+
+		await Bun.write(path.join(dir, "note.txt"), "newer fork pin\n");
+		await ok(dir, ["add", "note.txt"]);
+		await ok(dir, ["commit", "-m", "newer fork pin"]);
+		const newerSha = (await ok(dir, ["rev-parse", "HEAD"])).trim();
+		const newer12 = newerSha.slice(0, 12);
+
+		await seedReview({
+			target: targetSha,
+			version: "1.0.2",
+			fork: newerSha,
+			dir: "docs",
+			cwd: dir,
+		});
+
+		const recordRel = `docs/upstream-review-${target12}.json`;
+		const record = parseRecord(await Bun.file(path.join(dir, recordRel)).text(), recordRel);
+		expect(record.fork).toBe(newerSha);
+
+		const matrixPath = path.join(dir, `docs/upstream-review-${target12}-matrix.tsv`);
+		let matrixRows = parseMatrixTsv(await Bun.file(matrixPath).text());
+		expect(matrixRows.find(r => r.path === "f.txt")?.proof).toBe(
+			`pending:git diff --exit-code ${fork12} HEAD -- f.txt`,
+		);
+		const notePending = `pending:git diff --exit-code ${newer12} HEAD -- note.txt`;
+		expect(matrixRows.find(r => r.path === "note.txt")?.proof).toBe(notePending);
+		matrixRows = matrixRows.map(r => (r.path === "note.txt" ? { ...r, scope: "shared" } : r));
+		await Bun.write(matrixPath, formatMatrixTsv(matrixRows));
+
+		await run(dir, ["merge", "--no-ff", targetSha]);
+		await Bun.write(path.join(dir, "a.txt"), "line 1 RESOLVED\nline 2\nline 3\n");
+		await run(dir, ["add", "a.txt"]);
+		const mergeSha = await commitAll(dir, "merge target into newer fork");
+
+		const script = path.join(import.meta.dir, "upstream-review-seed.ts");
+		const proc = await $`bun ${script} --record ${recordRel} --settle --gates-passed-at ${mergeSha}`
+			.cwd(dir)
+			.quiet()
+			.nothrow()
+			.env(GIT_ENV);
+
+		expect(proc.exitCode).toBe(1);
+		const err = proc.stderr.toString();
+		expect(err).toContain(`matrix f.txt: pending:git diff --exit-code ${fork12} HEAD -- f.txt`);
+		expect(err).toContain(`matrix note.txt: ${notePending}`);
+
+		const after = parseMatrixTsv(await Bun.file(matrixPath).text());
+		expect(after.find(r => r.path === "f.txt")?.proof).toBe(`pending:git diff --exit-code ${fork12} HEAD -- f.txt`);
+		expect(after.find(r => r.path === "note.txt")?.scope).toBe("shared");
+		expect(after.find(r => r.path === "note.txt")?.proof).toBe(notePending);
+		expect(after.some(r => r.proof.includes(`${fork12}..`))).toBe(false);
+	});
+
 	test("settleReview throws TargetNotContainedError when commit does not contain target", async () => {
 		const { dir, targetSha, forkSha } = await createFixtureRepo();
 		const target12 = targetSha.slice(0, 12);

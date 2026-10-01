@@ -12,7 +12,8 @@
 // In settle mode (--settle), validates commit containment against target, settles fork-only proofs
 // and gate proofs (session-system/update.sh gates 3-12), writes updated matrix and changelog TSVs,
 // lists any remaining pending proofs, and exits 1 if pending rows remain, else 0 (exit 2 if target
-// not contained).
+// not contained). A fork-only proof is settled only when the row's scope is fork-only and its
+// pending command names this record's fork (12-hex prefix). Any other proof is left as written.
 //
 // Changelog rows are the entries deriveChangelogEntries produces for every
 // packages/*/CHANGELOG.md at the target, over [version_min, version_max].
@@ -602,6 +603,7 @@ export async function settleReview(options: SettleReviewOptions): Promise<Settle
 
 	const commit12 = commitSha.slice(0, 12);
 	const forkSha = record.fork;
+	const fork12 = forkSha.slice(0, 12);
 
 	const matrixDiskPath = resolveFile(record.matrix);
 	const matrixFile = Bun.file(matrixDiskPath);
@@ -618,10 +620,10 @@ export async function settleReview(options: SettleReviewOptions): Promise<Settle
 	let settledGateCount = 0;
 
 	for (const row of matrixRows) {
-		const forkProofMatch = row.proof.match(/^pending:git diff --exit-code ([0-9a-f]{12}) HEAD -- (.+)$/);
-		if (forkProofMatch && forkProofMatch[2] === row.path) {
+		const forkOnlyPending = `pending:git diff --exit-code ${fork12} HEAD -- ${row.path}`;
+		if (row.scope === "fork-only" && row.proof === forkOnlyPending) {
 			if (!changedForkSet.has(row.path)) {
-				row.proof = `fork-only sweep: git diff ${forkProofMatch[1]}..${commit12} -- ${row.path} is empty`;
+				row.proof = `fork-only sweep: git diff ${fork12}..${commit12} -- ${row.path} is empty`;
 				settledForkOnlyCount++;
 			}
 		} else if (row.proof === "pending:session-system/update.sh gates 3-12") {

@@ -112,63 +112,154 @@ Intake is executed exclusively in an owner session (by Chris or an authorized ow
 
 ### Ordered intake procedure
 
-The exact ordered commands to execute an upstream intake (OMP-401-s07):
+Run these blocks in order for one upstream intake (OMP-401-s07). Keep one shell so `C`, `V`, and `R` stay set. `$C` is the candidate's full 40-hex commit (`update.sh` rejects a short id).
+
+Stop flood, fetch upstream, and bind `C` and `V` from discovery (`candidate_commit`, `candidate_version`):
 
 ```bash
-# 1. Stop background workers and prepare repository
+set -euo pipefail
 systemctl --user stop flood
 cd /home/thetu/flood-repos/oh-my-pi
 git remote get-url upstream || git remote add upstream https://github.com/can1357/oh-my-pi.git
 git fetch upstream
-
-# 2. Discover the candidate commit C and version V
-bun scripts/upstream-discovery.ts --json   # C, V (e.g. 8b25ad4a0562, 18.4.6)
-
-# 3. Create isolated intake worktree branched from main
-git worktree add ../oh-my-pi-intake -b intake/${C:0:12} main
+DISC=$(bun scripts/upstream-discovery.ts --json)
+C=$(printf '%s' "$DISC" | bun -e 'const j = await Bun.stdin.json(); if (j.newer !== true || typeof j.candidate_commit !== "string") throw new Error("no upstream candidate"); process.stdout.write(j.candidate_commit)')
+V=$(printf '%s' "$DISC" | bun -e 'const j = await Bun.stdin.json(); if (typeof j.candidate_version !== "string") throw new Error("no candidate version"); process.stdout.write(j.candidate_version)')
+git worktree add ../oh-my-pi-intake -b "intake/${C:0:12}" main
 cd ../oh-my-pi-intake
-
-# 4. Seed the review record and companions
-bun scripts/upstream-review-seed.ts --target $C --version $V
-
-# 5. Switch to a scratch branch for integration and testing
-git switch -c scratch/${C:0:12}
+bun scripts/upstream-review-seed.ts --target "$C" --version "$V"
+git switch -c "scratch/${C:0:12}"
 git config rerere.enabled true
-git merge --no-ff $C   # resolve conflicts, repair tests, run gates 3-12
+git merge --no-ff "$C" || merge_rc=$?
+if [ "${merge_rc:-0}" -ne 0 ]; then
+	git rev-parse -q --verify MERGE_HEAD >/dev/null
+fi
+```
 
-# 6. Settle automated proofs against the passing scratch commit
-R=docs/upstream-review-${C:0:12}
-bun scripts/upstream-review-seed.ts --record $R.json --settle --gates-passed-at $(git rev-parse HEAD)
+A non-zero merge that does not leave `MERGE_HEAD` stops here. When `MERGE_HEAD` is set, edit every unmerged path until the worktree holds the resolution. `rerere.enabled` records that resolution when the merge commit is created. It does not stage the files, and it does not commit. The paths stay unmerged until `git add`. After the edits:
 
-# 7. Fill remaining pending proofs manually:
-#    - In $R-matrix.tsv: fill conflict rows with concrete resolutions and focused test proofs.
-#    - In $R-changelog.tsv: fill Breaking Changes / Removed rows with dispositions (re-fitted or not-applicable) and proof details.
-#    Verify strict review passes:
-bun scripts/verify-upstream-handoff.ts --record $R.json
+```bash
+set -euo pipefail
+if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+	git diff --name-only --diff-filter=U
+	git add -u
+	git commit --no-edit
+fi
+```
 
-# 8. Return to intake branch and commit the settled review record
-git switch intake/${C:0:12}
-git add $R* && git commit -m "OMP-401: review $V"
+Commit any further test repairs as ordinary commits on `scratch/${C:0:12}`. Then run the same commands as `session-system/update.sh` gates 3–12, after the frozen install and native refresh that script runs before its gates. Each command must exit 0. Gate 12's output must contain `PASS`, and the tracked tree must still be clean:
 
-# 9. Execute guarded pre-merge (rerere applies scratch resolutions)
-bash session-system/update.sh $C   # merge; rerere; commit
+```bash
+set -euo pipefail
+bun install --frozen-lockfile
+bash session-system/refresh-natives.sh
+bun test session-system/tests packages/work-client/test scripts/verify-upstream-handoff.test.ts
+./node_modules/.bin/tsc --noEmit -p session-system
+bun run check:ts
+cargo fmt --all -- --check
+cargo clippy --workspace --exclude brush-core --no-deps -- -D warnings
+bun run test:ts
+bun run test:scripts
+bun run test:py
+cargo nextest run --workspace --exclude brush-core --status-level=fail --final-status-level=fail
+SMOKE_LOG=$(mktemp)
+OMP_WORK_POSTGRES_INTEGRATION=1 bun run test:session:smoke | tee "$SMOKE_LOG"
+grep -q 'PASS' "$SMOKE_LOG"
+rm -f "$SMOKE_LOG"
+test -z "$(git status --porcelain --untracked-files=no)"
+```
 
-# 10. Cherry-pick repairs from scratch branch, then advance the baseline
-git cherry-pick <repairs>
-# Advance baseline: replace docs/upstream-baseline.json with review record plus accepted_at
-# Regenerate inventory and check patches:
+Settle against that scratch commit. Settle rewrites a fork-only proof when the path is identical at the record's fork and `HEAD`, and rewrites a proof equal to `pending:session-system/update.sh gates 3-12`. Conflict rows (`pending:resolve and name the focused test`) and Breaking Changes / Removed rows (`pending:decide re-fitted or not-applicable`) stay pending, so the command exits 1 and lists them:
+
+```bash
+set -euo pipefail
+R="docs/upstream-review-${C:0:12}"
+bun scripts/upstream-review-seed.ts --record "$R.json" --settle --gates-passed-at "$(git rev-parse HEAD)" || test $? -eq 1
+```
+
+Exit 2 (the commit does not contain the target) stops the shell. Exit 1 is the pending list this step fills next.
+
+Fill those listed rows before the strict review:
+
+- In `$R-matrix.tsv`, replace `pending:resolve and name the focused test` with the focused test command that covers that conflict resolution.
+- In `$R-changelog.tsv`, for each Breaking Changes or Removed row, set disposition to `re-fitted` or `not-applicable` and replace `pending:decide re-fitted or not-applicable` with the decision.
+
+```bash
+set -euo pipefail
+if git grep -n -e 'pending:resolve and name the focused test' -e 'pending:decide re-fitted or not-applicable' -- "$R-matrix.tsv" "$R-changelog.tsv"; then
+	echo "conflict and Breaking/Removed proofs are still pending" >&2
+	exit 1
+fi
+bun scripts/verify-upstream-handoff.ts --record "$R.json"
+```
+
+The verifier must print `PASS`. Commit the review on the intake branch (HEAD may move past the fork pin only under `docs/upstream-review-`):
+
+```bash
+set -euo pipefail
+git switch "intake/${C:0:12}"
+git add "$R"*
+git commit -m "OMP-401: review $V"
+```
+
+`update.sh` merges `$C` with `--no-ff` after the strict review passes. When the merge conflicts, `update.sh` exits on `git merge` (`set -e`) before it can commit. Default rerere writes the scratch resolution into the worktree and leaves the index unmerged. Cherry-pick runs only after that merge commit exists, so stage the replayed files and commit:
+
+```bash
+set -euo pipefail
+if ! bash session-system/update.sh "$C"; then
+	git rev-parse -q --verify MERGE_HEAD >/dev/null
+	git diff --name-only --diff-filter=U
+	git add -u
+	git commit --no-edit
+fi
+SCRATCH_TIP=$(git rev-parse "scratch/${C:0:12}")
+SCRATCH_MERGE=$(git rev-list --merges --ancestry-path "${C}..${SCRATCH_TIP}" | tail -n 1)
+test -n "$SCRATCH_MERGE"
+REPAIRS=$(git rev-list --reverse "${SCRATCH_MERGE}..${SCRATCH_TIP}" || true)
+if [ -n "$REPAIRS" ]; then
+	git cherry-pick $REPAIRS
+fi
+```
+
+That `git diff --name-only --diff-filter=U` line still lists the replayed paths: rerere does not stage them, so the list is empty only after `git add -u`. If a listed file still contains conflict markers, edit it before `git add -u`, then run `git commit --no-edit`.
+
+Advance the baseline by copying the review record to `docs/upstream-baseline.json` and setting `accepted_at` to today's UTC date. Refresh the inventory, reject a shared placeholder, and record the patch list:
+
+```bash
+set -euo pipefail
+export R
+bun -e 'const rec = await Bun.file(`${process.env.R}.json`).json(); const ordered = {}; for (const [k, v] of Object.entries(rec)) { if (k === "upstream_changes") ordered.accepted_at = new Date().toISOString().slice(0, 10); ordered[k] = v; } if (typeof ordered.accepted_at !== "string") ordered.accepted_at = new Date().toISOString().slice(0, 10); await Bun.write("docs/upstream-baseline.json", `${JSON.stringify(ordered, null, "\t")}\n`);'
 bun scripts/upstream-inventory.ts --write
+```
+
+Edit the behavior text of every inventory row `--write` added or whose description changed. A shared row whose behavior still starts with `fork change (describe)` fails the inventory check. Then check, print the patch list, and commit the baseline:
+
+```bash
+set -euo pipefail
+bun scripts/upstream-inventory.ts
 bun scripts/upstream-inventory.ts --patches
-git add docs/upstream-baseline.json docs/upstream-fork-inventory.tsv && git commit -m "OMP-401: advance baseline to $V"
+git add docs/upstream-baseline.json docs/upstream-fork-inventory.tsv
+git commit -m "OMP-401: advance baseline to $V"
+```
 
-# 11. Run full post-merge verification gates (gates 1-12)
-bash session-system/update.sh $C
+With `$C` an ancestor of HEAD, `update.sh` runs gates 1–12:
 
-# 12. Push intake branch and merge PR (merge commit only, no squash/rebase)
-git push origin intake/${C:0:12}
+```bash
+set -euo pipefail
+bash session-system/update.sh "$C"
+```
 
-# 13. Fast-forward main, deploy, and resume workers
-cd ../oh-my-pi && git fetch origin && git merge --ff-only origin/main
+Push the intake branch, open the pull request, and merge it with a merge commit (`gh pr merge --merge`). Then fast-forward the frozen `main` checkout, deploy, and start flood:
+
+```bash
+set -euo pipefail
+git push -u origin "intake/${C:0:12}"
+gh pr create --base main --head "intake/${C:0:12}" --title "OMP-401: intake upstream $V" --body "Incorporate upstream ${C} (${V}) by merge commit."
+gh pr merge --merge
+cd /home/thetu/flood-repos/oh-my-pi
+git fetch origin
+git switch main
+git merge --ff-only origin/main
 bash /home/thetu/flood/deploy-omp.sh
 systemctl --user start flood
 ```
