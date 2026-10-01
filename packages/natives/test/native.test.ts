@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -149,9 +149,10 @@ function textPdf(text: string): Uint8Array {
 describe("pi-natives", () => {
 	beforeAll(async () => {
 		await setupFixtures();
-		return async () => {
-			await cleanupFixtures();
-		};
+	});
+
+	afterAll(async () => {
+		await cleanupFixtures();
 	});
 
 	describe("summarize", () => {
