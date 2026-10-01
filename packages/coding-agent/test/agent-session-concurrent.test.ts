@@ -450,6 +450,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		});
 		let stopCount = 0;
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			emit: vi.fn().mockResolvedValue(undefined),
 			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
 			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
@@ -526,6 +527,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		});
 		let stopCount = 0;
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			emit: vi.fn().mockResolvedValue(undefined),
 			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
 			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
@@ -561,6 +563,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		});
 		let stopCount = 0;
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			emit: vi.fn().mockResolvedValue(undefined),
 			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
 			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
@@ -2259,6 +2262,7 @@ describe("AgentSession TTSR resume gate", () => {
 
 		let assistantStarts = 0;
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			emit: vi.fn(async (event: { type: string; message?: { role?: string } }) => {
 				if (event.type === "message_start" && event.message?.role === "assistant" && ++assistantStarts === 2) {
 					retryStartEntered.resolve();
@@ -2360,6 +2364,7 @@ describe("AgentSession TTSR resume gate", () => {
 		});
 
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			emit: vi.fn(async (event: { type: string }) => {
 				if (event.type === "turn_start") {
 					turnStartEntered.resolve();

@@ -111,6 +111,7 @@ describe("print mode disposes the session before terminating", () => {
 		let signalCallback: ((reason: postmortem.Reason) => void | Promise<void>) | undefined;
 		let disposeReason: postmortem.Reason | "dispose" | undefined;
 		const session = {
+			waitForIdle: async () => {},
 			extensionRunner: undefined,
 			subscribe: () => {},
 			settings: Settings.isolated(),

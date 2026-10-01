@@ -118,6 +118,7 @@ async function createHarness(): Promise<ShutdownHarness> {
 	const latchedBeforeRun: Error[] = [];
 
 	const session = {
+		waitForIdle: async () => {},
 		extensionRunner: undefined,
 		model: { provider: "anthropic", id: "test-model" },
 		settings: Settings.isolated(),

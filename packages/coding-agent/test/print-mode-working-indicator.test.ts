@@ -407,6 +407,7 @@ describe("print mode working indicator", () => {
 		const messages: AssistantMessage[] = [];
 		let disposed = false;
 		const session = {
+			waitForIdle: async () => {},
 			state: { messages },
 			getLastAssistantMessage: () => messages.findLast(message => message.role === "assistant"),
 			sessionManager: {

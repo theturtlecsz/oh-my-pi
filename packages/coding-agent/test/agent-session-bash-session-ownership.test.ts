@@ -183,6 +183,7 @@ describe("AgentSession bash session ownership", () => {
 			}));
 			const definition = createBashTool(tempDir.path(), { spawnHook });
 			const extensionRunner = {
+				setTaskResultProcessingGate: () => {},
 				hasHandlers: vi.fn(() => false),
 				getRegisteredTool: vi.fn((name: string) => (name === "bash" ? { definition } : undefined)),
 				emit: vi.fn().mockResolvedValue(undefined),
@@ -226,6 +227,7 @@ describe("AgentSession bash session ownership", () => {
 		});
 		const definition = createBashTool(tempDir.path(), { spawnHook });
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			hasHandlers: vi.fn(() => false),
 			getRegisteredTool: vi.fn((name: string) => (name === "bash" ? { definition } : undefined)),
 			emit: vi.fn().mockResolvedValue(undefined),

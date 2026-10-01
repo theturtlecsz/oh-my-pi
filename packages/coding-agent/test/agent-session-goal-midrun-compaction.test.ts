@@ -599,6 +599,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 		const contextMessageEndEntered = Promise.withResolvers<void>();
 		const turnEndEntered = Promise.withResolvers<void>();
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			hasHandlers: vi.fn(
 				(eventType: string) => eventType === "tool_call" || eventType === "message_end" || eventType === "turn_end",
 			),

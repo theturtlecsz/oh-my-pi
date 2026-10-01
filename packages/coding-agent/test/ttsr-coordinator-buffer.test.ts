@@ -44,6 +44,7 @@ function makeHost(): CoordinatorHostBundle {
 	);
 	const host = {
 		agent: {
+			waitForIdle: async () => {},
 			state: { messages: [], tools: [] },
 			abort: vi.fn(),
 			followUp,

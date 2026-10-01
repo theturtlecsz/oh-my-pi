@@ -56,6 +56,7 @@ function printSession(manager: MCPManager, refreshGate?: Promise<void>, onRefres
 	let prompted: string[] | undefined;
 	let disposed = false;
 	const session = {
+		waitForIdle: async () => {},
 		extensionRunner: undefined,
 		subscribe: () => {},
 		settings: Settings.isolated(),

@@ -283,6 +283,7 @@ describe("AgentSession.switchSession previous-context build", () => {
 
 		const emit = vi.fn(async () => ({ cancel: true }));
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			hasHandlers: (eventType: string) => eventType === "session_before_switch",
 			emit,
 		} as unknown as ExtensionRunner;

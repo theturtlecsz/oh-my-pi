@@ -96,6 +96,7 @@ function newSession(model: Model, options: { beforeAgentStartSystemPrompt?: stri
 		builtInToolNames: ["read", "bash"],
 		extensionRunner: options.beforeAgentStartSystemPrompt
 			? ({
+					setTaskResultProcessingGate: () => {},
 					emitBeforeAgentStart: async () => ({ systemPrompt: options.beforeAgentStartSystemPrompt }),
 					emit: async () => undefined,
 				} as unknown as ExtensionRunner)

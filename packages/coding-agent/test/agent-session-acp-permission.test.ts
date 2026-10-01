@@ -224,6 +224,8 @@ it("explicit yolo still gates tools whose per-tool policy requires a prompt", as
  */
 function noUiRunner(): ExtensionRunner {
 	return {
+		prepareToolDispatchGuard: () => undefined,
+		enterTaskResultProcessing: async () => {},
 		hasHandlers: () => false,
 		consumeToolCallEmitted: () => false,
 		hasUI: () => false,

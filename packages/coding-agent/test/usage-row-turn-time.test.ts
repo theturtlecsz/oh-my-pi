@@ -478,7 +478,7 @@ describe("AgentSession synthetic follow-up marking", () => {
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated(),
 			modelRegistry,
-			extensionRunner: {} as unknown as ExtensionRunner,
+			extensionRunner: { setTaskResultProcessingGate: () => {} } as unknown as ExtensionRunner,
 		});
 		try {
 			// The approved-plan execution path queues the hidden directive this way
@@ -517,6 +517,7 @@ describe("AgentSession synthetic follow-up marking", () => {
 			settings: Settings.isolated(),
 			modelRegistry,
 			extensionRunner: {
+				setTaskResultProcessingGate: () => {},
 				emit: vi.fn(async () => undefined),
 				emitBeforeAgentStart: vi.fn(async () => undefined),
 				hasHandlers: vi.fn(() => false),
