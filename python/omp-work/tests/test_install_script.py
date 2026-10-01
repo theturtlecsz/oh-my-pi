@@ -130,6 +130,44 @@ def test_render_only_targets_installed_python_without_creating_live_state(tmp_pa
         ]
 
 
+def test_restore_drill_timer_fires_after_daily_backup(tmp_path):
+    """The monthly drill must fire at a fixed hour after the daily backup."""
+    install_script = (
+        Path(__file__).resolve().parents[3] / "infra/work-ledger/install.sh"
+    )
+    home = tmp_path / "home"
+    units = tmp_path / "units"
+    result = subprocess.run(
+        [
+            "bash",
+            str(install_script),
+            "--render-only",
+            "--python",
+            "/candidate/python",
+            "--unit-dir",
+            str(units),
+        ],
+        env={
+            **os.environ,
+            "HOME": str(home),
+            "XDG_CONFIG_HOME": str(tmp_path / "config"),
+            "XDG_STATE_HOME": str(tmp_path / "state"),
+            "XDG_DATA_HOME": str(tmp_path / "data"),
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (units / "omp-work-restore-drill.timer").read_text() == (
+        "[Timer]\nOnCalendar=*-*-01 01:00:00\nPersistent=true\n"
+        "[Install]\nWantedBy=timers.target\n"
+    )
+    assert (units / "omp-work-backup.timer").read_text() == (
+        "[Timer]\nOnCalendar=daily\nPersistent=true\n"
+        "[Install]\nWantedBy=timers.target\n"
+    )
+
+
 @pytest.mark.parametrize(
     "destination", ["omitted", "home", "xdg", "directory-symlink", "unit-symlink", "unit-hardlink"]
 )

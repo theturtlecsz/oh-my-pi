@@ -137,7 +137,7 @@ Persistent=true
 WantedBy=timers.target
 ''',
     "omp-work-restore-drill.timer": '''[Timer]
-OnCalendar=monthly
+OnCalendar=*-*-01 01:00:00
 Persistent=true
 [Install]
 WantedBy=timers.target
