@@ -6,9 +6,7 @@ import { $ } from "bun";
 
 async function loadStepScript(): Promise<string> {
 	const ciYml = await Bun.file(path.join(import.meta.dir, "..", ".github", "workflows", "ci.yml")).text();
-	const match = ciYml.match(
-		/name: Resolve installed qualification mode[\s\S]*?\n\s+run: \|\n([\s\S]*?)\n\s+- name:/,
-	);
+	const match = ciYml.match(/name: Resolve installed qualification mode[\s\S]*?\n\s+run: \|\n([\s\S]*?)\n\s+- name:/);
 	const body = match?.[1];
 	if (!body) {
 		throw new Error("Failed to extract Resolve installed qualification mode script from .github/workflows/ci.yml");
@@ -185,9 +183,7 @@ describe("CI installed qualification mode step", () => {
 			await $`git -C ${fixture.clone} remote set-url origin ${path.join(fixture.base, "missing.git")}`.quiet();
 			const result = await runStep(fixture);
 			expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(0);
-			expect(result.stdout).toContain(
-				"installed qualification mode: full (changed files unavailable: git fetch",
-			);
+			expect(result.stdout).toContain("installed qualification mode: full (changed files unavailable: git fetch");
 			const output = await Bun.file(fixture.githubOutput).text();
 			expect(output).toContain("mode=full");
 			expect(result.bunLog).toBe("");
