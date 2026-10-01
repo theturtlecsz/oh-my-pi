@@ -3,7 +3,14 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { $ } from "bun";
-import { findVersionMin, parseArgs, seedReview } from "./upstream-review-seed.ts";
+import {
+	applyHandoffIndex,
+	buildChangelogRows,
+	buildHandoffIndex,
+	findVersionMin,
+	parseArgs,
+	seedReview,
+} from "./upstream-review-seed.ts";
 import {
 	type ChangelogRow,
 	formatChangelogTsv,
@@ -13,7 +20,6 @@ import {
 	parseMatrixTsv,
 	parseRecord,
 	parseSourcesTsv,
-	validate,
 } from "./verify-upstream-handoff.ts";
 
 const dirs: string[] = [];
@@ -42,6 +48,21 @@ async function commitAll(dir: string, subject: string): Promise<string> {
 	await ok(dir, ["add", "-A"]);
 	await ok(dir, ["commit", "-m", subject]);
 	return (await ok(dir, ["rev-parse", "HEAD"])).trim();
+}
+
+function indexIds(handoff: string): string[] {
+	const begin = "<!-- seed:index:begin -->";
+	const end = "<!-- seed:index:end -->";
+	const start = handoff.indexOf(begin);
+	const stop = handoff.indexOf(end, start + begin.length);
+	expect(start).toBeGreaterThanOrEqual(0);
+	expect(stop).toBeGreaterThan(start);
+	const lines = handoff
+		.slice(start + begin.length, stop)
+		.split("\n")
+		.filter(line => line.length > 0);
+	expect(lines.every(line => line.startsWith("- "))).toBe(true);
+	return lines.map(line => line.slice(2));
 }
 
 afterEach(async () => {
@@ -104,6 +125,83 @@ describe("formatMatrixTsv and formatChangelogTsv exports", () => {
 	test("formatChangelogTsv([]) writes header only", () => {
 		const tsv = formatChangelogTsv([]);
 		expect(tsv).toBe("entry_id\tpackage\tversion\tsection\ttext\tdisposition\tproof\n");
+	});
+});
+
+describe("changelog ledger and handoff index", () => {
+	test("buildChangelogRows keeps an existing entry_id row and drops rows that are not derived", () => {
+		const kept: ChangelogRow = {
+			id: "x@1.0.1:added:1",
+			pkg: "x",
+			version: "1.0.1",
+			section: "Added",
+			text: "hand edited text",
+			disposition: "not-applicable",
+			proof: "pending:custom",
+		};
+		const rows = buildChangelogRows(
+			[
+				{ id: "x@1.0.1:added:1", pkg: "x", version: "1.0.1", section: "Added", text: "fresh" },
+				{ id: "x@1.0.1:breaking:1", pkg: "x", version: "1.0.1", section: "Breaking Changes", text: "break" },
+				{ id: "x@1.0.1:removed:1", pkg: "x", version: "1.0.1", section: "Removed", text: "gone" },
+			],
+			[
+				kept,
+				{
+					id: "x@0.9.0:added:1",
+					pkg: "x",
+					version: "0.9.0",
+					section: "Added",
+					text: "stale",
+					disposition: "adopted",
+					proof: "old",
+				},
+			],
+		);
+		expect(rows).toEqual([
+			kept,
+			{
+				id: "x@1.0.1:breaking:1",
+				pkg: "x",
+				version: "1.0.1",
+				section: "Breaking Changes",
+				text: "break",
+				disposition: "re-fitted",
+				proof: "pending:decide re-fitted or not-applicable",
+			},
+			{
+				id: "x@1.0.1:removed:1",
+				pkg: "x",
+				version: "1.0.1",
+				section: "Removed",
+				text: "gone",
+				disposition: "re-fitted",
+				proof: "pending:decide re-fitted or not-applicable",
+			},
+		]);
+	});
+
+	test("buildHandoffIndex sorts every surface, source, and changelog id", () => {
+		expect(buildHandoffIndex(["f.txt", "a.txt"], ["sfff", "s000"], ["x@1.0.1:breaking:1", "m@1.0.1:added:1"])).toBe(
+			["- a.txt", "- f.txt", "- m@1.0.1:added:1", "- s000", "- sfff", "- x@1.0.1:breaking:1"].join("\n"),
+		);
+	});
+
+	test("applyHandoffIndex appends missing markers and keeps text outside them", () => {
+		const body = buildHandoffIndex(["b.txt"], ["s1"], ["x@1.0.1:added:1"]);
+		const appended = applyHandoffIndex("Hand-written review note.\n", body);
+		expect(appended.startsWith("Hand-written review note.\n")).toBe(true);
+		expect(appended).toContain("<!-- seed:index:begin -->");
+		expect(appended).toContain("<!-- seed:index:end -->");
+		expect(applyHandoffIndex(appended, body)).toBe(appended);
+
+		const withBelow = appended.replace("<!-- seed:index:end -->\n", "<!-- seed:index:end -->\n\nNotes below.\n");
+		const replaced = applyHandoffIndex(withBelow, buildHandoffIndex(["c.txt"], [], []));
+		expect(replaced.startsWith("Hand-written review note.\n")).toBe(true);
+		expect(replaced.endsWith("<!-- seed:index:end -->\n\nNotes below.\n")).toBe(true);
+		expect(replaced).toContain("- c.txt\n");
+		expect(replaced).not.toContain("b.txt");
+		expect(applyHandoffIndex(replaced, buildHandoffIndex(["c.txt"], [], []))).toBe(replaced);
 	});
 });
 
@@ -214,6 +312,29 @@ describe("upstream-review-seed end-to-end fixture", () => {
 			path.join(dir, "packages", "core", "CHANGELOG.md"),
 			["# Changelog", "", "## [1.0.1]", "", "- Update core module", ""].join("\n"),
 		);
+		await Bun.write(
+			path.join(dir, "packages", "x", "CHANGELOG.md"),
+			[
+				"# Changelog",
+				"",
+				"## [1.0.1]",
+				"",
+				"### Added",
+				"",
+				"- Ship the x widget",
+				"",
+				"### Breaking Changes",
+				"",
+				"- Drop the x legacy flag",
+				"",
+				"## [0.9.0]",
+				"",
+				"### Added",
+				"",
+				"- Old x helper below the range",
+				"",
+			].join("\n"),
+		);
 		const targetSha = await commitAll(dir, "target release commit");
 
 		// Fork branch (branched from baseSha):
@@ -288,11 +409,24 @@ describe("upstream-review-seed end-to-end fixture", () => {
 		expect(await Bun.file(changelogPath).exists()).toBe(true);
 		expect(await Bun.file(handoffPath).exists()).toBe(true);
 
-		// Missing changelog is header-only, handoff is empty
-		expect(await Bun.file(changelogPath).text()).toBe(
-			"entry_id\tpackage\tversion\tsection\ttext\tdisposition\tproof\n",
-		);
-		expect(await Bun.file(handoffPath).text()).toBe("");
+		const changelogRows = parseChangelogTsv(await Bun.file(changelogPath).text());
+		expect(changelogRows.map(row => row.id)).toEqual(["x@1.0.1:added:1", "x@1.0.1:breaking:1"]);
+		expect(changelogRows[0]).toMatchObject({
+			pkg: "x",
+			version: "1.0.1",
+			section: "Added",
+			text: "Ship the x widget",
+			disposition: "adopted",
+			proof: "pending:session-system/update.sh gates 3-12",
+		});
+		expect(changelogRows[1]).toMatchObject({
+			section: "Breaking Changes",
+			text: "Drop the x legacy flag",
+			disposition: "re-fitted",
+			proof: "pending:decide re-fitted or not-applicable",
+		});
+		expect(await Bun.file(changelogPath).text()).not.toContain("0.9.0");
+		expect(await Bun.file(changelogPath).text()).not.toContain("Old x helper below the range");
 
 		// Verify record JSON pins
 		const record = parseRecord(await Bun.file(recordPath).text(), recordPath);
@@ -349,11 +483,22 @@ describe("upstream-review-seed end-to-end fixture", () => {
 		expect(fRow?.classification).toBe("retained");
 		expect(fRow?.resolution).toBe("carried unchanged");
 		expect(fRow?.proof).toBe(`pending:git diff --exit-code ${fork12} HEAD -- f.txt`);
+
+		const sources = parseSourcesTsv(await Bun.file(sourcesPath).text());
+		const listed = indexIds(await Bun.file(handoffPath).text());
+		expect(listed).toEqual(
+			[
+				...matrixRows.map(row => row.surfaceId),
+				...sources.map(source => source.id),
+				...changelogRows.map(row => row.id),
+			].sort(),
+		);
 	});
 
-	test("--allow-pending verify shows no sources, upstream, matrix or conflict errors", async () => {
+	test("allow-pending verify passes and the strict run lists pending proofs", async () => {
 		const { dir, targetSha, forkSha } = await createFixtureRepo();
 		const target12 = targetSha.slice(0, 12);
+		const fork12 = forkSha.slice(0, 12);
 
 		await seedReview({
 			target: targetSha,
@@ -363,43 +508,23 @@ describe("upstream-review-seed end-to-end fixture", () => {
 			cwd: dir,
 		});
 
-		const recordPath = path.join(dir, `docs/upstream-review-${target12}.json`);
-		const sourcesPath = path.join(dir, `docs/upstream-review-${target12}-sources.tsv`);
-		const matrixPath = path.join(dir, `docs/upstream-review-${target12}-matrix.tsv`);
-		const changelogPath = path.join(dir, `docs/upstream-review-${target12}-changelog.tsv`);
-		const handoffPath = path.join(dir, `docs/upstream-review-${target12}-handoff.md`);
+		const verify = path.join(import.meta.dir, "verify-upstream-handoff.ts");
+		const recordRel = `docs/upstream-review-${target12}.json`;
+		const allowed = await $`bun ${verify} --record ${recordRel} --allow-pending`
+			.cwd(dir)
+			.quiet()
+			.nothrow()
+			.env(GIT_ENV);
+		expect(allowed.exitCode).toBe(0);
+		expect(allowed.text()).toContain("PASS");
 
-		const record = parseRecord(await Bun.file(recordPath).text(), recordPath);
-		const frozenSources = parseSourcesTsv(await Bun.file(sourcesPath).text());
-		const matrix = parseMatrixTsv(await Bun.file(matrixPath).text());
-		const changelogRows = parseChangelogTsv(await Bun.file(changelogPath).text());
-		const handoffText = await Bun.file(handoffPath).text();
-
-		// Run validate() directly with allowPending: true
-		const errors = validate({
-			frozenSources,
-			computedSources: frozenSources,
-			matrix,
-			changelogRows,
-			derivedEntries: [],
-			forkPaths: new Set(["a.txt", "c.txt", "f.txt"]),
-			sharedPaths: new Set(["a.txt", "c.txt"]),
-			conflictPaths: new Set(["a.txt"]),
-			frozenUpstream: record.upstreamChanges,
-			computedUpstream: record.upstreamChanges,
-			handoffText,
-			allowPending: true,
-		});
-
-		// Only handoff missing links are expected because handoff is written empty
-		const nonHandoffErrors = errors.filter(
-			e =>
-				e.startsWith("sources:") ||
-				e.startsWith("upstream:") ||
-				e.startsWith("matrix") ||
-				e.startsWith("conflict:"),
-		);
-		expect(nonHandoffErrors).toEqual([]);
+		const strict = await $`bun ${verify} --record ${recordRel}`.cwd(dir).quiet().nothrow().env(GIT_ENV);
+		expect(strict.exitCode).toBe(1);
+		const err = strict.stderr.toString();
+		expect(err).toContain("pending:session-system/update.sh gates 3-12");
+		expect(err).toContain("pending:decide re-fitted or not-applicable");
+		expect(err).toContain("pending:resolve and name the focused test");
+		expect(err).toContain(`pending:git diff --exit-code ${fork12} HEAD -- f.txt`);
 	});
 
 	test("hand edits survive re-seeding and re-seed is byte-identical", async () => {
@@ -468,6 +593,76 @@ describe("upstream-review-seed end-to-end fixture", () => {
 
 		const finalMatrixText = await Bun.file(matrixPath).text();
 		expect(finalMatrixText).toBe(reseededMatrixText);
+	});
+
+	test("changelog and handoff hand edits survive a byte-identical re-seed", async () => {
+		const { dir, targetSha, forkSha } = await createFixtureRepo();
+		const target12 = targetSha.slice(0, 12);
+		const seed = () =>
+			seedReview({
+				target: targetSha,
+				version: "1.0.2",
+				fork: forkSha,
+				dir: "docs",
+				cwd: dir,
+			});
+
+		await seed();
+		const changelogPath = path.join(dir, `docs/upstream-review-${target12}-changelog.tsv`);
+		const handoffPath = path.join(dir, `docs/upstream-review-${target12}-handoff.md`);
+		const firstChangelog = await Bun.file(changelogPath).text();
+		const firstHandoff = await Bun.file(handoffPath).text();
+		await seed();
+		expect(await Bun.file(changelogPath).text()).toBe(firstChangelog);
+		expect(await Bun.file(handoffPath).text()).toBe(firstHandoff);
+
+		const edited = parseChangelogTsv(firstChangelog).map(row =>
+			row.id === "x@1.0.1:breaking:1" ? { ...row, proof: "pending:custom changelog proof" } : row,
+		);
+		edited.push({
+			id: "x@0.9.0:added:1",
+			pkg: "x",
+			version: "0.9.0",
+			section: "Added",
+			text: "Old x helper below the range",
+			disposition: "adopted",
+			proof: "should be dropped",
+		});
+		await Bun.write(changelogPath, formatChangelogTsv(edited));
+		await Bun.write(handoffPath, "Hand-written review note.\n\nStill above the index.\n");
+
+		await seed();
+		const afterChangelog = await Bun.file(changelogPath).text();
+		const afterRows = parseChangelogTsv(afterChangelog);
+		expect(afterRows.map(row => row.id)).toEqual(["x@1.0.1:added:1", "x@1.0.1:breaking:1"]);
+		expect(afterRows.find(row => row.id === "x@1.0.1:added:1")?.disposition).toBe("adopted");
+		expect(afterRows.find(row => row.id === "x@1.0.1:breaking:1")?.proof).toBe("pending:custom changelog proof");
+		expect(afterChangelog).not.toContain("0.9.0");
+
+		const afterHandoff = await Bun.file(handoffPath).text();
+		expect(afterHandoff.startsWith("Hand-written review note.\n\nStill above the index.\n")).toBe(true);
+		expect(afterHandoff.indexOf("Hand-written review note.")).toBeLessThan(
+			afterHandoff.indexOf("<!-- seed:index:begin -->"),
+		);
+		const listed = indexIds(afterHandoff);
+		expect(listed).toContain("x@1.0.1:added:1");
+		expect(listed).toContain("x@1.0.1:breaking:1");
+		expect(listed).not.toContain("x@0.9.0:added:1");
+
+		const withBelow = afterHandoff.replace(
+			"<!-- seed:index:end -->\n",
+			"<!-- seed:index:end -->\n\nSettled by hand.\n",
+		);
+		await Bun.write(handoffPath, withBelow);
+		await seed();
+		const keptHandoff = await Bun.file(handoffPath).text();
+		expect(keptHandoff.startsWith("Hand-written review note.\n\nStill above the index.\n")).toBe(true);
+		expect(keptHandoff.endsWith("<!-- seed:index:end -->\n\nSettled by hand.\n")).toBe(true);
+		expect(await Bun.file(changelogPath).text()).toBe(afterChangelog);
+
+		await seed();
+		expect(await Bun.file(changelogPath).text()).toBe(afterChangelog);
+		expect(await Bun.file(handoffPath).text()).toBe(keptHandoff);
 	});
 
 	test("CLI execution via bun scripts/upstream-review-seed.ts", async () => {

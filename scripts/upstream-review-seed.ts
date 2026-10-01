@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// upstream-review-seed.ts — create or refresh a review record and its fork matrix (OMP-401).
+// upstream-review-seed.ts — create or refresh a review record and its companions (OMP-401).
 //
 // CLI:
 //   bun scripts/upstream-review-seed.ts --target <sha> --version <X.Y.Z> [--fork <rev>]
@@ -7,23 +7,39 @@
 //
 // Generates or updates <dir>/upstream-review-<target12>.json and its companion files:
 //   <stem>-sources.tsv, <stem>-matrix.tsv, <stem>-changelog.tsv, <stem>-handoff.md
+//
+// Changelog rows are the entries deriveChangelogEntries produces for every
+// packages/*/CHANGELOG.md at the target, over [version_min, version_max].
+// An existing row matched by entry_id is kept verbatim; a row that is no longer
+// derived is dropped. A new Added row is `adopted` with proof
+// `pending:session-system/update.sh gates 3-12`. Any other new row is `re-fitted`
+// with proof `pending:decide re-fitted or not-applicable`.
+//
+// Handoff text outside <!-- seed:index:begin --> and <!-- seed:index:end --> is
+// kept (the markers are appended when missing). The block between them is
+// regenerated as a sorted list of every surface id, source id, and changelog entry id.
 
 import * as path from "node:path";
 import { type InventoryRow, parseInventoryTsv } from "./upstream-inventory.ts";
 import {
+	type ChangelogRow,
 	compareVersions,
 	computeSourceRecords,
 	computeUpstreamChanges,
+	type DerivedEntry,
+	deriveChangelogEntries,
 	formatChangelogTsv,
 	formatMatrixTsv,
 	formatSourcesTsv,
 	formatUpstreamEntry,
 	type MatrixRow,
+	parseChangelogTsv,
 	parseMatrixTsv,
 	parseMergeTreeConflicts,
 	type SourceRecord,
 	type UpstreamChange,
 	unquoteGitPath,
+	type VersionRange,
 } from "./verify-upstream-handoff.ts";
 
 export type GitRunner = (args: string[], okExitCodes?: number[]) => Promise<string>;
@@ -211,6 +227,73 @@ export function buildMatrixRows(
 	return rows;
 }
 
+const ADDED_CHANGELOG_PROOF = "pending:session-system/update.sh gates 3-12";
+const OTHER_CHANGELOG_PROOF = "pending:decide re-fitted or not-applicable";
+
+/** One ledger row per derived entry. Existing entry_id rows stay verbatim; the rest are dropped. */
+export function buildChangelogRows(derived: DerivedEntry[], existing: ChangelogRow[]): ChangelogRow[] {
+	const existingById = new Map(existing.map(row => [row.id, row]));
+	return derived.map(entry => {
+		const kept = existingById.get(entry.id);
+		if (kept) return kept;
+		const added = entry.section === "Added";
+		return {
+			id: entry.id,
+			pkg: entry.pkg,
+			version: entry.version,
+			section: entry.section,
+			text: entry.text,
+			disposition: added ? "adopted" : "re-fitted",
+			proof: added ? ADDED_CHANGELOG_PROOF : OTHER_CHANGELOG_PROOF,
+		};
+	});
+}
+
+export const SEED_INDEX_BEGIN = "<!-- seed:index:begin -->";
+export const SEED_INDEX_END = "<!-- seed:index:end -->";
+
+/** Sorted markdown list of every surface id, source id, and changelog entry id. */
+export function buildHandoffIndex(
+	surfaceIds: readonly string[],
+	sourceIds: readonly string[],
+	entryIds: readonly string[],
+): string {
+	return [...surfaceIds, ...sourceIds, ...entryIds]
+		.sort()
+		.map(id => `- ${id}`)
+		.join("\n");
+}
+
+/**
+ * Replace the seed-index block, or append the markers when the pair is missing.
+ * Text outside the markers is preserved byte for byte.
+ */
+export function applyHandoffIndex(existing: string, indexBody: string): string {
+	const block = `${SEED_INDEX_BEGIN}\n${indexBody}${indexBody ? "\n" : ""}${SEED_INDEX_END}`;
+	const begin = existing.indexOf(SEED_INDEX_BEGIN);
+	const end = begin >= 0 ? existing.indexOf(SEED_INDEX_END, begin + SEED_INDEX_BEGIN.length) : -1;
+	if (begin >= 0 && end >= 0) {
+		return existing.slice(0, begin) + block + existing.slice(end + SEED_INDEX_END.length);
+	}
+	if (existing.length === 0) return `${block}\n`;
+	return `${existing}${existing.endsWith("\n") ? "" : "\n"}${block}\n`;
+}
+
+async function deriveTargetChangelogEntries(
+	targetSha: string,
+	range: VersionRange,
+	git: GitRunner,
+): Promise<DerivedEntry[]> {
+	const lsText = await git(["ls-tree", "-r", "--name-only", targetSha]);
+	const changelogPaths = lsText.split("\n").filter(p => /^packages\/[^/]+\/CHANGELOG\.md$/.test(p));
+	const entries: DerivedEntry[] = [];
+	for (const clPath of changelogPaths) {
+		const pkg = clPath.split("/")[1];
+		entries.push(...deriveChangelogEntries(pkg, await git(["show", `${targetSha}:${clPath}`]), range));
+	}
+	return entries;
+}
+
 export interface SeedReviewOptions {
 	target: string;
 	version: string;
@@ -234,6 +317,7 @@ export interface SeedResult {
 	versionMin: string;
 	versionMax: string;
 	matrixRows: MatrixRow[];
+	changelogRows: ChangelogRow[];
 	computedSources: SourceRecord[];
 	computedUpstream: UpstreamChange[];
 }
@@ -355,19 +439,32 @@ export async function seedReview(options: SeedReviewOptions): Promise<SeedResult
 		fork12,
 	);
 
+	const derivedEntries = await deriveTargetChangelogEntries(targetSha, { min: versionMin, max: versionMax }, git);
+	let existingChangelog: ChangelogRow[] = [];
+	const existingChangelogFile = Bun.file(changelogDiskPath);
+	if (await existingChangelogFile.exists()) {
+		try {
+			existingChangelog = parseChangelogTsv(await existingChangelogFile.text());
+		} catch {}
+	}
+	const changelogRows = buildChangelogRows(derivedEntries, existingChangelog);
+
+	const existingHandoffFile = Bun.file(handoffDiskPath);
+	const existingHandoff = (await existingHandoffFile.exists()) ? await existingHandoffFile.text() : "";
+	const handoffText = applyHandoffIndex(
+		existingHandoff,
+		buildHandoffIndex(
+			matrixRows.map(row => row.surfaceId),
+			computedSources.map(source => source.id),
+			changelogRows.map(row => row.id),
+		),
+	);
+
 	// Write companion files
 	await Bun.write(sourcesDiskPath, formatSourcesTsv(computedSources));
 	await Bun.write(matrixDiskPath, formatMatrixTsv(matrixRows));
-
-	const changelogFile = Bun.file(changelogDiskPath);
-	if (!(await changelogFile.exists())) {
-		await Bun.write(changelogDiskPath, formatChangelogTsv([]));
-	}
-
-	const handoffFile = Bun.file(handoffDiskPath);
-	if (!(await handoffFile.exists())) {
-		await Bun.write(handoffDiskPath, "");
-	}
+	await Bun.write(changelogDiskPath, formatChangelogTsv(changelogRows));
+	await Bun.write(handoffDiskPath, handoffText);
 
 	// Read existing record if present to keep any extra properties
 	const recordFile = Bun.file(recordDiskPath);
@@ -408,6 +505,7 @@ export async function seedReview(options: SeedReviewOptions): Promise<SeedResult
 		versionMin,
 		versionMax,
 		matrixRows,
+		changelogRows,
 		computedSources,
 		computedUpstream,
 	};
@@ -425,7 +523,7 @@ async function main(): Promise<void> {
 	try {
 		const result = await seedReview(args);
 		console.log(
-			`seeded review ${result.recordPath} (${result.matrixRows.length} matrix rows, ${result.computedSources.length} sources, ${result.computedUpstream.length} upstream changes)`,
+			`seeded review ${result.recordPath} (${result.matrixRows.length} matrix rows, ${result.computedSources.length} sources, ${result.changelogRows.length} changelog entries, ${result.computedUpstream.length} upstream changes)`,
 		);
 	} catch (err) {
 		console.error(`ERROR: ${err instanceof Error ? err.message : err}`);
