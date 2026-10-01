@@ -22,9 +22,11 @@ table in step with that unit map.
 | `omp-work-backup.service` | `omp-work-backup.timer` (daily) | `control_plane_op` |
 | `omp-work-wal.service` | `omp-work-wal.timer` (every 5 minutes) | `control_plane_op` |
 | `omp-work-restore-drill.service` | `omp-work-restore-drill.timer` (monthly) | `control_plane_op` |
+| `omp-events-push.service` | `omp-events-push.timer` (every 5 minutes) | `control_plane_op` |
 | `omp-work-backup.timer` | systemd user timer (`infra/work-ledger/install.sh`) | `control_plane_op` |
 | `omp-work-wal.timer` | systemd user timer (`infra/work-ledger/install.sh`) | `control_plane_op` |
 | `omp-work-restore-drill.timer` | systemd user timer (`infra/work-ledger/install.sh`) | `control_plane_op` |
+| `omp-events-push.timer` | systemd user timer (`infra/work-ledger/install.sh`) | `control_plane_op` |
 
 Dispositions:
 
@@ -32,6 +34,6 @@ Dispositions:
   task raises `UnattendedRefused` before any RPC session starts. No model runs.
 - `control_plane` — the ledger's own service process (PostgreSQL, the HTTP
   service, the native jobs worker). It runs no model and no worker agent.
-- `control_plane_op` — a deterministic `omp_work ops` command run by a systemd
+- `control_plane_op` — a deterministic `omp_work ops` or `omp_work events push` (ops.alarm/ops.digest push) command run by a systemd
   timer under the ledger's service identity. It reads no model and starts no
   worker session.
