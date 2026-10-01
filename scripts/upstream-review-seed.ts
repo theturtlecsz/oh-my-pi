@@ -460,7 +460,10 @@ export async function seedReview(options: SeedReviewOptions): Promise<SeedResult
 		git([attrSource, "diff", "--unified=0", "--no-renames", "--no-color", diffRange]),
 		git([attrSource, "diff", "--name-only", "--no-renames", "--no-color", diffRange]),
 		git([attrSource, "diff", "--raw", "--no-renames", "--abbrev=40", "--no-color", targetRange]),
-		git([attrSource, "merge-tree", "--write-tree", "--no-messages", "--merge-base", baseSha, forkSha, targetSha], [0, 1]),
+		git(
+			[attrSource, "merge-tree", "--write-tree", "--no-messages", "--merge-base", baseSha, forkSha, targetSha],
+			[0, 1],
+		),
 	]);
 
 	const computedSources = computeSourceRecords(rawText, numstatText, diffText);

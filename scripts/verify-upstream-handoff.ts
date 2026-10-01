@@ -864,7 +864,10 @@ async function main(): Promise<void> {
 		git([attrSource, "diff", "--raw", "--no-renames", "--abbrev=40", "--no-color", targetRange]),
 		// Explicit --merge-base: the pinned base commit removes any dependency on
 		// history connectivity, so depth-1 fetches of the three pins suffice (CI).
-		git([attrSource, "merge-tree", "--write-tree", "--no-messages", "--merge-base", pins.base, pins.fork, pins.target], [0, 1]),
+		git(
+			[attrSource, "merge-tree", "--write-tree", "--no-messages", "--merge-base", pins.base, pins.fork, pins.target],
+			[0, 1],
+		),
 	]);
 	const computedSources = computeSourceRecords(rawText, numstatText, diffText);
 	const computedUpstream = computeUpstreamChanges(targetRawText);
