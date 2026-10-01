@@ -10,6 +10,7 @@ import { runTournament } from "../../src/autoresearch/tournament/runner";
 import { maxJudgeCalls } from "../../src/autoresearch/tournament/schedule";
 import { TOURNAMENT_LABEL, type Tournament, type TournamentJudge } from "../../src/autoresearch/tournament/types";
 import type { AutoresearchToolFactoryOptions } from "../../src/autoresearch/types";
+import { lookup } from "../../src/config/registry";
 import { resetSettingsForTest, Settings } from "../../src/config/settings";
 import type { ExtensionAPI, ExtensionContext } from "../../src/extensibility/extensions";
 import type { JevUsageEntry } from "../../src/tiny/jev-client";
@@ -317,7 +318,7 @@ describe("hypothesis_tournament tool with Jev judge selected", () => {
 			createJudges: async () => {
 				const jevJudge = createJevJudge({
 					deps: {
-						getSetting: (p: string) => (isolatedSettings as any).get(p),
+						getSetting: (p: string) => lookup(p)?.get(isolatedSettings),
 						getApiKey: () => "test-key",
 						recordUsage: () => {},
 					},
