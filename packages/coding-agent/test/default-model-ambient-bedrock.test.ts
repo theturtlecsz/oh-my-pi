@@ -20,34 +20,18 @@ import { pickDefaultAvailableModel } from "@oh-my-pi/pi-coding-agent/config/mode
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
+import { type HostIsolation, isolateHost } from "./helpers/host-isolation";
 
 describe("issue #9967 default model with ambient Bedrock credentials", () => {
 	let tempDir: string;
 	let authStorage: AuthStorage;
 	let registry: ModelRegistry;
-	// Every AWS variable that can surface an ambient Bedrock credential source. The shared
-	// credentials/config files are pointed into the temp dir so a host `~/.aws` profile cannot
-	// make Bedrock available before the test adds its own ambient source.
-	const awsEnvKeys = [
-		"AWS_ACCESS_KEY_ID",
-		"AWS_SECRET_ACCESS_KEY",
-		"AWS_BEARER_TOKEN_BEDROCK",
-		"AWS_PROFILE",
-		"AWS_SHARED_CREDENTIALS_FILE",
-		"AWS_CONFIG_FILE",
-	] as const;
-	let savedAwsEnv: Record<string, string | undefined>;
+	let hostIsolation: HostIsolation;
 
 	beforeEach(async () => {
-		savedAwsEnv = {};
-		for (const key of awsEnvKeys) {
-			savedAwsEnv[key] = process.env[key];
-			delete process.env[key];
-		}
+		hostIsolation = isolateHost();
 		tempDir = path.join(os.tmpdir(), `pi-9967-${Snowflake.next()}`);
 		fs.mkdirSync(tempDir, { recursive: true });
-		process.env.AWS_SHARED_CREDENTIALS_FILE = path.join(tempDir, "aws-credentials");
-		process.env.AWS_CONFIG_FILE = path.join(tempDir, "aws-config");
 		authStorage = createInMemoryAuthStorage();
 		// The user's only real login: an Anthropic credential.
 		await authStorage.credentials.set("anthropic", [{ type: "api_key", key: "sk-test-anthropic" }]);
@@ -56,11 +40,7 @@ describe("issue #9967 default model with ambient Bedrock credentials", () => {
 
 	afterEach(() => {
 		authStorage.close();
-		for (const key of awsEnvKeys) {
-			const saved = savedAwsEnv[key];
-			if (saved === undefined) delete process.env[key];
-			else process.env[key] = saved;
-		}
+		hostIsolation.restore();
 		fs.rmSync(tempDir, { recursive: true, force: true });
 	});
 	function getRelevantModels() {
