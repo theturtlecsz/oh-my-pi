@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import os
 import socket
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -132,12 +132,10 @@ class _WorkServiceClientAdapter:
         service: WorkService,
         workspace_id: UUID,
         principal: Principal,
-        today: date,
     ) -> None:
         self._service = service
         self._workspace_id = workspace_id
         self._principal = principal
-        self._today = today
 
     def event_subscriptions(self) -> EventSubscriptionsPage:
         raw = self._service.event_subscriptions(self._principal, self._workspace_id)
@@ -150,17 +148,7 @@ class _WorkServiceClientAdapter:
             after_sequence=after_sequence,
             limit=limit,
         )
-        page = DomainEventsPage.model_validate(raw)
-        today_dt = datetime.combine(
-            self._today, datetime.min.time(), tzinfo=timezone.utc
-        )
-        adjusted_events = [
-            e.model_copy(update={"occurred_at": today_dt})
-            if e.event_type == "advance_event_cursor"
-            else e
-            for e in page.events
-        ]
-        return page.model_copy(update={"events": tuple(adjusted_events)})
+        return DomainEventsPage.model_validate(raw)
 
     def mission_events(
         self, after_sequence: int = 0, limit: int = 500
@@ -542,6 +530,25 @@ def test_client_neutral_delivery_e2e(
         )
         assert res.get("status") == "refused"
 
+    # 5. Work on the previous UTC day
+    today_utc = datetime.now(timezone.utc).date()
+    previous_day = today_utc - timedelta(days=1)
+    previous_dt = datetime.combine(previous_day, time(12, 0), tzinfo=timezone.utc)
+
+    with psycopg.connect(**config.connection_kwargs("postgres")) as conn:
+        conn.execute(
+            "ALTER TABLE omp_audit.domain_events DISABLE TRIGGER immutable_events"
+        )
+        try:
+            conn.execute(
+                "UPDATE omp_audit.domain_events SET occurred_at = %s WHERE workspace_id = %s",
+                (previous_dt, workspace_id),
+            )
+        finally:
+            conn.execute(
+                "ALTER TABLE omp_audit.domain_events ENABLE TRIGGER immutable_events"
+            )
+
     # Compute expected alerts across all workspace domain events
     all_events_page = work_service.events(
         push_principal, workspace_id, after_sequence=0, limit=500
@@ -550,11 +557,9 @@ def test_client_neutral_delivery_e2e(
     expected_alerts, _, _ = alarm_classify.classify(all_events)
     expected_kinds = {a.kind for a in expected_alerts}
     assert expected_kinds == alarm_classify.ALERT_KINDS
+    expected_keys = [a.idempotency_key for a in expected_alerts]
 
-    # 5. Work on the previous UTC day; run_push with today = next day
-    today_utc = datetime.now(timezone.utc).date()
-    next_day = today_utc + timedelta(days=1)
-
+    # Run push with today = next day after work (today_utc)
     recorded_sends: list[dict[str, Any]] = []
 
     def record_send(
@@ -574,9 +579,7 @@ def test_client_neutral_delivery_e2e(
             }
         )
 
-    push_client = _WorkServiceClientAdapter(
-        work_service, workspace_id, push_principal, next_day
-    )
+    push_client = _WorkServiceClientAdapter(work_service, workspace_id, push_principal)
     allowed_hosts = event_push.load_allowed_hosts(config.config_dir)
 
     run_result = event_push.run_push(
@@ -585,7 +588,7 @@ def test_client_neutral_delivery_e2e(
         master_key=master_key,
         allowed_hosts=allowed_hosts,
         send=record_send,
-        today=next_day,
+        today=today_utc,
     )
     assert "failed" not in run_result
     assert "refused" not in run_result
@@ -623,7 +626,8 @@ def test_client_neutral_delivery_e2e(
     second_keys = [s["idempotency_key"] for s in second_alarm]
     assert len(grok_keys) == len(set(grok_keys))
     assert len(second_keys) == len(set(second_keys))
-    assert grok_keys == second_keys
+    assert grok_keys == expected_keys
+    assert second_keys == expected_keys
 
     for s in grok_alarm:
         expected_key = f"{s['body']['event']['event_id']}:{s['body']['kind']}"
@@ -635,7 +639,7 @@ def test_client_neutral_delivery_e2e(
     # 5. ops.digest receives one "digest:{workspace}:{day}"
     assert len(grok_digest) == 1
     assert len(second_digest) == 1
-    expected_digest_key = f"digest:{workspace_id}:{today_utc.isoformat()}"
+    expected_digest_key = f"digest:{workspace_id}:{previous_day.isoformat()}"
     assert grok_digest[0]["idempotency_key"] == expected_digest_key
     assert second_digest[0]["idempotency_key"] == expected_digest_key
     assert grok_digest[0]["body"]["type"] == "digest"
@@ -649,7 +653,7 @@ def test_client_neutral_delivery_e2e(
         master_key=master_key,
         allowed_hosts=allowed_hosts,
         send=lambda url, idem, body, key=None: rerun_sends.append(idem),
-        today=next_day,
+        today=today_utc,
     )
     assert rerun_sends == []
     assert rerun_result == {"pushed": 0}
