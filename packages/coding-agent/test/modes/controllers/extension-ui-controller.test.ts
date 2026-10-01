@@ -695,9 +695,25 @@ describe("ExtensionUiController real hook abort boundary", () => {
 				await entered.promise;
 				// Keep the real retry timer pending behind the supported extension handler.
 				await retryElapsed.promise;
+				// message_end commits the interrupted assistant before its listeners run; the TTSR
+				// continuation must still wait for the pending handler: no second stream, no injection.
 				expect(f.streams()).toBe(1);
 				expect(
-					f.manager.getEntries().some(entry => entry.type === "message" && entry.message.role === "assistant"),
+					f.manager
+						.getEntries()
+						.filter(entry => entry.type === "message")
+						.map(entry => [
+							entry.message.role,
+							"stopReason" in entry.message ? entry.message.stopReason : undefined,
+						]),
+				).toEqual([
+					["user", undefined],
+					["assistant", "aborted"],
+				]);
+				expect(
+					f.manager
+						.getEntries()
+						.some(entry => entry.type === "custom_message" && entry.customType === "ttsr-injection"),
 				).toBe(false);
 				release.resolve();
 				await finished.promise;
