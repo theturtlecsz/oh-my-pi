@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 from typing import Any
@@ -14,26 +15,37 @@ import pytest
 from omp_work.orchestrator.candidate_git import (
     CandidateGitError,
     IntentLog,
+    _intent_key,
     _scan,
+    _ssh_command,
     add_worktree,
     audit_inputs,
     check_envelope,
     freeze,
     git,
+    merge,
     path_allowed,
+    push,
 )
 
 
 class InMemoryIntentLog:
     """In-memory IntentLog implementation for testing."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, raise_once: bool = False) -> None:
         self.records: dict[str, dict[str, Any]] = {}
+        self.done_calls = 0
+        self._raise_once = raise_once
+        self._raised = False
 
     def record_intent(self, key: str, action: str, target: Any) -> None:
         self.records[key] = {"action": action, "target": target, "done": False}
 
     def mark_done(self, key: str, ref: str) -> None:
+        self.done_calls += 1
+        if self._raise_once and not self._raised:
+            self._raised = True
+            raise RuntimeError("mark_done crashed")
         if key in self.records:
             self.records[key]["done"] = True
             self.records[key]["ref"] = ref
@@ -896,5 +908,277 @@ def test_freeze_directory_replaced_by_file_or_symlink(tmp_path: Path) -> None:
     assert "app.py" not in entries_dir
     audited_dir = audit_inputs(ctrl_dir, base_dir, commit_dir)
     assert audited_dir["changed_paths"] == ["app.py", "app.py/sub.py"]
+
+
+# ---------------------------------------------------------------------------
+# OMP-417-s04-s04: execute-only push and merge (no tier decision)
+# ---------------------------------------------------------------------------
+
+
+def _make_candidate_commit(tmp_path: Path, name: str) -> tuple[Path, str]:
+    """A non-bare repo with one unique commit; return (work_repo, commit_sha)."""
+    seed = tmp_path / name
+    subprocess.run(["git", "init", str(seed)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(seed), "config", "user.name", "Seed"], check=True)
+    subprocess.run(["git", "-C", str(seed), "config", "user.email", "seed@omp.dev"], check=True)
+    (seed / "app.py").write_text(f"print('{name}')\n")
+    subprocess.run(["git", "-C", str(seed), "add", "app.py"], check=True)
+    subprocess.run(["git", "-C", str(seed), "commit", "-m", f"init {name}"], check=True, capture_output=True)
+    commit = subprocess.check_output(["git", "-C", str(seed), "rev-parse", "HEAD"]).decode().strip()
+    return seed, commit
+
+
+def _make_bare_remote(tmp_path: Path, name: str) -> tuple[Path, Path]:
+    """Bare remote with an ``update`` hook appending one byte to a sibling count file."""
+    remote = tmp_path / name
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(remote), "config", "core.logAllRefUpdates", "always"],
+        check=True,
+    )
+    count = tmp_path / f"{name}-count"
+    hook = remote / "hooks" / "update"
+    hook.write_text(f"#!/bin/sh\necho x >> '{count}'\nexit 0\n")
+    hook.chmod(0o755)
+    return remote, count
+
+
+def _bare_ref(remote: Path, ref: str) -> str | None:
+    proc = subprocess.run(
+        ["git", "-C", str(remote), "rev-parse", "--verify", ref],
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.decode().strip()
+
+
+def _count_lines(count: Path) -> int:
+    if not count.exists():
+        return 0
+    return len(count.read_text().split())
+
+
+def test_intent_key_is_sha256_hex_of_nul_joined_fields() -> None:
+    assert (
+        _intent_key("push", "abc", "origin", "refs/heads/main")
+        == "dc185b450e9494efd521a022adb08462d4570ef77b4d949933c61f3f1887e9f1"
+    )
+    assert _intent_key("push", "abc", "origin", "refs/heads/main") != _intent_key(
+        "merge", "abc", "origin", "refs/heads/main"
+    )
+
+
+def test_ssh_command_keeps_credential_path_as_one_argument() -> None:
+    command = _ssh_command(Path("/k d/key"))
+    parts = shlex.split(command)
+    assert parts == [
+        "ssh",
+        "-i",
+        "/k d/key",
+        "-o",
+        "IdentitiesOnly=yes",
+        "-o",
+        "BatchMode=yes",
+    ]
+
+
+def test_dead_lease_refuses_push_and_merge_without_intent(tmp_path: Path) -> None:
+    seed, commit = _make_candidate_commit(tmp_path, "lease-seed")
+    remote, count = _make_bare_remote(tmp_path, "lease-remote.git")
+    credential = tmp_path / "cred"
+    credential.write_text("key\n")
+    intents = InMemoryIntentLog()
+
+    with pytest.raises(CandidateGitError) as push_exc:
+        push(seed, commit, str(remote), "refs/heads/main", intents=intents, lease_ok=lambda: False)
+    assert push_exc.value.code == "lease_dead"
+
+    with pytest.raises(CandidateGitError) as merge_exc:
+        merge(
+            seed,
+            commit,
+            str(remote),
+            "refs/heads/main",
+            intents=intents,
+            lease_ok=lambda: False,
+            credential_path=credential,
+        )
+    assert merge_exc.value.code == "lease_dead"
+
+    assert intents.records == {}
+    assert _bare_ref(remote, "refs/heads/main") is None
+    assert _count_lines(count) == 0
+
+
+def test_merge_without_credential_refused_before_lease_and_intent(tmp_path: Path) -> None:
+    seed, commit = _make_candidate_commit(tmp_path, "cred-seed")
+    remote, count = _make_bare_remote(tmp_path, "cred-remote.git")
+    intents = InMemoryIntentLog()
+
+    with pytest.raises(CandidateGitError) as exc:
+        merge(
+            seed,
+            commit,
+            str(remote),
+            "refs/heads/main",
+            intents=intents,
+            lease_ok=lambda: True,
+            credential_path=None,
+        )
+    assert exc.value.code == "credential_required"
+    assert intents.records == {}
+    assert _bare_ref(remote, "refs/heads/main") is None
+    assert _count_lines(count) == 0
+
+
+def _crash_retry_action(
+    *,
+    action: str,
+    seed: Path,
+    commit: str,
+    remote: Path,
+    credential: Path | None,
+    intents: InMemoryIntentLog,
+) -> None:
+    if action == "push":
+        push(seed, commit, str(remote), "refs/heads/main", intents=intents, lease_ok=lambda: True)
+    else:
+        merge(
+            seed,
+            commit,
+            str(remote),
+            "refs/heads/main",
+            intents=intents,
+            lease_ok=lambda: True,
+            credential_path=credential,
+        )
+
+
+@pytest.mark.parametrize("action", ["push", "merge"])
+def test_crash_after_push_retries_idempotently(tmp_path: Path, action: str) -> None:
+    seed, commit = _make_candidate_commit(tmp_path, f"{action}-crash-seed")
+    remote, count = _make_bare_remote(tmp_path, f"{action}-crash-remote.git")
+    credential = tmp_path / "cred"
+    credential.write_text("key\n")
+    intents = InMemoryIntentLog(raise_once=True)
+    key = _intent_key(action, commit, str(remote), "refs/heads/main")
+
+    with pytest.raises(RuntimeError):
+        _crash_retry_action(
+            action=action,
+            seed=seed,
+            commit=commit,
+            remote=remote,
+            credential=credential,
+            intents=intents,
+        )
+
+    assert _bare_ref(remote, "refs/heads/main") == commit
+    assert _count_lines(count) == 1
+    assert intents.open(key) is not None
+
+    _crash_retry_action(
+        action=action,
+        seed=seed,
+        commit=commit,
+        remote=remote,
+        credential=credential,
+        intents=intents,
+    )
+    assert _bare_ref(remote, "refs/heads/main") == commit
+    assert _count_lines(count) == 1
+    assert intents.open(key) is None
+
+
+def test_merge_non_fast_forward_is_git_failed(tmp_path: Path) -> None:
+    seed, commit = _make_candidate_commit(tmp_path, "ff-seed")
+    other_seed, other_commit = _make_candidate_commit(tmp_path, "other-seed")
+    remote, count = _make_bare_remote(tmp_path, "ff-remote.git")
+    subprocess.run(
+        ["git", "-C", str(seed), "push", str(remote), f"{commit}:refs/heads/main"],
+        check=True,
+        capture_output=True,
+    )
+    credential = tmp_path / "cred"
+    credential.write_text("key\n")
+    intents = InMemoryIntentLog()
+
+    with pytest.raises(CandidateGitError) as exc:
+        merge(
+            other_seed,
+            other_commit,
+            str(remote),
+            "refs/heads/main",
+            intents=intents,
+            lease_ok=lambda: True,
+            credential_path=credential,
+        )
+    assert exc.value.code == "git_failed"
+    assert _bare_ref(remote, "refs/heads/main") == commit
+    assert _count_lines(count) == 1
+
+
+def test_push_and_merge_attacker_gitdir_write_no_marker(tmp_path: Path) -> None:
+    """The s03 attacker gitdir's hooks, fsmonitor, and clean filter never run."""
+    ctrl, base = _make_control_repo_and_base(tmp_path)
+    wt = add_worktree(ctrl, tmp_path / "worktrees", "wt_push_evil", base)
+
+    marker = tmp_path / "marker"
+    scripts = tmp_path / "evil-scripts"
+    hooks_path = tmp_path / "evil-hooks"
+    scripts.mkdir()
+    hooks_path.mkdir()
+    clean = scripts / "clean.sh"
+    clean.write_text(f"#!/bin/sh\ntouch '{marker}'\nprintf 'FILTERED\\n'\n")
+    clean.chmod(0o755)
+    fsmonitor = scripts / "fsmonitor.sh"
+    fsmonitor.write_text(f"#!/bin/sh\ntouch '{marker}'\nexit 0\n")
+    fsmonitor.chmod(0o755)
+    for hook_name in ("pre-commit", "pre-push"):
+        hook = hooks_path / hook_name
+        hook.write_text(f"#!/bin/sh\ntouch '{marker}'\nexit 0\n")
+        hook.chmod(0o755)
+
+    attacker = tmp_path / "attacker"
+    subprocess.run(["git", "init", str(attacker)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(attacker), "config", "core.hooksPath", str(hooks_path)], check=True)
+    subprocess.run(["git", "-C", str(attacker), "config", "core.fsmonitor", str(fsmonitor)], check=True)
+    subprocess.run(["git", "-C", str(attacker), "config", "filter.evil.clean", str(clean)], check=True)
+    git_dir = attacker / ".git"
+    for hook_name in ("pre-commit", "pre-push"):
+        hook = git_dir / "hooks" / hook_name
+        hook.write_text(f"#!/bin/sh\ntouch '{marker}'\nexit 0\n")
+        hook.chmod(0o755)
+
+    (wt / ".git").write_text(f"gitdir: {git_dir}\n")
+    (wt / "app.py").write_text("print('candidate')\n")
+    (wt / ".gitattributes").write_text("* filter=evil\n")
+
+    commit = _freeze(ctrl, wt, base, "push candidate")
+    audited = audit_inputs(ctrl, base, commit)
+    assert audited["changed_paths"] == [".gitattributes", "app.py"]
+
+    push_remote, push_count = _make_bare_remote(tmp_path, "evil-push-remote.git")
+    push(ctrl, commit, str(push_remote), "refs/heads/main", intents=InMemoryIntentLog(), lease_ok=lambda: True)
+    assert _bare_ref(push_remote, "refs/heads/main") == commit
+    assert _count_lines(push_count) == 1
+
+    credential = tmp_path / "cred"
+    credential.write_text("key\n")
+    merge_remote, merge_count = _make_bare_remote(tmp_path, "evil-merge-remote.git")
+    merge(
+        ctrl,
+        commit,
+        str(merge_remote),
+        "refs/heads/main",
+        intents=InMemoryIntentLog(),
+        lease_ok=lambda: True,
+        credential_path=credential,
+    )
+    assert _bare_ref(merge_remote, "refs/heads/main") == commit
+    assert _count_lines(merge_count) == 1
+    assert not marker.exists()
 
 
