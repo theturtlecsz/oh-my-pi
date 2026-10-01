@@ -377,6 +377,18 @@ def status_mission_view(
     )
 
 
+def _mission_from_payload(payload: object) -> MissionView | None:
+    """Mission snapshot on an applied event, or None when the event has none."""
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    if not isinstance(payload, dict):
+        return None
+    mission = payload.get("mission")
+    if not isinstance(mission, dict):
+        return None
+    return MissionView.model_validate(mission)
+
+
 def latest_mission(
     cur: psycopg.Cursor[dict[str, object]],
     workspace_id: UUID,
@@ -398,14 +410,49 @@ def latest_mission(
     if row is None:
         return None
     payload = row["payload"] if isinstance(row, dict) else row[0]
-    if isinstance(payload, str):
-        payload = json.loads(payload)
-    if not isinstance(payload, dict):
-        return None
-    mission = payload.get("mission")
-    if not isinstance(mission, dict):
-        return None
-    return MissionView.model_validate(mission)
+    return _mission_from_payload(payload)
+
+
+def project_mission_progress(
+    cur: psycopg.Cursor[dict[str, object]],
+    workspace_id: UUID,
+    project_id: UUID,
+) -> list[dict[str, object]]:
+    """Latest applied mission per mission, kept when its current project is this one.
+
+    An event with no mission snapshot is skipped. ``updated_at`` is that event's
+    ``occurred_at``. Rows are ordered by mission_id.
+    """
+    cur.execute(
+        "SELECT DISTINCT ON (aggregate_id) payload, occurred_at"
+        " FROM omp_audit.domain_events"
+        " WHERE workspace_id=%s AND aggregate_type='mission'"
+        " AND outcome='applied' AND event_type = ANY(%s)"
+        " ORDER BY aggregate_id, sequence DESC",
+        (workspace_id, list(_MISSION_EVENTS)),
+    )
+    rows: list[dict[str, object]] = []
+    for row in cur.fetchall():
+        if isinstance(row, dict):
+            payload = row["payload"]
+            occurred_at = row["occurred_at"]
+        else:
+            payload = row[0]
+            occurred_at = row[1]
+        view = _mission_from_payload(payload)
+        if view is None or view.project_id != project_id:
+            continue
+        rows.append(
+            {
+                "mission_id": view.mission_id,
+                "objective": view.objective,
+                "status": view.status.value,
+                "revision": view.revision,
+                "updated_at": occurred_at,
+            }
+        )
+    rows.sort(key=lambda item: item["mission_id"])
+    return rows
 
 
 def open_missions(
@@ -432,14 +479,9 @@ def open_missions(
     views: list[MissionView] = []
     for row in cur.fetchall():
         payload = row["payload"] if isinstance(row, dict) else row[0]
-        if isinstance(payload, str):
-            payload = json.loads(payload)
-        if not isinstance(payload, dict):
-            continue
-        mission = payload.get("mission")
-        if not isinstance(mission, dict):
-            continue
-        views.append(MissionView.model_validate(mission))
+        view = _mission_from_payload(payload)
+        if view is not None:
+            views.append(view)
     project_key = str(project_id)
     open_views = [
         view
