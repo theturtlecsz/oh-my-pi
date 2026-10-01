@@ -1,4 +1,4 @@
-"""Tests for Grokbot HTTP client (OMP-406)."""
+"""Tests for push HTTP client (OMP-406, OMP-415)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from omp_work.grokbot import GrokbotError, send
+from omp_work.push_http import PushDeliveryError, send
 
 
 class _StubHandler(http.server.BaseHTTPRequestHandler):
@@ -64,7 +64,7 @@ def stub_server():
         server_thread.join(timeout=5)
 
 
-def test_grokbot_send_gets_body_and_three_headers(stub_server: str) -> None:
+def test_send_gets_body_and_three_headers(stub_server: str) -> None:
     token = "secret-token-abc"
     idempotency_key = "idemp-key-123"
     body = {"type": "alert", "kind": "cost_threshold", "workspace_id": "ws-1"}
@@ -86,13 +86,13 @@ def test_grokbot_send_gets_body_and_three_headers(stub_server: str) -> None:
     assert headers.get("Content-Type") == "application/json"
 
 
-def test_grokbot_send_500_raises_grokbot_error_without_token(stub_server: str) -> None:
+def test_send_500_raises_push_delivery_error_without_token(stub_server: str) -> None:
     _StubHandler.status_to_return = 500
     token = "super-secret-token-98765"
     idempotency_key = "key-500"
     body = {"test": "data"}
 
-    with pytest.raises(GrokbotError) as exc_info:
+    with pytest.raises(PushDeliveryError) as exc_info:
         send(
             url=f"{stub_server}/api/alerts",
             token=token,
@@ -107,7 +107,7 @@ def test_grokbot_send_500_raises_grokbot_error_without_token(stub_server: str) -
     assert "500" in err_str or (err.status_code == 500)
 
 
-def test_grokbot_send_refuses_file_and_http_example() -> None:
+def test_send_refuses_file_and_http_example() -> None:
     token = "some-token"
     key = "some-key"
     body = {"msg": "test"}
@@ -127,14 +127,14 @@ def test_grokbot_send_refuses_file_and_http_example() -> None:
         send("http://192.168.1.1:8080/alerts", token, key, body)
 
 
-def test_grokbot_send_network_error_without_token() -> None:
+def test_send_network_error_without_token() -> None:
     # Find an unused loopback port
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         unused_port = s.getsockname()[1]
 
     token = "network-secret-token"
-    with pytest.raises(GrokbotError) as exc_info:
+    with pytest.raises(PushDeliveryError) as exc_info:
         send(
             f"http://127.0.0.1:{unused_port}/alerts",
             token,

@@ -4,10 +4,9 @@ import argparse
 import json
 import os
 import sys
-from datetime import UTC, datetime, timedelta
-from functools import partial
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from uuid import UUID, uuid4
 
 import uvicorn
@@ -29,9 +28,7 @@ from .operations.database import collect_health
 from .v1.client import WorkClient
 from .v1.models import Approval
 from .v1.server import create_app
-from .alarm_dispatch import AlarmStateMissing, init_alarms, run_alarms, run_digest
 from .credential_watch import DEFAULT_ROOTS, watch_credentials
-from .grokbot import send as grokbot_send
 from .budget_headroom import compute_headroom
 from .always_running import check_stall
 from . import owner_key
@@ -167,27 +164,9 @@ def _alarm_client(path: str | Path) -> tuple[WorkClient, UUID]:
     )
 
 
-def _alarm_sender() -> Callable[[str, dict[str, Any]], None] | None:
-    url = os.environ.get("OMP_GROKBOT_ALERT_URL")
-    token_file = os.environ.get("OMP_GROKBOT_ALERT_TOKEN_FILE")
-    if not url or not token_file:
-        return None
-    try:
-        token = Path(token_file).read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    if not token:
-        return None
-    return partial(grokbot_send, url, token)
-
-
 def _run_alarms_command(args: argparse.Namespace) -> int:
     client, workspace_id = _alarm_client(args.client_config)
     state_path = Path(args.state)
-    if args.alarms_command == "init":
-        state = init_alarms(client, state_path)
-        print(json.dumps({"after_sequence": state.after_sequence}))
-        return 0
     if args.alarms_command == "watch-credentials":
         roots = tuple(Path(root) for root in args.root) if args.root else DEFAULT_ROOTS
         signalled = watch_credentials(
@@ -197,22 +176,6 @@ def _run_alarms_command(args: argparse.Namespace) -> int:
             roots=roots,
         )
         print(json.dumps({"signalled": signalled}))
-        return 0
-    sender = _alarm_sender()
-    if sender is None:
-        return 2
-    if args.alarms_command == "run":
-        try:
-            sent = run_alarms(client, state_path, sender)
-        except AlarmStateMissing:
-            print("run `omp-work alarms init` first", file=sys.stderr)
-            return 2
-        print(json.dumps({"sent": sent}))
-        return 0
-    if args.alarms_command == "digest":
-        day = args.day or (datetime.now(UTC).date() - timedelta(days=1))
-        body = run_digest(client, workspace_id, day, sender)
-        print(json.dumps(body))
         return 0
     return 2
 
@@ -383,10 +346,6 @@ def main(argv: list[str] | None = None) -> int | None:
     alarm_common.add_argument("--state", required=True)
     alarm_common.add_argument("--client-config", default=None)
     alarm_commands = alarms.add_subparsers(dest="alarms_command", required=True)
-    alarm_commands.add_parser("init", parents=[alarm_common])
-    alarm_commands.add_parser("run", parents=[alarm_common])
-    digest = alarm_commands.add_parser("digest", parents=[alarm_common])
-    digest.add_argument("--day")
     watch = alarm_commands.add_parser("watch-credentials", parents=[alarm_common])
     watch.add_argument("--root", action="append")
 

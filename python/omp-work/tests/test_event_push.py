@@ -28,7 +28,7 @@ from omp_work.event_push import (
     subscription_key,
     verify,
 )
-from omp_work.grokbot import GrokbotError
+from omp_work.push_http import PushDeliveryError
 from omp_work.operations import stop as stop_ops
 
 MASTER = bytes(range(32))
@@ -462,7 +462,7 @@ def test_rerun_after_mid_page_failure_resumes_past_last_delivered() -> None:
     def flaky(url: str, idem: str, body: Any, *, key: bytes) -> None:
         first_run.append(idem)
         if idem == third:
-            raise GrokbotError("boom")
+            raise PushDeliveryError("boom")
 
     result = run_push(
         client,
@@ -507,7 +507,7 @@ def test_send_signed_survives_two_500s_and_raises_on_third(
 ) -> None:
     body = {"k": "v"}
     key = subscription_key(MASTER, SUB_A)
-    original = event_push.grokbot_send
+    original = event_push.push_send
     sleeps: list[float] = []
 
     # Two failures then success: delivered once, slept 1s then 2s.
@@ -516,10 +516,10 @@ def test_send_signed_survives_two_500s_and_raises_on_third(
     def recovering(url, token, idem, payload, *, headers=None, timeout=10):
         if remaining["n"] > 0:
             remaining["n"] -= 1
-            raise GrokbotError("HTTP 500", status_code=500)
+            raise PushDeliveryError("HTTP 500", status_code=500)
         return original(url, token, idem, payload, headers=headers, timeout=timeout)
 
-    monkeypatch.setattr(event_push, "grokbot_send", recovering)
+    monkeypatch.setattr(event_push, "push_send", recovering)
     send_signed(f"{stub}/hook", "idem", body, key=key, sleep=sleeps.append)
     assert remaining["n"] == 0
     assert sleeps == [1.0, 2.0]
@@ -533,10 +533,10 @@ def test_send_signed_survives_two_500s_and_raises_on_third(
 
     def always_fail(url, token, idem, payload, *, headers=None, timeout=10):
         calls["n"] += 1
-        raise GrokbotError("HTTP 500", status_code=500)
+        raise PushDeliveryError("HTTP 500", status_code=500)
 
-    monkeypatch.setattr(event_push, "grokbot_send", always_fail)
-    with pytest.raises(GrokbotError):
+    monkeypatch.setattr(event_push, "push_send", always_fail)
+    with pytest.raises(PushDeliveryError):
         send_signed(f"{stub}/hook", "idem", body, key=key, sleep=lambda _s: None)
     assert calls["n"] == 3
 

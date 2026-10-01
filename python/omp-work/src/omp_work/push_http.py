@@ -1,4 +1,4 @@
-"""Client for sending operational alerts and digests to Grokbot (OMP-406)."""
+"""HTTP client for sending operational alerts and digests (OMP-406, OMP-415)."""
 
 from __future__ import annotations
 
@@ -9,11 +9,11 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-__all__ = ["GrokbotError", "send"]
+__all__ = ["PushDeliveryError", "send"]
 
 
-class GrokbotError(Exception):
-    """Raised when sending an alert or digest to Grokbot fails."""
+class PushDeliveryError(Exception):
+    """Raised when delivering an alert or digest over HTTP fails."""
 
     def __init__(
         self,
@@ -104,12 +104,12 @@ def send(
     timeout: float = 10,
     headers: dict[str, str] | None = None,
 ) -> None:
-    """POST JSON body to Grokbot with authentication and idempotency key.
+    """POST JSON body with authentication and idempotency key.
 
     URL must be https, or http to loopback; otherwise ValueError is raised
     before connecting. The opener rejects file: and data: schemes and does not
-    follow redirects (a 3xx is GrokbotError). Non-2xx and network errors raise
-    GrokbotError (status or reason, never the token).
+    follow redirects (a 3xx is PushDeliveryError). Non-2xx and network errors raise
+    PushDeliveryError (status or reason, never the token).
 
     ``token=None`` sends no Authorization header (OMP-415 signed pushes carry
     no bearer). ``headers`` are extra request headers, merged without letting
@@ -151,7 +151,7 @@ def send(
         with _OPENER.open(req, timeout=timeout) as resp:
             status = getattr(resp, "status", resp.getcode())
             if not (200 <= status < 300):
-                raise GrokbotError(
+                raise PushDeliveryError(
                     f"HTTP {status}",
                     status_code=status,
                 )
@@ -160,7 +160,7 @@ def send(
         reason = str(exc.reason)
         sanitized_reason = hide(reason)
         msg = f"HTTP {status_code}: {sanitized_reason}"
-        raise GrokbotError(
+        raise PushDeliveryError(
             msg,
             status_code=status_code,
             reason=sanitized_reason,
@@ -169,8 +169,8 @@ def send(
         reason = str(exc.reason) if hasattr(exc, "reason") else str(exc)
         sanitized_reason = hide(reason)
         msg = f"Network error: {sanitized_reason}"
-        raise GrokbotError(msg, reason=sanitized_reason) from None
+        raise PushDeliveryError(msg, reason=sanitized_reason) from None
     except (TimeoutError, OSError) as exc:
         sanitized_msg = hide(str(exc))
         msg = f"Network error: {sanitized_msg}"
-        raise GrokbotError(msg, reason=sanitized_msg) from None
+        raise PushDeliveryError(msg, reason=sanitized_msg) from None

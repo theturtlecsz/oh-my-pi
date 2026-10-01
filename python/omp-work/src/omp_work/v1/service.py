@@ -314,6 +314,11 @@ class WorkService:
                 principal, envelope, "forbidden", ()
             )
             raise WorkError("forbidden", status=403)
+        if (
+            envelope.command.type == "engage_stop"
+            and principal.actor_kind not in ("owner", "client")
+        ):
+            raise WorkError("forbidden", status=403)
         if envelope.command.type == "release_stop" and principal.actor_kind != "owner":
             raise WorkError("forbidden", status=403)
         # OMP-414: answering a decision is the owner's act — a signature on a

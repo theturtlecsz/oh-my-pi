@@ -1,4 +1,4 @@
-"""Alarm and digest dispatcher sending domain event alerts to Grokbot (OMP-406)."""
+"""Alarm and digest dispatcher sending domain event alerts (OMP-406)."""
 
 from __future__ import annotations
 

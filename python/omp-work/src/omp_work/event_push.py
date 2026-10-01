@@ -39,8 +39,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 from .alarm_classify import AlarmState, _to_utc_date, build_digest, classify
 from .egress_policy import blocked_address
-from .grokbot import GrokbotError
-from .grokbot import send as grokbot_send
+from .push_http import PushDeliveryError, send as push_send
 from .v1.models import (
     AdvanceEventCursor,
     AdvanceEventCursorCommand,
@@ -242,17 +241,17 @@ def send_signed(
 ) -> None:
     """Signed, bearer-less POST of one push body.
 
-    Sends ``body`` through :func:`grokbot.send` with ``token=None`` (no
-    Authorization header) and ``X-OMP-Signature`` for ``key``. ``grokbot.send``
-    does not follow redirects, so a 3xx is a GrokbotError rather than a delivery
-    to the Location. A GrokbotError is retried after ``sleep(1)`` then
+    Sends ``body`` through :func:`push_send` with ``token=None`` (no
+    Authorization header) and ``X-OMP-Signature`` for ``key``. ``push_send``
+    does not follow redirects, so a 3xx is a PushDeliveryError rather than a delivery
+    to the Location. A PushDeliveryError is retried after ``sleep(1)`` then
     ``sleep(2)``; the third failure is raised.
     """
     canonical = body_bytes(body)
     header = signature(key, idempotency_key, canonical)
     for attempt in range(1, max(1, attempts) + 1):
         try:
-            grokbot_send(
+            push_send(
                 url,
                 None,
                 idempotency_key,
@@ -260,7 +259,7 @@ def send_signed(
                 headers={_SIGNATURE_HEADER: header},
             )
             return
-        except GrokbotError:
+        except PushDeliveryError:
             if attempt >= attempts:
                 raise
             sleep(float(attempt))

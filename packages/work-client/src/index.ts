@@ -46,6 +46,7 @@ import type {
 } from "./research.generated";
 
 export { WORK_CONTRACT_SHA256 } from "./contract";
+export * from "./oversight";
 
 export type UUID = string;
 
