@@ -323,6 +323,10 @@ describe("model presets", () => {
 		tempDirs.push(dir);
 		const noAuth = await AuthStorage.create(path.join(dir.path(), "auth.db"));
 		const registry = new ModelRegistry(noAuth, path.join(dir.path(), "models.yml"));
+		// An empty auth store is not enough on its own: provider env keys (including ones
+		// loaded from the host's ~/.env) and ambient AWS profiles still count as configured
+		// auth. Pin the credential oracle to "none" so the precondition holds on any host.
+		vi.spyOn(registry, "hasConfiguredAuth").mockReturnValue(false);
 		try {
 			const settings = Settings.isolated();
 			settings.setModelRole("default", SONNET);
