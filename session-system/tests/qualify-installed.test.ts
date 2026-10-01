@@ -68,6 +68,8 @@ async function fixture(config: {
 	pytestExit?: number;
 	pytestStderr?: string;
 	junit?: string;
+	stageThrows?: string;
+	pytestThrows?: string;
 }): Promise<RunFixture> {
 	const root = await fs.mkdtemp(path.join(import.meta.dir, "qualify-root-"));
 	tempRoots.push(root);
@@ -76,6 +78,7 @@ async function fixture(config: {
 	const runner = async (command: readonly string[], options: CommandOptions): Promise<CommandResult> => {
 		calls.push({ command, options });
 		if (command.some(argument => argument.endsWith("stage.ts"))) {
+			if (config.stageThrows) throw new Error(config.stageThrows);
 			const destination = argValue(command, "--destination");
 			if (destination) {
 				await fs.mkdir(destination, { recursive: true });
@@ -83,6 +86,7 @@ async function fixture(config: {
 			}
 			return { exitCode: config.stageExit ?? 0, stdout: "", stderr: config.stageStderr ?? "" };
 		}
+		if (config.pytestThrows) throw new Error(config.pytestThrows);
 		const junitPath = prefixedValue(command, "--junitxml=");
 		if (junitPath && config.junit !== undefined) await Bun.write(junitPath, config.junit);
 		return { exitCode: config.pytestExit ?? 0, stdout: "", stderr: config.pytestStderr ?? "" };
@@ -135,6 +139,16 @@ describe("qualify-installed staging", () => {
 		]);
 		expect(calls[0].options.cwd).toBe(root);
 	});
+
+	test("a stage launch failure is fatal, preserves its evidence path, and never runs pytest", async () => {
+		const { calls, outcome } = await run({ stageThrows: "spawn failed: EACCES" });
+
+		expect(outcome.ok).toBe(false);
+		expect(outcome.reason).toContain("stage failed: spawn failed: EACCES");
+		expect((await fs.stat(outcome.tempRoot)).isDirectory()).toBe(true);
+		expect(calls).toHaveLength(1);
+		expect(calls.some(call => call.command.includes("pytest"))).toBe(false);
+	});
 });
 
 describe("qualify-installed pytest contract", () => {
@@ -162,6 +176,16 @@ describe("qualify-installed qualification verdicts", () => {
 		expect(outcome.reason).toContain("pytest failed with exit 3");
 		expect(outcome.manifestSha256).not.toBeNull();
 		expect((await fs.stat(outcome.tempRoot)).isDirectory()).toBe(true);
+	});
+
+	test("a pytest launch failure preserves the staged release and its evidence path", async () => {
+		const { outcome } = await run({ pytestThrows: "spawn failed: EACCES" });
+
+		expect(outcome.ok).toBe(false);
+		expect(outcome.reason).toContain("pytest failed with exit 1");
+		expect(outcome.manifestSha256).not.toBeNull();
+		expect((await fs.stat(outcome.tempRoot)).isDirectory()).toBe(true);
+		expect((await fs.stat(outcome.releaseRoot)).isDirectory()).toBe(true);
 	});
 
 	test("a run that skips is refused even when pytest exits zero", async () => {

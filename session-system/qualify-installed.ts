@@ -165,7 +165,14 @@ export async function runQualifyInstalled(options: QualifyInstalledOptions = {})
 	}
 
 	// A stage failure must abort before pytest: an unqualified runtime is never executed.
-	const stage = await runner(stageCommand(root, releaseRoot, tools), { cwd: root, env: { ...process.env } });
+	// A runner that throws never produced a result, so treat it as a stage failure
+	// too — the tmp root (and its staged manifest) must survive for inspection.
+	let stage: CommandResult;
+	try {
+		stage = await runner(stageCommand(root, releaseRoot, tools), { cwd: root, env: { ...process.env } });
+	} catch (err) {
+		return failure(`stage failed: ${err instanceof Error ? err.message : String(err)}`);
+	}
 	if (stage.exitCode !== 0) {
 		return failure(`stage failed with exit ${stage.exitCode}: ${summarize(stage.stderr) || "no stderr"}`);
 	}
@@ -183,7 +190,14 @@ export async function runQualifyInstalled(options: QualifyInstalledOptions = {})
 		OMP_INSTALLED_RELEASE: releaseRoot,
 		OMP_INSTALLED_MANIFEST_SHA256: manifestSha256,
 	};
-	const pytest = await runner(pytestCommand(tools.uvPath, stateRoot, junitPath), { cwd: root, env });
+	// A launch failure must preserve the staged release and its evidence path:
+	// fold the rejection into a pytest-failure result rather than letting it escape.
+	let pytest: CommandResult;
+	try {
+		pytest = await runner(pytestCommand(tools.uvPath, stateRoot, junitPath), { cwd: root, env });
+	} catch (err) {
+		pytest = { exitCode: 1, stdout: "", stderr: err instanceof Error ? err.message : String(err) };
+	}
 	if (pytest.exitCode !== 0) {
 		return failure(
 			`pytest failed with exit ${pytest.exitCode}: ${summarize(pytest.stderr) || "no stderr"}`,
