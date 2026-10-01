@@ -4,7 +4,7 @@
 // task results receive zero interception from this extension.
 import * as path from "node:path";
 import { describe, expect, test } from "bun:test";
-import { ExtensionRunner, loadExtensions } from "@oh-my-pi/pi-coding-agent";
+import { ExtensionRunner, Settings, TOP_LEVEL_AGENT, loadExtensions } from "@oh-my-pi/pi-coding-agent";
 
 const repoRoot = path.resolve(import.meta.dir, "../..");
 const extPath = path.join(repoRoot, "session-system/extensions/model-bookends.ts");
@@ -28,12 +28,9 @@ async function makeHarness(depth = 0, opts: { intakeConfigured?: boolean; hasCre
 		hasProvider: () => true,
 		resolver: () => () => undefined,
 	};
-	const fakeSettings = {
-		getModelRole: (role: string) => (role === "intake" && intakeConfigured ? "anthropic/claude-fable-5" : undefined),
-		getModelRoles: () => (intakeConfigured ? { intake: "anthropic/claude-fable-5" } : {}),
-		get: (key: string) => (key === "thinkingLevel" ? "medium" : undefined),
-		getStorage: () => undefined,
-	};
+	// Real isolated settings: upstream reads registry handles and model roles from them.
+	const settings = Settings.isolated();
+	if (intakeConfigured) settings.setModelRole("intake", "anthropic/claude-fable-5");
 	const runner = new ExtensionRunner(
 		result.extensions,
 		result.runtime,
@@ -41,10 +38,10 @@ async function makeHarness(depth = 0, opts: { intakeConfigured?: boolean; hasCre
 		{ getCwd: () => repoRoot, getBranch: () => [], getSessionId: () => "session-test" } as never,
 		fakeRegistry as never,
 		undefined,
-		fakeSettings as never,
+		settings,
 		undefined,
 		undefined,
-		depth,
+		depth === 0 ? TOP_LEVEL_AGENT : { ...TOP_LEVEL_AGENT, kind: "sub", depth },
 	);
 	const setModelCalls: Array<{ provider: string; id: string }> = [];
 	const thinkingLevels: string[] = [];

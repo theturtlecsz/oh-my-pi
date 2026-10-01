@@ -2,7 +2,7 @@
 // event arms execution, and only a typed handoff settles it.
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ExtensionRunner, loadExtensions } from "@oh-my-pi/pi-coding-agent";
+import { ExtensionRunner, TOP_LEVEL_AGENT, loadExtensions } from "@oh-my-pi/pi-coding-agent";
 import { confirmRoundTrip } from "./two-phase";
 
 const probe = process.argv[2];
@@ -142,7 +142,7 @@ const runner = new ExtensionRunner(
 	undefined,
 	undefined,
 	undefined,
-	0,
+	TOP_LEVEL_AGENT,
 );
 runner.initialize(
 	{ appendEntry: () => {} } as never,

@@ -6,7 +6,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
-import { type CustomEntry, type CustomMessageEntry, type CustomMessagePayload, type PersistedTurnContinuationRequest, type PersistedTurnContinuationResult, type SessionEntry, type SessionMessageEntry, ExtensionRunner, loadExtensions, normalizeCustomMessagePayload } from "@oh-my-pi/pi-coding-agent";
+import { type CustomEntry, type CustomMessageEntry, type CustomMessagePayload, type PersistedTurnContinuationRequest, type PersistedTurnContinuationResult, type SessionEntry, type SessionMessageEntry, ExtensionRunner, Settings, TOP_LEVEL_AGENT, loadExtensions, normalizeCustomMessagePayload } from "@oh-my-pi/pi-coding-agent";
 import { checkProspectiveContract } from "../../extensions/workflow/config";
 import * as taskModule from "@oh-my-pi/pi-coding-agent/task";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
@@ -203,6 +203,13 @@ async function flushSimulatedStartupTurns(): Promise<void> {
 	}
 	persistSentMessages(true);
 }
+/** Real isolated settings for the runner (upstream reads registry handles from it), with the audit role pinned. */
+function harnessSettings(auditModel?: string): Settings {
+	const settings = Settings.isolated();
+	if (auditModel) settings.setModelRole("audit", auditModel);
+	return settings;
+}
+
 const runner = new ExtensionRunner(
 	extensions,
 	loaded.runtime,
@@ -210,10 +217,10 @@ const runner = new ExtensionRunner(
 	fakeSessionManager as never,
 	{ getAvailable: () => [fableModel], hasProvider: () => true, getApiKey: () => Promise.resolve("key") } as never,
 	undefined,
-	{ getModelRole: (role: string) => (role === "audit" ? "anthropic/claude-fable-5" : undefined), get: () => undefined, getStorage: () => undefined } as never,
+	harnessSettings("anthropic/claude-fable-5"),
 	undefined,
 	undefined,
-	0,
+	TOP_LEVEL_AGENT,
 );
 runner.initialize(
 	{
