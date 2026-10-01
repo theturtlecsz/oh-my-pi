@@ -650,7 +650,6 @@ packages/stats/src/aggregator.ts	shared	modified	c82c35a9cb96	OMP-401: repair st
 packages/stats/src/parser.ts	shared	modified	14ec9aa34ec6	OMP-401: repair stats worker folder attribution under a runtime agent-dir override (run 3)	retained
 packages/stats/src/sync-worker.ts	shared	modified	1394fc49cc2c	OMP-401: repair stats worker folder attribution under a runtime agent-dir override (run 3)	retained
 packages/stats/test/ingest-order.test.ts	fork-only	added	892b6d6bc18d	OMP-498: prove a fork whose birth time equals its parent's cannot own the copied request even when it is created (and listed) before the parent	retained
-packages/tsconfig.workspace.json	shared	modified	cda6ef73dc41	OMP-391-s01: pin workspace package resolution to local checkout paths	retained
 packages/tsconfig.workspace.json	shared	modified	72b13d8e4d0d	OMP-391-s01: pin workspace package resolution to local checkout paths; OMP-509-s01: reformatted to oxfmt layout	retained
 packages/tui/src/chat/messages.ts	shared	modified	977ff8f90d26	advisor note message carries the optional supervision category the advisor tagged it with (coding-agent AdvisorCategory) so the TUI can render it	retained
 packages/tui/src/status-line/component.ts	shared	modified	edb5f8f9d2f4	HOME-130 inline extension statuses re-fitted onto the upstream pi-tui status line: INLINE_STATUS_SEG sentinel, placement-aware setHookStatus, inline insertion beside the path segment, inline-first truncation that keeps upstream leftWidths	retained
