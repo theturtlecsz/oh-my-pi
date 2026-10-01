@@ -69,6 +69,11 @@ class Settings(BaseSettings):
     provider: str | None = Field(None, alias="ROBOMP_PROVIDER")
     thinking_level: ThinkingLevel = Field("high", alias="ROBOMP_THINKING")
 
+    # Unattended operation (D35). Set in the container (docker-compose.yml) and
+    # left false for attended runs, so every agent task is refused unless the
+    # deployment explicitly opted in.
+    unattended: bool = Field(False, alias="ROBOMP_UNATTENDED")
+
     # Runtime
     max_concurrency: int = Field(8, alias="ROBOMP_MAX_CONCURRENCY")
     task_timeout_seconds: float = Field(2400.0, alias="ROBOMP_TASK_TIMEOUT_SECONDS")

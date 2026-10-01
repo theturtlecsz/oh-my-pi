@@ -47,6 +47,11 @@ services:
       # --- PR review ---
       ROBOMP_PR_REVIEW_ENABLED: ${ROBOMP_PR_REVIEW_ENABLED:-true}
 
+      # --- unattended operation (D35) ---
+      # The container runs unattended, so every agent task is refused. Set in
+      # the container only; attended runs and existing tests leave it unset.
+      ROBOMP_UNATTENDED: "1"
+
       # --- release sentinel ---
       ROBOMP_RELEASE_SENTINEL_ENABLED: ${ROBOMP_RELEASE_SENTINEL_ENABLED:-false}
       ROBOMP_RELEASE_COMMIT_PREFIX: "${ROBOMP_RELEASE_COMMIT_PREFIX:-chore: bump version to }"
