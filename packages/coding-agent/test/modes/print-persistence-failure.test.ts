@@ -76,6 +76,7 @@ function assistantSession(manager: SessionManager, dispose: () => Promise<void>)
 		prepareForHeadlessAdvisorDrain: () => {},
 		setTextOutputCommitted: () => {},
 		waitForAdvisorCatchup: async () => true,
+		waitForIdle: async () => {},
 		dispose,
 	} as unknown as AgentSession;
 }
@@ -100,6 +101,7 @@ describe("headless persistence-failure surface", () => {
 			prepareForHeadlessAdvisorDrain: () => {},
 			setTextOutputCommitted: () => {},
 			waitForAdvisorCatchup: async () => true,
+			waitForIdle: async () => {},
 			prompt: async () => {
 				manager.appendMessage({ role: "user", content: "boom-user", timestamp: Date.now() } as never);
 			},
@@ -147,6 +149,7 @@ describe("headless persistence-failure surface", () => {
 			prepareForHeadlessAdvisorDrain: () => {},
 			setTextOutputCommitted: () => {},
 			waitForAdvisorCatchup: async () => true,
+			waitForIdle: async () => {},
 			prompt: async () => {
 				// The store rejects this entry and keeps it in memory...
 				manager.appendMessage({ role: "user", content: "boom-user", timestamp: Date.now() } as never);
@@ -202,6 +205,7 @@ describe("headless persistence-failure surface", () => {
 			prepareForHeadlessAdvisorDrain: () => {},
 			setTextOutputCommitted: () => {},
 			waitForAdvisorCatchup: async () => true,
+			waitForIdle: async () => {},
 			prompt: async () => {
 				notifyPersistenceError?.(persistenceError);
 			},
@@ -243,6 +247,7 @@ describe("headless persistence-failure surface", () => {
 			prepareForHeadlessAdvisorDrain: () => {},
 			setTextOutputCommitted: () => {},
 			waitForAdvisorCatchup: async () => true,
+			waitForIdle: async () => {},
 			prompt: async () => {
 				manager.appendMessage({ role: "user", content: "boom-user", timestamp: Date.now() } as never);
 			},
