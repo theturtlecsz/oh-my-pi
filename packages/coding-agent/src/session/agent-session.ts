@@ -1104,6 +1104,9 @@ export class AgentSession implements SettingsScope {
 	#fallbackExtensionTimers: ManagedTimers | undefined = undefined;
 	#turnIndex = 0;
 	#messageEndPersistenceTail: Promise<void> = Promise.resolve();
+	/** Emission sequence numbers of reserved message_end commits that have not settled yet. */
+	#unsettledMessageEndSlots = new Set<number>();
+	#messageEndSlotSequence = 0;
 	#pendingMessageEndPersistence = new Map<string, Promise<void>>();
 	#persistedMessageKeys: { anchor: string; keys: Set<string> } | undefined;
 
@@ -4302,29 +4305,40 @@ export class AgentSession implements SettingsScope {
 	#createMessageEndPersistenceSlot(message: AgentMessage): MessageEndPersistenceSlot {
 		const key = sessionMessagePersistenceKey(message);
 		const previous = this.#messageEndPersistenceTail;
+		const sequence = ++this.#messageEndSlotSequence;
 		const { promise, resolve } = Promise.withResolvers<void>();
-		const clear = () => {
+		const settle = () => {
+			resolve();
+			this.#unsettledMessageEndSlots.delete(sequence);
 			if (key !== undefined && this.#pendingMessageEndPersistence.get(key) === promise) {
 				this.#pendingMessageEndPersistence.delete(key);
 			}
 		};
 		if (key !== undefined) this.#pendingMessageEndPersistence.set(key, promise);
+		this.#unsettledMessageEndSlots.add(sequence);
 		this.#messageEndPersistenceTail = promise;
 		return {
 			promise,
 			persist: async persistMessage => {
-				await previous;
+				// Commit synchronously when no earlier reservation is still open. A
+				// message_end listener may abort synchronously (bumping the prompt
+				// generation); a commit deferred past it would drop the message that
+				// already left the agent loop and orphan its tool results (OMP-246).
+				let earlierOpen = false;
+				for (const other of this.#unsettledMessageEndSlots) {
+					if (other < sequence) {
+						earlierOpen = true;
+						break;
+					}
+				}
+				if (earlierOpen) await previous;
 				try {
 					await persistMessage();
 				} finally {
-					resolve();
-					clear();
+					settle();
 				}
 			},
-			release: () => {
-				resolve();
-				clear();
-			},
+			release: settle,
 		};
 	}
 
