@@ -451,13 +451,16 @@ export async function seedReview(options: SeedReviewOptions): Promise<SeedResult
 	// Diff commands
 	const diffRange = `${baseSha}..${forkSha}`;
 	const targetRange = `${baseSha}..${targetSha}`;
+	// Diff the pinned trees under the fork pin's own attributes: the working
+	// tree's .gitattributes (e.g. a later `binary` marking) must not change the record.
+	const attrSource = `--attr-source=${forkSha}`;
 	const [rawText, numstatText, diffText, forkNames, targetRawText, mergeTreeText] = await Promise.all([
-		git(["diff", "--raw", "--no-renames", "--abbrev=40", "--no-color", diffRange]),
-		git(["diff", "--numstat", "--no-renames", "--no-color", diffRange]),
-		git(["diff", "--unified=0", "--no-renames", "--no-color", diffRange]),
-		git(["diff", "--name-only", "--no-renames", "--no-color", diffRange]),
-		git(["diff", "--raw", "--no-renames", "--abbrev=40", "--no-color", targetRange]),
-		git(["merge-tree", "--write-tree", "--no-messages", "--merge-base", baseSha, forkSha, targetSha], [0, 1]),
+		git([attrSource, "diff", "--raw", "--no-renames", "--abbrev=40", "--no-color", diffRange]),
+		git([attrSource, "diff", "--numstat", "--no-renames", "--no-color", diffRange]),
+		git([attrSource, "diff", "--unified=0", "--no-renames", "--no-color", diffRange]),
+		git([attrSource, "diff", "--name-only", "--no-renames", "--no-color", diffRange]),
+		git([attrSource, "diff", "--raw", "--no-renames", "--abbrev=40", "--no-color", targetRange]),
+		git([attrSource, "merge-tree", "--write-tree", "--no-messages", "--merge-base", baseSha, forkSha, targetSha], [0, 1]),
 	]);
 
 	const computedSources = computeSourceRecords(rawText, numstatText, diffText);
