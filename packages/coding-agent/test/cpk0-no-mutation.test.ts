@@ -40,7 +40,7 @@ async function hashFile(filePath: string): Promise<string> {
 }
 
 const VOLATILE_GIT_FILES = new Set(["FETCH_HEAD", "ORIG_HEAD", "COMMIT_EDITMSG", "index", "gc.log", "gc.pid"]);
-const VOLATILE_GIT_TREES = new Set(["logs", "worktrees"]);
+const VOLATILE_GIT_TREES = new Set(["logs", "worktrees", "rr-cache"]);
 
 /**
  * Identity of the git dirs a snapshot walks. `sharedStore` is true for the
@@ -56,6 +56,7 @@ interface SnapshotGitContext {
  * same clone. In a linked worktree, commonDir is the primary clone's `.git`:
  * every sibling worktree's `git fetch`/`rebase`/`commit` rewrites FETCH_HEAD,
  * ORIG_HEAD, COMMIT_EDITMSG, index, `logs/`, `worktrees/<name>/`, and `*.lock`.
+ * A sibling's rebase/merge (git rerere) writes rr-cache/<hash>/*.
  * Discovery and baseline never touch those, so snapshotting them only makes the
  * zero-mutation assertion flake when worktrees of one clone run git concurrently.
  *
@@ -393,6 +394,89 @@ describe("CPK-0 zero mutation verification (OMP-204-s05)", () => {
 			expect(snapHead).not.toEqual(snapBranch);
 		} finally {
 			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("ignores volatile rr-cache writes between snapshots in a stand-alone git dir (OMP-511)", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "cpk0-no-mutation-rrcache-standalone-"));
+		try {
+			await Bun.write(path.join(tempDir, "HEAD"), "ref: refs/heads/main\n");
+			await Bun.write(path.join(tempDir, "config"), "[core]\n\trepositoryformatversion = 0\n");
+			await Bun.write(path.join(tempDir, "refs/heads/main"), "1111111111111111111111111111111111111111\n");
+
+			const snap1 = await snapshotGit(tempDir, tempDir);
+
+			await Bun.sleep(20);
+			const rrHash = "4b8af42011111111111111111111111111111111";
+			await Bun.write(path.join(tempDir, "rr-cache", rrHash, "thisimage"), "thisimage bytes\n");
+			await Bun.write(path.join(tempDir, "rr-cache", rrHash, "preimage"), "preimage bytes\n");
+			await Bun.write(path.join(tempDir, "rr-cache", rrHash, "postimage"), "postimage bytes\n");
+
+			const snap2 = await snapshotGit(tempDir, tempDir);
+
+			expect(snap1).toEqual(snap2);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("ignores volatile rr-cache writes under commonDir in a linked worktree layout (OMP-511)", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "cpk0-no-mutation-rrcache-linked-"));
+		const commonDir = path.join(root, ".git");
+		const gitDir = path.join(commonDir, "worktrees", "OMP-343");
+		try {
+			await Bun.write(path.join(commonDir, "HEAD"), "ref: refs/heads/main\n");
+			const branchSha = "1111111111111111111111111111111111111111\n";
+			await Bun.write(path.join(commonDir, "refs/heads/main"), branchSha);
+			await Bun.write(path.join(commonDir, "refs/heads/OMP-343"), branchSha);
+			await Bun.write(path.join(commonDir, "packed-refs"), "# pack-refs with: peeled fully-peeled sorted\n");
+			await Bun.write(path.join(commonDir, "config"), "[core]\n\trepositoryformatversion = 0\n");
+
+			await Bun.write(path.join(gitDir, "HEAD"), "ref: refs/heads/OMP-343\n");
+			await Bun.write(path.join(gitDir, "commondir"), "../..\n");
+			await Bun.write(path.join(gitDir, "index"), "index bytes");
+
+			const snap1 = await snapshotGit(gitDir, commonDir);
+
+			await Bun.sleep(20);
+			const rrHash = "4b8af42011111111111111111111111111111111";
+			await Bun.write(path.join(commonDir, "rr-cache", rrHash, "thisimage"), "thisimage bytes\n");
+			await Bun.write(path.join(commonDir, "rr-cache", rrHash, "preimage"), "preimage bytes\n");
+			await Bun.write(path.join(commonDir, "rr-cache", rrHash, "postimage"), "postimage bytes\n");
+
+			const snap2 = await snapshotGit(gitDir, commonDir);
+
+			expect(snap1).toEqual(snap2);
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("negative control: detects non-volatile mutations alongside rr-cache writes in a stand-alone dir (OMP-511)", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "cpk0-no-mutation-rrcache-neg-"));
+		try {
+			await Bun.write(path.join(tempDir, "HEAD"), "ref: refs/heads/main\n");
+			await Bun.write(path.join(tempDir, "config"), "[core]\n\trepositoryformatversion = 0\n");
+			await Bun.write(path.join(tempDir, "refs/heads/main"), "1111111111111111111111111111111111111111\n");
+
+			const snapBase = await snapshotGit(tempDir, tempDir);
+
+			await Bun.sleep(20);
+			const rrHash = "4b8af42011111111111111111111111111111111";
+			await Bun.write(path.join(tempDir, "rr-cache", rrHash, "thisimage"), "thisimage bytes\n");
+
+			// After an rr-cache write, also write refs/heads/<new> -> not equal
+			await Bun.write(path.join(tempDir, "refs/heads/newbranch"), "2222222222222222222222222222222222222222\n");
+			const snapRef = await snapshotGit(tempDir, tempDir);
+			expect(snapRef).not.toEqual(snapBase);
+
+			// Separately objects/<xx>/<new> -> not equal
+			await fs.rm(path.join(tempDir, "refs/heads/newbranch"));
+			await Bun.write(path.join(tempDir, "objects/ab/newobj"), "object bytes\n");
+			const snapObj = await snapshotGit(tempDir, tempDir);
+			expect(snapObj).not.toEqual(snapBase);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
 		}
 	});
 });
