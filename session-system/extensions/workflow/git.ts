@@ -597,9 +597,11 @@ function listPaths(paths: readonly string[]): string {
 }
 
 /** OMP-218: freeze-time lint gate. A candidate that cannot pass the repo's
- *  required CI lint (biome — CI's 'Lint, type check & web build') must never
- *  freeze; the OMP-209 grant burned all 5 close attempts on a candidate whose
- *  only defect was biome-detectable. Injectable for deterministic tests. */
+ *  required CI lint (oxlint + oxfmt — CI's 'Lint, type check & web build',
+ *  `check:tools`) must never freeze; the OMP-209 grant burned all 5 close
+ *  attempts on a candidate whose only defect was lint-detectable. `runBiomeCheck`
+ *  serves only foreign repos that carry a biome config. Injectable for
+ *  deterministic tests. */
 export type BiomeRunner = (root: string, paths: readonly string[]) => { ok: boolean; output: string };
 
 export const runBiomeCheck: BiomeRunner = (root, paths) => {
@@ -630,8 +632,8 @@ export const runOxcCheck: BiomeRunner = (root, paths) => {
 	return { ok: lint.status === 0 && !lint.error && format?.status === 0 && !format.error, output };
 };
 
-/** The gate applies only where required CI lint exists: a biome config at the
- *  repository root. Harness fixtures and foreign repos without one skip it. */
+/** A biome config at the repository root marks a foreign repo's biome lint.
+ *  Harness fixtures and foreign repos without one skip the gate. */
 export function hasBiomeConfig(root: string): boolean {
 	return existsSync(joinPath(root, "biome.json")) || existsSync(joinPath(root, "biome.jsonc"));
 }

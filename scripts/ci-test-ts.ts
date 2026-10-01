@@ -204,6 +204,14 @@ function shellQuote(value: string): string {
 	return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
+// OMP-508: disable core dumps in the spawned test process so bun's JSC GC crash does not fill disk with cores; `exec` keeps the PID so the watchdog SIGKILL still hits the test process.
+export function coreLimitedCommand(command: string[]): string[] {
+	if (process.platform === "win32") {
+		return command;
+	}
+	return ["/bin/sh", "-c", 'ulimit -c 0 && exec "$@"', "sh", ...command];
+}
+
 function workspaceTestCommand(pkg: string, parallel: number, options: { extraArgs?: string[] } = {}): TestCommand {
 	const { extraArgs = [] } = options;
 	return {
@@ -427,7 +435,7 @@ async function runTestCommand(testCommand: TestCommand): Promise<ChunkOutcome | 
 	const startedAt = performance.now();
 	for (let attempt = 1; ; attempt++) {
 		const outcome = await withTempAgentDir(async (_agentDir, env) => {
-			const proc = Bun.spawn(testCommand.command, {
+			const proc = Bun.spawn(coreLimitedCommand(testCommand.command), {
 				cwd,
 				env,
 				stdout: "inherit",
@@ -962,7 +970,7 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 		testCommand: TestCommand,
 	): Promise<{ exitCode: number; output: string; timedOut: boolean }> {
 		return await withTempAgentDir(async (_agentDir, env) => {
-			const proc = Bun.spawn(testCommand.command, {
+			const proc = Bun.spawn(coreLimitedCommand(testCommand.command), {
 				cwd: path.join(repoRoot, testCommand.cwd),
 				env,
 				stdout: "pipe",

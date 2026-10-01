@@ -154,6 +154,7 @@ class SocketDaemonClient implements DaemonBrokerClient {
 	#buffer = "";
 	#closed = false;
 	#completionReconnectTimer: NodeJS.Timeout | undefined;
+	#shutdownAcked = false;
 
 	constructor(projectDir: string, runtimeDir: string, token: string, options: DaemonBrokerClientOptions) {
 		this.projectDir = projectDir;
@@ -166,7 +167,25 @@ class SocketDaemonClient implements DaemonBrokerClient {
 	async request(operation: DaemonOperation, signal?: AbortSignal): Promise<DaemonRpcResult> {
 		if (this.#closed) throw new Error("Daemon broker client is closed");
 		if (signal?.aborted) throw new Error("Daemon broker request aborted");
-		await this.#connect();
+		if (operation.op !== "shutdown") {
+			this.#shutdownAcked = false;
+		}
+		if (operation.op === "shutdown") {
+			if (!this.#socket || this.#socket.destroyed) {
+				try {
+					this.#bindSocket(await openSocket(this.#endpoint, 250));
+				} catch {
+					this.#shutdownAcked = true;
+					if (this.#completionReconnectTimer !== undefined) {
+						clearTimeout(this.#completionReconnectTimer);
+						this.#completionReconnectTimer = undefined;
+					}
+					return { op: "shutdown" };
+				}
+			}
+		} else {
+			await this.#connect();
+		}
 		const socket = this.#socket;
 		if (!socket || socket.destroyed) throw new Error("Daemon broker socket is unavailable");
 
@@ -218,6 +237,7 @@ class SocketDaemonClient implements DaemonBrokerClient {
 	close(): void {
 		if (this.#closed) return;
 		this.#closed = true;
+		this.#shutdownAcked = false;
 		clearTimeout(this.#completionReconnectTimer);
 		this.#completionReconnectTimer = undefined;
 		this.#socket?.destroy();
@@ -254,13 +274,14 @@ class SocketDaemonClient implements DaemonBrokerClient {
 	}
 
 	#publishCompletionOwners(): void {
-		if (this.#closed) return;
+		if (this.#closed || this.#shutdownAcked) return;
 		void this.request({ op: "ping" }).catch(() => this.#scheduleCompletionReconnect());
 	}
 
 	#scheduleCompletionReconnect(): void {
 		if (
 			this.#closed ||
+			this.#shutdownAcked ||
 			this.#completionSinks.size === 0 ||
 			this.#completionReconnectTimer !== undefined ||
 			(this.#socket !== undefined && !this.#socket.destroyed)
@@ -391,6 +412,13 @@ class SocketDaemonClient implements DaemonBrokerClient {
 			if (!response.ok) {
 				pending.reject(new DaemonBrokerRejectedError(response.error));
 				continue;
+			}
+			if (pending.operation.op === "shutdown") {
+				this.#shutdownAcked = true;
+				if (this.#completionReconnectTimer !== undefined) {
+					clearTimeout(this.#completionReconnectTimer);
+					this.#completionReconnectTimer = undefined;
+				}
 			}
 			try {
 				pending.resolve(parseDaemonRpcResult(pending.operation, response.result));
