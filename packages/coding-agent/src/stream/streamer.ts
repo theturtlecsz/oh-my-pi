@@ -238,6 +238,11 @@ export class StreamMuxHost {
 		socket.on("error", () => {
 			// The paired close event performs pane cleanup.
 		});
+		// A session that sent EOF is gone; nothing it could still read matters. Destroy
+		// instead of relying on the implicit allowHalfOpen=false end(): on Bun 1.3 a write
+		// racing the peer's hang-up never finishes or errors, so that end() would leave the
+		// socket open forever, leaking the pane and stalling server.close() in close().
+		socket.once("end", () => socket.destroy());
 		socket.once("close", () => this.#detach(connection));
 	}
 
