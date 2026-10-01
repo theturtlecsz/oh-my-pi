@@ -12,10 +12,11 @@ TCP ``127.0.0.1:3128`` forwards to the gateway proxy socket, and TCP
 tmpfs over the socket root hides every other sandbox's sockets, with only this
 sandbox's directory bound back so ``record.sock`` stays reachable.
 
-A ``research`` root skips the mount-proc shim and the setup_ok touch. The
-helper runs ``unshare --mount --pid --fork`` on
-:mod:`omp_work.egress_research_jail`, which builds the worker root and marks
-setup_ok only after ``pivot_root``.
+A ``research`` or ``worker`` root skips the mount-proc shim and the setup_ok
+touch. The helper runs ``unshare --mount --pid --fork`` on
+:mod:`omp_work.egress_research_jail`, which builds that profile's root and
+marks setup_ok only after ``pivot_root``. Any other named root exits 125
+before setup.
 """
 
 from __future__ import annotations
@@ -50,6 +51,10 @@ JAIL_CA_CERT = "/etc/ssl/certs/ca-certificates.crt"
 RESEARCH_HOME = "/home/research"
 RESEARCH_PATH_DEFAULT = "/usr/bin:/bin"
 _RESEARCH_ENV_NAMES = frozenset({"PATH", "LANG", "TERM", "TZ"})
+# Worker profile: the research allowlist plus the task token and WorkService
+# URL. Nothing else (no HOME, proxy, CA, or caller credential) is copied.
+_WORKER_ENV_ORDER = ("PATH", "LANG", "TERM", "TZ", "OMP_TASK_TOKEN", "OMP_WORK_URL")
+_WORKER_ENV_NAMES = frozenset(_WORKER_ENV_ORDER)
 
 _libc = ctypes.CDLL("libc.so.6", use_errno=True)
 
@@ -412,15 +417,34 @@ def _research_worker_env(config: dict) -> dict[str, str]:
     return worker_env
 
 
+def _worker_profile_env(config: dict) -> dict[str, str]:
+    """Closed worker environment: the six allowed names, and nothing else.
+
+    PATH defaults to ``/usr/bin:/bin``. HOME, proxy, CA, and LC_* are not set.
+    """
+    base = config.get("env") or {}
+    worker_env: dict[str, str] = {}
+    for name in _WORKER_ENV_ORDER:
+        if name in base and name in _WORKER_ENV_NAMES:
+            worker_env[name] = str(base[name])
+    if "PATH" not in worker_env:
+        worker_env["PATH"] = RESEARCH_PATH_DEFAULT
+    return worker_env
+
+
 def _worker_env(config: dict, workdir: str | None) -> dict[str, str]:
     """The worker environment: base env, proxy variables, and CA trust paths.
 
     A research root takes PATH, LANG, TERM, TZ, and LC_* from the config env
     (PATH defaults to ``/usr/bin:/bin``), sets HOME, and points the CA variables
     at the certificate inside the jail. Proxy variables match the s07 worker.
+    A worker root takes only PATH, LANG, TERM, TZ, OMP_TASK_TOKEN, and
+    OMP_WORK_URL.
     """
     if config.get("root") == "research":
         return _research_worker_env(config)
+    if config.get("root") == "worker":
+        return _worker_profile_env(config)
     base = config.get("env")
     worker_env = os.environ.copy() if base is None else dict(base)
     if config.get("proxy_sock"):
@@ -513,9 +537,9 @@ def main() -> None:
     config_path = Path(sys.argv[1])
     config = json.loads(config_path.read_text(encoding="utf-8"))
 
-    # A profile root other than research has no jail yet. Exit before setup_ok.
+    # A named profile other than research or worker has no jail. Exit before setup_ok.
     root = config.get("root")
-    if root not in (None, "research"):
+    if root not in (None, "research", "worker"):
         sys.exit(125)
 
     record_sock = config["record_sock"]
@@ -545,9 +569,9 @@ def main() -> None:
     # 6. Mask sibling sandboxes and expose loopback relays
     _setup_relays(config)
 
-    if root == "research":
+    if root in ("research", "worker"):
         # No mount-proc shim and no setup_ok touch: the jail marks setup_ok
-        # after pivot_root, or leaves it absent when the CA cannot be read.
+        # after pivot_root, or leaves it absent when setup cannot finish.
         returncode = _spawn_research_jail(config_path)
     else:
         # 7. Ensure unshare with mount-proc works

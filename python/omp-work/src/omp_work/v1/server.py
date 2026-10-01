@@ -3,7 +3,7 @@ from __future__ import annotations
 import hmac
 import json
 import stat
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -29,6 +29,25 @@ from .service import Principal, WorkError, WorkService
 from .store import PostgresWorkStore, WorkStore
 
 
+def _capability_expired(value: object, now: datetime) -> bool:
+    """True when ``expires_at`` is present and no longer valid.
+
+    A missing expiry is not expired. An unreadable expiry is treated as
+    expired so a broken capability file cannot authenticate.
+    """
+    if value is None:
+        return False
+    if not isinstance(value, str) or value == "":
+        return True
+    try:
+        expires = datetime.fromisoformat(value)
+    except ValueError:
+        return True
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=UTC)
+    return expires <= now
+
+
 def _principal(request: Request, capabilities_dir: Path) -> Principal:
     authorization = request.headers.get("authorization", "")
     if not authorization.startswith("Bearer "):
@@ -37,11 +56,15 @@ def _principal(request: Request, capabilities_dir: Path) -> Principal:
     try:
         if stat.S_IMODE(capabilities_dir.stat().st_mode) != 0o700:
             raise ValueError
+        now = datetime.now(UTC)
         for path in capabilities_dir.iterdir():
             if stat.S_IMODE(path.stat().st_mode) != 0o600:
                 continue
             data = json.loads(path.read_text())
             if hmac.compare_digest(str(data["token"]), token):
+                # Past expires_at is unknown (401). No expires_at behaves as before.
+                if _capability_expired(data.get("expires_at"), now):
+                    continue
                 candidate_ids = (
                     frozenset(UUID(value) for value in data.get("candidate_ids", ()))
                     or None
