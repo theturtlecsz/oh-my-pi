@@ -22,7 +22,6 @@ from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 import psycopg
-from psycopg.rows import dict_row
 
 from omp_work.action_classify import ResolvedTarget, classify, parse_submission
 from omp_work.control_actions import HoldDecision, perform
@@ -516,7 +515,7 @@ class StageContext:
         if stopped:
             raise Frozen
 
-    def command(self, type: str, payload: Mapping[str, Any]) -> dict[str, Any]:  # noqa: A002 - command type is the public name
+    def command(self, type: str, payload: Mapping[str, Any]) -> dict[str, Any]:  # noqa: A002  # pylint: disable=redefined-builtin - command type is the public name
         """Run one work command. Envelope ids are stable across a re-run of this step."""
         self._stop()
         ordinal = self._ordinals.get(type, 0)
@@ -669,12 +668,14 @@ class OrchestratorHandler:
         return self._dispatch(job, recovering=True)
 
     def steps(self) -> list[dict[str, Any]]:
-        assert self.mission_id is not None
+        if self.mission_id is None:
+            raise AssertionError("mission_id is None")
         with self.store.transaction(self.config.workspace_id, self.principal.actor_id) as cur:
             return list_steps(cur, self.config.workspace_id, str(self.mission_id))
 
     def record(self, step_index: int, body: Mapping[str, Any]) -> dict[str, Any]:
-        assert self.mission_id is not None and self._job_id is not None
+        if self.mission_id is None or self._job_id is None:
+            raise AssertionError("mission_id or job_id is None")
         step = {
             "mission_id": str(self.mission_id),
             "step_index": step_index,
@@ -760,7 +761,8 @@ class OrchestratorHandler:
         return Settlement(outcome="succeeded", receipts=[])
 
     def _run_stage(self, job: dict[str, Any], step_index: int) -> None:
-        assert self._request is not None and self.mission_id is not None and self.project_id is not None
+        if self._request is None or self.mission_id is None or self.project_id is None:
+            raise AssertionError("stage context is unbound")
         steps = self.steps()
         recorded = _outcome_step(steps, step_index)
         stage = _stage_for(steps, step_index)
@@ -798,7 +800,8 @@ class OrchestratorHandler:
         self._apply(job, step_index, chosen, outcome)
 
     def _operate(self, job: dict[str, Any], step_index: int, stage: str, facts: Facts) -> Outcome:
-        assert self._request is not None and self.project_id is not None
+        if self._request is None or self.project_id is None:
+            raise AssertionError("stage context is unbound")
         run = _REGISTRY.get(stage)
         if run is None:
             verdict = "pass" if stage == "audit" else "none"
@@ -825,7 +828,8 @@ class OrchestratorHandler:
         return produced
 
     def _facts(self, steps: list[dict[str, Any]], step_index: int, stage: str, outcome: Outcome | None) -> Facts:
-        assert self.mission_id is not None and self.project_id is not None and self._request is not None
+        if self.mission_id is None or self.project_id is None or self._request is None:
+            raise AssertionError("stage context is unbound")
         record, release = qualification_record(self.config.qualification_path)
         qualified, _missing = qualification.qualified(
             record,
@@ -865,12 +869,14 @@ class OrchestratorHandler:
         )
 
     def _bounds(self, stage: str):
-        assert self._request is not None
+        if self._request is None:
+            raise AssertionError("request is None")
         kind = str((self._request.get("scope") or {}).get("kind") or "engineering.execute")
         return bounds_for(load_policy(), kind, stage, self.config.repair_rounds)
 
     def _record_decision(self, step_index: int, chosen: Step, outcome: Outcome | None) -> None:
-        assert self.mission_id is not None
+        if self.mission_id is None:
+            raise AssertionError("mission_id is None")
         body: dict[str, Any] = {
             "kind": chosen.kind,
             "rule_id": chosen.rule_id,
@@ -891,7 +897,8 @@ class OrchestratorHandler:
 
     def _apply(self, job: dict[str, Any], step_index: int, chosen: Step, outcome: Outcome | None) -> None:
         del outcome
-        assert self.mission_id is not None
+        if self.mission_id is None:
+            raise AssertionError("mission_id is None")
         if chosen.kind in {"advance", "retry", "repair", "reroute", "reschedule"}:
             self._enqueue(_stage_job(self.mission_id, step_index + 1), UUID(str(job["work_id"])))
             return
@@ -934,7 +941,8 @@ class OrchestratorHandler:
             time.sleep(max(0.0, float(self.config.wait_seconds)))
             answer = self._answer(decision_id)
         if answer is None:
-            assert self.mission_id is not None
+            if self.mission_id is None:
+                raise AssertionError("mission_id is None")
             self._enqueue(
                 _wait_job(self.mission_id, UUID(decision_id), generation + 1),
                 UUID(str(job["work_id"])),
@@ -952,7 +960,8 @@ class OrchestratorHandler:
         if answer == "resume" or (answer == "approve" and rule_id != "terminal-needs-basis"):
             self._set_status("running", "decision", decision_id=decision_id)
             if pause is not None and pause.get("next_stage"):
-                assert self.mission_id is not None
+                if self.mission_id is None:
+                    raise AssertionError("mission_id is None")
                 self._enqueue(
                     _stage_job(self.mission_id, int(pause["step_index"]) + 1),
                     UUID(str(job["work_id"])),
@@ -978,7 +987,8 @@ class OrchestratorHandler:
         chosen: Step | None,
         decision_id: str | None = None,
     ) -> None:
-        assert self.mission_id is not None
+        if self.mission_id is None:
+            raise AssertionError("mission_id is None")
         cause = decision_id
         if cause is None and chosen is not None and chosen.decision is not None:
             cause = str(chosen.decision.decision_id)
@@ -1002,7 +1012,8 @@ class OrchestratorHandler:
             self._set_status("abandoned", "decision", decision_id=cause)
 
     def _redefine(self, job: dict[str, Any], step_index: int, decision_id: str | None = None) -> None:
-        assert self.mission_id is not None
+        if self.mission_id is None:
+            raise AssertionError("mission_id is None")
         self._act_terminal(
             job,
             step_index,
@@ -1035,7 +1046,8 @@ class OrchestratorHandler:
         rule_id: str,
         decision_id: str | None = None,
     ) -> None:
-        assert self.project_id is not None
+        if self.project_id is None:
+            raise AssertionError("project_id is None")
         ctx = StageContext(
             self,
             step_index=step_index,
@@ -1060,7 +1072,8 @@ class OrchestratorHandler:
         )
 
     def _record_owner_decision(self, chosen: Step) -> None:
-        assert chosen.decision is not None
+        if chosen.decision is None:
+            raise AssertionError("decision is None")
         payload = chosen.decision.model_dump(mode="json")
         self._command(
             "create_decision",
@@ -1076,7 +1089,8 @@ class OrchestratorHandler:
         policy_rule_id: str | None = None,
         decision_id: str | None = None,
     ) -> None:
-        assert self.mission_id is not None
+        if self.mission_id is None:
+            raise AssertionError("mission_id is None")
         payload: dict[str, Any] = {
             "mission_id": str(self.mission_id),
             "target_status": target,
@@ -1114,7 +1128,8 @@ class OrchestratorHandler:
         )
 
     def _mission(self) -> dict[str, Any]:
-        assert self.mission_id is not None
+        if self.mission_id is None:
+            raise AssertionError("mission_id is None")
         try:
             with self.store.transaction(self.config.workspace_id, self.principal.actor_id) as cur:
                 return read_mission(cur, self.config.workspace_id, self.mission_id)
@@ -1141,7 +1156,8 @@ class OrchestratorHandler:
         return bool(exhausted)
 
     def _capacity_free(self) -> bool:
-        assert self.mission_id is not None
+        if self.mission_id is None:
+            raise AssertionError("mission_id is None")
         record, _release = qualification_record(self.config.qualification_path)
         limit = qualification.max_workers(self.config.max_workers, record)
         prefix = f"orch:{self.mission_id}:"
@@ -1454,7 +1470,8 @@ def submit(config: OrchestratorConfig, request: MissionRequest) -> dict[str, Any
         }
     _prepare_mission(config, request, owner, automation)
     job_id = _stage_job(request.mission_id, 0)
-    assert work_id is not None
+    if work_id is None:
+        raise AssertionError("work_id is None")
     enqueue_job(
         NativeJobStore(config.ops),
         operation_id=str(_ids(request.mission_id, "enqueue:0")),

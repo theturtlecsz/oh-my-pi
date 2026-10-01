@@ -1014,10 +1014,15 @@ class DaemonBroker {
 		return this.#settle(record, generation, result.exitCode, result.timedOut ? "timed out" : undefined);
 	}
 
-	#notifyCompletion(completion: DaemonCompletionNotification): void {
+	/** Remember a completion for replay. Independent of the live socket write. */
+	#queueCompletion(completion: DaemonCompletionNotification): void {
 		const pending = this.#pendingCompletions.get(completion.owner) ?? new Map<string, DaemonCompletionNotification>();
 		pending.set(completion.completionId, completion);
 		this.#pendingCompletions.set(completion.owner, pending);
+	}
+
+	#notifyCompletion(completion: DaemonCompletionNotification): void {
+		this.#queueCompletion(completion);
 		const registration = this.#ownerSockets.get(completion.owner);
 		if (!registration || registration.socket.destroyed) return;
 		registration.socket.write(`${JSON.stringify(completion)}\n`);
@@ -1080,7 +1085,13 @@ class DaemonBroker {
 						daemon: { ...record.snapshot },
 					} satisfies DaemonCompletionNotification)
 				: undefined;
-		if (completion) record.pendingCompletions.push(completion);
+		if (completion) {
+			record.pendingCompletions.push(completion);
+			// Terminal state is visible to waiters while log close and metadata
+			// persistence yield. Queue the replay before that gap so a session
+			// that resumes in it still receives the completion.
+			this.#queueCompletion(completion);
+		}
 		this.#persist(record);
 		await record.log?.close();
 		record.log = undefined;

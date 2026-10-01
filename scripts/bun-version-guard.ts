@@ -1,11 +1,11 @@
 export function bunVersionMismatch(running: string, packageManager: string): string | null {
-	const runningMatch = /^v?(\d+)\.(\d+)/.exec((running ?? "").trim());
+	const runningMatch = /^v?(\d+)\.(\d+)/.exec(running.trim());
 	if (!runningMatch) {
 		return `running bun version ${running} has no major.minor`;
 	}
 	const runningMajorMinor = `${runningMatch[1]}.${runningMatch[2]}`;
 
-	const trimmedSpec = (packageManager ?? "").trim();
+	const trimmedSpec = packageManager.trim();
 	if (!trimmedSpec.startsWith("bun@")) {
 		return `bun ${running} is running but package.json packageManager is ${packageManager || "<empty>"} (expected bun@<major>.<minor>)`;
 	}
