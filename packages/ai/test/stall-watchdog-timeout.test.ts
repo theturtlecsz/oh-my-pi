@@ -1,9 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import * as os from "node:os";
-import {
-	defaultReadCmdline,
-	resolveRunTimeoutMs,
-} from "./helpers/stall-watchdog-timeout";
+import { defaultReadCmdline, resolveRunTimeoutMs } from "./helpers/stall-watchdog-timeout";
 
 describe("stall-watchdog-timeout resolution (OMP-512-s01)", () => {
 	it("resolves from argv using --timeout=N spelling", () => {
@@ -45,10 +42,7 @@ describe("stall-watchdog-timeout resolution (OMP-512-s01)", () => {
 	it("a self cmdline wins over the parent's cmdline", () => {
 		const timeout = resolveRunTimeoutMs({
 			argv: ["bun", "test"],
-			readCmdline: (pid) =>
-				pid === "self"
-					? ["bun", "test", "--timeout=1000"]
-					: ["bun", "test", "--timeout=3000"],
+			readCmdline: pid => (pid === "self" ? ["bun", "test", "--timeout=1000"] : ["bun", "test", "--timeout=3000"]),
 			ppid: 200,
 		});
 		expect(timeout).toBe(1000);
@@ -57,10 +51,8 @@ describe("stall-watchdog-timeout resolution (OMP-512-s01)", () => {
 	it("a self cmdline with space spelling wins over the parent's cmdline", () => {
 		const timeout = resolveRunTimeoutMs({
 			argv: ["bun", "test"],
-			readCmdline: (pid) =>
-				pid === "self"
-					? ["bun", "test", "--timeout", "1500"]
-					: ["bun", "test", "--timeout=3000"],
+			readCmdline: pid =>
+				pid === "self" ? ["bun", "test", "--timeout", "1500"] : ["bun", "test", "--timeout=3000"],
 			ppid: 200,
 		});
 		expect(timeout).toBe(1500);
@@ -69,10 +61,8 @@ describe("stall-watchdog-timeout resolution (OMP-512-s01)", () => {
 	it("a parent-only flag resolves when self cmdline has no timeout flag", () => {
 		const timeout = resolveRunTimeoutMs({
 			argv: ["bun", "test"],
-			readCmdline: (pid) =>
-				pid === "self"
-					? ["bun", "test", "worker.ts"]
-					: ["bun", "test", "--parallel=6", "--timeout=30000"],
+			readCmdline: pid =>
+				pid === "self" ? ["bun", "test", "worker.ts"] : ["bun", "test", "--parallel=6", "--timeout=30000"],
 			ppid: 200,
 		});
 		expect(timeout).toBe(30000);
@@ -81,10 +71,8 @@ describe("stall-watchdog-timeout resolution (OMP-512-s01)", () => {
 	it("a parent-only flag with space spelling resolves when self cmdline has no timeout flag", () => {
 		const timeout = resolveRunTimeoutMs({
 			argv: ["bun", "test"],
-			readCmdline: (pid) =>
-				pid === "self"
-					? ["bun", "test", "worker.ts"]
-					: ["bun", "test", "--parallel=6", "--timeout", "30000"],
+			readCmdline: pid =>
+				pid === "self" ? ["bun", "test", "worker.ts"] : ["bun", "test", "--parallel=6", "--timeout", "30000"],
 			ppid: 200,
 		});
 		expect(timeout).toBe(30000);
@@ -100,14 +88,14 @@ describe("stall-watchdog-timeout resolution (OMP-512-s01)", () => {
 
 		const timeoutSelfOnly = resolveRunTimeoutMs({
 			argv: ["bun", "test"],
-			readCmdline: (pid) => (pid === "self" ? ["bun", "test"] : undefined),
+			readCmdline: pid => (pid === "self" ? ["bun", "test"] : undefined),
 			ppid: 200,
 		});
 		expect(timeoutSelfOnly).toBe(5000);
 
 		const timeoutParentOnly = resolveRunTimeoutMs({
 			argv: ["bun", "test"],
-			readCmdline: (pid) => (pid === "self" ? undefined : ["bun", "test"]),
+			readCmdline: pid => (pid === "self" ? undefined : ["bun", "test"]),
 			ppid: 200,
 		});
 		expect(timeoutParentOnly).toBe(5000);
