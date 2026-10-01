@@ -651,6 +651,7 @@ packages/stats/src/parser.ts	shared	modified	14ec9aa34ec6	OMP-401: repair stats 
 packages/stats/src/sync-worker.ts	shared	modified	1394fc49cc2c	OMP-401: repair stats worker folder attribution under a runtime agent-dir override (run 3)	retained
 packages/stats/test/ingest-order.test.ts	fork-only	added	892b6d6bc18d	OMP-498: prove a fork whose birth time equals its parent's cannot own the copied request even when it is created (and listed) before the parent	retained
 packages/tsconfig.workspace.json	shared	modified	cda6ef73dc41	OMP-391-s01: pin workspace package resolution to local checkout paths	retained
+packages/tsconfig.workspace.json	shared	modified	72b13d8e4d0d	OMP-391-s01: pin workspace package resolution to local checkout paths; OMP-509-s01: reformatted to oxfmt layout	retained
 packages/tui/src/chat/messages.ts	shared	modified	977ff8f90d26	advisor note message carries the optional supervision category the advisor tagged it with (coding-agent AdvisorCategory) so the TUI can render it	retained
 packages/tui/src/status-line/component.ts	shared	modified	edb5f8f9d2f4	HOME-130 inline extension statuses re-fitted onto the upstream pi-tui status line: INLINE_STATUS_SEG sentinel, placement-aware setHookStatus, inline insertion beside the path segment, inline-first truncation that keeps upstream leftWidths	retained
 packages/tui/src/status-line/host.ts	shared	modified	da3aad1d2e7c	StatusLinePlacement type ("footer" | "inline") for HOME-130 extension statuses, defined in pi-tui because pi-tui cannot import coding-agent types	retained
@@ -1294,8 +1295,9 @@ scripts/commit-contract-approval.ts	fork-only	added	8c2349434702	OMP-452: commit
 scripts/cpk0-baseline.ts	fork-only	added	744a9e3ed4dc	OMP-204-s03: CPK-0 baseline measurement script exporting measureBaseline/probeStartup; OMP-204-s04: adds --write and --check modes, exports checkAgainstBudget and baseline types	retained
 scripts/cpk0-inventory.ts	fork-only	added	dce74acef3ee	OMP-287: Generator script extracting first-party tools, extension/hook surfaces, and authority classifications from source AST; OMP-289: TS2339 fixes; OMP-204-s01: exported type-safe extractApprovalFromNode (string-literal guard instead of any cast); OMP-204-s02: prompts + rule_paths	retained
 scripts/cpk0-rss-preload.ts	fork-only	added	affceb0abd5b	OMP-204-s03: Preload that writes process RSS to CPK0_RSS_OUT from a synchronous exit handler, used by the CPK-0 baseline memory measurement	retained
+scripts/gen-workspace-paths-oxfmt.test.ts	fork-only	added	1802194bdf21	OMP-509-s01: test oxfmt resolution, fallback, and formatted layout for gen-workspace-paths	retained
 scripts/gen-workspace-paths.test.ts	fork-only	added	175007d395f0	OMP-391-s01: tests for exportsToPaths, comparePathsKeys, and checkWorkspacePaths drift detection	retained
-scripts/gen-workspace-paths.ts	fork-only	added	8adc19da699f	OMP-391-s01: generate compilerOptions.paths in packages/tsconfig.workspace.json from package.json exports	retained
+scripts/gen-workspace-paths.ts	fork-only	added	3e2df8dc9d79	OMP-391-s01: generate compilerOptions.paths in packages/tsconfig.workspace.json from package.json exports; OMP-509-s01: resolve oxfmt via $which and format written tsconfig without .nothrow()	retained
 scripts/installed-qualification-mode.test.ts	fork-only	added	9513b1787dfb	OMP-335-s01: tests for installed qualification mode selection and CLI output	retained
 scripts/installed-qualification-mode.ts	fork-only	added	a21adfeecbde	OMP-335-s01: select installed qualification mode (subset vs full) and pytest targets based on event, release flag, and protected path changes	retained
 scripts/link-omp.sh	shared	modified	51a84679608b	session candidate: OMP-162	retained
