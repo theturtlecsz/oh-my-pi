@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping
 import fnmatch
 import os
 from pathlib import Path
+import stat
 import subprocess
 import tempfile
 from typing import Any, Protocol, runtime_checkable
@@ -14,6 +15,7 @@ __all__ = [
     "CandidateGitError",
     "IntentLog",
     "add_worktree",
+    "check_envelope",
     "git",
     "path_allowed",
 ]
@@ -166,3 +168,206 @@ def path_allowed(path: str | Path, allowed_paths: Iterable[str]) -> bool:
         if _match_segments(path_segments, _segments(pattern)):
             return True
     return False
+
+
+def check_envelope(
+    worktree: Path | str,
+    base: str,
+    allowed_paths: Iterable[str],
+    *,
+    repository: Path | str,
+    live_checkout: Path | str | None = None,
+) -> list[str]:
+    """Check candidate worktree against envelope constraints (OMP-417-s04-s02)."""
+    violations, _ = _scan(
+        worktree,
+        base,
+        allowed_paths,
+        repository=repository,
+        live_checkout=live_checkout,
+    )
+    return violations
+
+
+def _scan(
+    worktree: Path | str,
+    base: str,
+    allowed_paths: Iterable[str],
+    *,
+    repository: Path | str,
+    live_checkout: Path | str | None = None,
+) -> tuple[list[str], dict[str, tuple[str, bytes] | None]]:
+    """Scan candidate worktree for envelope violations and compute changed file snapshot."""
+    wt = Path(worktree).resolve()
+    repo = Path(repository).resolve()
+
+    violations: list[str] = []
+
+    # 1. Base ls-tree from bare control repo
+    base_out = git(repo, "ls-tree", "-r", "-z", "--full-tree", str(base))
+    base_entries: dict[str, tuple[str, str]] = {}
+    if base_out:
+        for item in base_out.split(b"\0"):
+            if not item:
+                continue
+            meta, path_b = item.split(b"\t", 1)
+            mode_b, _type_b, sha_b = meta.split(b" ", 2)
+            base_entries[path_b.decode("utf-8", errors="surrogateescape")] = (
+                mode_b.decode("ascii"),
+                sha_b.decode("ascii"),
+            )
+
+    # 2. Live checkout check
+    if live_checkout is not None:
+        live = Path(live_checkout).resolve()
+        live_out = git(
+            live,
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--ignored=traditional",
+        )
+        if live_out:
+            for entry in live_out.split(b"\0"):
+                if entry:
+                    violations.append(
+                        f"live_checkout_changed:{entry.decode('utf-8', errors='surrogateescape')}"
+                    )
+
+    # 3. Walk worktree without pruning
+    wt_files: dict[str, tuple[str, str, bytes]] = {}
+    seen_paths: set[str] = set()
+
+    for root, dirs, files in os.walk(wt, followlinks=False):
+        for d in list(dirs):
+            full_d = Path(root) / d
+            rel_d = full_d.relative_to(wt).as_posix()
+            d_parts = _segments(rel_d)
+
+            if os.path.islink(full_d):
+                try:
+                    target = full_d.resolve()
+                    if not target.is_relative_to(wt):
+                        violations.append(f"symlink_escape:{rel_d}")
+                except (OSError, RuntimeError):
+                    violations.append(f"symlink_escape:{rel_d}")
+
+                if any(part == ".git" for part in d_parts):
+                    violations.append(f"git_metadata:{rel_d}")
+                else:
+                    try:
+                        link_text = os.readlink(full_d)
+                        content_bytes = link_text.encode("utf-8")
+                        mode = "120000"
+                        sha = git(
+                            repo,
+                            "hash-object",
+                            "--no-filters",
+                            "--stdin",
+                            input=content_bytes,
+                        ).decode("ascii").strip()
+                        wt_files[rel_d] = (mode, sha, content_bytes)
+                        seen_paths.add(rel_d)
+                    except OSError:
+                        pass
+            else:
+                if any(part == ".git" for part in d_parts):
+                    violations.append(f"git_metadata:{rel_d}")
+
+        for f in files:
+            full_f = Path(root) / f
+            rel_f = full_f.relative_to(wt).as_posix()
+            f_parts = _segments(rel_f)
+
+            try:
+                st = os.lstat(full_f)
+            except OSError:
+                continue
+
+            if stat.S_ISLNK(st.st_mode):
+                try:
+                    target = full_f.resolve()
+                    if not target.is_relative_to(wt):
+                        violations.append(f"symlink_escape:{rel_f}")
+                except (OSError, RuntimeError):
+                    violations.append(f"symlink_escape:{rel_f}")
+
+                if any(part == ".git" for part in f_parts):
+                    violations.append(f"git_metadata:{rel_f}")
+                else:
+                    try:
+                        link_text = os.readlink(full_f)
+                        content_bytes = link_text.encode("utf-8")
+                        mode = "120000"
+                        sha = git(
+                            repo,
+                            "hash-object",
+                            "--no-filters",
+                            "--stdin",
+                            input=content_bytes,
+                        ).decode("ascii").strip()
+                        wt_files[rel_f] = (mode, sha, content_bytes)
+                        seen_paths.add(rel_f)
+                    except OSError:
+                        pass
+
+            elif (
+                stat.S_ISFIFO(st.st_mode)
+                or stat.S_ISSOCK(st.st_mode)
+                or stat.S_ISCHR(st.st_mode)
+                or stat.S_ISBLK(st.st_mode)
+            ):
+                violations.append(f"unsupported:{rel_f}")
+                if any(part == ".git" for part in f_parts):
+                    violations.append(f"git_metadata:{rel_f}")
+
+            elif stat.S_ISREG(st.st_mode):
+                is_root_gitfile = (rel_f == ".git")
+                if st.st_nlink > 1:
+                    violations.append(f"hardlink:{rel_f}")
+
+                if any(part == ".git" for part in f_parts):
+                    if not is_root_gitfile:
+                        violations.append(f"git_metadata:{rel_f}")
+                else:
+                    try:
+                        content_bytes = full_f.read_bytes()
+                        mode = "100755" if bool(st.st_mode & 0o111) else "100644"
+                        sha = git(
+                            repo,
+                            "hash-object",
+                            "--no-filters",
+                            "--stdin",
+                            input=content_bytes,
+                        ).decode("ascii").strip()
+                        wt_files[rel_f] = (mode, sha, content_bytes)
+                        seen_paths.add(rel_f)
+                    except OSError:
+                        pass
+
+    # 4. Check changed paths relative to base
+    changed_map: dict[str, tuple[str, bytes] | None] = {}
+
+    for p, (mode, sha, content_bytes) in wt_files.items():
+        if p not in base_entries:
+            changed_map[p] = (mode, content_bytes)
+            if not path_allowed(p, allowed_paths):
+                violations.append(f"outside_allowed:{p}")
+        else:
+            base_mode, base_sha = base_entries[p]
+            if mode != base_mode or sha != base_sha:
+                changed_map[p] = (mode, content_bytes)
+                if not path_allowed(p, allowed_paths):
+                    violations.append(f"outside_allowed:{p}")
+
+    for p in base_entries:
+        if p not in seen_paths:
+            changed_map[p] = None
+            if not path_allowed(p, allowed_paths):
+                violations.append(f"outside_allowed:{p}")
+
+    sorted_violations = sorted(set(violations))
+    return sorted_violations, changed_map
+
