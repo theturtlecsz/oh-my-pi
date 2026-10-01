@@ -48,26 +48,6 @@ describe("Loader component", () => {
 		loader.stop();
 	});
 
-	it("falls back to component-scoped renders for lightweight TUI stubs", () => {
-		vi.useFakeTimers();
-		const ui = { requestComponentRender: vi.fn() };
-		const loader = new Loader(
-			ui as unknown as TUI,
-			text => text,
-			text => text,
-			"Checking",
-			["0"],
-		);
-
-		expect(ui.requestComponentRender).toHaveBeenCalledTimes(1);
-
-		loader.setMessage("Still checking");
-		expect(ui.requestComponentRender).toHaveBeenCalledTimes(2);
-		expect(loader.render(30).join("\n")).toContain("0 Still checking");
-
-		loader.stop();
-	});
-
 	it("skips animated render requests when composed text is unchanged before the spinner advances", () => {
 		vi.useFakeTimers();
 		const ui = { requestComponentRender: vi.fn() };
@@ -153,6 +133,64 @@ describe("Loader component", () => {
 		loader.stop();
 	});
 
+	it("backs off from the completed TUI frame cost when render requests are asynchronous", () => {
+		vi.useFakeTimers();
+		let lastFrameCostMs = 0;
+		const ui = {
+			synchronizedOutput: true,
+			get lastFrameCostMs() {
+				return lastFrameCostMs;
+			},
+			requestComponentRender: vi.fn(),
+		};
+		const loader = new Loader(
+			ui as unknown as TUI,
+			text => text,
+			text => text,
+			"Checking",
+			["0", "1"],
+		);
+
+		expect(ui.requestComponentRender).toHaveBeenCalledTimes(1);
+		lastFrameCostMs = 40;
+		vi.advanceTimersByTime(80);
+		expect(ui.requestComponentRender).toHaveBeenCalledTimes(2);
+
+		vi.advanceTimersByTime(359);
+		expect(ui.requestComponentRender).toHaveBeenCalledTimes(2);
+		vi.advanceTimersByTime(1);
+		expect(ui.requestComponentRender).toHaveBeenCalledTimes(3);
+
+		loader.stop();
+	});
+
+	it("caps backpressure after a pathological one-off frame", () => {
+		vi.useFakeTimers();
+		const ui = {
+			synchronizedOutput: true,
+			lastFrameCostMs: 5_000,
+			requestComponentRender: vi.fn(),
+		};
+		const loader = new Loader(
+			ui as unknown as TUI,
+			text => text,
+			text => text,
+			"Checking",
+			["0", "1"],
+		);
+
+		expect(ui.requestComponentRender).toHaveBeenCalledTimes(1);
+		vi.advanceTimersByTime(80);
+		expect(ui.requestComponentRender).toHaveBeenCalledTimes(2);
+
+		vi.advanceTimersByTime(1_799);
+		expect(ui.requestComponentRender).toHaveBeenCalledTimes(2);
+		vi.advanceTimersByTime(1);
+		expect(ui.requestComponentRender).toHaveBeenCalledTimes(3);
+
+		loader.stop();
+	});
+
 	it("reuses text layout when only animated ANSI styling changes", () => {
 		vi.useFakeTimers();
 		let colorFrame = 0;
@@ -221,6 +259,59 @@ describe("Loader component", () => {
 		for (const line of widerFrame) {
 			expect(visibleWidth(line)).toBeLessThanOrEqual(8);
 		}
+		loader.stop();
+	});
+
+	it("redocks changing trailers with live colors and variable-width spinner output", () => {
+		vi.useFakeTimers();
+		const tui = new TUI(new VirtualTerminal(24, 4));
+		let color = 31;
+		let spinnerSuffix = "";
+		let trailer = "T";
+		const loader = new Loader(
+			tui,
+			text => `\x1b[${color}m${text}${spinnerSuffix}\x1b[0m`,
+			text => `\x1b[${color}m${text}\x1b[0m`,
+			"界 e\u0301\nnext",
+			["⠋", "界"],
+		);
+		loader.setTrailer(() => trailer);
+
+		const initial = loader.render(24);
+		expect(Bun.stripANSI(initial[1])).toBe(` ⠋ 界 e\u0301${" ".repeat(16)}T`);
+		expect(initial[2]).toContain("\x1b[31mnext\x1b[0m");
+
+		color = 32;
+		spinnerSuffix = ">>";
+		trailer = "界!";
+		const recolored = loader.render(24);
+		expect(Bun.stripANSI(recolored[1])).toBe(` ⠋>> 界 e\u0301${" ".repeat(12)}界!`);
+		expect(recolored[2]).toContain("\x1b[32mnext\x1b[0m");
+
+		vi.advanceTimersByTime(80);
+		expect(Bun.stripANSI(loader.render(24)[1])).toBe(` 界>> 界 e\u0301${" ".repeat(11)}界!`);
+
+		trailer = "a trailer that does not fit";
+		expect(loader.render(24)[1]).not.toContain(trailer);
+		loader.stop();
+	});
+
+	it("preserves trailer docking when colorizers move ANSI past trailing message whitespace", () => {
+		vi.useFakeTimers();
+		const tui = new TUI(new VirtualTerminal(18, 4));
+		let reset = "";
+		const loader = new Loader(
+			tui,
+			text => text,
+			text => Bun.stripANSI(text) + reset,
+			"\x1b[31mHi \x1b[0m",
+			["*"],
+		);
+		loader.setTrailer(() => "T");
+
+		expect(loader.render(18)[1]).toBe(` * Hi${" ".repeat(12)}T`);
+		reset = "\x1b[0m";
+		expect(loader.render(18)[1]).toBe(` * Hi \x1b[0m${" ".repeat(11)}T`);
 		loader.stop();
 	});
 

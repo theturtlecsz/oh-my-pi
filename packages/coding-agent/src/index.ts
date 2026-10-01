@@ -9,16 +9,16 @@ export { Container, Markdown, Spacer, Text } from "@oh-my-pi/pi-tui";
 // Logging
 export { getAgentDir, logger, VERSION } from "@oh-my-pi/pi-utils";
 export * from "./advisor";
-export * from "./config/keybindings";
+export * from "@oh-my-pi/pi-tui/app-keybindings";
 export * from "./config/model-registry";
 // Prompt templates
 export type * from "./config/prompt-templates";
 export * from "./config/prompt-templates";
-export type { RetrySettings, SkillsSettings } from "./config/settings";
+export type { SkillsSettings } from "./extensibility/settings";
+export type { RetrySettings } from "./session/settings";
 export { Settings, settings } from "./config/settings";
 // Custom commands
 export type * from "./extensibility/custom-commands/types";
-export type * from "./extensibility/custom-tools";
 // Custom tools
 export * from "./extensibility/custom-tools";
 export type * from "./extensibility/extensions";
@@ -36,7 +36,7 @@ export * from "./main";
 export * from "./modes";
 export * from "./modes/components";
 // Theme utilities for custom tools
-export * from "./modes/theme/theme";
+export * from "@oh-my-pi/pi-tui/theme";
 // SDK for programmatic usage
 export * from "./sdk";
 // Secret obfuscation (shared redactor — extensions must not build a second one)
@@ -58,9 +58,25 @@ export * from "./session/session-storage";
 export * from "./session/sql-session-storage";
 export * from "./task/executor";
 export type * from "./task/types";
+export type {
+	AgentSource,
+	StructuredSubagentSchemaMode,
+	StructuredSubagentSchemaSource,
+	StructuredSubagentValidationStatus,
+	StructuredSubagentOutput,
+	TaskItem,
+	TaskParams,
+	ReviewFinding,
+	ReviewSummary,
+	ReviewData,
+	YieldItem,
+	AgentProgress,
+	SingleResult,
+	TaskToolDetails,
+} from "@oh-my-pi/pi-tui/tools/task";
 // Tools (detail types and utilities)
 export * from "./tools";
-export * from "./utils/git";
+export * from "./utils/github";
 // UI components for extensions
 export {
 	HookEditorComponent as ExtensionEditorComponent,

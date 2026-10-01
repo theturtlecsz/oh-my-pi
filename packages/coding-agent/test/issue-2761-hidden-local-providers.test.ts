@@ -1,3 +1,4 @@
+import { createModelBrowserSource } from "../src/modes/model-browser-source";
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import type { Model } from "@oh-my-pi/pi-ai";
@@ -8,8 +9,8 @@ import {
 	type ModelHubCallbacks,
 	ModelHubComponent,
 	resetProviderAutoRefreshGuard,
-} from "@oh-my-pi/pi-coding-agent/modes/components/model-hub";
-import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+} from "@oh-my-pi/pi-tui/overlays/model-hub";
+import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
 import type { TUI } from "@oh-my-pi/pi-tui";
 
 // Issue #2761: implicit local providers (ollama, llama.cpp, lm-studio) used to
@@ -47,19 +48,24 @@ interface RegistrySpec {
 	discoverable?: string[];
 	discovery?: (providerId: string) => unknown;
 	hasAuth?: (providerId: string) => boolean;
-	refreshProvider?: (providerId: string, mode: string) => Promise<void>;
+	refresh?: (mode: string) => Promise<void>;
 }
 
 function makeRegistry(spec: RegistrySpec): ModelRegistry {
 	return {
-		refresh: async () => {},
-		refreshProvider: spec.refreshProvider ?? (async () => {}),
+		refresh: spec.refresh ?? (async () => {}),
+		refreshProvider: async () => {},
 		getError: () => undefined,
 		getAvailable: spec.models,
 		getAll: spec.models,
 		getDiscoverableProviders: () => spec.discoverable ?? [],
 		getProviderDiscoveryState: spec.discovery ?? (() => undefined),
-		authStorage: { hasAuth: spec.hasAuth ?? (() => false) },
+		authStorage: {
+			keys: {
+				source: (providerId: string) =>
+					spec.hasAuth?.(providerId) ? { kind: "api_key", concrete: true } : undefined,
+			},
+		},
 	} as unknown as ModelRegistry;
 }
 
@@ -74,7 +80,7 @@ function createHub(registry: ModelRegistry): ModelHubComponent {
 		onLoginRequest: () => {},
 		onCancel: () => {},
 	};
-	const hub = new ModelHubComponent(ui, settings, registry, [], callbacks);
+	const hub = new ModelHubComponent(ui, createModelBrowserSource(settings), registry, [], callbacks);
 	openHubs.push(hub);
 	return hub;
 }
@@ -179,7 +185,7 @@ describe("issue #2761: unconfigured local providers in the Model Hub sidebar", (
 		expect(normalize(hub.render(220))).toContain("lm-studio");
 	});
 
-	test("re-probes hidden locals once on open and resurfaces the tab when a server appears", async () => {
+	test("the online refresh resurfaces a hidden local when its server appears", async () => {
 		let serving = false;
 		const probed: string[] = [];
 		const hub = createHub(
@@ -190,33 +196,33 @@ describe("issue #2761: unconfigured local providers in the Model Hub sidebar", (
 				},
 				discoverable: ["lm-studio"],
 				discovery: id => discoveryState(id, serving ? "ok" : "unavailable"),
-				refreshProvider: async (id, mode) => {
-					probed.push(`${id}:${mode}`);
+				refresh: async mode => {
+					probed.push(mode);
 					serving = true;
 				},
 			}),
 		);
 		await settle();
-		expect(probed).toEqual(["lm-studio:online"]);
+		expect(probed).toEqual(["online"]);
 		const rendered = normalize(hub.render(220));
 		expect(rendered).toContain("lm-studio");
 		expect(rendered).toContain("local-model");
 	});
 
-	test("does not re-probe a hidden local that stays down more than once per open", async () => {
+	test("does not refresh a hidden local that stays down more than once when the hub opens", async () => {
 		const probed: string[] = [];
 		const hub = createHub(
 			makeRegistry({
 				models: () => [makeModel("prov-a", "model-a")],
 				discoverable: ["lm-studio"],
 				discovery: id => discoveryState(id, "unavailable"),
-				refreshProvider: async (id, mode) => {
-					probed.push(`${id}:${mode}`);
+				refresh: async mode => {
+					probed.push(mode);
 				},
 			}),
 		);
 		await settle();
-		expect(probed).toEqual(["lm-studio:online"]);
+		expect(probed).toEqual(["online"]);
 		expect(normalize(hub.render(220))).not.toContain("lm-studio");
 	});
 });

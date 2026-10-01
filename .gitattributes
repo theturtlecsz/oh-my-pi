@@ -69,3 +69,10 @@ THIRD-PARTY-NOTICES.txt -whitespace
 crates/pi-natives/tools/cache/tokenization_kimi.py whitespace=-trailing-space
 packages/catalog/src/discovery/cursor-proto.ts whitespace=-blank-at-eof
 packages/catalog/src/discovery/devin-proto.ts whitespace=-blank-at-eof
+# Generated, minified catalog artifacts: regenerate instead of diffing/merging.
+packages/catalog/src/models.json binary
+packages/catalog/src/compat/rules.json binary
+
+# Generated tree-sitter parser: regenerate from grammar.js (see its README.md).
+crates/vendor/tree-sitter-go/src/parser.c linguist-generated
+

@@ -23,15 +23,12 @@ import { convertMessages, streamOpenAICompletions } from "@oh-my-pi/pi-ai/provid
 import type { AssistantMessage, Context, FetchImpl, Model, ThinkingContent, ToolCall } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 const DEEPINFRA_BASE_URL = "https://api.deepinfra.com/v1/openai";
 
 /**
  * Mirrors the spec DeepInfra catalog discovery produces for the V4 Flash
- * entry: `reasoning_effort` tag → reasoning + the generic low/medium/high
- * discovery ladder, which buildModel must normalize to DeepSeek's wire-exact
- * tiers.
+ * entry. The compat engine owns the reviewed DeepSeek wire ladder.
  */
 function deepinfraDeepseekModel(): Model<"openai-completions"> {
 	return buildModel({
@@ -41,7 +38,6 @@ function deepinfraDeepseekModel(): Model<"openai-completions"> {
 		provider: "deepinfra",
 		baseUrl: DEEPINFRA_BASE_URL,
 		reasoning: true,
-		thinking: { mode: "effort", efforts: [Effort.Low, Effort.Medium, Effort.High] },
 		input: ["text"],
 		cost: { input: 0.27, output: 0.4, cacheRead: 0.054, cacheWrite: 0 },
 		contextWindow: 163_840,
@@ -154,23 +150,11 @@ describe("DeepInfra reasoning wire contract (oh-my-pi#9522)", () => {
 		expect(compat.reasoningContentField).toBe("reasoning_content");
 	});
 
-	it("carries the contract on the bundled slice that seeds dynamic discovery", () => {
-		// `mapDeepinfraModel` spreads the bundled reference (baked compat
-		// included) into every discovered spec, so the generated slice must
-		// agree with the live resolver — a stale bake here would override the
-		// host detection at runtime.
-		const bundled = getBundledModel<"openai-completions">("deepinfra", "deepseek-ai/DeepSeek-V4-Flash-0731");
-		expect(bundled.compat.requiresReasoningContentForToolCalls).toBe(true);
-		expect(bundled.compat.allowsSyntheticReasoningContentForToolCalls).toBe(false);
-		expect(bundled.thinking?.efforts).toEqual([Effort.Low, Effort.High, Effort.Max]);
-	});
-
-	it("normalizes the discovery ladder to DeepSeek's wire-exact low/high/max tiers", () => {
+	it("resolves DeepSeek's wire-exact low/high/max tiers through the compat engine", () => {
 		const model = deepinfraDeepseekModel();
-		// Discovery advertises the generic low/medium/high dial; V4 Flash's
-		// real tiers are low/high (default thinking mode) and max (max-effort
-		// mode). The wire literals pass through unmapped — DeepInfra accepts
-		// them verbatim (`max` aliases `xhigh`).
+		// V4 Flash's real tiers are low/high (default thinking mode) and max
+		// (max-effort mode). The wire literals pass through unmapped —
+		// DeepInfra accepts them verbatim (`max` aliases `xhigh`).
 		expect(model.thinking?.efforts).toEqual([Effort.Low, Effort.High, Effort.Max]);
 		expect(model.thinking?.effortMap).toBeUndefined();
 	});

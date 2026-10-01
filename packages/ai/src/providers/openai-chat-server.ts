@@ -29,6 +29,8 @@ import {
 	type OpenAIChatToolChoice,
 	openaiChatRequestSchema,
 } from "./openai-chat-server-schema";
+import { decodeDataUri } from "./openai-data-uri";
+import { coerceNullMessageContentInPlace } from "./openai-shared";
 
 export type { ParsedRequest };
 
@@ -89,6 +91,9 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 	// for `resolvePromptCacheKey` to pull a cache identity out of inbound
 	// vendor-neutral headers when the body doesn't carry one.
 	rejectUnsupportedExplicitPromptCacheFields(body);
+	const request =
+		typeof body === "object" && body !== null && !Array.isArray(body) ? (body as Record<string, unknown>) : undefined;
+	coerceNullMessageContentInPlace(request?.messages, message => message.role !== "function");
 	const parsed = openaiChatRequestSchema(body);
 	if (parsed instanceof type.errors) {
 		throw new AIError.ValidationError(`openai-chat: ${parsed.summary}`);
@@ -195,7 +200,9 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 	if (data.user !== undefined) options.user = data.user;
 	if (data.response_format !== undefined) options.responseFormat = data.response_format;
 	if (data.parallel_tool_calls !== undefined) options.parallelToolCalls = data.parallel_tool_calls;
-	if (data.reasoning_effort !== undefined && isReasoningEffort(data.reasoning_effort)) {
+	if (data.reasoning_effort === "none") {
+		options.forceReasoningOff = true;
+	} else if (data.reasoning_effort !== undefined && isReasoningEffort(data.reasoning_effort)) {
 		options.reasoning = data.reasoning_effort;
 	}
 	if (data.service_tier !== undefined && isServiceTier(data.service_tier)) {
@@ -250,18 +257,6 @@ function parseUserLikeContent(
 		}
 	}
 	return parts;
-}
-
-function decodeDataUri(url: string): { data: string; mimeType: string } | undefined {
-	if (!url.startsWith("data:")) return undefined;
-	const comma = url.indexOf(",");
-	if (comma < 0) return undefined;
-	const header = url.slice(5, comma);
-	const payload = url.slice(comma + 1);
-	const isBase64 = header.endsWith(";base64");
-	const mimeType = (isBase64 ? header.slice(0, -";base64".length) : header) || "application/octet-stream";
-	const data = isBase64 ? payload : Buffer.from(decodeURIComponent(payload), "utf8").toString("base64");
-	return { data, mimeType };
 }
 
 function buildAssistantMessage(

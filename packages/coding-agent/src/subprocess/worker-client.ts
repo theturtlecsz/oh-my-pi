@@ -3,13 +3,19 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
 	$env,
+	$which,
 	isBunTestRuntime,
 	isCompiledBinary,
+	isExecutable,
+	isFullyQualifiedPath,
 	logger,
+	openCloexecSync,
 	postmortem,
 	stripWindowsExtendedLengthPathPrefix,
+	WhichCachePolicy,
 	workerHostEntry,
 } from "@oh-my-pi/pi-utils";
+import { stripGitRepoLocationEnv } from "@oh-my-pi/pi-utils/env";
 import type { Subprocess } from "bun";
 
 /**
@@ -107,6 +113,49 @@ export interface WorkerSpawnCommand {
 export const SMOKE_TEST_TIMEOUT_MS = 30_000;
 
 /**
+ * Resolve the current executable path, falling back to finding the binary on
+ * PATH if the original physical path was unlinked on disk (e.g. Homebrew or a
+ * package manager pruned the prior version directory during an in-flight
+ * upgrade, leaving `process.execPath` pointing at a missing path).
+ */
+export function resolveExecutablePath(): string {
+	const executable = stripWindowsExtendedLengthPathPrefix(process.execPath);
+	if (isCompiledBinary() && !isExecutable(executable)) {
+		const argv0 = stripWindowsExtendedLengthPathPrefix(process.argv0);
+		const isPath = argv0.includes("/") || argv0.includes("\\") || argv0.includes(":");
+		const candidates = [
+			// Prefer the original launcher when invoked with an absolute path
+			isFullyQualifiedPath(argv0) ? argv0 : null,
+			!isPath ? $which(argv0, { requireAbsolutePaths: true, cache: WhichCachePolicy.Bypass }) : null,
+			// Generic fallback to finding "omp" on PATH
+			$which("omp", { requireAbsolutePaths: true, cache: WhichCachePolicy.Bypass }),
+		];
+		for (const candidate of candidates) {
+			if (candidate && isExecutable(candidate)) {
+				return candidate;
+			}
+		}
+	}
+	return executable;
+}
+
+/**
+ * Resolve the command that re-enters this CLI's entrypoint: the compiled
+ * binary itself, or the runtime plus the declared worker-host entry. Used by
+ * the TUI `/restart` relaunch; workers go through {@link resolveWorkerSpawnCmd},
+ * whose no-host fallback deliberately differs (cwd-relative entry pinned to the
+ * package root for `bun test` IPC). Outside a CLI host this falls back to the
+ * absolute path of `src/cli.ts` so the relaunch keeps the caller's cwd.
+ */
+export function resolveCliEntryCmd(): string[] {
+	const executable = resolveExecutablePath();
+	if (isCompiledBinary()) return [executable];
+	const hostEntry = workerHostEntry();
+	if (hostEntry) return [executable, hostEntry];
+	return [executable, path.resolve(import.meta.dir, "..", "cli.ts")];
+}
+
+/**
  * Resolve the command used to relaunch the agent CLI into worker mode. In a
  * compiled binary the entry point is the binary itself; otherwise re-enter the
  * declared worker-host entry by absolute path. Workers deliberately spawn
@@ -118,7 +167,7 @@ export const SMOKE_TEST_TIMEOUT_MS = 30_000;
  * IPC handles more reliably under `bun test`.
  */
 export function resolveWorkerSpawnCmd(workerArg: string): WorkerSpawnCommand {
-	const executable = stripWindowsExtendedLengthPathPrefix(process.execPath);
+	const executable = resolveExecutablePath();
 	if (isCompiledBinary()) return { cmd: [executable, workerArg] };
 	const hostEntry = workerHostEntry();
 	if (hostEntry) {
@@ -140,6 +189,9 @@ export function workerEnvFromParent(overlay?: Record<string, string>): Record<st
 		const value = base[key];
 		if (typeof value === "string") merged[key] = value;
 	}
+	// Inherited repo-location overrides must not reach a worker or the PTY
+	// daemons it hosts (issue #11082); an explicit overlay still wins below.
+	stripGitRepoLocationEnv(merged);
 	if (overlay) {
 		for (const key in overlay) merged[key] = overlay[key];
 	}
@@ -395,7 +447,7 @@ function createStderrCapture(exitLabel: string): StderrCapture {
 		reapStaleStderrCaptures();
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), STDERR_CAPTURE_PREFIX));
 		const logPath = path.join(dir, "stderr.log");
-		const fd = fs.openSync(logPath, "w+");
+		const fd = openCloexecSync(logPath, fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_TRUNC);
 		// POSIX keeps an unlinked file's data readable through its open fd, so
 		// dropping the directory entry (and the now-empty dir) immediately means a
 		// SIGKILL to this process — which never runs the `exit` handler — still

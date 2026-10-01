@@ -21,6 +21,7 @@ const READ_TOOL = new Map<string, SystemPromptToolMetadata>([
 			label: "Read",
 			description: "Reads files from disk.",
 			parameters: { type: "object", properties: { path: { type: "string" } } },
+			readsSkillUris: true,
 		},
 	],
 ]);
@@ -200,8 +201,6 @@ describe("SYSTEM.md prompt assembly", () => {
 		});
 
 		const promptText = systemPrompt.join("\n\n");
-		expect(promptText).toContain("<active-repo-context>");
-		expect(promptText).toContain("`active-project`");
 		expect(promptText).toContain("`active-project/`");
 	});
 

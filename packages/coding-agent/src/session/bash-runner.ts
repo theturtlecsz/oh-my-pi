@@ -9,6 +9,8 @@ import { clampTimeout } from "../tools/tool-timeouts";
 import type { BashExecutionMessage } from "./messages";
 import type { SessionManager } from "./session-manager";
 
+import { cfgToolsMaxTimeout } from "../tools/settings";
+
 /** Destination that owns a bash result after a session or branch transition. */
 export type BashAppendDestination =
 	| { kind: "current"; manager: SessionManager }
@@ -91,9 +93,20 @@ export class BashRunner {
 				}
 			}
 
+			// The hook's adapter forwards only entries that differ from the baseline
+			// it is handed, and the child shell starts from the (cached, filtered)
+			// spawn env — NOT from live process.env. Diffing against process.env
+			// cancels out any variable an extension both mirrors into process.env
+			// and injects via its hook (e.g. the secretsd session token file), so
+			// hand the hook the env the child will actually receive. Pass a copy:
+			// this.#host.settings.getShellConfig().env is a cached, shared object,
+			// and a legacy hook that mutates its context.env in place (a supported
+			// pattern) would otherwise poison that cache for every later command.
 			const shellEnv =
 				options?.useUserShell === true
-					? extensionRunner?.getRegisteredTool("bash")?.definition.shellEnv?.({ command, cwd, env: process.env })
+					? extensionRunner
+							?.getRegisteredTool("bash")
+							?.definition.shellEnv?.({ command, cwd, env: { ...this.#host.settings.getShellConfig().env } })
 					: undefined;
 
 			const abortController = new AbortController();
@@ -105,7 +118,7 @@ export class BashRunner {
 					signal: abortController.signal,
 					sessionKey: target.sessionId,
 					cwd,
-					timeout: clampTimeout("bash", undefined, this.#host.settings.get("tools.maxTimeout")) * 1000,
+					timeout: clampTimeout("bash", undefined, cfgToolsMaxTimeout.get(this.#host.settings)) * 1000,
 					onMinimizedSave: originalText => this.#saveOriginalArtifact(target, originalText),
 					env: shellEnv,
 					useUserShell: options?.useUserShell,
@@ -275,6 +288,7 @@ export class BashRunner {
 			exitCode: result.exitCode,
 			cancelled: result.cancelled,
 			truncated: result.truncated,
+			images: result.images,
 			meta,
 			timestamp: Date.now(),
 			excludeFromContext: options?.excludeFromContext,

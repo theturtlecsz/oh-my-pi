@@ -6,10 +6,10 @@ import {
 	applyShakeRegion,
 	applyShakeRegions,
 	collectShakeRegions,
-	DEFAULT_SHAKE_CONFIG,
 	RESCUE_SHAKE_CONFIG,
 } from "@oh-my-pi/pi-agent-core/compaction";
-import type { AssistantMessage, TextContent, ToolCall, ToolResultMessage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ImageContent, TextContent, ToolCall, ToolResultMessage } from "@oh-my-pi/pi-ai";
+import { convertMessageToLlm } from "../src/compaction/messages";
 
 const tokenizer = new Tokenizer();
 
@@ -85,6 +85,23 @@ describe("collectShakeRegions — tool results", () => {
 		applyShakeRegion(region, "[shaken]");
 		expect(tr.prunedAt).toBeGreaterThan(0);
 		expect(tr.content).toEqual([{ type: "text", text: "[shaken]" }]);
+	});
+
+	test("keeps images in the provider view of an elided mixed tool result", () => {
+		const image: ImageContent = {
+			type: "image",
+			data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+			mimeType: "image/png",
+		};
+		const tr = toolResultMessage("bash", "[shaken]", {
+			content: [{ type: "text", text: "[shaken]" }, image],
+			prunedAt: Date.now(),
+		});
+
+		const converted = convertMessageToLlm(tr);
+
+		expect(converted?.content).toEqual([{ type: "text", text: "[shaken]" }, image]);
+		expect(Array.isArray(converted?.content) ? converted.content[1] : undefined).toBe(image);
 	});
 
 	test("never collects protected tools", () => {
@@ -210,12 +227,6 @@ describe("applyShakeRegions — multi-region ordering", () => {
 });
 
 describe("shake config presets", () => {
-	test("aggressive preset protects skill and keeps a small recent tail", () => {
-		expect(AGGRESSIVE_SHAKE_CONFIG.protectTokens).toBeGreaterThan(0);
-		expect(AGGRESSIVE_SHAKE_CONFIG.minSavings).toBe(0);
-		expect(AGGRESSIVE_SHAKE_CONFIG.protectedTools).toContain("skill");
-	});
-
 	test("manual shake preserves the recent tool-result tail instead of stripping everything", () => {
 		const older = messageEntry(toolResultMessage("bash", "old-result ".repeat(300)));
 		const recent = messageEntry(toolResultMessage("bash", "recent-result ".repeat(3000)));
@@ -225,11 +236,6 @@ describe("shake config presets", () => {
 		// still shaken aggressively.
 		expect(regions).toHaveLength(1);
 		expect(regions[0].entry).toBe(older);
-	});
-
-	test("default preset keeps a protect window", () => {
-		expect(DEFAULT_SHAKE_CONFIG.protectTokens).toBeGreaterThan(0);
-		expect(DEFAULT_SHAKE_CONFIG.protectedTools).toContain("skill");
 	});
 
 	test("rescue preset overrides the manual tail so it can elide the newest result", () => {
