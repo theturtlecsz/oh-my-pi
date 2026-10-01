@@ -50,7 +50,7 @@
 - Work Ledger mutations whose response was lost now report the landed result instead of an error, never re-send the command, and report an unknown outcome only after the retry window.
 - Fixed Julia kernel startup failing on a cold package depot: the prelude now loads its HTTP client on the first `tool.*` call instead of while the kernel starts, so the interpreter's initial startup no longer times out.
 - Fixed computer screenshots, session-less vibe worker artifacts, and worker stderr captures piling up in the system temp directory; each is now removed when its run or worker lifetime ends, including after a hard kill.
-## [18.0.6] - 2026-08-26
+
 ## [18.4.6] - 2026-10-01
 
 ### Added
