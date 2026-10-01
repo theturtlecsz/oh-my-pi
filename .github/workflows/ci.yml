@@ -1584,10 +1584,8 @@ jobs:
            id: qualification_mode
            shell: bash
            env:
-              GH_TOKEN: ${{ github.token }}
               EVENT_NAME: ${{ github.event_name }}
               IS_RELEASE: ${{ needs.release_metadata.outputs.is-release }}
-              PR_NUMBER: ${{ github.event.pull_request.number }}
               BEFORE: ${{ github.event.before }}
            run: |
               set -euo pipefail
@@ -1596,12 +1594,21 @@ jobs:
               # Only a non-release PR or an incremental push needs a changed-file
               # list; schedule/dispatch/release and all-zero-BEFORE pushes select
               # full mode from the event alone (scripts/installed-qualification-mode.ts).
+              # PRs diff the three-dot range ($GITHUB_SHA^1...$GITHUB_SHA^2)
+              # locally after unshallowing, avoiding gh pr diff file caps.
               diff_failed=""
               if [ "$IS_RELEASE" != "true" ] && [ "$EVENT_NAME" = "pull_request" ]; then
-                if ! changed_files="$(gh pr diff "$PR_NUMBER" --name-only 2>&1)"; then
-                  diff_failed="gh pr diff failed: $(printf '%s' "$changed_files" | tr '\n' ' ')"
-                else
-                  printf '%s\n' "$changed_files" > "$changed_files_file"
+                if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+                  if ! fetch_err="$(git fetch --no-tags --unshallow origin "$GITHUB_SHA" 2>&1)"; then
+                    diff_failed="git fetch origin $GITHUB_SHA failed: $(printf '%s' "$fetch_err" | tr '\n' ' ')"
+                  fi
+                fi
+                if [ -z "$diff_failed" ]; then
+                  if ! diff_out="$(git diff --name-only "$GITHUB_SHA^1...$GITHUB_SHA^2" 2>&1)"; then
+                    diff_failed="git diff $GITHUB_SHA^1...$GITHUB_SHA^2 failed: $(printf '%s' "$diff_out" | tr '\n' ' ')"
+                  else
+                    printf '%s\n' "$diff_out" > "$changed_files_file"
+                  fi
                 fi
               elif [ "$EVENT_NAME" = "push" ] && [ -n "$BEFORE" ] && [[ ! "$BEFORE" =~ ^0+$ ]]; then
                 if ! fetch_err="$(git fetch --no-tags --depth=1 origin "$BEFORE" 2>&1)"; then
