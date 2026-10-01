@@ -358,7 +358,7 @@ def _answer_decision(
                 ),
             ),
         )
-        event = execute_answer_decision(
+        _, event = execute_answer_decision(
             cur, translated, config_dir / "owner_allowed_signers"
         )
         signed = payload.owner_signature is not None
@@ -379,7 +379,7 @@ def _answer_decision(
                 ),
             ),
         )
-        event = execute_answer_decision(
+        _, event = execute_answer_decision(
             cur, translated, config_dir / "owner_allowed_signers"
         )
         signed = False
