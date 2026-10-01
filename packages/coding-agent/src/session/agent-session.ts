@@ -528,7 +528,16 @@ import {
 	cfgThemeDark,
 	cfgThemeLight,
 } from "../modes/settings";
-import { cfgTaskBatch, cfgTaskDisabledAgents } from "../task/settings";
+import {
+	cfgTaskAgentAdvisor,
+	cfgTaskAgentModelOverrides,
+	cfgTaskAgentPrewalk,
+	cfgTaskBatch,
+	cfgTaskDisabledAgents,
+	cfgTaskIsolationEnabled,
+	cfgTaskMaxRecursionDepth,
+	cfgTaskPrewalk,
+} from "../task/settings";
 import {
 	cfgBranchSummaryReserveTokens,
 	cfgExtendedContext,
@@ -536,12 +545,14 @@ import {
 } from "./context-settings";
 import { cfgTitleRefreshOnReplan } from "../goals/settings";
 import {
+	cfgAsyncEnabled,
 	cfgComputerEnabled,
 	cfgRatchetEnabled,
 	cfgDevAutoqa,
 	cfgDevAutoqaConsent,
 	cfgTodoEnabled,
 	cfgToolsApproval,
+	cfgToolsApprovalMode,
 } from "../tools/settings";
 import { cfgTtsrJudge } from "../export/ttsr-settings";
 
@@ -3741,7 +3752,7 @@ export class AgentSession implements SettingsScope {
 		);
 		if (
 			this.sessionManager.getLeafId() !== read.expectedLeaf ||
-			this.settings.get("externalThinking") ||
+			cfgExternalThinking.get(this.settings) ||
 			this.messages.some(message => "content" in message && !isTaskReadTextContent(message.content))
 		) {
 			read.disqualified = true;
@@ -3830,7 +3841,7 @@ export class AgentSession implements SettingsScope {
 			return undefined;
 		if (
 			model.api !== "openai-completions" ||
-			this.settings.get("externalThinking") ||
+			cfgExternalThinking.get(this.settings) ||
 			context.messages.some(message => !isTaskReadTextContent(message.content))
 		) {
 			if (read.claim) {
@@ -6670,7 +6681,7 @@ export class AgentSession implements SettingsScope {
 			throw new Error("Revived child initialization or reverse binding differs");
 		if (
 			child.asyncJobManager ||
-			child.settings.get("advisor.enabled") ||
+			cfgAdvisorEnabled.get(child.settings) ||
 			taskRecoveryHash(taskRuntimeContract(child)) !== taskRecoveryHash(scope.binding.contract.runtime)
 		)
 			throw new Error("Revived child model/tool/async/advisor contract differs");
@@ -6819,18 +6830,18 @@ export class AgentSession implements SettingsScope {
 
 	#dispatchPolicyHash(): string {
 		return taskRecoveryHash({
-			approval: this.settings.get("tools.approval"),
-			mode: this.settings.get("tools.approvalMode"),
+			approval: cfgToolsApproval.get(this.settings),
+			mode: cfgToolsApprovalMode.get(this.settings),
 			roles: this.settings.getModelRoles(),
-			async: this.settings.get("async.enabled"),
-			batch: this.settings.get("task.batch"),
-			isolation: this.settings.get("task.isolation.mode"),
-			depth: this.settings.get("task.maxRecursionDepth"),
-			disabledAgents: this.settings.get("task.disabledAgents"),
-			prewalk: this.settings.get("task.prewalk"),
-			agentPrewalk: this.settings.get("task.agentPrewalk"),
-			agentAdvisor: this.settings.get("task.agentAdvisor"),
-			modelOverride: this.settings.get("task.agentModelOverrides"),
+			async: cfgAsyncEnabled.get(this.settings),
+			batch: cfgTaskBatch.get(this.settings),
+			isolation: cfgTaskIsolationEnabled.get(this.settings),
+			depth: cfgTaskMaxRecursionDepth.get(this.settings),
+			disabledAgents: cfgTaskDisabledAgents.get(this.settings),
+			prewalk: cfgTaskPrewalk.get(this.settings),
+			agentPrewalk: cfgTaskAgentPrewalk.get(this.settings),
+			agentAdvisor: cfgTaskAgentAdvisor.get(this.settings),
+			modelOverride: cfgTaskAgentModelOverrides.get(this.settings),
 		});
 	}
 
@@ -11264,7 +11275,7 @@ export class AgentSession implements SettingsScope {
 		message: CustomMessage,
 		options?: {
 			triggerTurn?: boolean;
-			deliverAs?: "steer" | "followUp" | "nextTurn";
+			deliverAs?: "steer" | "followUp" | "nextTurn" | "aside";
 			validateDispatch?: DispatchAuthorityValidation;
 		},
 	): void {

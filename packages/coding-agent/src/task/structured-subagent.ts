@@ -55,11 +55,11 @@ import {
 	taskRuntimeContract,
 } from "./recovery";
 import { resolveSpawnPolicy } from "./spawn-policy";
-import type { TaskParams } from "./types";
 import { type AgentDefinition, canSpawnAtDepth } from "./types";
 import type {
 	AgentProgress,
 	SingleResult,
+	TaskParams,
 	StructuredSubagentOutput,
 	StructuredSubagentSchemaMode,
 	StructuredSubagentSchemaSource,

@@ -3,12 +3,12 @@ import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import type { Usage } from "@oh-my-pi/pi-ai";
 import { Text } from "@oh-my-pi/pi-tui";
-import { getDefault, isSettingsInitialized, settings } from "../../config/settings";
-import type { SettingPath, SettingValue } from "../../config/settings-schema";
+import { lookup, type Setting } from "../../config/registry";
+import { isSettingsInitialized, settings } from "../../config/settings";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../../extensibility/extensions";
-import type { Theme } from "../../modes/theme/theme";
+import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import { JEV_PROVIDER } from "../../tiny/jev-client";
-import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../../tools/render-utils";
+import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import { addUsageTotals } from "../../utils/usage-totals";
 import { createJevJudge } from "../tournament/jev-judge";
 import { createModelJudge, createModelSummarizer } from "../tournament/model-judge";
@@ -16,6 +16,21 @@ import { type HypothesisInput, prepareHypotheses, type Summarizer } from "../tou
 import { runTournament } from "../tournament/runner";
 import { TOURNAMENT_LABEL, type TournamentJudge, type TournamentResult } from "../tournament/types";
 import type { AutoresearchToolFactoryOptions } from "../types";
+import {
+	cfgAutoresearchTournamentJudgeModel,
+	cfgAutoresearchTournamentMaxJudgeChars,
+	cfgAutoresearchTournamentSecondJudgeModel,
+	cfgAutoresearchTournamentSwissRoundCap,
+} from "../settings";
+import { cfgJevTournamentJudge } from "../../tiny/jev-settings";
+
+/**
+ * The typed ExtensionContext exposes no settings handle; the session singleton is the
+ * sanctioned settings source, falling back to the registered default before init.
+ */
+function readSetting<T>(setting: Setting<T>): T {
+	return isSettingsInitialized() ? setting.get(settings) : setting.default;
+}
 
 const hypothesisTournamentSchema = type({
 	input_path: type("string").describe("Path to input JSON file containing question and hypotheses"),
@@ -49,14 +64,13 @@ function isJevJudgeSpec(spec: string | undefined): boolean {
 }
 
 function createJevJudgeForContext(ctx: ExtensionContext, pi: ExtensionAPI, signal?: AbortSignal): TournamentJudge {
-	const activeSettings = isSettingsInitialized() ? settings : undefined;
 	return createJevJudge({
 		deps: {
-			// The typed ExtensionContext exposes no settings handle; the session
-			// singleton is the sanctioned settings source (see render-utils.ts).
 			recordUsage: entry => pi.appendEntry("jev_usage", entry),
-			getSetting: <P extends SettingPath>(path: P): SettingValue<P> =>
-				activeSettings ? activeSettings.get(path) : getDefault(path),
+			getSetting: (path: string) => {
+				const setting = lookup(path);
+				return setting ? readSetting(setting) : undefined;
+			},
 			getApiKey: async (provider?: string) => {
 				const sessionId = ctx.sessionManager.getSessionId();
 				try {
@@ -77,16 +91,10 @@ async function defaultCreateJudges(
 	seed: number,
 	signal?: AbortSignal,
 ): Promise<TournamentJudge[]> {
-	const activeSettings = isSettingsInitialized() ? settings : undefined;
-	const judgeModelSpec =
-		activeSettings?.get("autoresearch.tournament.judgeModel") ??
-		getDefault("autoresearch.tournament.judgeModel") ??
-		"@smol";
-	const secondJudgeModelSpec =
-		activeSettings?.get("autoresearch.tournament.secondJudgeModel") ??
-		getDefault("autoresearch.tournament.secondJudgeModel");
+	const judgeModelSpec = readSetting(cfgAutoresearchTournamentJudgeModel) ?? "@smol";
+	const secondJudgeModelSpec = readSetting(cfgAutoresearchTournamentSecondJudgeModel);
 
-	const jevEnabledFlag = activeSettings?.get("jev.tournamentJudge") === true;
+	const jevEnabledFlag = readSetting(cfgJevTournamentJudge) === true;
 	const isPrimaryJev = isJevJudgeSpec(judgeModelSpec) || jevEnabledFlag;
 
 	const judges: TournamentJudge[] = [];
@@ -140,16 +148,10 @@ async function defaultCreateJudges(
 }
 
 async function defaultCreateSummarizer(ctx: ExtensionContext): Promise<Summarizer> {
-	const activeSettings = isSettingsInitialized() ? settings : undefined;
-	const judgeModelSpec =
-		activeSettings?.get("autoresearch.tournament.judgeModel") ??
-		getDefault("autoresearch.tournament.judgeModel") ??
-		"@smol";
-	const secondJudgeModelSpec =
-		activeSettings?.get("autoresearch.tournament.secondJudgeModel") ??
-		getDefault("autoresearch.tournament.secondJudgeModel");
+	const judgeModelSpec = readSetting(cfgAutoresearchTournamentJudgeModel) ?? "@smol";
+	const secondJudgeModelSpec = readSetting(cfgAutoresearchTournamentSecondJudgeModel);
 
-	const isPrimaryJev = isJevJudgeSpec(judgeModelSpec) || activeSettings?.get("jev.tournamentJudge") === true;
+	const isPrimaryJev = isJevJudgeSpec(judgeModelSpec) || readSetting(cfgJevTournamentJudge) === true;
 	const summarizerModelSpec = isPrimaryJev
 		? secondJudgeModelSpec && !isJevJudgeSpec(secondJudgeModelSpec)
 			? secondJudgeModelSpec
@@ -206,13 +208,8 @@ export function createHypothesisTournamentTool(
 
 			const seed = params.seed !== undefined ? params.seed : Math.floor(Math.random() * 0x7fffffff) | 0;
 
-			const activeSettings = isSettingsInitialized() ? settings : undefined;
-			const swissRoundCap =
-				activeSettings?.get("autoresearch.tournament.swissRoundCap") ??
-				getDefault("autoresearch.tournament.swissRoundCap");
-			const maxJudgeChars =
-				activeSettings?.get("autoresearch.tournament.maxJudgeChars") ??
-				getDefault("autoresearch.tournament.maxJudgeChars");
+			const swissRoundCap = readSetting(cfgAutoresearchTournamentSwissRoundCap);
+			const maxJudgeChars = readSetting(cfgAutoresearchTournamentMaxJudgeChars);
 
 			const summarizer = deps?.createSummarizer
 				? await deps.createSummarizer(ctx, { signal })

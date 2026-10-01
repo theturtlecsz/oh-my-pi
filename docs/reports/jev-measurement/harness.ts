@@ -196,16 +196,7 @@ interface CurrentSmolContext {
  * path falls through to the wrapped settings unchanged.
  */
 function withoutJev(settings: Settings): Settings {
-	const forcedOff = new Set(["jev.enabled", "jev.autoThinking", "jev.unexpectedStop"]);
-	return new Proxy(settings, {
-		get(target, prop, receiver) {
-			if (prop === "get") {
-				return (path: string) => (forcedOff.has(path) ? false : target.get(path as never));
-			}
-			const value = Reflect.get(target, prop, receiver);
-			return typeof value === "function" ? value.bind(target) : value;
-		},
-	});
+	return settings.overlay({ "jev.enabled": false, "jev.autoThinking": false, "jev.unexpectedStop": false });
 }
 
 export interface MeasurementRunOptions {
@@ -477,7 +468,7 @@ export async function evaluateAutoThinkingFeature(
 		const start = performance.now();
 		let result: Effort | undefined;
 		try {
-			result = await classifyDifficulty(promptText, deps);
+			result = await classifyDifficulty({ request: promptText }, deps);
 		} catch {
 			// Fallback is disabled/throwing when Jev fails
 		}
@@ -545,15 +536,18 @@ export async function evaluateAutoThinkingFeature(
 			const start = performance.now();
 			let result: Effort | undefined;
 			try {
-				result = await classifyDifficulty(promptText, {
-					settings: withoutJev(current.settings),
-					registry: current.registry,
-					model: dummyModel,
-					sessionId: "harness-session-at-current",
-					onCompletionUsage: message => {
-						current.usageCostUsd += message.usage.cost.total;
+				result = await classifyDifficulty(
+					{ request: promptText },
+					{
+						settings: withoutJev(current.settings),
+						registry: current.registry,
+						model: dummyModel,
+						sessionId: "harness-session-at-current",
+						onUsage: judgment => {
+							current.usageCostUsd += judgment.usage.cost.total;
+						},
 					},
-				});
+				);
 			} catch {
 				currentUnparseable++;
 			}
@@ -744,8 +738,8 @@ export async function evaluateUnexpectedStopFeature(
 					settings: withoutJev(current.settings),
 					registry: current.registry,
 					sessionId: "harness-session-us-current",
-					onCompletionUsage: message => {
-						current.usageCostUsd += message.usage.cost.total;
+					onUsage: judgment => {
+						current.usageCostUsd += judgment.usage.cost.total;
 					},
 				});
 			} catch {

@@ -99,7 +99,7 @@ import {
 import { SpawnRun, type SpawnPermit } from "./spawn-run";
 import { type TaskLauncher, TaskLaunchSession } from "./speculative-launch";
 
-import { cfgAsyncEnabled } from "../tools/settings";
+import { cfgAsyncEnabled, cfgToolsApproval, cfgToolsApprovalMode } from "../tools/settings";
 import {
 	cfgTaskBatch,
 	cfgTaskDisabledAgents,
@@ -1665,8 +1665,8 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			const recoveryEligible =
 				!detached &&
 				!this.#isBatchEnabled() &&
-				this.session.settings.get("async.enabled") === false &&
-				this.session.settings.get("task.isolation.mode") === "none" &&
+				cfgAsyncEnabled.get(this.session.settings) === false &&
+				!cfgTaskIsolationEnabled.get(this.session.settings) &&
 				params.isolated !== true;
 			const execution = await runStructuredSubagent({
 				...(recoveryEligible
@@ -1816,8 +1816,8 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const approval = resolveApproval(
 			this,
 			params,
-			this.session.getToolContext?.()?.autoApprove ? "yolo" : this.session.settings.get("tools.approvalMode"),
-			this.session.settings.get("tools.approval"),
+			this.session.getToolContext?.()?.autoApprove ? "yolo" : cfgToolsApprovalMode.get(this.session.settings),
+			cfgToolsApproval.get(this.session.settings),
 		);
 		if (approval.policy === "deny") throw new Error("Task recovery is denied by current tool policy");
 	}
@@ -1933,7 +1933,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			signal: request.signal,
 			eventBus: this.session.eventBus,
 			artifactsDir,
-			maxRuntimeMs: this.session.settings.get("task.maxRuntimeMs"),
+			maxRuntimeMs: cfgTaskMaxRuntimeMs.get(this.session.settings),
 			outputSchemaSource: policy.schema.source,
 		});
 		await child.sessionManager.flush();

@@ -26,7 +26,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { modelFamilyToken } from "@oh-my-pi/pi-catalog/identity";
+import { classifyModel } from "@oh-my-pi/pi-catalog/identity";
 import { createJevJudge } from "@oh-my-pi/pi-coding-agent/autoresearch/tournament/jev-judge";
 import { createModelJudge, createModelSummarizer } from "@oh-my-pi/pi-coding-agent/autoresearch/tournament/model-judge";
 import {
@@ -40,7 +40,7 @@ import { resolveRoleSelection } from "@oh-my-pi/pi-coding-agent/config/model-res
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { discoverAuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-broker-config";
 import { JEV_ENV_KEY } from "@oh-my-pi/pi-coding-agent/tiny/jev-client";
-import type { SettingPath, SettingValue } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
+import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { parseEnvFile } from "@oh-my-pi/pi-utils";
 import { defaultConfigHome, jevEnvPath } from "./router-transport";
 import { type LabeledPair, type TournamentMeasurementResults, runTournamentMeasurement } from "./tournament-harness";
@@ -158,12 +158,13 @@ export async function buildJudges(options: BuildJudgesOptions): Promise<BuiltJud
 		throw new Error("no chat model resolved for the tournament second family");
 	}
 	const chatModel = selection.model;
-	const chatFamily = modelFamilyToken(chatModel.id) || chatModel.provider.toLowerCase();
+	const chatClass = classifyModel(chatModel.provider, chatModel.id, { lenient: true }).class;
+	const chatFamily = chatClass !== "unknown" ? chatClass : chatModel.provider.toLowerCase();
 	const chatApiKey = await registry.getApiKey(chatModel);
 
 	const jev = createJevJudge({
 		deps: {
-			getSetting: <P extends SettingPath>(path: P): SettingValue<P> => settings.get(path),
+			getSetting: (path: string) => lookup(path)?.get(settings),
 			getApiKey: async () => apiKey,
 			recordUsage: () => {},
 		},
