@@ -1,12 +1,19 @@
 #!/usr/bin/env bun
-// upstream-review-seed.ts — create or refresh a review record and its companions (OMP-401).
+// upstream-review-seed.ts — create or refresh a review record and its companions, or settle proofs (OMP-401).
 //
 // CLI:
 //   bun scripts/upstream-review-seed.ts --target <sha> --version <X.Y.Z> [--fork <rev>]
 //     [--baseline <json>] [--inventory <tsv>] [--dir docs]
+//   bun scripts/upstream-review-seed.ts --record <rec> --settle --gates-passed-at <commit>
 //
-// Generates or updates <dir>/upstream-review-<target12>.json and its companion files:
+// In seed mode, generates or updates <dir>/upstream-review-<target12>.json and its companion files:
 //   <stem>-sources.tsv, <stem>-matrix.tsv, <stem>-changelog.tsv, <stem>-handoff.md
+//
+// In settle mode (--settle), validates commit containment against target, settles fork-only proofs
+// and gate proofs (session-system/update.sh gates 3-12), writes updated matrix and changelog TSVs,
+// lists any remaining pending proofs, and exits 1 if pending rows remain, else 0 (exit 2 if target
+// not contained). A fork-only proof is settled only when the row's scope is fork-only and its
+// pending command names this record's fork (12-hex prefix). Any other proof is left as written.
 //
 // Changelog rows are the entries deriveChangelogEntries produces for every
 // packages/*/CHANGELOG.md at the target, over [version_min, version_max].
@@ -36,6 +43,7 @@ import {
 	parseChangelogTsv,
 	parseMatrixTsv,
 	parseMergeTreeConflicts,
+	parseRecord,
 	type SourceRecord,
 	type UpstreamChange,
 	unquoteGitPath,
@@ -55,9 +63,25 @@ async function defaultGit(args: string[], okExitCodes: number[] = [0], cwd?: str
 	return stdout;
 }
 
+export class TargetNotContainedError extends Error {
+	constructor(target: string, commit: string) {
+		super(`commit ${commit} does not contain target ${target}`);
+		this.name = "TargetNotContainedError";
+	}
+}
+
+export interface PendingRow {
+	kind: "matrix" | "changelog";
+	id: string;
+	proof: string;
+}
+
 export interface ReviewSeedArgs {
-	target: string;
-	version: string;
+	settle?: boolean;
+	record?: string;
+	gatesPassedAt?: string;
+	target?: string;
+	version?: string;
 	fork: string;
 	baseline?: string;
 	inventory?: string;
@@ -65,6 +89,9 @@ export interface ReviewSeedArgs {
 }
 
 export function parseArgs(argv: string[]): ReviewSeedArgs {
+	let settle = false;
+	let record: string | undefined;
+	let gatesPassedAt: string | undefined;
 	let target: string | undefined;
 	let version: string | undefined;
 	let fork = "HEAD";
@@ -74,7 +101,15 @@ export function parseArgs(argv: string[]): ReviewSeedArgs {
 
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
-		if (arg === "--target") {
+		if (arg === "--settle") {
+			settle = true;
+		} else if (arg === "--record") {
+			record = argv[++i];
+			if (!record) throw new Error("missing value for --record");
+		} else if (arg === "--gates-passed-at") {
+			gatesPassedAt = argv[++i];
+			if (!gatesPassedAt) throw new Error("missing value for --gates-passed-at");
+		} else if (arg === "--target") {
 			target = argv[++i];
 			if (!target) throw new Error("missing value for --target");
 		} else if (arg === "--version") {
@@ -97,6 +132,18 @@ export function parseArgs(argv: string[]): ReviewSeedArgs {
 		}
 	}
 
+	if (settle) {
+		if (!record) throw new Error("missing required --record");
+		if (!gatesPassedAt) throw new Error("missing required --gates-passed-at");
+		if (target) throw new Error("--target cannot be combined with --settle");
+		if (version) throw new Error("--version cannot be combined with --settle");
+		if (baseline) throw new Error("--baseline cannot be combined with --settle");
+		if (inventory) throw new Error("--inventory cannot be combined with --settle");
+		return { settle: true, record, gatesPassedAt, fork, dir };
+	}
+
+	if (record) throw new Error("--record requires --settle");
+	if (gatesPassedAt) throw new Error("--gates-passed-at requires --settle");
 	if (!target) throw new Error("missing required --target");
 	if (!version) throw new Error("missing required --version");
 	if (!/^\d+\.\d+\.\d+$/.test(version)) {
@@ -511,6 +558,119 @@ export async function seedReview(options: SeedReviewOptions): Promise<SeedResult
 	};
 }
 
+export interface SettleReviewOptions {
+	record: string;
+	gatesPassedAt: string;
+	cwd?: string;
+	gitRunner?: GitRunner;
+}
+
+export interface SettleResult {
+	recordPath: string;
+	matrixPath: string;
+	changelogPath: string;
+	settledForkOnlyCount: number;
+	settledGateCount: number;
+	pendingRows: PendingRow[];
+}
+
+export async function settleReview(options: SettleReviewOptions): Promise<SettleResult> {
+	const cwd = options.cwd;
+	const git: GitRunner = options.gitRunner ?? ((args, okExitCodes) => defaultGit(args, okExitCodes, cwd));
+	const resolveFile = (p: string): string => (cwd && !path.isAbsolute(p) ? path.join(cwd, p) : p);
+
+	const recordDiskPath = resolveFile(options.record);
+	const recordFile = Bun.file(recordDiskPath);
+	if (!(await recordFile.exists())) {
+		throw new Error(`record file missing: ${options.record}`);
+	}
+	const recordText = await recordFile.text();
+	const record = parseRecord(recordText, options.record);
+
+	let commitSha: string;
+	try {
+		commitSha = (await git(["rev-parse", `${options.gatesPassedAt}^{commit}`])).trim();
+	} catch {
+		throw new TargetNotContainedError(record.target, options.gatesPassedAt);
+	}
+
+	const targetSha = record.target;
+	try {
+		await git(["merge-base", "--is-ancestor", targetSha, commitSha]);
+	} catch {
+		throw new TargetNotContainedError(targetSha, commitSha);
+	}
+
+	const commit12 = commitSha.slice(0, 12);
+	const forkSha = record.fork;
+	const fork12 = forkSha.slice(0, 12);
+
+	const matrixDiskPath = resolveFile(record.matrix);
+	const matrixFile = Bun.file(matrixDiskPath);
+	if (!(await matrixFile.exists())) {
+		throw new Error(`matrix file missing: ${record.matrix}`);
+	}
+	const matrixRows = parseMatrixTsv(await matrixFile.text());
+
+	// Differing paths between fork and commit
+	const changedForkDiff = await git(["diff", "--name-only", "--no-renames", `${forkSha}..${commitSha}`]);
+	const changedForkSet = new Set(changedForkDiff.split("\n").filter(Boolean).map(unquoteGitPath));
+
+	let settledForkOnlyCount = 0;
+	let settledGateCount = 0;
+
+	for (const row of matrixRows) {
+		const forkOnlyPending = `pending:git diff --exit-code ${fork12} HEAD -- ${row.path}`;
+		if (row.scope === "fork-only" && row.proof === forkOnlyPending) {
+			if (!changedForkSet.has(row.path)) {
+				row.proof = `fork-only sweep: git diff ${fork12}..${commit12} -- ${row.path} is empty`;
+				settledForkOnlyCount++;
+			}
+		} else if (row.proof === "pending:session-system/update.sh gates 3-12") {
+			row.proof = `session-system/update.sh gates 3-12 passed at ${commit12} (operator-recorded)`;
+			settledGateCount++;
+		}
+	}
+
+	const changelogDiskPath = resolveFile(record.changelog);
+	const changelogFile = Bun.file(changelogDiskPath);
+	if (!(await changelogFile.exists())) {
+		throw new Error(`changelog file missing: ${record.changelog}`);
+	}
+	const changelogRows = parseChangelogTsv(await changelogFile.text());
+
+	for (const row of changelogRows) {
+		if (row.proof === "pending:session-system/update.sh gates 3-12") {
+			row.proof = `session-system/update.sh gates 3-12 passed at ${commit12} (operator-recorded)`;
+			settledGateCount++;
+		}
+	}
+
+	await Bun.write(matrixDiskPath, formatMatrixTsv(matrixRows));
+	await Bun.write(changelogDiskPath, formatChangelogTsv(changelogRows));
+
+	const pendingRows: PendingRow[] = [];
+	for (const r of matrixRows) {
+		if (r.proof.startsWith("pending:")) {
+			pendingRows.push({ kind: "matrix", id: r.surfaceId, proof: r.proof });
+		}
+	}
+	for (const r of changelogRows) {
+		if (r.proof.startsWith("pending:")) {
+			pendingRows.push({ kind: "changelog", id: r.id, proof: r.proof });
+		}
+	}
+
+	return {
+		recordPath: options.record,
+		matrixPath: record.matrix,
+		changelogPath: record.changelog,
+		settledForkOnlyCount,
+		settledGateCount,
+		pendingRows,
+	};
+}
+
 async function main(): Promise<void> {
 	let args: ReviewSeedArgs;
 	try {
@@ -520,8 +680,32 @@ async function main(): Promise<void> {
 		process.exit(2);
 	}
 
+	if (args.settle) {
+		try {
+			const result = await settleReview({
+				record: args.record!,
+				gatesPassedAt: args.gatesPassedAt!,
+			});
+			if (result.pendingRows.length > 0) {
+				for (const r of result.pendingRows) {
+					console.error(`${r.kind} ${r.id}: ${r.proof}`);
+				}
+				process.exit(1);
+			}
+			console.log(`PASS: review settled at ${args.gatesPassedAt}`);
+			process.exit(0);
+		} catch (err) {
+			if (err instanceof TargetNotContainedError) {
+				console.error(`ERROR: ${err.message}`);
+				process.exit(2);
+			}
+			console.error(`ERROR: ${err instanceof Error ? err.message : err}`);
+			process.exit(1);
+		}
+	}
+
 	try {
-		const result = await seedReview(args);
+		const result = await seedReview(args as SeedReviewOptions);
 		console.log(
 			`seeded review ${result.recordPath} (${result.matrixRows.length} matrix rows, ${result.computedSources.length} sources, ${result.changelogRows.length} changelog entries, ${result.computedUpstream.length} upstream changes)`,
 		);

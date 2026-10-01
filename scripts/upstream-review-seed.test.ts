@@ -10,6 +10,8 @@ import {
 	findVersionMin,
 	parseArgs,
 	seedReview,
+	settleReview,
+	TargetNotContainedError,
 } from "./upstream-review-seed.ts";
 import {
 	type ChangelogRow,
@@ -240,6 +242,42 @@ describe("parseArgs", () => {
 			/unexpected argument --unknown/,
 		);
 	});
+
+	test("parses valid settle CLI options", () => {
+		const args = parseArgs(["--record", "docs/rec.json", "--settle", "--gates-passed-at", "1234567890ab"]);
+		expect(args).toEqual({
+			settle: true,
+			record: "docs/rec.json",
+			gatesPassedAt: "1234567890ab",
+			fork: "HEAD",
+			dir: "docs",
+		});
+	});
+
+	test("rejects --settle missing --record", () => {
+		expect(() => parseArgs(["--settle", "--gates-passed-at", "1234567890ab"])).toThrow(/missing required --record/);
+	});
+
+	test("rejects --settle missing --gates-passed-at", () => {
+		expect(() => parseArgs(["--settle", "--record", "docs/rec.json"])).toThrow(/missing required --gates-passed-at/);
+	});
+
+	test("rejects --record without --settle", () => {
+		expect(() => parseArgs(["--record", "docs/rec.json"])).toThrow(/--record requires --settle/);
+	});
+
+	test("rejects --gates-passed-at without --settle", () => {
+		expect(() => parseArgs(["--gates-passed-at", "1234567890ab"])).toThrow(/--gates-passed-at requires --settle/);
+	});
+
+	test("rejects combining --target or --version with --settle", () => {
+		expect(() => parseArgs(["--record", "r.json", "--settle", "--gates-passed-at", "c1", "--target", "t1"])).toThrow(
+			/--target cannot be combined with --settle/,
+		);
+		expect(() =>
+			parseArgs(["--record", "r.json", "--settle", "--gates-passed-at", "c1", "--version", "1.0.0"]),
+		).toThrow(/--version cannot be combined with --settle/);
+	});
 });
 
 describe("findVersionMin", () => {
@@ -277,106 +315,106 @@ describe("findVersionMin", () => {
 	});
 });
 
+async function createFixtureRepo(): Promise<{
+	dir: string;
+	baseSha: string;
+	targetSha: string;
+	forkSha: string;
+}> {
+	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-review-seed-test-"));
+	dirs.push(dir);
+	await ok(dir, ["init", "-b", "main"]);
+
+	// Base commit (upstream baseline):
+	// - a.txt: 3 lines
+	// - b.txt: 2 lines
+	// - c.txt: 10 lines (for clean 3-way merge)
+	await Bun.write(path.join(dir, "a.txt"), "line 1\nline 2\nline 3\n");
+	await Bun.write(path.join(dir, "b.txt"), "b line 1\nb line 2\n");
+	await Bun.write(path.join(dir, "c.txt"), Array.from({ length: 10 }, (_, i) => `line ${i + 1}\n`).join(""));
+	const baseSha = await commitAll(dir, "upstream baseline commit");
+
+	// Target branch:
+	// - a.txt: edit line 1 (conflicting with fork)
+	// - b.txt: edit line 2 (target-only change)
+	// - c.txt: edit line 10 (merges cleanly with fork editing line 1)
+	// - packages/core/CHANGELOG.md: adds ## [1.0.1]
+	await ok(dir, ["checkout", "-b", "target", baseSha]);
+	await Bun.write(path.join(dir, "a.txt"), "line 1 TARGET EDIT\nline 2\nline 3\n");
+	await Bun.write(path.join(dir, "b.txt"), "b line 1\nb line 2 TARGET EDIT\n");
+	const cLinesTarget = Array.from({ length: 10 }, (_, i) => `line ${i + 1}\n`);
+	cLinesTarget[9] = "line 10 TARGET EDIT\n";
+	await Bun.write(path.join(dir, "c.txt"), cLinesTarget.join(""));
+	await Bun.write(
+		path.join(dir, "packages", "core", "CHANGELOG.md"),
+		["# Changelog", "", "## [1.0.1]", "", "- Update core module", ""].join("\n"),
+	);
+	await Bun.write(
+		path.join(dir, "packages", "x", "CHANGELOG.md"),
+		[
+			"# Changelog",
+			"",
+			"## [1.0.1]",
+			"",
+			"### Added",
+			"",
+			"- Ship the x widget",
+			"",
+			"### Breaking Changes",
+			"",
+			"- Drop the x legacy flag",
+			"",
+			"## [0.9.0]",
+			"",
+			"### Added",
+			"",
+			"- Old x helper below the range",
+			"",
+		].join("\n"),
+	);
+	const targetSha = await commitAll(dir, "target release commit");
+
+	// Fork branch (branched from baseSha):
+	// - a.txt: edit line 1 (conflicting with target)
+	// - c.txt: edit line 1 (clean with target's line 10)
+	// - f.txt: new fork-only file
+	await ok(dir, ["checkout", "-b", "fork", baseSha]);
+	await Bun.write(path.join(dir, "a.txt"), "line 1 FORK EDIT\nline 2\nline 3\n");
+	const cLinesFork = Array.from({ length: 10 }, (_, i) => `line ${i + 1}\n`);
+	cLinesFork[0] = "line 1 FORK EDIT\n";
+	await Bun.write(path.join(dir, "c.txt"), cLinesFork.join(""));
+	await Bun.write(path.join(dir, "f.txt"), "fork only file content\n");
+	const forkSha = await commitAll(dir, "fork changes");
+
+	// Working tree files: baseline record and inventory
+	await Bun.write(
+		path.join(dir, "docs", "upstream-baseline.json"),
+		`${JSON.stringify(
+			{
+				upstream_repo: "https://github.com/can1357/oh-my-pi",
+				upstream_version: "1.0.0",
+				target: baseSha,
+				version_max: "1.0.0",
+			},
+			null,
+			"\t",
+		)}\n`,
+	);
+	await Bun.write(
+		path.join(dir, "docs", "upstream-fork-inventory.tsv"),
+		[
+			"path\tscope\tstate\thead_blob\tbehavior\tclassification",
+			"a.txt\tshared\tmodified\t111111111111\ta.txt fork patch description\tretained",
+			"c.txt\tshared\tmodified\t222222222222\tc.txt fork patch description\tre-fitted",
+			"f.txt\tfork-only\tadded\t333333333333\tf.txt fork patch description\tretained",
+			"",
+		].join("\n"),
+	);
+
+	return { dir, baseSha, targetSha, forkSha };
+}
+
 describe("upstream-review-seed end-to-end fixture", () => {
-	async function createFixtureRepo(): Promise<{
-		dir: string;
-		baseSha: string;
-		targetSha: string;
-		forkSha: string;
-	}> {
-		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-review-seed-test-"));
-		dirs.push(dir);
-		await ok(dir, ["init", "-b", "main"]);
-
-		// Base commit (upstream baseline):
-		// - a.txt: 3 lines
-		// - b.txt: 2 lines
-		// - c.txt: 10 lines (for clean 3-way merge)
-		await Bun.write(path.join(dir, "a.txt"), "line 1\nline 2\nline 3\n");
-		await Bun.write(path.join(dir, "b.txt"), "b line 1\nb line 2\n");
-		await Bun.write(path.join(dir, "c.txt"), Array.from({ length: 10 }, (_, i) => `line ${i + 1}\n`).join(""));
-		const baseSha = await commitAll(dir, "upstream baseline commit");
-
-		// Target branch:
-		// - a.txt: edit line 1 (conflicting with fork)
-		// - b.txt: edit line 2 (target-only change)
-		// - c.txt: edit line 10 (merges cleanly with fork editing line 1)
-		// - packages/core/CHANGELOG.md: adds ## [1.0.1]
-		await ok(dir, ["checkout", "-b", "target", baseSha]);
-		await Bun.write(path.join(dir, "a.txt"), "line 1 TARGET EDIT\nline 2\nline 3\n");
-		await Bun.write(path.join(dir, "b.txt"), "b line 1\nb line 2 TARGET EDIT\n");
-		const cLinesTarget = Array.from({ length: 10 }, (_, i) => `line ${i + 1}\n`);
-		cLinesTarget[9] = "line 10 TARGET EDIT\n";
-		await Bun.write(path.join(dir, "c.txt"), cLinesTarget.join(""));
-		await Bun.write(
-			path.join(dir, "packages", "core", "CHANGELOG.md"),
-			["# Changelog", "", "## [1.0.1]", "", "- Update core module", ""].join("\n"),
-		);
-		await Bun.write(
-			path.join(dir, "packages", "x", "CHANGELOG.md"),
-			[
-				"# Changelog",
-				"",
-				"## [1.0.1]",
-				"",
-				"### Added",
-				"",
-				"- Ship the x widget",
-				"",
-				"### Breaking Changes",
-				"",
-				"- Drop the x legacy flag",
-				"",
-				"## [0.9.0]",
-				"",
-				"### Added",
-				"",
-				"- Old x helper below the range",
-				"",
-			].join("\n"),
-		);
-		const targetSha = await commitAll(dir, "target release commit");
-
-		// Fork branch (branched from baseSha):
-		// - a.txt: edit line 1 (conflicting with target)
-		// - c.txt: edit line 1 (clean with target's line 10)
-		// - f.txt: new fork-only file
-		await ok(dir, ["checkout", "-b", "fork", baseSha]);
-		await Bun.write(path.join(dir, "a.txt"), "line 1 FORK EDIT\nline 2\nline 3\n");
-		const cLinesFork = Array.from({ length: 10 }, (_, i) => `line ${i + 1}\n`);
-		cLinesFork[0] = "line 1 FORK EDIT\n";
-		await Bun.write(path.join(dir, "c.txt"), cLinesFork.join(""));
-		await Bun.write(path.join(dir, "f.txt"), "fork only file content\n");
-		const forkSha = await commitAll(dir, "fork changes");
-
-		// Working tree files: baseline record and inventory
-		await Bun.write(
-			path.join(dir, "docs", "upstream-baseline.json"),
-			`${JSON.stringify(
-				{
-					upstream_repo: "https://github.com/can1357/oh-my-pi",
-					upstream_version: "1.0.0",
-					target: baseSha,
-					version_max: "1.0.0",
-				},
-				null,
-				"\t",
-			)}\n`,
-		);
-		await Bun.write(
-			path.join(dir, "docs", "upstream-fork-inventory.tsv"),
-			[
-				"path\tscope\tstate\thead_blob\tbehavior\tclassification",
-				"a.txt\tshared\tmodified\t111111111111\ta.txt fork patch description\tretained",
-				"c.txt\tshared\tmodified\t222222222222\tc.txt fork patch description\tre-fitted",
-				"f.txt\tfork-only\tadded\t333333333333\tf.txt fork patch description\tretained",
-				"",
-			].join("\n"),
-		);
-
-		return { dir, baseSha, targetSha, forkSha };
-	}
-
 	test("seeds review record and matrix with all three row kinds", async () => {
 		const { dir, baseSha, targetSha, forkSha } = await createFixtureRepo();
 		const target12 = targetSha.slice(0, 12);
@@ -679,5 +717,257 @@ describe("upstream-review-seed end-to-end fixture", () => {
 		expect(proc.exitCode).toBe(0);
 		expect(proc.text()).toContain(`seeded review docs/upstream-review-${target12}.json`);
 		expect(await Bun.file(path.join(dir, `docs/upstream-review-${target12}.json`)).exists()).toBe(true);
+	});
+});
+
+describe("upstream-review-seed --settle mode", () => {
+	test("a commit without the target exits 2 with record bytes unchanged", async () => {
+		const { dir, targetSha, forkSha } = await createFixtureRepo();
+		const target12 = targetSha.slice(0, 12);
+
+		await seedReview({
+			target: targetSha,
+			version: "1.0.2",
+			fork: forkSha,
+			dir: "docs",
+			cwd: dir,
+		});
+
+		const recordRel = `docs/upstream-review-${target12}.json`;
+		const recordPath = path.join(dir, recordRel);
+		const matrixPath = path.join(dir, `docs/upstream-review-${target12}-matrix.tsv`);
+		const changelogPath = path.join(dir, `docs/upstream-review-${target12}-changelog.tsv`);
+		const handoffPath = path.join(dir, `docs/upstream-review-${target12}-handoff.md`);
+
+		const beforeRecord = await Bun.file(recordPath).text();
+		const beforeMatrix = await Bun.file(matrixPath).text();
+		const beforeChangelog = await Bun.file(changelogPath).text();
+		const beforeHandoff = await Bun.file(handoffPath).text();
+
+		const script = path.join(import.meta.dir, "upstream-review-seed.ts");
+		// forkSha does not contain targetSha
+		const proc = await $`bun ${script} --record ${recordRel} --settle --gates-passed-at ${forkSha}`
+			.cwd(dir)
+			.quiet()
+			.nothrow()
+			.env(GIT_ENV);
+
+		expect(proc.exitCode).toBe(2);
+		expect(proc.stderr.toString()).toContain("does not contain target");
+
+		expect(await Bun.file(recordPath).text()).toBe(beforeRecord);
+		expect(await Bun.file(matrixPath).text()).toBe(beforeMatrix);
+		expect(await Bun.file(changelogPath).text()).toBe(beforeChangelog);
+		expect(await Bun.file(handoffPath).text()).toBe(beforeHandoff);
+	});
+
+	test("at fixture merge commit, settle rewrites fork-only and gate proofs, leaves conflict and Breaking rows pending, exits 1 listing them; filling rows makes strict verify pass", async () => {
+		const { dir, targetSha, forkSha } = await createFixtureRepo();
+		const target12 = targetSha.slice(0, 12);
+		const fork12 = forkSha.slice(0, 12);
+
+		await seedReview({
+			target: targetSha,
+			version: "1.0.2",
+			fork: forkSha,
+			dir: "docs",
+			cwd: dir,
+		});
+
+		const recordRel = `docs/upstream-review-${target12}.json`;
+
+		// Create merge commit merging target into fork
+		await run(dir, ["merge", "--no-ff", targetSha]);
+		// a.txt conflicted; resolve it
+		await Bun.write(path.join(dir, "a.txt"), "line 1 RESOLVED\nline 2\nline 3\n");
+		await run(dir, ["add", "a.txt"]);
+		const mergeSha = await commitAll(dir, "merge target into fork");
+		const merge12 = mergeSha.slice(0, 12);
+
+		const script = path.join(import.meta.dir, "upstream-review-seed.ts");
+		const proc = await $`bun ${script} --record ${recordRel} --settle --gates-passed-at ${mergeSha}`
+			.cwd(dir)
+			.quiet()
+			.nothrow()
+			.env(GIT_ENV);
+
+		expect(proc.exitCode).toBe(1);
+		const err = proc.stderr.toString();
+		expect(err).toContain("matrix a.txt: pending:resolve and name the focused test");
+		expect(err).toContain("changelog x@1.0.1:breaking:1: pending:decide re-fitted or not-applicable");
+		expect(err).not.toContain("c.txt");
+		expect(err).not.toContain("f.txt");
+		expect(err).not.toContain("x@1.0.1:added:1");
+
+		const matrixPath = path.join(dir, `docs/upstream-review-${target12}-matrix.tsv`);
+		const matrixRows = parseMatrixTsv(await Bun.file(matrixPath).text());
+		const aRow = matrixRows.find(r => r.path === "a.txt");
+		const cRow = matrixRows.find(r => r.path === "c.txt");
+		const fRow = matrixRows.find(r => r.path === "f.txt");
+
+		expect(aRow?.proof).toBe("pending:resolve and name the focused test");
+		expect(cRow?.proof).toBe(`session-system/update.sh gates 3-12 passed at ${merge12} (operator-recorded)`);
+		expect(fRow?.proof).toBe(`fork-only sweep: git diff ${fork12}..${merge12} -- f.txt is empty`);
+
+		const changelogPath = path.join(dir, `docs/upstream-review-${target12}-changelog.tsv`);
+		const changelogRows = parseChangelogTsv(await Bun.file(changelogPath).text());
+		const addedRow = changelogRows.find(r => r.id === "x@1.0.1:added:1");
+		const breakingRow = changelogRows.find(r => r.id === "x@1.0.1:breaking:1");
+
+		expect(addedRow?.proof).toBe(`session-system/update.sh gates 3-12 passed at ${merge12} (operator-recorded)`);
+		expect(breakingRow?.proof).toBe("pending:decide re-fitted or not-applicable");
+
+		// Fill the remaining pending rows
+		const filledMatrix = matrixRows.map(r =>
+			r.path === "a.txt" ? { ...r, proof: "focused test: test/a.test.ts passes" } : r,
+		);
+		await Bun.write(matrixPath, formatMatrixTsv(filledMatrix));
+
+		const filledChangelog = changelogRows.map(r =>
+			r.id === "x@1.0.1:breaking:1" ? { ...r, proof: "re-fitted: callers migrated to new api" } : r,
+		);
+		await Bun.write(changelogPath, formatChangelogTsv(filledChangelog));
+
+		// Strict verify passes once rows are filled
+		const verifyScript = path.join(import.meta.dir, "verify-upstream-handoff.ts");
+		const verifyStrict = await $`bun ${verifyScript} --record ${recordRel}`.cwd(dir).quiet().nothrow().env(GIT_ENV);
+
+		expect(verifyStrict.exitCode).toBe(0);
+		expect(verifyStrict.text()).toContain("PASS");
+
+		// Settle now passes with exit code 0
+		const settleAgain = await $`bun ${script} --record ${recordRel} --settle --gates-passed-at ${mergeSha}`
+			.cwd(dir)
+			.quiet()
+			.nothrow()
+			.env(GIT_ENV);
+
+		expect(settleAgain.exitCode).toBe(0);
+		expect(settleAgain.text()).toContain("PASS: review settled");
+	});
+
+	test("a fork-only path that changed after the pin stays pending", async () => {
+		const { dir, targetSha, forkSha } = await createFixtureRepo();
+		const target12 = targetSha.slice(0, 12);
+		const fork12 = forkSha.slice(0, 12);
+
+		await seedReview({
+			target: targetSha,
+			version: "1.0.2",
+			fork: forkSha,
+			dir: "docs",
+			cwd: dir,
+		});
+
+		const recordRel = `docs/upstream-review-${target12}.json`;
+
+		await run(dir, ["merge", "--no-ff", targetSha]);
+		await Bun.write(path.join(dir, "a.txt"), "line 1 RESOLVED\nline 2\nline 3\n");
+		await Bun.write(path.join(dir, "f.txt"), "fork only file modified in merge commit\n");
+		await run(dir, ["add", "a.txt", "f.txt"]);
+		const mergeSha = await commitAll(dir, "merge target into fork with f.txt changed");
+
+		const script = path.join(import.meta.dir, "upstream-review-seed.ts");
+		const proc = await $`bun ${script} --record ${recordRel} --settle --gates-passed-at ${mergeSha}`
+			.cwd(dir)
+			.quiet()
+			.nothrow()
+			.env(GIT_ENV);
+
+		expect(proc.exitCode).toBe(1);
+		const err = proc.stderr.toString();
+		expect(err).toContain(`matrix f.txt: pending:git diff --exit-code ${fork12} HEAD -- f.txt`);
+
+		const matrixPath = path.join(dir, `docs/upstream-review-${target12}-matrix.tsv`);
+		const matrixRows = parseMatrixTsv(await Bun.file(matrixPath).text());
+		const fRow = matrixRows.find(r => r.path === "f.txt");
+		expect(fRow?.proof).toBe(`pending:git diff --exit-code ${fork12} HEAD -- f.txt`);
+	});
+
+	test("re-seeding a newer fork leaves an older fork prefix pending, and a non-fork-only row is untouched", async () => {
+		const { dir, targetSha, forkSha } = await createFixtureRepo();
+		const target12 = targetSha.slice(0, 12);
+		const fork12 = forkSha.slice(0, 12);
+
+		await seedReview({
+			target: targetSha,
+			version: "1.0.2",
+			fork: forkSha,
+			dir: "docs",
+			cwd: dir,
+		});
+
+		await Bun.write(path.join(dir, "note.txt"), "newer fork pin\n");
+		await ok(dir, ["add", "note.txt"]);
+		await ok(dir, ["commit", "-m", "newer fork pin"]);
+		const newerSha = (await ok(dir, ["rev-parse", "HEAD"])).trim();
+		const newer12 = newerSha.slice(0, 12);
+
+		await seedReview({
+			target: targetSha,
+			version: "1.0.2",
+			fork: newerSha,
+			dir: "docs",
+			cwd: dir,
+		});
+
+		const recordRel = `docs/upstream-review-${target12}.json`;
+		const record = parseRecord(await Bun.file(path.join(dir, recordRel)).text(), recordRel);
+		expect(record.fork).toBe(newerSha);
+
+		const matrixPath = path.join(dir, `docs/upstream-review-${target12}-matrix.tsv`);
+		let matrixRows = parseMatrixTsv(await Bun.file(matrixPath).text());
+		expect(matrixRows.find(r => r.path === "f.txt")?.proof).toBe(
+			`pending:git diff --exit-code ${fork12} HEAD -- f.txt`,
+		);
+		const notePending = `pending:git diff --exit-code ${newer12} HEAD -- note.txt`;
+		expect(matrixRows.find(r => r.path === "note.txt")?.proof).toBe(notePending);
+		matrixRows = matrixRows.map(r => (r.path === "note.txt" ? { ...r, scope: "shared" } : r));
+		await Bun.write(matrixPath, formatMatrixTsv(matrixRows));
+
+		await run(dir, ["merge", "--no-ff", targetSha]);
+		await Bun.write(path.join(dir, "a.txt"), "line 1 RESOLVED\nline 2\nline 3\n");
+		await run(dir, ["add", "a.txt"]);
+		const mergeSha = await commitAll(dir, "merge target into newer fork");
+
+		const script = path.join(import.meta.dir, "upstream-review-seed.ts");
+		const proc = await $`bun ${script} --record ${recordRel} --settle --gates-passed-at ${mergeSha}`
+			.cwd(dir)
+			.quiet()
+			.nothrow()
+			.env(GIT_ENV);
+
+		expect(proc.exitCode).toBe(1);
+		const err = proc.stderr.toString();
+		expect(err).toContain(`matrix f.txt: pending:git diff --exit-code ${fork12} HEAD -- f.txt`);
+		expect(err).toContain(`matrix note.txt: ${notePending}`);
+
+		const after = parseMatrixTsv(await Bun.file(matrixPath).text());
+		expect(after.find(r => r.path === "f.txt")?.proof).toBe(`pending:git diff --exit-code ${fork12} HEAD -- f.txt`);
+		expect(after.find(r => r.path === "note.txt")?.scope).toBe("shared");
+		expect(after.find(r => r.path === "note.txt")?.proof).toBe(notePending);
+		expect(after.some(r => r.proof.includes(`${fork12}..`))).toBe(false);
+	});
+
+	test("settleReview throws TargetNotContainedError when commit does not contain target", async () => {
+		const { dir, targetSha, forkSha } = await createFixtureRepo();
+		const target12 = targetSha.slice(0, 12);
+
+		await seedReview({
+			target: targetSha,
+			version: "1.0.2",
+			fork: forkSha,
+			dir: "docs",
+			cwd: dir,
+		});
+
+		const recordRel = `docs/upstream-review-${target12}.json`;
+		expect(
+			settleReview({
+				record: recordRel,
+				gatesPassedAt: forkSha,
+				cwd: dir,
+			}),
+		).rejects.toThrow(TargetNotContainedError);
 	});
 });
