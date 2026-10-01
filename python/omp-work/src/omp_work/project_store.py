@@ -53,6 +53,7 @@ from omp_work.standing_policy import (
     validate_policy,
 )
 from omp_work.v1.decision_records import find_decision
+from omp_work.v1.missions import open_missions
 from omp_work.v1.store_shared import WorkStoreError, row_json
 
 if TYPE_CHECKING:
@@ -509,6 +510,7 @@ class ProjectStoreMixin:
             view["refs"] = [row_json(row) for row in refs]
             view["repositories"] = [row_json(row) for row in repositories]
             view["missions"] = [row_json(row) for row in missions]
+            view["open_missions"] = open_missions(cur, workspace_id, project_id)
             view["history"] = [row_json(row) for row in history]
             view["standing_mandate"] = row_json(mandate)
             view["standing_policies"] = [row_json(row) for row in policies]

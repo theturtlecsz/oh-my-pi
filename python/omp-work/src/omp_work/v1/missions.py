@@ -408,6 +408,60 @@ def latest_mission(
     return MissionView.model_validate(mission)
 
 
+def open_missions(
+    cur: psycopg.Cursor[dict[str, object]],
+    workspace_id: UUID,
+    project_id: UUID,
+) -> list[dict[str, object]]:
+    """Live missions of one project: the latest applied snapshot per mission.
+
+    ``project_missions`` records only what submit_mission writes, so a mission
+    that reached a terminal status through an event is not there. The latest
+    applied mission event is the state; DISTINCT ON keeps one row per mission.
+    A mission belongs to the project in its own snapshot, and a terminal status
+    (completed, failed, abandoned) drops it. Ordered by created_at, then
+    mission_id.
+    """
+    cur.execute(
+        "SELECT DISTINCT ON (aggregate_id) payload FROM omp_audit.domain_events"
+        " WHERE workspace_id=%s AND aggregate_type='mission'"
+        " AND outcome='applied' AND event_type = ANY(%s)"
+        " ORDER BY aggregate_id, sequence DESC",
+        (workspace_id, list(_MISSION_EVENTS)),
+    )
+    views: list[MissionView] = []
+    for row in cur.fetchall():
+        payload = row["payload"] if isinstance(row, dict) else row[0]
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        if not isinstance(payload, dict):
+            continue
+        mission = payload.get("mission")
+        if not isinstance(mission, dict):
+            continue
+        views.append(MissionView.model_validate(mission))
+    project_key = str(project_id)
+    open_views = [
+        view
+        for view in views
+        if str(view.project_id) == project_key
+        and view.status.value not in TERMINAL_STATUSES
+    ]
+    open_views.sort(key=lambda view: (view.created_at, str(view.mission_id)))
+    return [
+        {
+            "mission_id": str(view.mission_id),
+            "objective": view.objective,
+            "status": view.status.value,
+            "priority": view.priority,
+            "kind": view.kind,
+            "revision": view.revision,
+            "created_at": view.created_at.isoformat(),
+        }
+        for view in open_views
+    ]
+
+
 def mission_for_work(
     cur: psycopg.Cursor[dict[str, object]],
     workspace_id: UUID,
