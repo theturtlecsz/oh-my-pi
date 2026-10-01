@@ -383,6 +383,34 @@ export function formatSourcesTsv(records: SourceRecord[]): string {
 	return `${lines.join("\n")}\n`;
 }
 
+export function formatMatrixTsv(rows: MatrixRow[]): string {
+	const lines = [MATRIX_HEADER.join("\t")];
+	for (const r of rows) {
+		lines.push(
+			[
+				r.surfaceId,
+				r.path,
+				r.scope,
+				r.sourceIds.join(","),
+				r.forkBehavior,
+				r.upstreamChange,
+				r.classification,
+				r.resolution,
+				r.proof,
+			].join("\t"),
+		);
+	}
+	return `${lines.join("\n")}\n`;
+}
+
+export function formatChangelogTsv(rows: ChangelogRow[]): string {
+	const lines = [CHANGELOG_HEADER.join("\t")];
+	for (const r of rows) {
+		lines.push([r.id, r.pkg, r.version, r.section, r.text, r.disposition, r.proof].join("\t"));
+	}
+	return `${lines.join("\n")}\n`;
+}
+
 export interface ValidateInput {
 	frozenSources: SourceRecord[];
 	computedSources: SourceRecord[];
