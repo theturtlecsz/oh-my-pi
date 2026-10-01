@@ -529,3 +529,35 @@ def test_check_envelope_every_code_produced(tmp_path: Path) -> None:
     v_live = check_envelope(wt, base, ["**"], repository=ctrl_repo, live_checkout=live_dir)
     assert any(v.startswith("live_checkout_changed:") for v in v_live)
 
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses directory permissions")
+def test_scan_unreadable_disallowed_file_fails_closed(tmp_path: Path) -> None:
+    """An unreadable file must abort the scan, never be dropped into an approval."""
+    ctrl_repo, base = _make_control_repo_and_base(tmp_path)
+    wt = add_worktree(ctrl_repo, tmp_path / "worktrees", "wt_unreadable", base)
+
+    (wt / "app.py").write_text("print('changed')\n")
+    secret = wt / "secret.txt"
+    secret.write_text("unreadable\n")
+    secret.chmod(0o000)
+    try:
+        with pytest.raises(PermissionError):
+            _scan(wt, base, ["app.py"], repository=ctrl_repo)
+    finally:
+        secret.chmod(0o644)
+
+
+def test_scan_non_utf8_symlink_target_is_preserved(tmp_path: Path) -> None:
+    """Non-UTF-8 link bytes round-trip instead of crashing the UTF-8 encode."""
+    ctrl_repo, base = _make_control_repo_and_base(tmp_path)
+    wt = add_worktree(ctrl_repo, tmp_path / "worktrees", "wt_nonutf8", base)
+
+    target_bytes = b"app.py\xff\xfe"
+    os.symlink(target_bytes, os.fsencode(str(wt / "link")))
+
+    violations = check_envelope(wt, base, ["link"], repository=ctrl_repo)
+    assert violations == []
+
+    _, changed_map = _scan(wt, base, ["link"], repository=ctrl_repo)
+    assert changed_map["link"] == ("120000", target_bytes)
+

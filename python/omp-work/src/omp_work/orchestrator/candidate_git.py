@@ -170,6 +170,54 @@ def path_allowed(path: str | Path, allowed_paths: Iterable[str]) -> bool:
     return False
 
 
+def _raise_walk_error(error: OSError) -> None:
+    """Fail closed: an unreadable directory must abort the scan, not vanish."""
+    raise error
+
+
+def _resolves_inside(path: Path, root: Path) -> bool:
+    """Return True only when ``path`` resolves to a location inside ``root``.
+
+    Broken links and resolve failures count as escaping (fail closed).
+    """
+    try:
+        return path.resolve().is_relative_to(root)
+    except (OSError, RuntimeError):
+        return False
+
+
+def _snapshot_blob(repo: Path, content_bytes: bytes) -> str:
+    """Hash content in the control repo without writing the blob (``-w`` omitted)."""
+    return git(repo, "hash-object", "--no-filters", "--stdin", input=content_bytes).decode("ascii").strip()
+
+
+def _record_symlink(
+    full: Path,
+    rel: str,
+    *,
+    wt: Path,
+    repo: Path,
+    in_git_metadata: bool,
+    violations: list[str],
+    wt_files: dict[str, tuple[str, str, bytes]],
+    seen_paths: set[str],
+) -> None:
+    """Record one symlink: escape check, git-metadata check, else 120000 blob.
+
+    ``os.readlink`` text is re-encoded with :func:`os.fsencode`, which round-trips
+    the exact filesystem bytes (surrogateescape), so non-UTF-8 targets neither
+    crash the scan nor get rewritten. Read errors propagate (fail closed).
+    """
+    if not _resolves_inside(full, wt):
+        violations.append(f"symlink_escape:{rel}")
+    if in_git_metadata:
+        violations.append(f"git_metadata:{rel}")
+        return
+    content_bytes = os.fsencode(os.readlink(full))
+    wt_files[rel] = ("120000", _snapshot_blob(repo, content_bytes), content_bytes)
+    seen_paths.add(rel)
+
+
 def check_envelope(
     worktree: Path | str,
     base: str,
@@ -240,78 +288,43 @@ def _scan(
     wt_files: dict[str, tuple[str, str, bytes]] = {}
     seen_paths: set[str] = set()
 
-    for root, dirs, files in os.walk(wt, followlinks=False):
+    for root, dirs, files in os.walk(wt, followlinks=False, onerror=_raise_walk_error):
         for d in list(dirs):
             full_d = Path(root) / d
             rel_d = full_d.relative_to(wt).as_posix()
-            d_parts = _segments(rel_d)
 
             if os.path.islink(full_d):
-                try:
-                    target = full_d.resolve()
-                    if not target.is_relative_to(wt):
-                        violations.append(f"symlink_escape:{rel_d}")
-                except (OSError, RuntimeError):
-                    violations.append(f"symlink_escape:{rel_d}")
-
-                if any(part == ".git" for part in d_parts):
-                    violations.append(f"git_metadata:{rel_d}")
-                else:
-                    try:
-                        link_text = os.readlink(full_d)
-                        content_bytes = link_text.encode("utf-8")
-                        mode = "120000"
-                        sha = git(
-                            repo,
-                            "hash-object",
-                            "--no-filters",
-                            "--stdin",
-                            input=content_bytes,
-                        ).decode("ascii").strip()
-                        wt_files[rel_d] = (mode, sha, content_bytes)
-                        seen_paths.add(rel_d)
-                    except OSError:
-                        pass
-            else:
-                if any(part == ".git" for part in d_parts):
-                    violations.append(f"git_metadata:{rel_d}")
+                _record_symlink(
+                    full_d,
+                    rel_d,
+                    wt=wt,
+                    repo=repo,
+                    in_git_metadata=any(part == ".git" for part in _segments(rel_d)),
+                    violations=violations,
+                    wt_files=wt_files,
+                    seen_paths=seen_paths,
+                )
+            elif any(part == ".git" for part in _segments(rel_d)):
+                violations.append(f"git_metadata:{rel_d}")
 
         for f in files:
             full_f = Path(root) / f
             rel_f = full_f.relative_to(wt).as_posix()
             f_parts = _segments(rel_f)
 
-            try:
-                st = os.lstat(full_f)
-            except OSError:
-                continue
+            st = os.lstat(full_f)
 
             if stat.S_ISLNK(st.st_mode):
-                try:
-                    target = full_f.resolve()
-                    if not target.is_relative_to(wt):
-                        violations.append(f"symlink_escape:{rel_f}")
-                except (OSError, RuntimeError):
-                    violations.append(f"symlink_escape:{rel_f}")
-
-                if any(part == ".git" for part in f_parts):
-                    violations.append(f"git_metadata:{rel_f}")
-                else:
-                    try:
-                        link_text = os.readlink(full_f)
-                        content_bytes = link_text.encode("utf-8")
-                        mode = "120000"
-                        sha = git(
-                            repo,
-                            "hash-object",
-                            "--no-filters",
-                            "--stdin",
-                            input=content_bytes,
-                        ).decode("ascii").strip()
-                        wt_files[rel_f] = (mode, sha, content_bytes)
-                        seen_paths.add(rel_f)
-                    except OSError:
-                        pass
+                _record_symlink(
+                    full_f,
+                    rel_f,
+                    wt=wt,
+                    repo=repo,
+                    in_git_metadata=any(part == ".git" for part in f_parts),
+                    violations=violations,
+                    wt_files=wt_files,
+                    seen_paths=seen_paths,
+                )
 
             elif (
                 stat.S_ISFIFO(st.st_mode)
@@ -324,7 +337,7 @@ def _scan(
                     violations.append(f"git_metadata:{rel_f}")
 
             elif stat.S_ISREG(st.st_mode):
-                is_root_gitfile = (rel_f == ".git")
+                is_root_gitfile = rel_f == ".git"
                 if st.st_nlink > 1:
                     violations.append(f"hardlink:{rel_f}")
 
@@ -332,20 +345,10 @@ def _scan(
                     if not is_root_gitfile:
                         violations.append(f"git_metadata:{rel_f}")
                 else:
-                    try:
-                        content_bytes = full_f.read_bytes()
-                        mode = "100755" if bool(st.st_mode & 0o111) else "100644"
-                        sha = git(
-                            repo,
-                            "hash-object",
-                            "--no-filters",
-                            "--stdin",
-                            input=content_bytes,
-                        ).decode("ascii").strip()
-                        wt_files[rel_f] = (mode, sha, content_bytes)
-                        seen_paths.add(rel_f)
-                    except OSError:
-                        pass
+                    content_bytes = full_f.read_bytes()
+                    mode = "100755" if bool(st.st_mode & 0o111) else "100644"
+                    wt_files[rel_f] = (mode, _snapshot_blob(repo, content_bytes), content_bytes)
+                    seen_paths.add(rel_f)
 
     # 4. Check changed paths relative to base
     changed_map: dict[str, tuple[str, bytes] | None] = {}
