@@ -11508,6 +11508,8 @@ export class AgentSession implements SettingsScope {
 			deliverAs?: "steer" | "followUp" | "nextTurn" | "aside";
 			queueChipText?: string;
 			acceptTerminalEmptyStop?: boolean;
+			/** Dispatch-time authority check for a hidden `nextTurn` + `triggerTurn` message (see {@link #sendCustomMessage}). */
+			validateDispatch?: DispatchAuthorityValidation;
 		},
 	): Promise<boolean> {
 		return this.#admitSubmission(() => this.#sendCustomMessage(message, options));
