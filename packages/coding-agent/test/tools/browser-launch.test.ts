@@ -233,7 +233,7 @@ describe("browser executable selection", () => {
 				for (const xdg of [xdgCache, path.join(tempDir.path(), "data"), path.join(tempDir.path(), "state")]) {
 					fs.mkdirSync(path.join(xdg, APP_NAME), { recursive: true });
 				}
-				const env = {
+				const env: Record<string, string | undefined> = {
 					...process.env,
 					HOME: home,
 					XDG_CACHE_HOME: xdgCache,
@@ -242,6 +242,9 @@ describe("browser executable selection", () => {
 					OMP_BROWSER_PROBE_PLATFORM: "darwin",
 					PUPPETEER_EXECUTABLE_PATH: "",
 				};
+				// An inherited agent-dir override (the CI runner pins one per chunk)
+				// disables XDG resolution, so the child must run in default mode.
+				delete env.PI_CODING_AGENT_DIR;
 
 				// System Google Chrome bundle (com.google.Chrome) — the LaunchServices
 				// hijacker the fix must avoid selecting.
