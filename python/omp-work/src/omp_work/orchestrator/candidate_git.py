@@ -8,7 +8,7 @@ import hashlib
 import os
 from pathlib import Path
 import stat
-import subprocess
+import subprocess  # nosec B404 - git argv lists only; executable is the literal "git", no shell
 import tempfile
 from typing import Any, Protocol, runtime_checkable
 
@@ -59,7 +59,7 @@ class IntentLog(Protocol):
 def git(
     repo: Path | str,
     *args: str,
-    input: bytes | str | None = None,
+    input: bytes | str | None = None,  # pylint: disable=redefined-builtin
     index_file: Path | str | None = None,
     extra_env: Mapping[str, str] | None = None,
 ) -> bytes:
@@ -97,7 +97,7 @@ def git(
         else:
             input_bytes = input
 
-        proc = subprocess.run(
+        proc = subprocess.run(  # nosec B603 - argv starts with the literal "git", no shell; remaining args and stdin are data, not a shell command
             cmd,
             input=input_bytes,
             stdout=subprocess.PIPE,
