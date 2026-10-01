@@ -191,6 +191,24 @@ def test_path_allowed_rows() -> None:
     assert not path_allowed("any/path.py", [])
 
 
+def test_path_allowed_matches_verbatim_no_normalization() -> None:
+    # Whitespace is part of the filename: no strip on path or pattern.
+    assert not path_allowed(" README", ["README"])
+    assert not path_allowed("README ", ["README"])
+    assert not path_allowed("README", [" README"])
+    assert path_allowed("README", ["README"])
+
+    # Backslash is a literal filename byte, not a POSIX separator.
+    assert not path_allowed("src\\a.py", ["src/*"])
+    assert path_allowed("src\\a.py", ["src\\a.py"])
+
+    # A trailing slash does not imply recursion; only explicit ** recurses.
+    assert not path_allowed("README/x", ["README/"])
+    assert path_allowed("README", ["README/"])
+    assert path_allowed("README/x", ["README/**"])
+    assert not path_allowed("README/x", ["README"])
+
+
 def test_add_worktree_checks_out_base_and_post_checkout_hook_writes_no_marker(tmp_path: Path) -> None:
     ctrl_repo = tmp_path / "control.git"
     subprocess.run(["git", "init", "--bare", str(ctrl_repo)], check=True, capture_output=True)

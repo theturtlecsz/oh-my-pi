@@ -145,22 +145,24 @@ def _match_segments(path_segments: list[str], pat_segments: list[str]) -> bool:
     return dp[0][0]
 
 
+def _segments(value: str) -> list[str]:
+    """Split a POSIX path or glob on ``/``, dropping empty and ``.`` segments."""
+    return [s for s in value.split("/") if s and s != "."]
+
+
 def path_allowed(path: str | Path, allowed_paths: Iterable[str]) -> bool:
-    """Check if path matches any segment glob pattern in allowed_paths."""
-    norm_path = str(path).replace("\\", "/").strip()
-    if norm_path.startswith("./"):
-        norm_path = norm_path[2:]
-    norm_path = norm_path.strip("/")
-    path_segments = [s for s in norm_path.split("/") if s and s != "."]
+    """Check if path matches any segment glob pattern in allowed_paths.
+
+    The path is matched verbatim: whitespace and backslashes are preserved, so
+    ``" README"``/``"README "`` do not match ``README`` and a literal POSIX
+    filename ``src\\a.py`` does not match ``src/*``. Globs match per segment:
+    ``*``, ``?`` and ``[..]`` stay within one segment, and only an explicit
+    ``**`` segment matches zero or more segments. Nothing matches by prefix,
+    and a trailing slash does not imply recursion.
+    """
+    path_segments = _segments(str(path))
 
     for pattern in allowed_paths:
-        pat = pattern.replace("\\", "/").strip()
-        if pat.startswith("./"):
-            pat = pat[2:]
-        if pat.endswith("/"):
-            pat += "**"
-        pat = pat.strip("/")
-        pat_segments = [s for s in pat.split("/") if s and s != "."]
-        if _match_segments(path_segments, pat_segments):
+        if _match_segments(path_segments, _segments(pattern)):
             return True
     return False
