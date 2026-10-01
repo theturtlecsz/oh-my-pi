@@ -14,7 +14,18 @@
 import { type ParseSessionResult, parseSessionFile, type SessionParserState } from "./parser";
 
 export type SyncWorkerRequest =
-	| { kind?: "parse"; sessionFile: string; fromOffset: number; parserState?: SessionParserState; replay?: boolean }
+	| {
+			kind?: "parse";
+			sessionFile: string;
+			fromOffset: number;
+			parserState?: SessionParserState;
+			replay?: boolean;
+			/**
+			 * Sessions root as the main thread resolves it. Bun workers can see stale
+			 * startup env, so the worker must not re-derive it.
+			 */
+			sessionsDir: string;
+	  }
 	| { kind: "ping" };
 
 export type SyncWorkerResponse =
@@ -38,6 +49,7 @@ self.onmessage = async event => {
 			request.fromOffset,
 			request.parserState,
 			request.replay,
+			request.sessionsDir,
 		);
 		self.postMessage({ ok: true, result } satisfies SyncWorkerResponse);
 	} catch (err) {

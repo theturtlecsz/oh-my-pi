@@ -43,12 +43,12 @@ const TOOL_NAME_PATTERN = /^[\w.:-]+$/;
  * subagent's own advisor — counts as `advisor`; every other nested transcript
  * is a task `subagent`.
  */
-export function classifyAgentType(sessionPath: string): AgentType {
+export function classifyAgentType(sessionPath: string, sessionsDir = getSessionsDir()): AgentType {
 	const base = path.basename(sessionPath);
 	if (base === ADVISOR_TRANSCRIPT_BASENAME || (base.startsWith("__advisor.") && base.endsWith(".jsonl"))) {
 		return "advisor";
 	}
-	const rel = path.relative(getSessionsDir(), sessionPath);
+	const rel = path.relative(sessionsDir, sessionPath);
 	// `<project>/<file>.jsonl` -> 2 segments. Deeper nesting is a subagent.
 	return rel.split(path.sep).length <= 2 ? "main" : "subagent";
 }
@@ -58,8 +58,7 @@ export function classifyAgentType(sessionPath: string): AgentType {
  * Session files are named like: --work--pi--/timestamp_uuid.jsonl
  * The folder part uses -- as path separator.
  */
-export function extractFolderFromPath(sessionPath: string): string {
-	const sessionsDir = getSessionsDir();
+export function extractFolderFromPath(sessionPath: string, sessionsDir = getSessionsDir()): string {
 	const rel = path.relative(sessionsDir, sessionPath);
 	const projectDir = rel.split(path.sep)[0];
 	// Convert --work--pi-- to /work/pi
@@ -530,6 +529,7 @@ export async function parseSessionFile(
 	fromOffset = 0,
 	state?: SessionParserState,
 	replay = false,
+	sessionsDir = getSessionsDir(),
 ): Promise<ParseSessionResult> {
 	let bytes: Uint8Array;
 	let start = fromOffset;
@@ -538,8 +538,8 @@ export async function parseSessionFile(
 	let info: nodeFs.Stats;
 	let checkpoint: string;
 	let read: number;
-	const folder = extractFolderFromPath(sessionPath);
-	const agentType = classifyAgentType(sessionPath);
+	const folder = extractFolderFromPath(sessionPath, sessionsDir);
+	const agentType = classifyAgentType(sessionPath, sessionsDir);
 	const stats: MessageStatsInput[] = [];
 	const userStats: UserMessageStats[] = [];
 	const userLinks: UserMessageLink[] = [];

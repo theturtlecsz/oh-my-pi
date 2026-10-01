@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getAgentDbPath, getStatsDbPath, workerHostEntry } from "@oh-my-pi/pi-utils";
+import { getAgentDbPath, getSessionsDir, getStatsDbPath, workerHostEntry } from "@oh-my-pi/pi-utils";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import {
 	applySessionParseResults,
@@ -434,6 +434,7 @@ async function syncAllSessionsLocked(
 	}
 
 	const poolSize = Math.min(files.length, requestedWorkers);
+	const sessionsDir = getSessionsDir();
 
 	const handles: WorkerHandle[] = [];
 
@@ -443,7 +444,7 @@ async function syncAllSessionsLocked(
 				const idx = cursor++;
 				if (idx >= files.length) return;
 				const parsed = await prepareFile(idx, (file, fromOffset, parserState, replay) =>
-					dispatch(handle, { sessionFile: file, fromOffset, parserState, replay }),
+					dispatch(handle, { sessionFile: file, fromOffset, parserState, replay, sessionsDir }),
 				);
 				if (!failed) acceptFile(files[idx], parsed);
 			}
