@@ -33,7 +33,8 @@ describe("CPK-0 surface inventory (OMP-287)", () => {
 		});
 		expect(res.status).toBe(0);
 		expect(res.stdout).toContain("CPK-0 surface inventory check passed");
-	}, 30000);
+		// A full ts-morph scan in a child process; hosted CI runners exceeded 30 s (Bun kills the child on timeout).
+	}, 120_000);
 
 	describe("tool inventory completeness", () => {
 		it("enumerates all first-party tools including custom and injected tools", () => {
