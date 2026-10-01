@@ -62,6 +62,9 @@ describe("coworkFetch response cancellation", () => {
 describe("coworkFetch premature response close", () => {
 	async function streamingResponse(signal?: AbortSignal) {
 		const message = new http.IncomingMessage(new net.Socket());
+		// Bun 1.3 treats a non-handle first argument as a web body and ends the message on the
+		// next _read(); keep it open the way Node does until the test cuts it off.
+		message._read = () => {};
 		message.statusCode = 200;
 		message.statusMessage = "OK";
 		message.headers = { "content-type": "text/event-stream" };
