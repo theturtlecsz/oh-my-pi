@@ -1,7 +1,6 @@
-import { describe, expect, it, spyOn } from "bun:test";
-import * as os from "node:os";
+import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { __resetDirsFromEnvForTests, CONFIG_DIR_NAME, getConfigAgentDirName, TempDir } from "@oh-my-pi/pi-utils";
+import { CONFIG_DIR_NAME, getConfigAgentDirName, TempDir } from "@oh-my-pi/pi-utils";
 import {
 	buildSystemPrompt,
 	discoverSystemPromptOverride,
@@ -12,6 +11,7 @@ import {
 import eagerTasksTemplate from "./fixtures/system-prompt-template/eager-tasks.md" with { type: "text" };
 import literalDataTemplate from "./fixtures/system-prompt-template/literal-data.md" with { type: "text" };
 import liveDataTemplate from "./fixtures/system-prompt-template/live-data.md" with { type: "text" };
+import { isolateHost } from "./helpers/host-isolation";
 
 const EMPTY_TREE = {
 	rootPath: "",
@@ -30,31 +30,13 @@ interface DiscoveryPaths {
 async function withDiscoveryHome<T>(fn: (paths: DiscoveryPaths) => Promise<T>): Promise<T> {
 	using tempDir = TempDir.createSync("@omp-system-prompt-template-discovery-");
 	const home = tempDir.join("home");
-	const homedirSpy = spyOn(os, "homedir").mockReturnValue(home);
-	const previousHome = process.env.HOME;
-	const previousUserProfile = process.env.USERPROFILE;
-	// The CI runner pins PI_CODING_AGENT_DIR per chunk; user prompts must resolve under the fake home.
-	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-	process.env.HOME = home;
-	process.env.USERPROFILE = home;
-	delete process.env.PI_CODING_AGENT_DIR;
-	__resetDirsFromEnvForTests();
-	try {
-		return await fn({
-			cwd: tempDir.join("project"),
-			projectConfig: tempDir.join("project", CONFIG_DIR_NAME),
-			userConfig: path.join(home, getConfigAgentDirName()),
-		});
-	} finally {
-		homedirSpy.mockRestore();
-		if (previousHome === undefined) delete process.env.HOME;
-		else process.env.HOME = previousHome;
-		if (previousUserProfile === undefined) delete process.env.USERPROFILE;
-		else process.env.USERPROFILE = previousUserProfile;
-		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-		__resetDirsFromEnvForTests();
-	}
+	// User prompts must resolve under the fake home, not the host's pinned agent dir.
+	using _isolation = isolateHost({ home });
+	return await fn({
+		cwd: tempDir.join("project"),
+		projectConfig: tempDir.join("project", CONFIG_DIR_NAME),
+		userConfig: path.join(home, getConfigAgentDirName()),
+	});
 }
 
 function options(cwd: string, overrides: Partial<BuildSystemPromptOptions> = {}): BuildSystemPromptOptions {
