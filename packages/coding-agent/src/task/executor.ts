@@ -3476,6 +3476,8 @@ export interface PersistedTaskRunOptions {
 	binding: PersistedTaskBindingV1;
 	signal: AbortSignal;
 	eventBus?: EventBus;
+	/** Root-scoped `task:subagent:*` bus; RPC and HUD surfaces only observe frames emitted here. */
+	subagentEventBus?: EventBus;
 	artifactsDir: string;
 	maxRuntimeMs: number;
 	outputSchemaSource: StructuredSubagentSchemaSource;
@@ -3498,6 +3500,7 @@ export async function runPersistedTask(options: PersistedTaskRunOptions): Promis
 				outputSchemaSource: options.outputSchemaSource,
 				signal: options.signal,
 				eventBus: options.eventBus,
+				subagentEventBus: options.subagentEventBus,
 				parentToolCallId: binding.call.toolCallId,
 				artifactsDir: options.artifactsDir,
 				maxRuntimeMs: options.maxRuntimeMs,

@@ -1932,6 +1932,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			binding,
 			signal: request.signal,
 			eventBus: this.session.eventBus,
+			subagentEventBus: this.session.subagentEventBus,
 			artifactsDir,
 			maxRuntimeMs: cfgTaskMaxRuntimeMs.get(this.session.settings),
 			outputSchemaSource: policy.schema.source,
