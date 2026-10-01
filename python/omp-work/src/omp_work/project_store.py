@@ -52,6 +52,7 @@ from omp_work.standing_policy import (
     policy_change_kind,
     validate_policy,
 )
+from omp_work.v1.agent_stop import read_stop_state
 from omp_work.v1.decision_records import find_decision
 from omp_work.v1.missions import open_missions, project_mission_progress
 from omp_work.v1.store_shared import WorkStoreError, row_json
@@ -812,6 +813,8 @@ class ProjectStoreMixin:
         signed = False
         tier = tier_of(action.action_class)
         with self._transaction(workspace_id, actor_id) as cur:
+            if read_stop_state(cur, workspace_id)["stopped"]:
+                raise ProjectAuthorityRefused("agent_stop_engaged")
             self._require_project(cur, workspace_id, project_id)
             if tier == 1:
                 pass
@@ -891,6 +894,8 @@ class ProjectStoreMixin:
         spend appends a spend_records row naming its tier and policy.
         """
         with self._transaction(workspace_id, actor_id) as cur:
+            if read_stop_state(cur, workspace_id)["stopped"]:
+                raise ProjectAuthorityRefused("agent_stop_engaged")
             self._require_project(cur, workspace_id, project_id)
             self._lock_mission(cur, workspace_id, project_id, mission_id)
             mission_budget, _ = self._load_budget_locked(

@@ -43,6 +43,8 @@ from omp_work.v1.models import (
     CommandEnvelope,
     CreateDecisionCommand,
     CreateDecisionPayload,
+    RecordAlarmSignalCommand,
+    RecordAlarmSignalPayload,
 )
 
 __all__ = [
@@ -153,18 +155,26 @@ def perform(
     resolved = resolver(operation)
     classification = classify(operation, resolved)
 
-    if classification.tier == 3 and decision_id is None:
-        return _hold(
+    if classification.tier == 3:
+        _record_alarm(
             store,
             workspace_id,
             actor_id,
-            project_id,
-            mission_id,
-            operation,
-            now,
-            classification,
+            3,
+            classification.action_class,
+            "attempted",
         )
-    if classification.tier == 3:
+        if decision_id is None:
+            return _hold(
+                store,
+                workspace_id,
+                actor_id,
+                project_id,
+                mission_id,
+                operation,
+                now,
+                classification,
+            )
         return _execute_tier3(
             store,
             workspace_id,
@@ -281,6 +291,15 @@ def _execute_tier2(
                 now,
             )
         except ProjectAuthorityRefused as refused:
+            if refused.code == "standing_policy_required":
+                _record_alarm(
+                    store,
+                    workspace_id,
+                    actor_id,
+                    2,
+                    classification.action_class,
+                    refused.code,
+                )
             return ActionOutcome(
                 "refused", classification.action_class, 2, None, refused.code
             )
@@ -293,6 +312,15 @@ def _execute_tier2(
             store, workspace_id, actor_id, project_id, mission_id, action, now
         )
     except ProjectAuthorityRefused as refused:
+        if refused.code == "standing_policy_required":
+            _record_alarm(
+                store,
+                workspace_id,
+                actor_id,
+                2,
+                classification.action_class,
+                refused.code,
+            )
         return ActionOutcome(
             "refused", classification.action_class, 2, None, refused.code
         )
@@ -454,3 +482,52 @@ def _as_uuid(value: object) -> UUID | None:
     if isinstance(value, UUID):
         return value
     return UUID(str(value))
+
+
+def _alarm_envelope(
+    workspace_id: UUID,
+    signal: Literal[
+        "cost_threshold",
+        "budget_exceeded",
+        "safety_check_failed",
+        "credential_appeared",
+        "owner_approval_attempt",
+    ],
+    subject: str,
+    detail: str,
+) -> CommandEnvelope:
+    payload = RecordAlarmSignalPayload(
+        signal=signal,
+        subject=subject,
+        detail=detail,
+    )
+    return CommandEnvelope(
+        api_version="work.omp.dev/v1",
+        workspace_id=workspace_id,
+        operation_id=uuid4(),
+        request_id=uuid4(),
+        correlation_id=uuid4(),
+        command=RecordAlarmSignalCommand(type="record_alarm_signal", payload=payload),
+    )
+
+
+def _record_alarm(
+    store: ActionStore,
+    workspace_id: UUID,
+    actor_id: UUID,
+    tier: int,
+    action_class: str,
+    detail: str,
+) -> None:
+    envelope = _alarm_envelope(
+        workspace_id,
+        signal="owner_approval_attempt",
+        subject=f"tier {tier} {action_class}",
+        detail=detail,
+    )
+    store.execute(
+        envelope,
+        actor_id=actor_id,
+        actor_kind="automation",
+        required_scope="work.mutate",
+    )
