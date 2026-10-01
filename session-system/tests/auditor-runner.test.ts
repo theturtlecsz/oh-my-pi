@@ -13,7 +13,7 @@ import { AgentSession, SessionManager, Settings, type CustomEntry, type Extensio
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import * as taskModule from "@oh-my-pi/pi-coding-agent/task";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
-import * as managedGit from "@oh-my-pi/pi-coding-agent/utils/git";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
 import { applyExtensionNewSessionSetup } from "../../packages/coding-agent/src/modes/controllers/extension-ui-controller";
@@ -2931,7 +2931,7 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 		};
 
 		let shouldFailRestart = false;
-		let healthFp = "prospective-fp-199";
+		const healthFp = "prospective-fp-199";
 		const mockBackend = {
 			cacheFile: repo.cacheFile,
 			markerFile: ".work-project",
@@ -3114,6 +3114,7 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 
 	test("execution delivery checkpoint race and crash-retry use one guarded continuation", async () => {
 		const repo = makeTempRepo();
+		// oxlint-disable-next-line prefer-const -- captured by closures before assignment
 		let ownershipEntry: CustomEntry | undefined;
 		let registeredExecute: ((id: string, params: Record<string, unknown>, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: { type: string; text: string }[] }>) | undefined;
 		const sentMessages: Array<{ customType?: string; content?: string }> = [];
@@ -3406,12 +3407,12 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 			const remote = gitModule.runGit(repo.dir, ["remote", "add", "origin", remoteDir]);
 			if (!remote.ok) throw new Error(remote.err);
 			await Bun.write(path.join(repo.dir, "foreign.txt"), "foreign candidate\n");
-			await managedGit.stage.files(repo.dir, ["foreign.txt"]);
-			await managedGit.commit(repo.dir, "session candidate: OMP-999\n\nWork-Candidate: 00000000-0000-7000-8000-000000000099");
+			await vcs.requireGit(repo.dir).stageFiles(["foreign.txt"]);
+			await vcs.requireGit(repo.dir).commitCreate("session candidate: OMP-999\n\nWork-Candidate: 00000000-0000-7000-8000-000000000099", {});
 			await Bun.write(path.join(repo.dir, "ordinary.txt"), "ordinary follow-up\n");
-			await managedGit.stage.files(repo.dir, ["ordinary.txt"]);
-			await managedGit.commit(repo.dir, "Ordinary follow-up");
-			const originalHead = await managedGit.head.sha(repo.dir);
+			await vcs.requireGit(repo.dir).stageFiles(["ordinary.txt"]);
+			await vcs.requireGit(repo.dir).commitCreate("Ordinary follow-up", {});
+			const originalHead = await vcs.requireGit(repo.dir).headSha();
 			const commands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
 			const notifications: string[] = [];
 			const appendEntry = vi.fn();
@@ -3438,7 +3439,7 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 			expect(notifications.join("\n")).toContain("OMP-999");
 			expect(notifications.join("\n")).toContain("Cannot begin execution");
 			for (const effect of [checks, beginExecution, health, primaryRoot, ensure, newSession, appendEntry, sendMessage]) expect(effect).not.toHaveBeenCalled();
-			expect(await managedGit.head.sha(repo.dir)).toBe(originalHead);
+			expect(await vcs.requireGit(repo.dir).headSha()).toBe(originalHead);
 			expect(gitModule.dirtyPaths(repo.dir)).toEqual([]);
 		} finally { repo.cleanup(); }
 	});
@@ -3545,12 +3546,12 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 		fixtureCaches.push(repo.dir, path.resolve(os.homedir(), ".omp", "agent", repo.cacheFile, ".."));
 		const linked = `${repo.dir}-linked`;
 		fixtureCaches.push(linked);
-		await managedGit.branch.create(repo.dir, "execution/omp-212", repo.headSha);
-		await managedGit.worktree.add(repo.dir, linked, "execution/omp-212");
+		await vcs.requireGit(repo.dir).createBranch("execution/omp-212", repo.headSha, false);
+		await vcs.requireGit(repo.dir).worktreeAdd(linked, "execution/omp-212", { detach: false, clone: false });
 		await Bun.write(path.join(linked, "test.txt"), "candidate only on managed execution branch\n");
-		await managedGit.stage.files(linked, ["test.txt"]);
-		await managedGit.commit(linked, "Create isolated audit candidate");
-		const candidate = await managedGit.head.sha(linked);
+		await vcs.requireGit(linked).stageFiles(["test.txt"]);
+		await vcs.requireGit(linked).commitCreate("Create isolated audit candidate", {});
+		const candidate = await vcs.requireGit(linked).headSha();
 		if (!candidate) throw new Error("Linked candidate commit missing");
 		const inputCwd = path.join(linked, "python/omp-work/src");
 		const registeredCommands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
@@ -3819,10 +3820,10 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 			const sealed = JSON.parse(runSubprocessSpy.mock.calls[0][0].task) as { repository: string; start: string; final: string };
 			const canonicalRepository = await fs.promises.realpath(repo.dir);
 			expect({ admission: mockExec.grant.repository, push: pushRepository, attempt: attemptRepository, auditor: sealed.repository }).toEqual({ admission: canonicalRepository, push: canonicalRepository, attempt: canonicalRepository, auditor: canonicalRepository });
-			expect(await managedGit.head.sha(sealed.repository)).toBe(repo.headSha);
-			expect((await managedGit.commitDetails(sealed.repository, sealed.start)).sha).toBe(repo.headSha);
-			expect((await managedGit.commitDetails(sealed.repository, sealed.final)).sha).toBe(candidate);
-			expect(await managedGit.diff(sealed.repository, { base: sealed.start, head: sealed.final })).toContain("+candidate only on managed execution branch");
+			expect(await vcs.requireGit(sealed.repository).headSha()).toBe(repo.headSha);
+			expect((await vcs.requireGit(sealed.repository).commitDetails(sealed.start)).sha).toBe(repo.headSha);
+			expect((await vcs.requireGit(sealed.repository).commitDetails(sealed.final)).sha).toBe(candidate);
+			expect(await vcs.requireGit(sealed.repository).diffText({ base: sealed.start, head: sealed.final })).toContain("+candidate only on managed execution branch");
 		} finally {
 			dirtySpy.mockRestore();
 			headSpy.mockRestore();

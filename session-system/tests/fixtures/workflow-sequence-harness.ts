@@ -3,7 +3,7 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ExtensionRunner, getAgentDir, loadExtensions, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { ExtensionRunner, Settings, TOP_LEVEL_AGENT, getAgentDir, loadExtensions, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { confirmRoundTrip } from "./two-phase";
 import { currentTranscriptRef } from "../../extensions/workflow/transcript";
@@ -882,6 +882,13 @@ function writeIntakeBlueprint(name: string, content: string): string {
 	fs.writeFileSync(p, content);
 	return content;
 }
+/** Real isolated settings for the runner (upstream reads registry handles from it), with the audit role pinned. */
+function harnessSettings(auditModel?: string): Settings {
+	const settings = Settings.isolated();
+	if (auditModel) settings.setModelRole("audit", auditModel);
+	return settings;
+}
+
 const runner = new ExtensionRunner(
 	loaded.extensions,
 	loaded.runtime,
@@ -889,10 +896,10 @@ const runner = new ExtensionRunner(
 	{ getCwd: () => probe, getBranch: () => inheritedNow, getSessionId: () => currentSessionId, getArtifactsDir: () => artifactsDir } as never,
 	{ getAvailable: () => [fableModel, gptModel], hasProvider: () => true } as never,
 	undefined,
-	{ getModelRole: (role: string) => (role === "audit" ? "openai/gpt-5.2" : undefined), get: () => undefined, getStorage: () => undefined } as never,
+	harnessSettings("openai/gpt-5.2"),
 	localProtocolOptions,
 	undefined,
-	depth,
+	depth === 0 ? TOP_LEVEL_AGENT : { ...TOP_LEVEL_AGENT, kind: "sub", depth },
 );
 runner.initialize(
 	{

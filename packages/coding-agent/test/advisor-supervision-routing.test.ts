@@ -18,6 +18,7 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { cfgAdvisorSupervisionPath } from "../src/advisor/settings";
 
 const ADVISOR_TYPE = "advisor";
 const REAL_CONCERN = "Check the retry queue bounds.";
@@ -69,10 +70,10 @@ async function createHarness(options: {
 	});
 	// `isolated` values are overrides, which outrank `set`. The path is applied
 	// with `set` so a later `set` is what the rebuilt advisor reads.
-	settings.set("advisor.supervisionPath", options.path);
+	cfgAdvisorSupervisionPath.set(settings, options.path);
 	settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
 	const authStorage = await AuthStorage.create(":memory:");
-	authStorage.setRuntimeApiKey("anthropic", "test-key");
+	authStorage.keys.setRuntime("anthropic", "test-key");
 	const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
 	const session = new AgentSession({
 		agent,
@@ -142,7 +143,7 @@ describe("advisor supervision routing", () => {
 			await withHarness({ path }, async ({ session }) => {
 				expect(session.setAdvisorEnabled(true)).toBe(true);
 				expect(await advise(session, { note: "Stop.", severity: "blocker", category: "gate-defect" })).toBe(
-					"Recorded.",
+					"Dropped: nothing actionable.",
 				);
 				expect(deliveredNotes(session)).toEqual([]);
 				const [entry] = session.getAdvisorSupervisionReport();
@@ -162,18 +163,18 @@ describe("advisor supervision routing", () => {
 				await settlePrimary(session);
 				expect(session.setAdvisorEnabled(true)).toBe(true);
 				expect(await advise(session, { note: "Stop.", severity: "blocker", category: "gate-defect" })).toBe(
-					"Recorded.",
+					"Dropped: nothing actionable.",
 				);
 				expect(
 					await advise(session, { note: REAL_CONCERN, severity: "concern", category: "semantic-concern" }),
-				).toBe("Recorded.");
+				).toBe("Delivered.");
 				expect(
 					await advise(session, {
 						note: REAL_CONCERN_VARIANT,
 						severity: "concern",
 						category: "semantic-concern",
 					}),
-				).toBe("Recorded.");
+				).toBe("Dropped: already raised.");
 				expect(deliveredNotes(session)).toEqual([REAL_CONCERN]);
 				const [entry] = session.getAdvisorSupervisionReport();
 				expect(entry?.report.authority).toBe(authorityFor(path));
@@ -192,7 +193,7 @@ describe("advisor supervision routing", () => {
 				invocations: { legacy: 0, structured: 1 },
 			});
 
-			settings.set("advisor.supervisionPath", "legacy");
+			cfgAdvisorSupervisionPath.set(settings, "legacy");
 			expect(session.setAdvisorEnabled(false)).toBe(false);
 			expect(session.setAdvisorEnabled(true)).toBe(true);
 			expect(session.getAdvisorSupervisionReport()[0]?.report).toMatchObject({

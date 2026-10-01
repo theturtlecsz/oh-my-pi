@@ -19,6 +19,8 @@ export type AdvisorSupervisionAuthority = "legacy" | "structured";
 export interface AdvisorSupervisionPipelineOptions {
 	path: AdvisorSupervisionPath;
 	canaryMaxDivergences: number;
+	/** Per-update non-blocker budget for each arm's emission guard (`advisor.maxNotesPerUpdate`). */
+	budgetPerUpdate?: number;
 	/** Sampled by each arm at `execute`, and kept on a deferred note until flush. */
 	transcriptIndex: () => number;
 	deliver: (note: string, severity?: AdvisorSeverity, category?: AdvisorCategory, transcriptIndex?: number) => void;
@@ -48,6 +50,56 @@ interface Arm {
 	buffer: BufferedNote[];
 }
 
+type AdviseExecute = AdviseTool["execute"];
+
+/**
+ * The advise tool an advisor loop registers for a pipeline: each call fans out
+ * to the pipeline's arms, and it carries the same update-boundary surface as a
+ * bare {@link AdviseTool} (`beginUpdate`, `flushDeferredNotes`,
+ * `resetDeliveredNotes`), applied to every arm through the pipeline.
+ */
+export class AdvisorSupervisionTool implements AgentTool<AdviseTool["parameters"], AdviseDetails> {
+	readonly name: string;
+	readonly label: string;
+	readonly description: string;
+	readonly parameters: AdviseTool["parameters"];
+	readonly intent: AdviseTool["intent"];
+	readonly #pipeline: AdvisorSupervisionPipeline;
+	readonly #dispatch: AdviseExecute;
+
+	constructor(prototype: AdviseTool, pipeline: AdvisorSupervisionPipeline, dispatch: AdviseExecute) {
+		this.name = prototype.name;
+		this.label = prototype.label;
+		this.description = prototype.description;
+		this.parameters = prototype.parameters;
+		this.intent = prototype.intent;
+		this.#pipeline = pipeline;
+		this.#dispatch = dispatch;
+	}
+
+	execute(
+		toolCallId: string,
+		args: AdviseParams,
+		signal?: AbortSignal,
+		onUpdate?: AgentToolUpdateCallback<AdviseDetails>,
+		context?: AgentToolContext,
+	): Promise<AgentToolResult<AdviseDetails>> {
+		return this.#dispatch(toolCallId, args, signal, onUpdate, context);
+	}
+
+	beginUpdate(inProgress: boolean): void {
+		this.#pipeline.beginUpdate(inProgress);
+	}
+
+	flushDeferredNotes(): void {
+		this.#pipeline.flushDeferredNotes();
+	}
+
+	resetDeliveredNotes(): void {
+		this.#pipeline.reset();
+	}
+}
+
 function sameNotes(left: readonly BufferedNote[], right: readonly BufferedNote[]): boolean {
 	if (left.length !== right.length) return false;
 	const rightIterator = right[Symbol.iterator]();
@@ -68,8 +120,8 @@ function sameNotes(left: readonly BufferedNote[], right: readonly BufferedNote[]
 }
 
 /**
- * Compares the legacy rank-map plus {@link AdvisorEmissionGuard} with the
- * structured {@link AdvisorSupervisionGate}, and delivers one of them.
+ * Compares the stock {@link AdvisorEmissionGuard} arm with the structured
+ * {@link AdvisorSupervisionGate} arm, and delivers one of them.
  *
  * `legacy` and `shadow` deliver the legacy arm. `structured` and `canary`
  * deliver the structured arm until a canary divergence count exceeds
@@ -77,16 +129,15 @@ function sameNotes(left: readonly BufferedNote[], right: readonly BufferedNote[]
  * buffer and result for the pipeline's life, including across {@link reset}.
  *
  * An arm's `onAdvice` only buffers. {@link AdvisorSupervisionPipeline.beginUpdate}
- * flushes synchronously — legacy tool, then its guard — and compares those
+ * flushes synchronously and compares those
  * buffers the same way. One call or flush whose buffers differ is one divergence.
  * `invocations` counts `execute` calls, not flushes.
  */
 export class AdvisorSupervisionPipeline {
-	readonly tool: AgentTool<any, AdviseDetails>;
+	readonly tool: AdvisorSupervisionTool;
 	readonly #path: AdvisorSupervisionPath;
 	readonly #canaryMaxDivergences: number;
 	readonly #deliver: AdvisorSupervisionPipelineOptions["deliver"];
-	readonly #legacyGuard?: AdvisorEmissionGuard;
 	readonly #structuredGate?: AdvisorSupervisionGate;
 	readonly #legacy?: Arm;
 	readonly #structured?: Arm;
@@ -104,27 +155,25 @@ export class AdvisorSupervisionPipeline {
 		const wantStructured = opts.path === "structured" || opts.path === "shadow" || opts.path === "canary";
 
 		if (wantLegacy) {
-			const guard = new AdvisorEmissionGuard();
+			const guard = new AdvisorEmissionGuard({ budgetPerUpdate: opts.budgetPerUpdate });
 			const buffer: BufferedNote[] = [];
 			const tool = new AdviseTool(
 				(note, severity, category, transcriptIndex) => {
-					if (!guard.accept(note)) return;
 					buffer.push({ note, severity, category, transcriptIndex });
 				},
-				{ transcriptIndex: opts.transcriptIndex },
+				{ guard, transcriptIndex: opts.transcriptIndex },
 			);
-			this.#legacyGuard = guard;
 			this.#legacy = { tool, buffer };
 		}
 
 		if (wantStructured) {
-			const gate = opts.structuredGate ?? new AdvisorSupervisionGate();
+			const gate = opts.structuredGate ?? new AdvisorSupervisionGate({ budgetPerUpdate: opts.budgetPerUpdate });
 			const buffer: BufferedNote[] = [];
 			const tool = new AdviseTool(
 				(note, severity, category, transcriptIndex) => {
 					buffer.push({ note, severity, category, transcriptIndex });
 				},
-				{ gate, transcriptIndex: opts.transcriptIndex },
+				{ guard: gate, transcriptIndex: opts.transcriptIndex },
 			);
 			this.#structuredGate = gate;
 			this.#structured = { tool, buffer };
@@ -132,34 +181,31 @@ export class AdvisorSupervisionPipeline {
 
 		const prototype = (this.#legacy ?? this.#structured)?.tool;
 		if (!prototype) throw new Error(`advisor supervision path ${opts.path} built no arm`);
-		this.tool = {
-			name: prototype.name,
-			label: prototype.label,
-			description: prototype.description,
-			parameters: prototype.parameters,
-			intent: prototype.intent,
-			execute: (toolCallId, args, signal, onUpdate, context) =>
-				this.#execute(toolCallId, args, signal, onUpdate, context),
-		};
+		this.tool = new AdvisorSupervisionTool(prototype, this, (toolCallId, args, signal, onUpdate, context) =>
+			this.#execute(toolCallId, args, signal, onUpdate, context),
+		);
 	}
 
 	/**
-	 * Fan the in-progress flag out to every arm. A completed update flushes
-	 * deferred notes before the legacy guard's budget reopens.
+	 * Fan the in-progress flag out to every arm. Each arm's tool reopens its
+	 * guard's per-update budget and flushes deferred notes on a completed update.
 	 */
 	beginUpdate(inProgress: boolean): void {
-		if (this.#legacy) {
-			this.#legacy.tool.beginUpdate(inProgress);
-			this.#legacyGuard?.beginUpdate();
-		}
+		this.#legacy?.tool.beginUpdate(inProgress);
 		this.#structured?.tool.beginUpdate(inProgress);
 		this.#compareAndDeliver();
 	}
 
-	/** Clear every arm. Divergence count, invocation counts, and the canary latch stay. */
+	/** Flush every arm's withheld notes at the primary's terminal boundary, without a new update. */
+	flushDeferredNotes(): void {
+		this.#legacy?.tool.flushDeferredNotes();
+		this.#structured?.tool.flushDeferredNotes();
+		this.#compareAndDeliver();
+	}
+
+	/** Clear every arm (each tool resets its guard). Divergence count, invocation counts, and the canary latch stay. */
 	reset(): void {
 		this.#legacy?.tool.resetDeliveredNotes();
-		this.#legacyGuard?.reset();
 		this.#structured?.tool.resetDeliveredNotes();
 	}
 

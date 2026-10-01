@@ -43,6 +43,7 @@ import {
 import { AgentSession } from "../../src/session/agent-session";
 import { AuthStorage } from "../../src/session/auth-storage";
 import { SessionManager } from "../../src/session/session-manager";
+import { cfgAdvisorSupervisionPath } from "../../src/advisor/settings";
 
 type SettingOverrides = Parameters<typeof Settings.isolated>[0];
 
@@ -230,16 +231,14 @@ async function drivePipelineFreePair(events: readonly AdvisorReplayEvent[]): Pro
 	let currentIndex = 0;
 	const tool = new AdviseTool(
 		(note, severity, category, transcriptIndex) => {
-			if (!guard.accept(note)) return;
 			delivered.push(proposalFromAdvisorNote(note, severity, category, transcriptIndex ?? currentIndex));
 		},
-		{ transcriptIndex: () => currentIndex },
+		{ guard, transcriptIndex: () => currentIndex },
 	);
 	for (const [index, event] of events.entries()) {
 		currentIndex = index;
 		if (event.type === "update") {
 			tool.beginUpdate(event.inProgress);
-			guard.beginUpdate();
 			continue;
 		}
 		if (event.category === undefined) throw new Error("sentinel corpus advise event is missing a category");
@@ -294,7 +293,7 @@ function createHarness(overrides: SettingOverrides = {}): Promise<Harness> {
 	});
 	settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
 	return AuthStorage.create(":memory:").then(async authStorage => {
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
 		const session = new AgentSession({
 			agent,
@@ -361,7 +360,7 @@ describe("advisor supervision retirement (OMP-208-s08)", () => {
 
 			await settlePrimary(session);
 			expect(await advise(session, { note: REAL_CONCERN, severity: "concern", category: "semantic-concern" })).toBe(
-				"Recorded.",
+				"Delivered.",
 			);
 
 			const [after] = session.getAdvisorSupervisionReport();
@@ -384,7 +383,7 @@ describe("advisor supervision retirement (OMP-208-s08)", () => {
 			expect(session.setAdvisorEnabled(true)).toBe(true);
 			expect(session.getAdvisorSupervisionReport()[0]?.report.authority).toBe("structured");
 
-			settings.set("advisor.supervisionPath", "legacy");
+			cfgAdvisorSupervisionPath.set(settings, "legacy");
 			expect(session.setAdvisorEnabled(false)).toBe(false);
 			expect(session.setAdvisorEnabled(true)).toBe(true);
 

@@ -167,7 +167,9 @@ run_gate 3 bun test session-system/tests packages/work-client/test scripts/verif
 run_gate 4 ./node_modules/.bin/tsc --noEmit -p session-system
 run_gate 5 bun run check:ts
 run_gate 6 cargo fmt --all -- --check
-run_gate 7 cargo clippy --workspace --exclude brush-core --no-deps -- -D warnings
+# Vendored brush-parser (a workspace member since upstream 18.4.8) denies clippy::cargo in its manifest, which
+# audits every workspace crate's crates.io publish metadata; no workspace crate is published, so allow that lint.
+run_gate 7 cargo clippy --workspace --exclude brush-core --no-deps -- -D warnings -A clippy::cargo_common_metadata
 run_gate 8 bun run test:ts
 run_gate 9 bun run test:scripts
 run_gate 10 bun run test:py

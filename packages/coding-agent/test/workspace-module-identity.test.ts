@@ -118,7 +118,6 @@ describe("workspace module identity with foreign node_modules", () => {
 					pkgDir: "coding-agent",
 					relTarget: `src/prompts/${promptName}.md`,
 				},
-				{ spec: "@oh-my-pi/hashline/grammar.lark", pkgDir: "hashline", relTarget: "src/grammar.lark" },
 			];
 
 			for (const sample of wildcardSamples) {

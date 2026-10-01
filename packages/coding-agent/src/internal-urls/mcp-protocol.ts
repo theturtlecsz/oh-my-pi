@@ -1,7 +1,8 @@
 import { MCPManager } from "../mcp/manager";
 import { isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "../mcp/timeout";
 import type { MCPResourceReadResult } from "../mcp/types";
-import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
+import mcpDoc from "../prompts/internal-urls/mcp.md" with { type: "text" };
+import type { InternalResource, InternalUrl, ProtocolHandler, SchemeSpec } from "./types";
 
 function escapeRegex(text: string): string {
 	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -103,29 +104,23 @@ function resolveTargetServer(mcpManager: MCPManager, uri: string): string | unde
  */
 async function waitForConnectingServers(manager: MCPManager, timeoutMs: number): Promise<void> {
 	const pending = manager.getAllServerNames().filter(name => manager.getConnectionStatus(name) === "connecting");
-	await Promise.allSettled(
-		pending.map(async name => {
-			if (!isMCPTimeoutEnabled(timeoutMs)) {
-				await manager.waitForConnection(name).catch(() => undefined);
-				return;
-			}
-			let timer: ReturnType<typeof setTimeout> | undefined;
-			const bounded = new Promise<void>(resolve => {
-				timer = setTimeout(resolve, timeoutMs);
-			});
-			try {
-				await Promise.race([
-					manager.waitForConnection(name).then(
-						() => undefined,
-						() => undefined,
-					),
-					bounded,
-				]);
-			} finally {
-				if (timer !== undefined) clearTimeout(timer);
-			}
-		}),
+	await Promise.all(pending.map(name => waitWithinMCPTimeout(manager.waitForConnection(name), timeoutMs)));
+}
+
+/** Settle when `work` does, but never later than an enabled MCP timeout; rejections are ignored. */
+async function waitWithinMCPTimeout(work: Promise<unknown>, timeoutMs: number): Promise<void> {
+	const settled = work.then(
+		() => undefined,
+		() => undefined,
 	);
+	if (!isMCPTimeoutEnabled(timeoutMs)) return settled;
+	const { promise: bounded, resolve } = Promise.withResolvers<void>();
+	const timer = setTimeout(resolve, timeoutMs);
+	try {
+		await Promise.race([settled, bounded]);
+	} finally {
+		clearTimeout(timer);
+	}
 }
 
 function formatAvailableResources(mcpManager: MCPManager): string {
@@ -151,7 +146,16 @@ function formatAvailableResources(mcpManager: MCPManager): string {
  */
 export class McpProtocolHandler implements ProtocolHandler {
 	readonly scheme = "mcp";
-	readonly immutable = true;
+	readonly spec: SchemeSpec = { backing: "remote", selectors: "opaque", immutable: true };
+
+	/**
+	 * Always advertised: the system prompt is built before MCP discovery settles
+	 * (`MCPManager.instance()` and its server set are populated asynchronously),
+	 * so there is no reliable synchronous "has servers" signal at prompt time.
+	 */
+	promptDoc(): string {
+		return mcpDoc.trim();
+	}
 
 	async resolve(url: InternalUrl): Promise<InternalResource> {
 		const mcpManager = MCPManager.instance();
@@ -162,6 +166,14 @@ export class McpProtocolHandler implements ProtocolHandler {
 		const uri = extractResourceUri(url);
 		let targetServer = resolveTargetServer(mcpManager, uri);
 		if (!targetServer) {
+			// A configured server may still be handshaking when discovery returned
+			// (the `connectServers` startup race deliberately leaves slow servers in
+			// flight). This one-shot read must observe the final attached state
+			// rather than the mid-handshake snapshot, so wait for pending connects
+			// before loading catalogs and retrying.
+			// Bounded like every other MCP call: a server that never answers must not
+			// stall the read past the MCP timeout.
+			await waitWithinMCPTimeout(mcpManager.waitForPendingConnections(), resolveMCPTimeoutMs());
 			await Promise.allSettled(mcpManager.getConnectedServers().map(name => mcpManager.ensureServerResources(name)));
 			targetServer = resolveTargetServer(mcpManager, uri);
 		}

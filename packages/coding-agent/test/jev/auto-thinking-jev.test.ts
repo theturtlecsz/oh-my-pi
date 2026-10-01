@@ -4,7 +4,10 @@ import { Effort, type Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { classifyDifficulty } from "@oh-my-pi/pi-coding-agent/auto-thinking/classifier";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { type JevUsageEntry, resetDefaultJevBreaker } from "@oh-my-pi/pi-coding-agent/tiny/jev-client";
+import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 import { type StubJevServer, startStubJevServer } from "./stub-jev-server";
 
 describe("auto-thinking Jev classifier", () => {
@@ -44,33 +47,22 @@ describe("auto-thinking Jev classifier", () => {
 		} = {},
 	) {
 		const targetModel = overrides.model ?? buildLadderModel("mock-max", MAX_LADDER);
-		const settingsStore: Record<string, unknown> = {
+		// Upstream's registry-era Settings: handles read through a real instance, and the
+		// fallback classifier is the `judge` role chain (formerly the smol role).
+		const settings = Settings.isolated({
 			"jev.enabled": overrides.jevEnabled ?? true,
 			"jev.autoThinking": overrides.jevAutoThinking ?? true,
 			"jev.baseUrl": stub.baseUrl,
 			"jev.autoThinkingConfidence": overrides.autoThinkingConfidence ?? 0.5,
 			"jev.autoThinkingMaxSignal": overrides.autoThinkingMaxSignal ?? 0.7,
-			"providers.autoThinkingModel": "online",
 			"providers.autoThinkingMaxEffort": overrides.autoThinkingMaxEffort ?? "xhigh",
-		};
-		const settings = {
-			get(path: string) {
-				return settingsStore[path];
-			},
-			getModelRole(role: string) {
-				return role === "smol" ? `${classifierModel.provider}/${classifierModel.id}` : undefined;
-			},
-			getStorage() {
-				return undefined;
-			},
-		} as never;
+			modelRoles: { judge: `${classifierModel.provider}/${classifierModel.id}` },
+		});
 
-		const registry = {
-			getAvailable: () => [classifierModel],
-			getApiKey: async () => "test-key",
-			resolver: () => async () => "test-key",
-			getApiKeyForProvider: async () => "test-key",
-		} as never;
+		const authStorage = createInMemoryAuthStorage();
+		authStorage.keys.setRuntime(classifierModel.provider, "test-key");
+		const registry = new ModelRegistry(authStorage, "/nonexistent/auto-thinking-jev-models.yml");
+		vi.spyOn(registry, "getAvailable").mockReturnValue([classifierModel]);
 
 		const deps = {
 			settings,
@@ -103,7 +95,7 @@ describe("auto-thinking Jev classifier", () => {
 		}
 	});
 
-	it("flags off: no stub request, and the smol path runs as before", async () => {
+	it("flags off: no stub request, and the judge path runs as before", async () => {
 		const completeSimpleSpy = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: "high" }],
@@ -111,7 +103,7 @@ describe("auto-thinking Jev classifier", () => {
 
 		// Case 1: jev.enabled is false
 		const fixture1 = createFixture({ jevEnabled: false, jevAutoThinking: true });
-		const effort1 = await classifyDifficulty("fix parsing bug", fixture1.deps);
+		const effort1 = await classifyDifficulty({ request: "fix parsing bug" }, fixture1.deps);
 
 		expect(stub.requests).toHaveLength(0);
 		expect(completeSimpleSpy).toHaveBeenCalledTimes(1);
@@ -121,7 +113,7 @@ describe("auto-thinking Jev classifier", () => {
 
 		// Case 2: jev.autoThinking is false
 		const fixture2 = createFixture({ jevEnabled: true, jevAutoThinking: false });
-		const effort2 = await classifyDifficulty("fix parsing bug", fixture2.deps);
+		const effort2 = await classifyDifficulty({ request: "fix parsing bug" }, fixture2.deps);
 
 		expect(stub.requests).toHaveLength(0);
 		expect(completeSimpleSpy).toHaveBeenCalledTimes(1);
@@ -145,7 +137,7 @@ describe("auto-thinking Jev classifier", () => {
 		});
 
 		const fixture = createFixture();
-		const effort = await classifyDifficulty("refactor database connection pool", fixture.deps);
+		const effort = await classifyDifficulty({ request: "refactor database connection pool" }, fixture.deps);
 
 		expect(effort).toBe(Effort.High);
 		expect(completeSimpleSpy).not.toHaveBeenCalled();
@@ -164,7 +156,7 @@ describe("auto-thinking Jev classifier", () => {
 		expect(requestBody.questions.live_cutover.type).toBe("noul");
 	});
 
-	it("below the threshold: undefined, with no smol call", async () => {
+	it("below the threshold: undefined, with no judge call", async () => {
 		const completeSimpleSpy = vi.spyOn(ai, "completeSimple");
 		stub.setAnswers({
 			difficulty: {
@@ -181,7 +173,7 @@ describe("auto-thinking Jev classifier", () => {
 		});
 
 		const fixture = createFixture({ autoThinkingConfidence: 0.5 });
-		const effort = await classifyDifficulty("ambiguous request", fixture.deps);
+		const effort = await classifyDifficulty({ request: "ambiguous request" }, fixture.deps);
 
 		expect(effort).toBeUndefined();
 		expect(completeSimpleSpy).not.toHaveBeenCalled();
@@ -207,14 +199,14 @@ describe("auto-thinking Jev classifier", () => {
 		// Ceiling is max on a model supporting max
 		const maxModel = buildLadderModel("mock-max", MAX_LADDER);
 		const maxFixture = createFixture({ model: maxModel, autoThinkingMaxEffort: "max" });
-		const maxEffort = await classifyDifficulty("drop table and migrate in-place", maxFixture.deps);
+		const maxEffort = await classifyDifficulty({ request: "drop table and migrate in-place" }, maxFixture.deps);
 
 		expect(maxEffort).toBe(Effort.Max);
 		expect(completeSimpleSpy).not.toHaveBeenCalled();
 
 		// Ceiling is xhigh
 		const xhighFixture = createFixture({ model: maxModel, autoThinkingMaxEffort: "xhigh" });
-		const xhighEffort = await classifyDifficulty("drop table and migrate in-place", xhighFixture.deps);
+		const xhighEffort = await classifyDifficulty({ request: "drop table and migrate in-place" }, xhighFixture.deps);
 
 		expect(xhighEffort).toBe(Effort.XHigh);
 		expect(completeSimpleSpy).not.toHaveBeenCalled();
@@ -222,7 +214,10 @@ describe("auto-thinking Jev classifier", () => {
 		// Model ladder tops out at xhigh even with max requested
 		const xhighModel = buildLadderModel("mock-xhigh", XHIGH_LADDER);
 		const cappedModelFixture = createFixture({ model: xhighModel, autoThinkingMaxEffort: "max" });
-		const cappedEffort = await classifyDifficulty("drop table and migrate in-place", cappedModelFixture.deps);
+		const cappedEffort = await classifyDifficulty(
+			{ request: "drop table and migrate in-place" },
+			cappedModelFixture.deps,
+		);
 
 		expect(cappedEffort).toBe(Effort.XHigh);
 	});
@@ -241,7 +236,7 @@ describe("auto-thinking Jev classifier", () => {
 			live_cutover: { probability: 0.1 },
 		});
 		const noReproFixture = createFixture({ model: maxModel, autoThinkingMaxEffort: "max" });
-		expect(await classifyDifficulty("flaky bug with no repro", noReproFixture.deps)).toBe(Effort.Max);
+		expect(await classifyDifficulty({ request: "flaky bug with no repro" }, noReproFixture.deps)).toBe(Effort.Max);
 
 		// live_cutover >= 0.7
 		stub.setAnswers({
@@ -253,7 +248,7 @@ describe("auto-thinking Jev classifier", () => {
 			live_cutover: { probability: 0.75 },
 		});
 		const liveCutoverFixture = createFixture({ model: maxModel, autoThinkingMaxEffort: "max" });
-		expect(await classifyDifficulty("zero-downtime cutover", liveCutoverFixture.deps)).toBe(Effort.Max);
+		expect(await classifyDifficulty({ request: "zero-downtime cutover" }, liveCutoverFixture.deps)).toBe(Effort.Max);
 
 		// all signals below 0.7 -> XHigh
 		stub.setAnswers({
@@ -265,12 +260,12 @@ describe("auto-thinking Jev classifier", () => {
 			live_cutover: { probability: 0.69 },
 		});
 		const noSignalFixture = createFixture({ model: maxModel, autoThinkingMaxEffort: "max" });
-		expect(await classifyDifficulty("regular hard task", noSignalFixture.deps)).toBe(Effort.XHigh);
+		expect(await classifyDifficulty({ request: "regular hard task" }, noSignalFixture.deps)).toBe(Effort.XHigh);
 
 		expect(completeSimpleSpy).not.toHaveBeenCalled();
 	});
 
-	it("stub 500: the smol path runs", async () => {
+	it("stub 500: the judge path runs", async () => {
 		stub.setMode("500");
 		const completeSimpleSpy = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
@@ -278,7 +273,7 @@ describe("auto-thinking Jev classifier", () => {
 		} as never);
 
 		const fixture = createFixture();
-		const effort = await classifyDifficulty("investigate issue", fixture.deps);
+		const effort = await classifyDifficulty({ request: "investigate issue" }, fixture.deps);
 
 		expect(effort).toBe(Effort.Medium);
 		expect(completeSimpleSpy).toHaveBeenCalledTimes(1);
@@ -286,7 +281,7 @@ describe("auto-thinking Jev classifier", () => {
 		expect(stub.requests).toHaveLength(2);
 	});
 
-	it("stub timeout: the smol path runs", async () => {
+	it("stub timeout: the judge path runs", async () => {
 		stub.setMode("delay");
 		stub.setDelayMs(3200);
 
@@ -296,14 +291,14 @@ describe("auto-thinking Jev classifier", () => {
 		} as never);
 
 		const fixture = createFixture();
-		const effort = await classifyDifficulty("investigate issue", fixture.deps);
+		const effort = await classifyDifficulty({ request: "investigate issue" }, fixture.deps);
 
 		expect(effort).toBe(Effort.Low);
 		expect(completeSimpleSpy).toHaveBeenCalledTimes(1);
 		expect(stub.requests).toHaveLength(1);
 	});
 
-	it("stub malformed: the smol path runs", async () => {
+	it("stub malformed: the judge path runs", async () => {
 		stub.setMode("malformed");
 
 		const completeSimpleSpy = vi.spyOn(ai, "completeSimple").mockResolvedValue({
@@ -312,7 +307,7 @@ describe("auto-thinking Jev classifier", () => {
 		} as never);
 
 		const fixture = createFixture();
-		const effort = await classifyDifficulty("investigate issue", fixture.deps);
+		const effort = await classifyDifficulty({ request: "investigate issue" }, fixture.deps);
 
 		expect(effort).toBe(Effort.High);
 		expect(completeSimpleSpy).toHaveBeenCalledTimes(1);
@@ -331,7 +326,7 @@ describe("auto-thinking Jev classifier", () => {
 		});
 
 		const fixture1 = createFixture();
-		await classifyDifficulty("small feature", fixture1.deps);
+		await classifyDifficulty({ request: "small feature" }, fixture1.deps);
 
 		expect(entries).toHaveLength(1);
 		expect(entries[0].feature).toBe("auto_thinking");
@@ -349,7 +344,7 @@ describe("auto-thinking Jev classifier", () => {
 		} as never);
 
 		const fixture2 = createFixture();
-		await classifyDifficulty("retry feature", fixture2.deps);
+		await classifyDifficulty({ request: "retry feature" }, fixture2.deps);
 
 		expect(entries).toHaveLength(2);
 		expect(entries[0].feature).toBe("auto_thinking");

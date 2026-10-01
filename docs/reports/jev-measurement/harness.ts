@@ -31,8 +31,7 @@ export const WP5_AMENDMENT =
  * mock rather than a real measurement. Deliberately not matched by
  * `wp5VerdictLines`, so the report carries no WP5 decision on a mocked run.
  */
-export const WP5_VERDICT_WITHHELD =
-	"WP5 verdict withheld: the current side is a mocked baseline, not a measurement.";
+export const WP5_VERDICT_WITHHELD = "WP5 verdict withheld: the current side is a mocked baseline, not a measurement.";
 
 export const JEV_COST_PER_MTOK_USD = 0.042;
 
@@ -196,16 +195,7 @@ interface CurrentSmolContext {
  * path falls through to the wrapped settings unchanged.
  */
 function withoutJev(settings: Settings): Settings {
-	const forcedOff = new Set(["jev.enabled", "jev.autoThinking", "jev.unexpectedStop"]);
-	return new Proxy(settings, {
-		get(target, prop, receiver) {
-			if (prop === "get") {
-				return (path: string) => (forcedOff.has(path) ? false : target.get(path as never));
-			}
-			const value = Reflect.get(target, prop, receiver);
-			return typeof value === "function" ? value.bind(target) : value;
-		},
-	});
+	return settings.overlay({ "jev.enabled": false, "jev.autoThinking": false, "jev.unexpectedStop": false });
 }
 
 export interface MeasurementRunOptions {
@@ -338,9 +328,7 @@ function makeJevSideRegistry(apiKey?: string): any {
 			throw new Error("Jev side must never reach a network model: getAvailable() called");
 		},
 		getApiKey: async (model?: any) => {
-			throw new Error(
-				`Jev side must never reach a network model: getApiKey() called for ${model?.id ?? "unknown"}`,
-			);
+			throw new Error(`Jev side must never reach a network model: getApiKey() called for ${model?.id ?? "unknown"}`);
 		},
 		getApiKeyForProvider: async (provider?: string) => {
 			if (provider === JEV_PROVIDER || provider === "typesafe") {
@@ -349,9 +337,7 @@ function makeJevSideRegistry(apiKey?: string): any {
 			throw new Error(`Jev side must never reach a network model: getApiKeyForProvider(${provider})`);
 		},
 		resolver: (model?: any) => async () => {
-			throw new Error(
-				`Jev side must never reach a network model: resolver() called for ${model?.id ?? "unknown"}`,
-			);
+			throw new Error(`Jev side must never reach a network model: resolver() called for ${model?.id ?? "unknown"}`);
 		},
 	};
 }
@@ -360,24 +346,19 @@ function makeJevSideSettings(options: {
 	jevBaseUrl?: string;
 	autoThinking?: boolean;
 	unexpectedStop?: boolean;
-}): any {
-	return {
-		get(path: string) {
-			if (path === "jev.enabled") return true;
-			if (path === "jev.autoThinking") return Boolean(options.autoThinking);
-			if (path === "jev.unexpectedStop") return Boolean(options.unexpectedStop);
-			if (path === "jev.baseUrl") return options.jevBaseUrl;
-			if (path === "jev.autoThinkingConfidence") return 0.5;
-			if (path === "jev.autoThinkingMaxSignal") return 0.7;
-			if (path === "jev.unexpectedStopThreshold") return 0.70;
-			if (path === "providers.autoThinkingModel") return "off";
-			if (path === "providers.unexpectedStopModel") return "off";
-			return undefined;
-		},
-		getModelRole(_role: string) {
-			return undefined;
-		},
-	};
+}): Settings {
+	// Real registry-backed Settings: feature handles read through `cfg.get(settings)`, which a
+	// duck-typed `{ get(path) }` cannot satisfy. The judge fallback is unreachable on this side
+	// because makeJevSideRegistry throws on every non-Jev lookup.
+	return Settings.isolated({
+		"jev.enabled": true,
+		"jev.autoThinking": Boolean(options.autoThinking),
+		"jev.unexpectedStop": Boolean(options.unexpectedStop),
+		"jev.baseUrl": options.jevBaseUrl ?? JEV_DEFAULT_BASE_URL,
+		"jev.autoThinkingConfidence": 0.5,
+		"jev.autoThinkingMaxSignal": 0.7,
+		"jev.unexpectedStopThreshold": 0.7,
+	});
 }
 
 function makeJevGuardedFetch(jevBaseUrl?: string): FetchImpl {
@@ -385,11 +366,7 @@ function makeJevGuardedFetch(jevBaseUrl?: string): FetchImpl {
 	const allowedOrigin = new URL(effectiveBaseUrl).origin;
 	return async (input, init) => {
 		const urlStr =
-			typeof input === "string"
-				? input
-				: input instanceof URL
-					? input.toString()
-					: (input as Request).url;
+			typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url;
 		const reqOrigin = new URL(urlStr).origin;
 		if (reqOrigin !== allowedOrigin) {
 			throw new Error(
@@ -424,21 +401,25 @@ export async function evaluateAutoThinkingFeature(
 	},
 ): Promise<FeatureComparison> {
 	const baseModel = getBundledModel("anthropic", "claude-sonnet-4-5");
-	const dummyModel: Model = baseModel ?? ({
-		id: "claude-sonnet-4-5",
-		provider: "anthropic",
-		name: "Claude Sonnet 4.5",
-		reasoning: false,
-		contextWindow: 200000,
-		maxTokens: 8192,
-	} as Model);
+	const dummyModel: Model =
+		baseModel ??
+		({
+			id: "claude-sonnet-4-5",
+			provider: "anthropic",
+			name: "Claude Sonnet 4.5",
+			reasoning: false,
+			contextWindow: 200000,
+			maxTokens: 8192,
+		} as Model);
 	// The current side never touches Jev: it is the plain smol classifier, and
 	// its latency/cost must reflect that call, not a JeV round trip. With no
 	// samples there is nothing to classify, so the current context stays
 	// unresolved (a zero-sample run must not touch the owner's registry).
 	const useFake = Boolean(options.fakeSmol?.classifyDifficulty);
 	const current =
-		useFake || prompts.length === 0 ? undefined : (options.current ?? (await resolveCurrentSmolContext(options.smol)));
+		useFake || prompts.length === 0
+			? undefined
+			: (options.current ?? (await resolveCurrentSmolContext(options.smol)));
 
 	// Evaluate Jev on
 	const jevLatencies: number[] = [];
@@ -477,7 +458,7 @@ export async function evaluateAutoThinkingFeature(
 		const start = performance.now();
 		let result: Effort | undefined;
 		try {
-			result = await classifyDifficulty(promptText, deps);
+			result = await classifyDifficulty({ request: promptText }, deps);
 		} catch {
 			// Fallback is disabled/throwing when Jev fails
 		}
@@ -545,15 +526,18 @@ export async function evaluateAutoThinkingFeature(
 			const start = performance.now();
 			let result: Effort | undefined;
 			try {
-				result = await classifyDifficulty(promptText, {
-					settings: withoutJev(current.settings),
-					registry: current.registry,
-					model: dummyModel,
-					sessionId: "harness-session-at-current",
-					onCompletionUsage: message => {
-						current.usageCostUsd += message.usage.cost.total;
+				result = await classifyDifficulty(
+					{ request: promptText },
+					{
+						settings: withoutJev(current.settings),
+						registry: current.registry,
+						model: dummyModel,
+						sessionId: "harness-session-at-current",
+						onUsage: judgment => {
+							current.usageCostUsd += judgment.usage.cost.total;
+						},
 					},
-				});
+				);
 			} catch {
 				currentUnparseable++;
 			}
@@ -617,14 +601,16 @@ export async function evaluateUnexpectedStopFeature(
 	},
 ): Promise<FeatureComparison> {
 	const baseModel = getBundledModel("anthropic", "claude-sonnet-4-5");
-	const dummyModel: Model = baseModel ?? ({
-		id: "claude-sonnet-4-5",
-		provider: "anthropic",
-		name: "Claude Sonnet 4.5",
-		reasoning: false,
-		contextWindow: 200000,
-		maxTokens: 8192,
-	} as Model);
+	const dummyModel: Model =
+		baseModel ??
+		({
+			id: "claude-sonnet-4-5",
+			provider: "anthropic",
+			name: "Claude Sonnet 4.5",
+			reasoning: false,
+			contextWindow: 200000,
+			maxTokens: 8192,
+		} as Model);
 	const useFake = Boolean(options.fakeSmol?.classifyUnexpectedStop);
 	const current =
 		useFake || turnEnds.length === 0
@@ -744,8 +730,8 @@ export async function evaluateUnexpectedStopFeature(
 					settings: withoutJev(current.settings),
 					registry: current.registry,
 					sessionId: "harness-session-us-current",
-					onCompletionUsage: message => {
-						current.usageCostUsd += message.usage.cost.total;
+					onUsage: judgment => {
+						current.usageCostUsd += judgment.usage.cost.total;
 					},
 				});
 			} catch {
@@ -826,9 +812,7 @@ export async function evaluateRobompFeature(
 	},
 ): Promise<{ comparison: FeatureComparison; sessionFlagsMissing: boolean }> {
 	const sessionFlagsMissing =
-		options.sessionCostUsd === undefined ||
-		options.sessionP50Ms === undefined ||
-		options.sessionP95Ms === undefined;
+		options.sessionCostUsd === undefined || options.sessionP50Ms === undefined || options.sessionP95Ms === undefined;
 
 	let jevMetrics: Partial<FeatureMetricSummary> = {};
 
@@ -869,7 +853,7 @@ export async function evaluateRobompFeature(
 		}
 	}
 
-	const currentCostPer1000 = (options.sessionCostUsd ?? 0.50) * 1000;
+	const currentCostPer1000 = (options.sessionCostUsd ?? 0.5) * 1000;
 	const currentP50 = options.sessionP50Ms ?? 30000;
 	const currentP95 = options.sessionP95Ms ?? 60000;
 
@@ -900,10 +884,9 @@ export async function evaluateRobompFeature(
 
 export async function runMeasurementHarness(options: MeasurementRunOptions): Promise<MeasurementResults> {
 	const promptsPath = `${options.setsDir}/prompts.jsonl`;
-	const turnEndsPath =
-		(await Bun.file(`${options.setsDir}/turn-ends.jsonl`).exists())
-			? `${options.setsDir}/turn-ends.jsonl`
-			: `${options.setsDir}/turn_ends.jsonl`;
+	const turnEndsPath = (await Bun.file(`${options.setsDir}/turn-ends.jsonl`).exists())
+		? `${options.setsDir}/turn-ends.jsonl`
+		: `${options.setsDir}/turn_ends.jsonl`;
 	const issuesPath = `${options.setsDir}/issues.jsonl`;
 
 	const loadJsonl = async <T>(path: string): Promise<T[]> => {
@@ -928,11 +911,7 @@ export async function runMeasurementHarness(options: MeasurementRunOptions): Pro
 	// injected a mock registry. A robomp-only or zero-sample run stays off disk.
 	const needsRealCurrent = !options.fakeSmol && (prompts.length > 0 || turnEnds.length > 0);
 	const current = needsRealCurrent ? await resolveCurrentSmolContext(options.smol) : undefined;
-	const currentBaseline: MeasurementBaseline = options.fakeSmol
-		? "fake"
-		: options.mockedBaseline
-			? "mocked"
-			: "real";
+	const currentBaseline: MeasurementBaseline = options.fakeSmol ? "fake" : options.mockedBaseline ? "mocked" : "real";
 
 	const autoThinking = await evaluateAutoThinkingFeature(prompts, {
 		jevBaseUrl: options.jevBaseUrl,

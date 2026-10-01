@@ -17,6 +17,7 @@ target/
 
 # Environment
 .env
+.venv
 
 # Editors
 .vscode/
@@ -94,3 +95,4 @@ packages/coding-agent/bench/boot-baseline.json
 
 # core dumps (OMP-42 crash artifacts; OMP-57 keeps them out of candidate freezes)
 /core.[0-9]*
+.parity/

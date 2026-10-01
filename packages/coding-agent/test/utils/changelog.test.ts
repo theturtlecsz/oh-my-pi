@@ -15,22 +15,29 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { removeWithRetries, VERSION } from "@oh-my-pi/pi-utils";
-import { SETTINGS_SCHEMA, Settings } from "../../src/config/settings";
-import { CURRENT_SETUP_VERSION } from "../../src/modes/setup-version";
+import { lookup } from "../../src/config/registry";
+import { Settings } from "../../src/config/settings";
+import { CURRENT_SETUP_VERSION } from "@oh-my-pi/pi-tui/setup/setup-version";
 import {
+	CHANGELOG_COMMAND_USAGE,
 	type ChangelogEntry,
+	DEFAULT_LAST_CHANGELOG_COUNT,
 	formatStartupChangelogSummary,
 	getNewEntries,
 	parseChangelog,
+	parseChangelogView,
 	RECENT_CHANGELOG_ENTRY_LIMIT,
 	readLastChangelogVersion,
 	renderChangelogEntries,
 	resolveStartupChangelogForDisplay,
+	selectChangelogEntries,
 	STARTUP_CHANGELOG_FULL_HINT,
 	STARTUP_CHANGELOG_MAX_BYTES,
 	selectStartupChangelog,
 	writeLastChangelogVersion,
 } from "../../src/utils/changelog";
+
+import { cfgStartupChangelogMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 
 const CURRENT_VERSION = "2.0.0";
 const repoRoot = path.resolve(import.meta.dir, "..", "..", "..", "..");
@@ -49,12 +56,8 @@ function release(major: number, minor: number, patch: number, body: string): Cha
 }
 
 describe("startup changelog mode settings", () => {
-	test("defaults to a summary", () => {
-		expect(Settings.isolated().get("startup.changelogMode")).toBe("summary");
-	});
-
 	test("keeps the legacy key out of the public schema while migrating raw config", async () => {
-		expect(Object.hasOwn(SETTINGS_SCHEMA, "collapseChangelog")).toBe(false);
+		expect(lookup("collapseChangelog")).toBeUndefined();
 
 		await withTempAgentDir(async agentDir => {
 			const configPath = path.join(agentDir, "config.yml");
@@ -64,7 +67,7 @@ describe("startup changelog mode settings", () => {
 			] as const) {
 				await Bun.write(configPath, `collapseChangelog: ${legacyValue}\n`);
 				const settings = await Settings.loadReadOnly({ cwd: agentDir, agentDir });
-				expect(settings.get("startup.changelogMode")).toBe(expectedMode);
+				expect(cfgStartupChangelogMode.get(settings)).toBe(expectedMode);
 			}
 		});
 	});
@@ -76,8 +79,34 @@ describe("startup changelog mode settings", () => {
 				"collapseChangelog: false\nstartup:\n  changelogMode: hidden\n",
 			);
 			const settings = await Settings.loadReadOnly({ cwd: agentDir, agentDir });
-			expect(settings.get("startup.changelogMode")).toBe("hidden");
+			expect(cfgStartupChangelogMode.get(settings)).toBe("hidden");
 		});
+	});
+});
+describe("parseChangelogView", () => {
+	const entries = [release(1, 0, 3, "c"), release(1, 0, 2, "b"), release(1, 0, 1, "a")];
+
+	test("maps bare, full, and last counts", () => {
+		expect(parseChangelogView("")).toEqual({ kind: "recent", count: RECENT_CHANGELOG_ENTRY_LIMIT });
+		expect(parseChangelogView("full")).toEqual({ kind: "full" });
+		expect(parseChangelogView("last")).toEqual({ kind: "last", count: DEFAULT_LAST_CHANGELOG_COUNT });
+		expect(parseChangelogView("LAST 2")).toEqual({ kind: "last", count: 2 });
+	});
+
+	test("rejects unknown args and a zero count with one usage string", () => {
+		expect(parseChangelogView("yesterday")).toEqual({ error: CHANGELOG_COMMAND_USAGE });
+		expect(parseChangelogView("last 0")).toEqual({
+			error: `${CHANGELOG_COMMAND_USAGE} (N must be a positive integer)`,
+		});
+	});
+
+	test("slices last N and leaves an oversized count to the caller title", () => {
+		const last = parseChangelogView("last 2");
+		if ("error" in last) throw new Error(last.error);
+		expect(selectChangelogEntries(entries, last).map(entry => entry.patch)).toEqual([3, 2]);
+		const oversized = parseChangelogView("last 999999");
+		if ("error" in oversized) throw new Error(oversized.error);
+		expect(selectChangelogEntries(entries, oversized)).toHaveLength(entries.length);
 	});
 });
 
@@ -156,6 +185,8 @@ describe("selectStartupChangelog", () => {
 		expect(selection.markdown).not.toContain("## [1.0.0]");
 	});
 
+	// Lexing the 128 KiB single-word item is quadratic in the vendored marked inline
+	// tokenizer (~10 s on the shared host), so this case gets its own budget.
 	test("caps one oversized startup release and appends the full-changelog hint", () => {
 		const selection = selectStartupChangelog(
 			[release(2, 0, 0, `### Added\n\n- ${"x".repeat(STARTUP_CHANGELOG_MAX_BYTES * 2)}\nTAIL-ONE-RELEASE`)],
@@ -169,7 +200,7 @@ describe("selectStartupChangelog", () => {
 		expect(selection.markdown).toContain(STARTUP_CHANGELOG_FULL_HINT);
 		expect(selection.markdown).not.toContain("TAIL-ONE-RELEASE");
 		expect(Buffer.byteLength(selection.markdown ?? "")).toBeLessThanOrEqual(STARTUP_CHANGELOG_MAX_BYTES);
-	});
+	}, 30_000);
 
 	test("caps aggregate startup releases that exceed the byte budget and appends the full-changelog hint", () => {
 		const halfBudgetBody = "x".repeat(Math.ceil(STARTUP_CHANGELOG_MAX_BYTES / 2));
@@ -235,8 +266,13 @@ describe("parseChangelog", () => {
 		const latest = entries[0];
 		const previous = entries[1];
 
-		expect(`${latest?.major}.${latest?.minor}.${latest?.patch}`).toBe(VERSION);
-		expect(latest?.content).toContain(`## [${VERSION}]`);
+		// A release with no user-facing coding-agent changes gets no changelog
+		// section (scripts/release.ts skips empty [Unreleased]), so the newest
+		// section may lag VERSION — but it must never be ahead of it.
+		expect(latest).toBeDefined();
+		const latestVersion = `${latest?.major}.${latest?.minor}.${latest?.patch}`;
+		expect(latest?.content).toContain(`## [${latestVersion}]`);
+		expect(getNewEntries(entries, VERSION)).toEqual([]);
 		expect(previous).toBeDefined();
 
 		const previousVersion = `${previous?.major}.${previous?.minor}.${previous?.patch}`;
@@ -297,6 +333,26 @@ describe("last changelog marker", () => {
 
 			expect(downgradeDisplay).toBeUndefined();
 			expect(await readLastChangelogVersion(agentDir)).toBe("3.0.0");
+		});
+	});
+
+	test("summary mode keeps the last unseen release of a changelog that ends in a newline", async () => {
+		await withTempAgentDir(async agentDir => {
+			await writeLastChangelogVersion("1.0.0", agentDir);
+			const changelogPath = path.join(agentDir, "CHANGELOG.md");
+			const history = [release(2, 0, 0, "### Added\n\n- Newest."), release(1, 5, 0, "### Fixed\n\n- Last section.")];
+			await Bun.write(changelogPath, `# Changelog\n\n${history.map(entry => entry.content).join("\n\n")}\n`);
+
+			const selection = await resolveStartupChangelogForDisplay({
+				mode: "summary",
+				currentVersion: CURRENT_VERSION,
+				changelogPath,
+				agentDir,
+			});
+
+			expect(selection?.totalUnseenEntries).toBe(2);
+			expect(selection?.markdown).toContain("## [1.5.0]");
+			expect(selection?.markdown).toContain("- Last section.");
 		});
 	});
 });

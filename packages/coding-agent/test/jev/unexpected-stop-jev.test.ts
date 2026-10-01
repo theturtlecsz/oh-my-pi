@@ -5,7 +5,7 @@ import * as ai from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { type SettingPath, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import type { CustomEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
@@ -29,9 +29,9 @@ type Harness = {
 
 const activeHarnesses: Harness[] = [];
 const sharedAuthStorage = createInMemoryAuthStorage();
-sharedAuthStorage.setRuntimeApiKey("mock", "test-key");
-sharedAuthStorage.setRuntimeApiKey("anthropic", "test-key");
-sharedAuthStorage.setRuntimeApiKey("typesafe", "test-key");
+sharedAuthStorage.keys.setRuntime("mock", "test-key");
+sharedAuthStorage.keys.setRuntime("anthropic", "test-key");
+sharedAuthStorage.keys.setRuntime("typesafe", "test-key");
 const sharedModelRegistry = new ModelRegistry(sharedAuthStorage);
 
 afterAll(() => {
@@ -60,7 +60,7 @@ function unexpectedStopResponse(text: string): MockResponse {
 
 async function createHarness(
 	responses: MockResponse[],
-	settingsOverrides: Partial<Record<SettingPath, unknown>> = {},
+	settingsOverrides: Readonly<Record<string, unknown>> = {},
 ): Promise<Harness> {
 	const tempDir = TempDir.createSync("@pi-unexpected-stop-jev-");
 	const mock = createMockModel({ responses });
@@ -77,6 +77,7 @@ async function createHarness(
 	const model = getBundledModel("anthropic", "claude-sonnet-4-5") ?? mock;
 	const sessionManager = SessionManager.inMemory(tempDir.path());
 	const tools = [recordTool as AgentTool];
+	// oxlint-disable-next-line prefer-const -- captured by closures before assignment
 	let session: AgentSession | undefined;
 	const agent = new Agent({
 		getApiKey: () => "test-key",
@@ -116,29 +117,20 @@ function makeClassifierDeps(options: {
 	if (!baseModel) throw new Error("Expected bundled Claude Sonnet 4.5 model");
 	const model = { ...baseModel, reasoning: false };
 
-	const settings = {
-		get(path: string) {
-			if (path === "providers.unexpectedStopModel") return "online";
-			if (path === "jev.enabled") return options.enabled ?? true;
-			if (path === "jev.unexpectedStop") return options.unexpectedStop ?? true;
-			if (path === "jev.baseUrl") return options.stub.baseUrl;
-			if (path === "jev.unexpectedStopThreshold") return options.threshold;
-			return undefined;
-		},
-		getModelRole(role: string) {
-			return role === "smol" ? `${model.provider}/${model.id}` : undefined;
-		},
-		getStorage() {
-			return undefined;
-		},
-	} as never;
+	// Upstream's registry-era Settings: handles read through a real instance, and the
+	// fallback classifier is the `judge` role chain (formerly the smol role).
+	const settings = Settings.isolated({
+		"jev.enabled": options.enabled ?? true,
+		"jev.unexpectedStop": options.unexpectedStop ?? true,
+		"jev.baseUrl": options.stub.baseUrl,
+		...(options.threshold === undefined ? {} : { "jev.unexpectedStopThreshold": options.threshold }),
+		modelRoles: { judge: `${model.provider}/${model.id}` },
+	});
 
-	const registry = {
-		getAvailable: () => [model],
-		getApiKey: async () => "test-key",
-		getApiKeyForProvider: async () => "test-key",
-		resolver: () => async () => "test-key",
-	} as never;
+	const authStorage = createInMemoryAuthStorage();
+	authStorage.keys.setRuntime(model.provider, "test-key");
+	const registry = new ModelRegistry(authStorage, "/nonexistent/unexpected-stop-jev-models.yml");
+	vi.spyOn(registry, "getAvailable").mockReturnValue([model]);
 
 	const deps: ClassifyUnexpectedStopDeps = {
 		settings,
@@ -181,7 +173,7 @@ describe("Jev unexpected-stop classifier", () => {
 	});
 
 	describe("flags off", () => {
-		it("makes no stub request and answers via smol path when jev.enabled is false", async () => {
+		it("makes no stub request and answers via judge path when jev.enabled is false", async () => {
 			const { deps, entries } = makeClassifierDeps({
 				stub,
 				enabled: false,
@@ -200,7 +192,7 @@ describe("Jev unexpected-stop classifier", () => {
 			expect(entries).toHaveLength(0);
 		});
 
-		it("makes no stub request and answers via smol path when jev.unexpectedStop is false", async () => {
+		it("makes no stub request and answers via judge path when jev.unexpectedStop is false", async () => {
 			const { deps, entries } = makeClassifierDeps({
 				stub,
 				enabled: true,
@@ -288,8 +280,8 @@ describe("Jev unexpected-stop classifier", () => {
 		});
 	});
 
-	describe("stub failures fall back to smol answer with exactly one warn line", () => {
-		it("falls back to smol answer and logs one warn line on 500", async () => {
+	describe("stub failures fall back to judge answer with exactly one warn line", () => {
+		it("falls back to judge answer and logs one warn line on 500", async () => {
 			stub.setMode("500");
 			const warnSpy = vi.spyOn(logger, "warn");
 			const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
@@ -326,7 +318,7 @@ describe("Jev unexpected-stop classifier", () => {
 			expect(entries[0].requestId).not.toBe(entries[1].requestId);
 		});
 
-		it("falls back to smol answer and logs one warn line on timeout", async () => {
+		it("falls back to judge answer and logs one warn line on timeout", async () => {
 			stub.setMode("delay");
 			const warnSpy = vi.spyOn(logger, "warn");
 			const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
@@ -358,7 +350,7 @@ describe("Jev unexpected-stop classifier", () => {
 			expect(entries[0].outcome).toBe("timeout");
 		});
 
-		it("falls back to smol answer and logs one warn line on malformed response", async () => {
+		it("falls back to judge answer and logs one warn line on malformed response", async () => {
 			stub.setMode("malformed");
 			const warnSpy = vi.spyOn(logger, "warn");
 			const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({

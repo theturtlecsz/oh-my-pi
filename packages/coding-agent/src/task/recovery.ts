@@ -10,9 +10,21 @@ import { TOOL_EXECUTION_START_CUSTOM_TYPE } from "../session/exit-diagnostics";
 import type { SessionEntry, SessionInitEntry } from "../session/session-entries";
 import type { SessionManager } from "../session/session-manager";
 import type { ToolSession } from "../tools";
+import { cfgAsyncEnabled, cfgToolsApproval, cfgToolsApprovalMode } from "../tools/settings";
 import { resolveAgentPrewalkDefault } from "./prewalk";
-import { repairTaskParams } from "./repair-args";
-import type { AgentDefinition, SingleResult, TaskParams, TaskToolDetails } from "./types";
+import {
+	cfgTaskAgentAdvisor,
+	cfgTaskAgentModelOverrides,
+	cfgTaskAgentPrewalk,
+	cfgTaskBatch,
+	cfgTaskDisabledAgents,
+	cfgTaskIsolationEnabled,
+	cfgTaskMaxRecursionDepth,
+	cfgTaskPrewalk,
+} from "./settings";
+import { repairTaskParams } from "@oh-my-pi/pi-tui/tools/task-repair-args";
+import type { SingleResult, TaskParams, TaskToolDetails } from "@oh-my-pi/pi-tui/tools/task";
+import type { AgentDefinition } from "./types";
 
 export const TASK_RUN_BINDING = "task-run-binding";
 export const PROMPT_PREPARATION = "prompt-preparation";
@@ -619,11 +631,11 @@ export function supportsTaskRecoveryAgent(session: ToolSession, agent: AgentDefi
 		agent.name === "task" &&
 		agent.source === "bundled" &&
 		!resolveAgentPrewalkPattern({
-			settingsOverride: session.settings.get("task.agentPrewalk")[agent.name],
-			agentPrewalk: resolveAgentPrewalkDefault(agent, session.settings.get("task.prewalk")),
+			settingsOverride: cfgTaskAgentPrewalk.get(session.settings)[agent.name],
+			agentPrewalk: resolveAgentPrewalkDefault(agent, cfgTaskPrewalk.get(session.settings)),
 		}) &&
 		!resolveAgentAdvisorSelection({
-			settingsOverride: session.settings.get("task.agentAdvisor")[agent.name],
+			settingsOverride: cfgTaskAgentAdvisor.get(session.settings)[agent.name],
 			agentAdvisor: agent.advisor,
 		})
 	);
@@ -632,9 +644,9 @@ export function supportsTaskRecoveryAgent(session: ToolSession, agent: AgentDefi
 export function taskRecoveryPolicy(session: ToolSession): TaskRecoveryPolicy {
 	const settings = session.settings;
 	if (
-		settings.get("async.enabled") !== false ||
-		settings.get("task.batch") !== false ||
-		settings.get("task.isolation.mode") !== "none"
+		cfgAsyncEnabled.get(settings) !== false ||
+		cfgTaskBatch.get(settings) !== false ||
+		cfgTaskIsolationEnabled.get(settings)
 	)
 		throw new Error("Task recovery requires explicit synchronous, flat, non-isolated execution");
 	return {
@@ -643,15 +655,15 @@ export function taskRecoveryPolicy(session: ToolSession): TaskRecoveryPolicy {
 		isolation: "none",
 		parentDepth: session.taskDepth ?? 0,
 		parentSpawns: session.getSessionSpawns(),
-		maxDepth: settings.get("task.maxRecursionDepth"),
-		disabledAgents: settings.get("task.disabledAgents"),
-		approval: settings.get("tools.approval"),
-		approvalMode: settings.get("tools.approvalMode"),
-		modelOverride: settings.get("task.agentModelOverrides"),
+		maxDepth: cfgTaskMaxRecursionDepth.get(settings),
+		disabledAgents: cfgTaskDisabledAgents.get(settings),
+		approval: cfgToolsApproval.get(settings),
+		approvalMode: cfgToolsApprovalMode.get(settings),
+		modelOverride: cfgTaskAgentModelOverrides.get(settings),
 		executionPolicy: {
-			prewalk: settings.get("task.prewalk"),
-			agentPrewalk: settings.get("task.agentPrewalk"),
-			agentAdvisor: settings.get("task.agentAdvisor"),
+			prewalk: cfgTaskPrewalk.get(settings),
+			agentPrewalk: cfgTaskAgentPrewalk.get(settings),
+			agentAdvisor: cfgTaskAgentAdvisor.get(settings),
 			roleModels: settings.getModelRoles(),
 			autoApprove: session.getToolContext?.()?.autoApprove === true,
 		},

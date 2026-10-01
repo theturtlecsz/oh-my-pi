@@ -167,8 +167,8 @@ describe("work-backend-skip-recovery", () => {
 		});
 
 		test("already resolved claim: returned directly without GET or POST", async () => {
-			let postCount = 0;
-			let getCount = 0;
+			const postCount = 0;
+			const getCount = 0;
 
 			const skipCommand = {
 				type: "skip_active_item" as const,

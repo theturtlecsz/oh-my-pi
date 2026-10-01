@@ -35,13 +35,13 @@ function createTtsrRule(name: string): Rule {
 	};
 }
 
-const SECRET_ENV_PATTERNS = /(?:KEY|SECRET|TOKEN|PASSWORD|PASS|AUTH|CREDENTIAL|PRIVATE|OAUTH)(?:_|$)/i;
-
 async function withClearedSecretEnv<T>(run: () => Promise<T>): Promise<T> {
+	// Clear every variable the runtime would harvest, including connection-URL
+	// passwords under neutral names (e.g. a DATABASE_URL from ~/.env).
+	const harvested = secrets.collectEnvSecrets().flatMap(entry => (entry.type === "plain" ? [entry.content] : []));
 	const removed: Array<[string, string]> = [];
 	for (const [name, value] of Object.entries(process.env)) {
-		if (!value || value.length < 8) continue;
-		if (!SECRET_ENV_PATTERNS.test(name)) continue;
+		if (!value || !harvested.some(content => value.includes(content))) continue;
 		removed.push([name, value]);
 		delete process.env[name];
 	}

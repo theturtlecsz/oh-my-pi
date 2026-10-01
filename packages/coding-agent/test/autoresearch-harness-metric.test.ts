@@ -12,7 +12,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/autoresearch/storage";
 import { createInitExperimentTool } from "@oh-my-pi/pi-coding-agent/autoresearch/tools/init-experiment";
 import { createLogExperimentTool } from "@oh-my-pi/pi-coding-agent/autoresearch/tools/log-experiment";
-import type { LogDetails } from "@oh-my-pi/pi-coding-agent/autoresearch/types";
+import type { LogDetails } from "@oh-my-pi/pi-tui/tools/autoresearch";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { $ } from "bun";
 

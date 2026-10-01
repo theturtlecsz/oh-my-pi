@@ -6,6 +6,8 @@
 import * as path from "node:path";
 import { type Component, replaceTabs, Spacer, Text } from "@oh-my-pi/pi-tui";
 import { getMCPConfigPath, getProjectDir } from "@oh-my-pi/pi-utils";
+import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
+import { appKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import { clearCache as clearFsCache } from "../../capability/fs";
 import type { SourceMeta } from "../../capability/types";
 import { expandEnvVarsDeep } from "../../discovery/helpers";
@@ -25,6 +27,7 @@ import {
 	removeMCPServer,
 	setServerDisabled,
 	updateMCPServer,
+	validateServerName,
 } from "../../mcp/config-writer";
 import {
 	lookupMcpOAuthCredentialForServer,
@@ -56,19 +59,21 @@ import type {
 	MCPServerConfig,
 	MCPServerConnection,
 } from "../../mcp/types";
-import { shortenPath } from "../../tools/render-utils";
-import { urlHyperlinkAlways } from "../../tui";
+import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
+import { urlHyperlinkAlways } from "@oh-my-pi/pi-tui/render";
 import { copyToClipboard } from "../../utils/clipboard";
 import { isTimeoutError } from "../../utils/fetch-timeout";
 import { openPath } from "../../utils/open";
-import { ChatBlock } from "../components/chat-block";
-import { DynamicBorder } from "../components/dynamic-border";
-import { MCPAddWizard } from "../components/mcp-add-wizard";
-import { TranscriptBlock } from "../components/transcript-container";
-import { parseCommandArgs } from "../shared";
-import { theme } from "../theme/theme";
+import { ChatBlock } from "@oh-my-pi/pi-tui/chrome/chat-block";
+import { DynamicBorder } from "@oh-my-pi/pi-tui/chrome/dynamic-border";
+import { MCPAddWizard } from "@oh-my-pi/pi-tui/overlays/mcp-add-wizard";
+import { TranscriptBlock } from "@oh-my-pi/pi-tui/chrome/transcript-container";
+import { parseCommandArgs } from "../../utils/command-args";
+import { theme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "../types";
 import { groupBySource, parseRemoveArgs, readScopeFlag, showCommandMessage } from "./command-controller-shared";
+
+import { cfgMcpEnableProjectConfig } from "../../mcp/settings";
 
 const MCP_MANUAL_INPUT_PROVIDER_ID = "mcp";
 const MCP_MANUAL_LOGIN_TIP = "Headless? Paste the redirect URL or code with /login <value>.";
@@ -397,8 +402,9 @@ export class MCPCommandController {
 	 * Handle /mcp command and route to subcommands
 	 */
 	async handle(text: string): Promise<void> {
-		const parts = text.trim().split(/\s+/);
+		const parts = parseCommandArgs(text.trim());
 		const subcommand = parts[1]?.toLowerCase();
+		const serverName = parts.slice(2).join(" ") || undefined;
 
 		if (!subcommand || subcommand === "help") {
 			this.#showHelp();
@@ -417,19 +423,19 @@ export class MCPCommandController {
 				await this.#handleRemove(text);
 				break;
 			case "test":
-				await this.#handleTest(parts[2]);
+				await this.#handleTest(serverName);
 				break;
 			case "reauth":
-				await this.#handleReauth(parts[2]);
+				await this.#handleReauth(serverName);
 				break;
 			case "unauth":
-				await this.#handleUnauth(parts[2]);
+				await this.#handleUnauth(serverName);
 				break;
 			case "enable":
-				await this.#handleSetEnabled(parts[2], true);
+				await this.#handleSetEnabled(serverName, true);
 				break;
 			case "disable":
-				await this.#handleSetEnabled(parts[2], false);
+				await this.#handleSetEnabled(serverName, false);
 				break;
 			case "resources":
 				await this.#handleResources();
@@ -450,7 +456,7 @@ export class MCPCommandController {
 				await this.#handleSmitheryLogout();
 				break;
 			case "reconnect":
-				await this.#handleReconnect(parts[2]);
+				await this.#handleReconnect(serverName);
 				break;
 			case "reload":
 				await this.#handleReload();
@@ -751,6 +757,7 @@ export class MCPCommandController {
 									redirectUri: finalConfig.oauth?.redirectUri,
 									prompt: finalConfig.oauth?.prompt,
 									registrationUrl: oauth.registrationUrl,
+									issuerUrl: oauth.issuerUrl,
 									serverUrl: finalConfig.url,
 									resource: oauthResource,
 									stripSameOriginResource: oauthResourceIsFallback,
@@ -790,6 +797,7 @@ export class MCPCommandController {
 
 		// Create wizard with OAuth handler and connection test
 		const wizard = new MCPAddWizard(
+			{ validateServerName, analyzeAuthError, discoverOAuthEndpoints, fetchResourceMetadataScopes },
 			async (name: string, config: MCPServerConfig, scope: "user" | "project") => {
 				done();
 				await this.#handleWizardComplete(name, config, scope);
@@ -833,6 +841,7 @@ export class MCPCommandController {
 			prompt?: string;
 			serverUrl?: string;
 			registrationUrl?: string;
+			issuerUrl?: string;
 			resource?: string;
 			stripSameOriginResource?: boolean;
 			/**
@@ -852,13 +861,13 @@ export class MCPCommandController {
 		try {
 			parsedAuthUrl = new URL(authUrl);
 			new URL(tokenUrl);
-		} catch (_error) {
+		} catch {
 			throw new Error(
 				`Invalid OAuth URLs. Please check:\n  Authorization URL: ${authUrl}\n  Token URL: ${tokenUrl}`,
 			);
 		}
 
-		const resolvedClientId = clientId.trim() || parsedAuthUrl.searchParams.get("client_id") || undefined;
+		const resolvedClientId = clientId.trim() || parsedAuthUrl.searchParams.get("client_id")?.trim() || undefined;
 		const resolvedClientSecret = clientSecret.trim() || undefined;
 
 		const manualInput = this.ctx.oauthManualInput;
@@ -898,6 +907,7 @@ export class MCPCommandController {
 					authorizationUrl: authUrl,
 					tokenUrl: tokenUrl,
 					registrationUrl: opts?.registrationUrl,
+					issuerUrl: opts?.issuerUrl,
 					clientId: resolvedClientId,
 					clientSecret: resolvedClientSecret,
 					scopes: scopes || undefined,
@@ -919,7 +929,10 @@ export class MCPCommandController {
 						block.addChild(new Spacer(1));
 						block.addChild(
 							new Text(
-								theme.fg("muted", "Waiting for authorization... (Press Esc to cancel, 5 minute timeout)"),
+								theme.fg(
+									"muted",
+									`Waiting for authorization... (Press ${appKey(this.ctx.keybindings, "app.interrupt")} to cancel, 5 minute timeout)`,
+								),
 								1,
 								0,
 							),
@@ -950,7 +963,7 @@ export class MCPCommandController {
 					onProgress: (message: string) => {
 						this.ctx.present([new Spacer(1), new Text(theme.fg("muted", message), 1, 0)]);
 					},
-					onManualCodeInput: () => {
+					onManualCodeInput: signal => {
 						if (manualInputClaim) return manualInputClaim.promise;
 						const pendingInput = manualInput.tryClaimInput(MCP_MANUAL_INPUT_PROVIDER_ID);
 						if (!pendingInput) {
@@ -959,8 +972,18 @@ export class MCPCommandController {
 								`OAuth login already in progress for ${pendingProvider}. Complete or cancel it before starting MCP OAuth.`,
 							);
 						}
-						manualInputClaim = pendingInput;
-						return pendingInput.promise;
+						const onAbort = () => pendingInput.clear("Manual MCP OAuth input cancelled");
+						if (signal?.aborted) onAbort();
+						else signal?.addEventListener("abort", onAbort, { once: true });
+						const claim = {
+							clear: pendingInput.clear,
+							promise: pendingInput.promise.finally(() => {
+								signal?.removeEventListener("abort", onAbort);
+								if (manualInputClaim === claim) manualInputClaim = undefined;
+							}),
+						};
+						manualInputClaim = claim;
+						return claim.promise;
 					},
 					signal: oauthTimeout.signal,
 				},
@@ -1001,13 +1024,13 @@ export class MCPCommandController {
 				type: "oauth",
 				...credentials,
 				tokenUrl,
-				clientId: flow.resolvedClientId ?? resolvedClientId,
+				clientId: flow.resolvedClientId?.trim() || resolvedClientId,
 				clientSecret: flow.registeredClientSecret ?? resolvedClientSecret,
 				resource: flow.resource,
 				authorizationUrl: flow.authorizationUrl,
 			};
 
-			await authStorage.set(credentialId, oauthCredential);
+			await authStorage.credentials.set(credentialId, oauthCredential);
 
 			return {
 				credentialId,
@@ -1060,10 +1083,12 @@ export class MCPCommandController {
 			resource?: string;
 			stripSameOriginResource?: boolean;
 			clientId?: string;
+			persistOAuthClientId?: boolean;
 			userClientSecret?: string;
 		},
 	): MCPServerConfig {
-		const clientId = result.clientId ?? opts.clientId ?? config.oauth?.clientId;
+		const clientId = result.clientId?.trim() || opts.clientId?.trim() || config.oauth?.clientId?.trim();
+		const oauthClientId = opts.persistOAuthClientId === false ? undefined : clientId;
 		const resource =
 			result.resource ?? (opts.stripSameOriginResource ? undefined : opts.resource) ?? config.auth?.resource;
 		return {
@@ -1078,7 +1103,7 @@ export class MCPCommandController {
 			},
 			oauth: {
 				...config.oauth,
-				clientId,
+				clientId: oauthClientId,
 			},
 		};
 	}
@@ -1396,7 +1421,10 @@ export class MCPCommandController {
 				"",
 				theme.fg("muted", "Server creation cancelled."),
 				"",
-				theme.fg("dim", "Tip: Press Ctrl+C or Esc anytime to cancel"),
+				theme.fg(
+					"dim",
+					`Tip: Press ${formatKeyHint("ctrl+c")} or ${appKey(this.ctx.keybindings, "app.interrupt")} anytime to cancel`,
+				),
 				"",
 			].join("\n"),
 		);
@@ -1665,7 +1693,14 @@ export class MCPCommandController {
 
 			hintBlock = new MutableHintBlock();
 			hintBlock.addChild(new DynamicBorder());
-			const text = new Text(theme.fg("muted", `Testing connection to "${name}"... (esc to cancel)`), 1, 1);
+			const text = new Text(
+				theme.fg(
+					"muted",
+					`Testing connection to "${name}"... (${appKey(this.ctx.keybindings, "app.interrupt")} to cancel)`,
+				),
+				1,
+				1,
+			);
 			hintBlock.addChild(text);
 			hintBlock.addChild(new DynamicBorder());
 			this.ctx.presentCommandOutput(hintBlock);
@@ -1963,16 +1998,33 @@ export class MCPCommandController {
 			// DCR secrets are embedded in the stored credential and never echoed back
 			// into config files.
 			const runtimeAuth = currentAuth ? expandEnvVarsDeep(currentAuth) : undefined;
-			const configuredClientId = runtimeBaseConfig.oauth?.clientId ?? runtimeAuth?.clientId;
+			const configuredClientId = runtimeBaseConfig.oauth?.clientId?.trim() || undefined;
+			const configuredClientSecret = runtimeBaseConfig.oauth?.clientSecret;
 			const existingCredential = lookupMcpOAuthCredentialForServer(authStorage, currentAuth, serverUrl)?.credential;
-			const flowClientId = oauth.clientId ?? configuredClientId ?? existingCredential?.clientId ?? "";
-			const storedClientSecret =
-				existingCredential?.clientId === flowClientId ? existingCredential.clientSecret : undefined;
+			const persistedClientId = runtimeAuth?.clientId?.trim() || undefined;
+			const storedClientId = existingCredential?.clientId?.trim() || undefined;
+			const discoveredClientId = oauth.clientId?.trim() || undefined;
+			// A metadata-advertised client is only a fallback. Prefer DCR when the
+			// authorization server explicitly offers it, while retaining configured
+			// and previously registered client credentials above.
+			const flowClientId =
+				configuredClientId ??
+				persistedClientId ??
+				storedClientId ??
+				(oauth.registrationUrl ? undefined : discoveredClientId) ??
+				"";
+			const storedClientSecret = storedClientId === flowClientId ? existingCredential?.clientSecret : undefined;
 			const flowClientSecret =
-				runtimeBaseConfig.oauth?.clientSecret ?? runtimeAuth?.clientSecret ?? storedClientSecret ?? "";
+				(configuredClientId === flowClientId ? configuredClientSecret : undefined) ??
+				(persistedClientId === flowClientId ? runtimeAuth?.clientSecret : undefined) ??
+				storedClientSecret ??
+				"";
 			// Persisted separately below: keep the raw `${...}` placeholder in the file
 			// rather than writing the resolved secret back to (possibly shared) config.
-			const userClientSecret = found.config.oauth?.clientSecret ?? currentAuth?.clientSecret;
+			const userClientSecret =
+				(configuredClientId === flowClientId ? found.config.oauth?.clientSecret : undefined) ??
+				(persistedClientId === flowClientId ? currentAuth?.clientSecret : undefined);
+			const hasConfiguredOnlySecret = configuredClientId === undefined && configuredClientSecret !== undefined;
 
 			if (!options.silent) {
 				this.#showMessage(["", theme.fg("muted", `Reauthorizing "${name}"...`), ""].join("\n"));
@@ -1988,13 +2040,14 @@ export class MCPCommandController {
 				oauth.tokenUrl,
 				flowClientId,
 				flowClientSecret,
-				oauth.scopes ?? "",
+				oauth.scopes || runtimeBaseConfig.oauth?.scope || "",
 				{
 					callbackPort: found.config.oauth?.callbackPort,
 					callbackPath: found.config.oauth?.callbackPath,
 					redirectUri: found.config.oauth?.redirectUri,
 					prompt: found.config.oauth?.prompt,
 					registrationUrl: oauth.registrationUrl,
+					issuerUrl: oauth.issuerUrl,
 					serverUrl,
 					resource: oauthResource,
 					stripSameOriginResource: oauthResourceIsFallback,
@@ -2016,7 +2069,10 @@ export class MCPCommandController {
 			const updatedConfig = shouldPersist
 				? this.#persistOAuthResult(baseConfig, oauthResult, {
 						tokenUrl: oauth.tokenUrl,
+						// Do not turn a configured-only secret into a persisted oauth
+						// client pair by echoing the discovered client id.
 						clientId: oauth.clientId,
+						persistOAuthClientId: !hasConfiguredOnlySecret,
 						userClientSecret,
 						resource: oauthResource,
 						stripSameOriginResource: oauthResourceIsFallback,
@@ -2062,12 +2118,16 @@ export class MCPCommandController {
 		try {
 			this.#showMessage(["", theme.fg("muted", "Reloading MCP servers and runtime tools..."), ""].join("\n"));
 			await this.reloadServers();
-			const connectedCount = this.ctx.mcpManager?.getConnectedServers().length ?? 0;
+			const manager = this.ctx.mcpManager;
+			const connectedCount = manager?.getConnectedServers().length ?? 0;
+			const connectingCount =
+				manager?.getAllServerNames().filter(name => manager.getConnectionStatus(name) === "connecting").length ?? 0;
 			this.#showMessage(
 				[
 					"",
 					theme.fg("success", `${theme.icon.loop} MCP reload complete`),
 					`  Connected servers: ${connectedCount}`,
+					`  Connecting servers: ${connectingCount}`,
 					"",
 				].join("\n"),
 			);
@@ -2122,7 +2182,9 @@ export class MCPCommandController {
 			return;
 		}
 
-		const { configs, sources } = await loadAllMCPConfigs(getProjectDir());
+		const { configs, sources } = await loadAllMCPConfigs(getProjectDir(), {
+			extensionRoots: this.ctx.session.effectiveExtensionRoots,
+		});
 		const config = configs[name];
 		if (!config) {
 			await this.ctx.session.refreshMCPTools(this.ctx.mcpManager.getTools());
@@ -2177,9 +2239,10 @@ export class MCPCommandController {
 
 		// Rediscover and connect, mirroring startup's discovery filters.
 		const result = await this.ctx.mcpManager.discoverAndConnect({
-			enableProjectConfig: this.ctx.settings.get("mcp.enableProjectConfig") ?? true,
+			enableProjectConfig: cfgMcpEnableProjectConfig.get(this.ctx.settings),
 			filterExa: true,
-			filterBrowser: this.ctx.settings.get("browser.enabled") ?? false,
+			filterBrowser: this.ctx.session.getEvalPreludes().some(definition => definition.name === "browser"),
+			extensionRoots: this.ctx.session.effectiveExtensionRoots,
 		});
 		await this.ctx.session.refreshMCPTools(this.ctx.mcpManager.getTools());
 
@@ -2362,7 +2425,9 @@ export class MCPCommandController {
 	}
 
 	async #handleSmitheryLoginWithApiKey(): Promise<boolean> {
-		const apiKey = await this.#promptSmitheryApiKey("Smithery API key (Esc to cancel)");
+		const apiKey = await this.#promptSmitheryApiKey(
+			`Smithery API key (${appKey(this.ctx.keybindings, "app.interrupt")} to cancel)`,
+		);
 		if (!apiKey) return false;
 		await saveSmitheryApiKey(apiKey);
 		this.ctx.showStatus("Smithery API key saved.");

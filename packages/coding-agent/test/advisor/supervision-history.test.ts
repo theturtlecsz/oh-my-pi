@@ -41,6 +41,7 @@ import {
 const N_WRITE_PATH = "The agent edited the write path without running the required flush check.";
 const N_RETRY = "The new retry loop may double-charge because the idempotency key is generated inside the loop.";
 const N_PLAN_GATE = "Two rules disagree on whether the plan gate applies before or after the write.";
+const N_PLAN_NIT = "The plan file name does not follow the dated naming convention.";
 const N_BLOCKER = "The write path mutates state before the approval gate, violating the policy.";
 const N_FALSE_POSITIVE = "This may be a false positive: the tool result looks truncated but is a complete preview.";
 const N_GATE = "Rule-class check accepts a proposal whose ruleClass does not match its declared class.";
@@ -79,7 +80,7 @@ interface SessionSpec {
  * - gate-defect          : [u,a,u,a,u,a]         (3 updates, 1 advise each)
  * - model-procedure-miss : [u,a,u,a,u,a]         (3 updates, 1 advise each)
  * - semantic-concern     : [u,a,u,u,a,a]         (wip, empty, then two notes)
- * - policy-ambiguity     : [u,a,a,u]             (wip with concern + blocker)
+ * - policy-ambiguity     : [u,a,a,a,u]           (wip with nit + concern + blocker)
  * - possible-false-positive: [u,a,u,a]           (note, then whitespace note)
  */
 const CORPUS: SessionSpec[] = [
@@ -132,21 +133,23 @@ const CORPUS: SessionSpec[] = [
 		labels: [{ ruleClass: "semantic-concern", transcriptIndex: 1 }],
 	},
 	{
-		// A blocker (event 2) in a wip update reaches the guard immediately; the
-		// concern (event 1) deferred alongside it is then lost to that update's
-		// budget when the completion flush replays it.
+		// A blocker (event 3) in a wip update is delivered immediately and needs
+		// no budget slot; the concern (event 2) displaces the still-queued nit
+		// (event 1) from that update's single slot, and the completion flush
+		// routes the concern.
 		id: "policy-ambiguity",
 		updates: [
 			{
 				inProgress: true,
 				advises: [
+					{ note: N_PLAN_NIT, severity: "nit", category: "policy-ambiguity" },
 					{ note: N_PLAN_GATE, severity: "concern", category: "policy-ambiguity" },
 					{ note: N_BLOCKER, severity: "blocker", category: "policy-ambiguity" },
 				],
 			},
 			{ inProgress: false, advises: [] },
 		],
-		labels: [{ ruleClass: "policy-ambiguity", transcriptIndex: 2 }],
+		labels: [{ ruleClass: "policy-ambiguity", transcriptIndex: 3 }],
 	},
 	{
 		// A whitespace-only note (event 3) is dropped by the guard's empty-key check.
@@ -246,13 +249,20 @@ interface DriveResult {
 	deliveredNotes: string[];
 }
 
-/** Drive the legacy pair exactly as `SessionAdvisors` wires it. */
+/**
+ * Drive the legacy pair exactly as `SessionAdvisors` wires it, at the tightest
+ * `advisor.maxNotesPerUpdate` (1) so the corpus reaches the budget and
+ * displacement cases.
+ */
 async function driveLegacyPair(events: AdvisorReplayEvent[]): Promise<DriveResult> {
 	const deliveredNotes: string[] = [];
-	const guard = new AdvisorEmissionGuard();
-	const tool = new AdviseTool(note => {
-		if (guard.accept(note)) deliveredNotes.push(note);
-	});
+	const guard = new AdvisorEmissionGuard({ budgetPerUpdate: 1 });
+	const tool = new AdviseTool(
+		note => {
+			deliveredNotes.push(note);
+		},
+		{ guard },
+	);
 	const advises: DrivenAdvise[] = [];
 	let updateSeq = -1;
 	let inProgress = false;
@@ -261,7 +271,6 @@ async function driveLegacyPair(events: AdvisorReplayEvent[]): Promise<DriveResul
 			updateSeq++;
 			inProgress = event.inProgress;
 			tool.beginUpdate(event.inProgress);
-			guard.beginUpdate();
 			continue;
 		}
 		advises.push({
@@ -451,6 +460,22 @@ describe("sentinel corpus catching power (legacy pair)", () => {
 			).toBeDefined();
 			// blocker in a wip update
 			expect(allAdvises.find(a => a.inProgress && a.severity === "blocker")).toBeDefined();
+			// queued wip nit displaced by a higher-severity note of the same update
+			expect(
+				allAdvises.find(
+					a =>
+						a.inProgress &&
+						a.severity === "nit" &&
+						delivered(a.session, a.note) === 0 &&
+						allAdvises.some(
+							b =>
+								b.session === a.session &&
+								b.updateSeq === a.updateSeq &&
+								b.severity === "concern" &&
+								delivered(b.session, b.note) > 0,
+						),
+				),
+			).toBeDefined();
 		});
 	});
 });

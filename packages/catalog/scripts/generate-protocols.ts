@@ -3,6 +3,7 @@ import { generateProtoTs, ProtoContext, parseProto } from "./proto-parser";
 
 const PACKAGES_DIR = path.resolve(import.meta.dir, "../..");
 const CURSOR_PROTO = path.join(PACKAGES_DIR, "ai/src/providers/cursor/proto/agent.proto");
+const CURSOR_MODELS_PROTO = path.join(PACKAGES_DIR, "catalog/src/discovery/cursor-models.proto");
 const DEVIN_PROTO_DIR = path.join(PACKAGES_DIR, "ai/src/providers/devin/proto");
 const DISCOVERY_DIR = path.resolve(import.meta.dir, "../src/discovery");
 
@@ -14,8 +15,16 @@ const CURSOR_CONSUMER_DIRS = [
 	path.join(PACKAGES_DIR, "coding-agent/test"),
 ];
 
-const CURSOR_ENUMS = ["ForceBackgroundShellStatus", "ForceBackgroundSubagentStatus"];
+const CURSOR_ENUMS = [
+	"CursorError",
+	"CursorRuleSource",
+	"ForceBackgroundShellStatus",
+	"ForceBackgroundSubagentStatus",
+	"ModelVendorId",
+];
 const DEVIN_MESSAGES = [
+	"exa.api_server_pb.AssignModelRequest",
+	"exa.api_server_pb.AssignModelResponse",
 	"exa.chat_pb.ChatMessagePrompt",
 	"exa.codeium_common_pb.ChatToolCall",
 	"exa.chat_pb.ChatToolChoice",
@@ -28,6 +37,8 @@ const DEVIN_MESSAGES = [
 	"exa.api_server_pb.GetCliModelConfigsResponse",
 	"exa.auth_pb.GetUserJwtRequest",
 	"exa.auth_pb.GetUserJwtResponse",
+	"exa.seat_management_pb.GetUserStatusRequest",
+	"exa.seat_management_pb.GetUserStatusResponse",
 	"exa.codeium_common_pb.ImageData",
 	"exa.codeium_common_pb.Metadata",
 	"exa.codeium_common_pb.ModelUsageStats",
@@ -36,11 +47,13 @@ const DEVIN_MESSAGES = [
 	"exa.codeium_common_pb.ModelFeatures",
 ];
 const DEVIN_ENUMS = [
+	"BillingStrategy",
 	"CacheControlType",
 	"ChatMessageRequestType",
 	"ChatMessageSource",
 	"ConversationalPlannerMode",
 	"StopReason",
+	"TeamsTier",
 ];
 
 async function collectCursorMessages(): Promise<string[]> {
@@ -95,8 +108,10 @@ async function parseProtoDirectory(directory: string): Promise<ProtoContext> {
 
 async function generateProtocols(): Promise<void> {
 	const cursorSource = await Bun.file(CURSOR_PROTO).text();
+	const cursorModelsSource = await Bun.file(CURSOR_MODELS_PROTO).text();
 	const cursorContext = new ProtoContext();
 	cursorContext.addFile(parseProto(cursorSource, "agent.proto"));
+	cursorContext.addFile(parseProto(cursorModelsSource, "cursor-models.proto"));
 
 	const cursor = generateProtoTs(cursorContext, {
 		includeMessages: await collectCursorMessages(),

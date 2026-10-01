@@ -1,23 +1,7 @@
 {
 	"extends": "../tsconfig.base.json",
 	"compilerOptions": {
-		"allowArbitraryExtensions": false,
 		"paths": {
-			"@oh-my-pi/hashline": [
-				"./hashline/src/index.ts"
-			],
-			"@oh-my-pi/hashline/grammar.lark": [
-				"./hashline/src/grammar.lark"
-			],
-			"@oh-my-pi/hashline/prompt.md": [
-				"./hashline/src/prompt.md"
-			],
-			"@oh-my-pi/hashline/*.js": [
-				"./hashline/src/*.ts"
-			],
-			"@oh-my-pi/hashline/*": [
-				"./hashline/src/*.ts"
-			],
 			"@oh-my-pi/omp-stats": [
 				"./stats/src/index.ts"
 			],
@@ -69,8 +53,17 @@
 			"@oh-my-pi/pi-ai/dialect": [
 				"./ai/src/dialect/index.ts"
 			],
+			"@oh-my-pi/pi-ai/embeddings": [
+				"./ai/src/embeddings/index.ts"
+			],
 			"@oh-my-pi/pi-ai/error": [
 				"./ai/src/error/index.ts"
+			],
+			"@oh-my-pi/pi-ai/images": [
+				"./ai/src/images/index.ts"
+			],
+			"@oh-my-pi/pi-ai/judgment": [
+				"./ai/src/judgment/index.ts"
 			],
 			"@oh-my-pi/pi-ai/oauth": [
 				"./ai/src/registry/oauth/index.ts"
@@ -81,11 +74,23 @@
 			"@oh-my-pi/pi-ai/registry/oauth": [
 				"./ai/src/registry/oauth/index.ts"
 			],
+			"@oh-my-pi/pi-ai/rerank": [
+				"./ai/src/rerank/index.ts"
+			],
+			"@oh-my-pi/pi-ai/speech": [
+				"./ai/src/speech/index.ts"
+			],
+			"@oh-my-pi/pi-ai/transcription": [
+				"./ai/src/transcription/index.ts"
+			],
 			"@oh-my-pi/pi-ai/utils/harmony-leak": [
 				"./ai/src/utils/harmony-leak.ts"
 			],
 			"@oh-my-pi/pi-ai/utils/schema": [
 				"./ai/src/utils/schema/index.ts"
+			],
+			"@oh-my-pi/pi-ai/video": [
+				"./ai/src/video/index.ts"
 			],
 			"@oh-my-pi/pi-ai/providers/openai-codex/*": [
 				"./ai/src/providers/openai-codex/*.ts"
@@ -210,6 +215,9 @@
 			"@oh-my-pi/pi-coding-agent/extensibility/custom-commands": [
 				"./coding-agent/src/extensibility/custom-commands/index.ts"
 			],
+			"@oh-my-pi/pi-coding-agent/extensibility/custom-commands/bundled/annotate": [
+				"./coding-agent/src/extensibility/custom-commands/bundled/annotate/index.ts"
+			],
 			"@oh-my-pi/pi-coding-agent/extensibility/custom-commands/bundled/ci-green": [
 				"./coding-agent/src/extensibility/custom-commands/bundled/ci-green/index.ts"
 			],
@@ -234,11 +242,17 @@
 			"@oh-my-pi/pi-coding-agent/hindsight": [
 				"./coding-agent/src/hindsight/index.ts"
 			],
+			"@oh-my-pi/pi-coding-agent/ida": [
+				"./coding-agent/src/ida/index.ts"
+			],
 			"@oh-my-pi/pi-coding-agent/if-bench": [
 				"./coding-agent/src/if-bench/index.ts"
 			],
 			"@oh-my-pi/pi-coding-agent/internal-urls": [
 				"./coding-agent/src/internal-urls/index.ts"
+			],
+			"@oh-my-pi/pi-coding-agent/judgment": [
+				"./coding-agent/src/judgment/index.ts"
 			],
 			"@oh-my-pi/pi-coding-agent/lsp": [
 				"./coding-agent/src/lsp/index.ts"
@@ -270,18 +284,6 @@
 			"@oh-my-pi/pi-coding-agent/modes/components": [
 				"./coding-agent/src/modes/components/index.ts"
 			],
-			"@oh-my-pi/pi-coding-agent/modes/components/extensions": [
-				"./coding-agent/src/modes/components/extensions/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/modes/components/status-line": [
-				"./coding-agent/src/modes/components/status-line/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/modes/setup-wizard": [
-				"./coding-agent/src/modes/setup-wizard/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/modes/theme/defaults": [
-				"./coding-agent/src/modes/theme/defaults/index.ts"
-			],
 			"@oh-my-pi/pi-coding-agent/secrets": [
 				"./coding-agent/src/secrets/index.ts"
 			],
@@ -294,11 +296,8 @@
 			"@oh-my-pi/pi-coding-agent/tools": [
 				"./coding-agent/src/tools/index.ts"
 			],
-			"@oh-my-pi/pi-coding-agent/tools/hub": [
-				"./coding-agent/src/tools/hub/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/tui": [
-				"./coding-agent/src/tui/index.ts"
+			"@oh-my-pi/pi-coding-agent/tools/jfind": [
+				"./coding-agent/src/tools/jfind/index.ts"
 			],
 			"@oh-my-pi/pi-coding-agent/web/scrapers": [
 				"./coding-agent/src/web/scrapers/index.ts"
@@ -311,9 +310,6 @@
 			],
 			"@oh-my-pi/pi-coding-agent/extensibility/custom-commands/*": [
 				"./coding-agent/src/extensibility/custom-commands/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/modes/components/status-line/*": [
-				"./coding-agent/src/modes/components/status-line/*.ts"
 			],
 			"@oh-my-pi/pi-coding-agent/modes/components/extensions/*": [
 				"./coding-agent/src/modes/components/extensions/*.ts"
@@ -347,9 +343,6 @@
 			],
 			"@oh-my-pi/pi-coding-agent/autoresearch/tools/*": [
 				"./coding-agent/src/autoresearch/tools/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/modes/setup-wizard/*": [
-				"./coding-agent/src/modes/setup-wizard/*.ts"
 			],
 			"@oh-my-pi/pi-coding-agent/modes/controllers/*": [
 				"./coding-agent/src/modes/controllers/*.ts"
@@ -399,20 +392,17 @@
 			"@oh-my-pi/pi-coding-agent/lsp/clients/*": [
 				"./coding-agent/src/lsp/clients/*.ts"
 			],
-			"@oh-my-pi/pi-coding-agent/modes/theme/*": [
-				"./coding-agent/src/modes/theme/*.ts"
-			],
 			"@oh-my-pi/pi-coding-agent/modes/utils/*": [
 				"./coding-agent/src/modes/utils/*.ts"
+			],
+			"@oh-my-pi/pi-coding-agent/tools/jfind/*": [
+				"./coding-agent/src/tools/jfind/*.ts"
 			],
 			"@oh-my-pi/pi-coding-agent/capability/*": [
 				"./coding-agent/src/capability/*.ts"
 			],
 			"@oh-my-pi/pi-coding-agent/commit/git/*": [
 				"./coding-agent/src/commit/git/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/edit/modes/*": [
-				"./coding-agent/src/edit/modes/*.ts"
 			],
 			"@oh-my-pi/pi-coding-agent/web/search/*": [
 				"./coding-agent/src/web/search/*.ts"
@@ -432,9 +422,6 @@
 			"@oh-my-pi/pi-coding-agent/plan-mode/*": [
 				"./coding-agent/src/plan-mode/*.ts"
 			],
-			"@oh-my-pi/pi-coding-agent/tools/hub/*": [
-				"./coding-agent/src/tools/hub/*.ts"
-			],
 			"@oh-my-pi/pi-coding-agent/commands/*": [
 				"./coding-agent/src/commands/*.ts"
 			],
@@ -443,6 +430,9 @@
 			],
 			"@oh-my-pi/pi-coding-agent/memories/*": [
 				"./coding-agent/src/memories/*.ts"
+			],
+			"@oh-my-pi/pi-coding-agent/registry/*": [
+				"./coding-agent/src/registry/*.ts"
 			],
 			"@oh-my-pi/pi-coding-agent/eval/js/*": [
 				"./coding-agent/src/eval/js/*.ts"
@@ -504,6 +494,9 @@
 			"@oh-my-pi/pi-coding-agent/exa/*": [
 				"./coding-agent/src/exa/*.ts"
 			],
+			"@oh-my-pi/pi-coding-agent/ida/*": [
+				"./coding-agent/src/ida/*.ts"
+			],
 			"@oh-my-pi/pi-coding-agent/lsp/*": [
 				"./coding-agent/src/lsp/*.ts"
 			],
@@ -515,9 +508,6 @@
 			],
 			"@oh-my-pi/pi-coding-agent/stt/*": [
 				"./coding-agent/src/stt/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/tui/*": [
-				"./coding-agent/src/tui/*.ts"
 			],
 			"@oh-my-pi/pi-coding-agent/web/*": [
 				"./coding-agent/src/web/*.ts"
@@ -564,11 +554,38 @@
 			"@oh-my-pi/pi-natives/desktop": [
 				"./natives/desktop"
 			],
+			"@oh-my-pi/pi-natives/path": [
+				"./natives/path"
+			],
+			"@oh-my-pi/pi-natives/vcs": [
+				"./natives/vcs"
+			],
 			"@oh-my-pi/pi-tui": [
 				"./tui/src/index.ts"
 			],
+			"@oh-my-pi/pi-tui/chrome": [
+				"./tui/src/chrome/index.ts"
+			],
+			"@oh-my-pi/pi-tui/render": [
+				"./tui/src/render/index.ts"
+			],
+			"@oh-my-pi/pi-tui/status-line": [
+				"./tui/src/status-line/index.ts"
+			],
+			"@oh-my-pi/pi-tui/theme": [
+				"./tui/src/theme/index.ts"
+			],
+			"@oh-my-pi/pi-tui/theme/defaults": [
+				"./tui/src/theme/defaults/index.ts"
+			],
+			"@oh-my-pi/pi-tui/tools": [
+				"./tui/src/tools/index.ts"
+			],
 			"@oh-my-pi/pi-tui/components/*": [
 				"./tui/src/components/*.ts"
+			],
+			"@oh-my-pi/pi-tui/theme/*": [
+				"./tui/src/theme/*.ts"
 			],
 			"@oh-my-pi/pi-tui/*.js": [
 				"./tui/src/*.ts"

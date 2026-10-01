@@ -110,7 +110,10 @@ import { prepareNativeAuditRunner, resolveAuditModel, type NativeAuditRunner, ty
 import { computeAuditTcb, type SourceResolver } from "./audit-tcb";
 import { canonicalJson, sha256Hex, WORK_CONTRACT_SHA256, WorkError, type Candidate, type CloseAttempt, type Command, type CommandResult, type ExecutionGrantItemClaim, type ExecutionProvenanceEnvelope, type ExecutionJudgeManifest, type HealthView, type WorkItemView, type WorkflowView } from "@oh-my-pi/pi-work-client";
 
-type ReviewAttemptIdentity = Partial<Pick<CloseAttempt, "revision_id" | "candidate_id" | "candidate_sha256" | "candidate_commit">>;
+/** Attempt identity as either the close-attempt record or a workflow view row (whose columns may be null). */
+type ReviewAttemptIdentity = {
+	[K in "revision_id" | "candidate_id" | "candidate_sha256" | "candidate_commit"]?: CloseAttempt[K] | null;
+};
 type ReviewCandidateIdentity = Pick<Candidate, "candidate_id" | "candidate_sha256" | "commit_sha">;
 
 function matchesReviewCandidate(

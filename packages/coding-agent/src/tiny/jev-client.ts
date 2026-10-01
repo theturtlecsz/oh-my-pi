@@ -9,7 +9,9 @@
  */
 
 import { $pickenv, type FetchImpl, logger } from "@oh-my-pi/pi-utils";
-import { getDefault, type SettingPath, type SettingValue, settings } from "../config/settings";
+import type { Setting } from "../config/registry";
+import { isSettingsInitialized, settings } from "../config/settings";
+import { cfgJevBaseUrl, cfgJevEnabled } from "./jev-settings";
 
 /** Model id sent on every request. */
 export const JEV_MODEL = "jev-latest";
@@ -141,8 +143,8 @@ export interface JevUsageEntry {
 	attempt: number;
 }
 
-/** Function signature for reading settings in JevDeps. */
-export type JevSettingsGetter = (<P extends SettingPath>(path: P) => SettingValue<P>) | ((path: string) => unknown);
+/** Function signature for reading settings in JevDeps: a setting id to its value (`undefined` = default). */
+export type JevSettingsGetter = (path: string) => unknown;
 
 /** Dependencies for {@link decide}. */
 export interface JevDeps {
@@ -160,23 +162,16 @@ export interface JevDeps {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function readSetting<P extends SettingPath>(deps: JevDeps, path: P): SettingValue<P> {
+function readSetting<T>(deps: JevDeps, setting: Setting<T>): T {
 	if (deps.getSetting) {
 		try {
-			const val = deps.getSetting(path);
-			if (val !== undefined) {
-				return val as SettingValue<P>;
-			}
-			return getDefault(path);
+			const val = deps.getSetting(setting.id);
+			return val !== undefined ? (val as T) : setting.default;
 		} catch {
-			return getDefault(path);
+			return setting.default;
 		}
 	}
-	try {
-		return settings.get(path);
-	} catch {
-		return getDefault(path);
-	}
+	return isSettingsInitialized() ? setting.get(settings) : setting.default;
 }
 
 async function resolveApiKey(deps: JevDeps): Promise<string | undefined> {
@@ -270,15 +265,12 @@ export async function decide(state: string, questions: JevQuestions, deps: JevDe
 
 	if (breaker.isOpen(now())) return undefined;
 
-	if (!readSetting(deps, "jev.enabled")) return undefined;
+	if (!readSetting(deps, cfgJevEnabled)) return undefined;
 
 	const apiKey = await resolveApiKey(deps);
 	if (!apiKey) return undefined;
 
-	const baseUrl = ((readSetting(deps, "jev.baseUrl") as string | undefined) ?? JEV_DEFAULT_BASE_URL).replace(
-		/\/+$/,
-		"",
-	);
+	const baseUrl = (readSetting(deps, cfgJevBaseUrl) ?? JEV_DEFAULT_BASE_URL).replace(/\/+$/, "");
 	const url = `${baseUrl}/v1/systemone`;
 	const { state: sentState, truncated } = truncateState(state);
 	const stateChars = state.length;

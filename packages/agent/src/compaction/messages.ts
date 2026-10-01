@@ -64,6 +64,13 @@ export interface CompactionSummaryMessage {
 	images?: ImageContent[];
 	/** Post-pass dead-end warning attached to this compaction (progress guard). */
 	warning?: string;
+	/**
+	 * Thinking-binding rewrite marker when it must differ from `timestamp`: a
+	 * natively replayed summary predates it before the retained tail so that
+	 * tail's bound thinking stays valid. `timestamp` remains the commit time,
+	 * which is what invalidates the tail's pre-compaction usage reports.
+	 */
+	historyRewriteAt?: number;
 	timestamp: number;
 }
 
@@ -85,7 +92,16 @@ function getPrunedToolResultContent(message: ToolResultMessage): (TextContent | 
 	}
 	const textBlocks = message.content.filter((content): content is TextContent => content.type === "text");
 	const text = textBlocks.map(block => block.text).join("") || "[Output truncated]";
-	return [{ type: "text", text }];
+	const firstTextIndex = message.content.findIndex(content => content.type === "text");
+	if (firstTextIndex < 0) return [{ type: "text", text }, ...message.content];
+
+	const content: (TextContent | ImageContent)[] = [];
+	for (let index = 0; index < message.content.length; index++) {
+		const block = message.content[index];
+		if (block.type !== "text") content.push(block);
+		else if (index === firstTextIndex) content.push({ type: "text", text });
+	}
+	return content;
 }
 
 export function renderBranchSummaryContext(summary: string): string {
@@ -126,6 +142,8 @@ export interface CompactionSummaryMessageOptions {
 	method?: string;
 	/** Estimated context tokens after the rewrite, for display alongside `tokensBefore`. */
 	tokensAfter?: number;
+	/** See {@link CompactionSummaryMessage.historyRewriteAt}. */
+	historyRewriteAt?: number;
 }
 
 export function createCompactionSummaryMessage(
@@ -134,7 +152,7 @@ export function createCompactionSummaryMessage(
 	timestamp: string,
 	options: CompactionSummaryMessageOptions = {},
 ): CompactionSummaryMessage {
-	const { shortSummary, providerPayload, images, blocks, warning, method, tokensAfter } = options;
+	const { shortSummary, providerPayload, images, blocks, warning, method, tokensAfter, historyRewriteAt } = options;
 	const imageBlocks =
 		blocks?.filter((block): block is ImageContent => block.type === "image") ??
 		(images && images.length > 0 ? images : undefined);
@@ -149,6 +167,7 @@ export function createCompactionSummaryMessage(
 		blocks: blocks && blocks.length > 0 ? blocks : undefined,
 		images: imageBlocks && imageBlocks.length > 0 ? imageBlocks : undefined,
 		warning,
+		historyRewriteAt,
 		timestamp: new Date(timestamp).getTime(),
 	};
 }
@@ -217,6 +236,7 @@ export function convertMessageToLlm(message: AgentMessage): Message | undefined 
 						},
 					],
 					attribution: "agent",
+					historyRewriteAt: message.timestamp,
 					timestamp: message.timestamp,
 				};
 			case "compactionSummary":
@@ -236,6 +256,7 @@ export function convertMessageToLlm(message: AgentMessage): Message | undefined 
 									...(message.images ?? []),
 								],
 					attribution: "agent",
+					historyRewriteAt: message.historyRewriteAt ?? message.timestamp,
 					providerPayload: message.providerPayload,
 					timestamp: message.timestamp,
 				};

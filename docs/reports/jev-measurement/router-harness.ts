@@ -584,22 +584,25 @@ async function measureCurrent(
 			const usageCost = { total: 0 };
 			try {
 				if (mode === "effort") {
-					const effort = await classifyDifficulty(item.text, {
-						settings: withoutJevSettings(current.settings),
-						registry: current.registry,
-						model: CURRENT_MODEL,
-						onCompletionUsage: message => {
-							usageCost.total += message.usage.cost.total;
+					const effort = await classifyDifficulty(
+						{ request: item.text },
+						{
+							settings: withoutJevSettings(current.settings),
+							registry: current.registry,
+							model: CURRENT_MODEL,
+							onUsage: judgment => {
+								usageCost.total += judgment.usage.cost.total;
+							},
 						},
-					});
+					);
 					value = scoreableEffortLabel(effort);
 				} else {
 					const stopped = await classifyUnexpectedStop(item.text, {
 						settings: withoutJevSettings(current.settings),
 						registry: current.registry,
 						sessionId: "router-measurement-current",
-						onCompletionUsage: message => {
-							usageCost.total += message.usage.cost.total;
+						onUsage: judgment => {
+							usageCost.total += judgment.usage.cost.total;
 						},
 					});
 					value = stopped === undefined ? undefined : stopped ? "continue" : "stop";
@@ -655,16 +658,7 @@ async function measureCurrent(
  * so this module adds no export to the existing harness.
  */
 export function withoutJevSettings(settings: CurrentSmolHarness["settings"]): CurrentSmolHarness["settings"] {
-	const forcedOff = new Set(["jev.enabled", "jev.autoThinking", "jev.unexpectedStop"]);
-	return new Proxy(settings, {
-		get(target, prop, receiver) {
-			if (prop === "get") {
-				return (path: string) => (forcedOff.has(path) ? false : target.get(path as never));
-			}
-			const value = Reflect.get(target, prop, receiver);
-			return typeof value === "function" ? value.bind(target) : value;
-		},
-	});
+	return settings.overlay({ "jev.enabled": false, "jev.autoThinking": false, "jev.unexpectedStop": false });
 }
 
 function emptyRouteMetrics(sampleSize: number): RouterRouteMetrics {

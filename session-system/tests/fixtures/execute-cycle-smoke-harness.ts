@@ -4,9 +4,9 @@ import { vi } from "bun:test";
 import * as ai from "@oh-my-pi/pi-ai";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as managedGit from "@oh-my-pi/pi-coding-agent/utils/git";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
-import { type CustomEntry, type CustomMessageEntry, type CustomMessagePayload, type PersistedTurnContinuationRequest, type PersistedTurnContinuationResult, type SessionEntry, type SessionMessageEntry, ExtensionRunner, loadExtensions, normalizeCustomMessagePayload } from "@oh-my-pi/pi-coding-agent";
+import { type CustomEntry, type CustomMessageEntry, type CustomMessagePayload, type PersistedTurnContinuationRequest, type PersistedTurnContinuationResult, type SessionEntry, type SessionMessageEntry, ExtensionRunner, Settings, TOP_LEVEL_AGENT, loadExtensions, normalizeCustomMessagePayload } from "@oh-my-pi/pi-coding-agent";
 import { checkProspectiveContract } from "../../extensions/workflow/config";
 import * as taskModule from "@oh-my-pi/pi-coding-agent/task";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
@@ -48,8 +48,8 @@ vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 	const [, repository, startCommit, finalCommit, diffSha256] = manifest;
 	if (!path.isAbsolute(repository) || repository !== await executionPrimaryRoot(ownerProbe))
 		throw new Error(`Sealed audit repository is not the canonical absolute primary: ${repository}`);
-	if ((await managedGit.commitDetails(repository, startCommit)).sha !== startCommit ||
-		(await managedGit.commitDetails(repository, finalCommit)).sha !== finalCommit ||
+	if ((await vcs.requireGit(repository).commitDetails(startCommit)).sha !== startCommit ||
+		(await vcs.requireGit(repository).commitDetails(finalCommit)).sha !== finalCommit ||
 		rangeDiffSha256(repository, startCommit, finalCommit) !== diffSha256)
 		throw new Error("Sealed audit Git objects or diff do not match the repository manifest");
 	auditRepositoryChecks.push({ repository, startCommit, finalCommit, diffSha256 });
@@ -203,6 +203,13 @@ async function flushSimulatedStartupTurns(): Promise<void> {
 	}
 	persistSentMessages(true);
 }
+/** Real isolated settings for the runner (upstream reads registry handles from it), with the audit role pinned. */
+function harnessSettings(auditModel?: string): Settings {
+	const settings = Settings.isolated();
+	if (auditModel) settings.setModelRole("audit", auditModel);
+	return settings;
+}
+
 const runner = new ExtensionRunner(
 	extensions,
 	loaded.runtime,
@@ -210,10 +217,10 @@ const runner = new ExtensionRunner(
 	fakeSessionManager as never,
 	{ getAvailable: () => [fableModel], hasProvider: () => true, getApiKey: () => Promise.resolve("key") } as never,
 	undefined,
-	{ getModelRole: (role: string) => (role === "audit" ? "anthropic/claude-fable-5" : undefined), get: () => undefined, getStorage: () => undefined } as never,
+	harnessSettings("anthropic/claude-fable-5"),
 	undefined,
 	undefined,
-	0,
+	TOP_LEVEL_AGENT,
 );
 runner.initialize(
 	{

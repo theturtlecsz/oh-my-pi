@@ -134,24 +134,37 @@ export async function probeStartup(cliPath: string, options: ProbeStartupOptions
 	const home = await TempDir.create(tempPrefix("home"));
 	const cwd = await TempDir.create(tempPrefix("cwd"));
 	const rssOut = path.join(home.path(), "rss.txt");
+	// The interactive pre-paint chain only runs with a terminal on stdin (a
+	// non-TTY launch without a prompt exits 2), so the probe runs in a PTY;
+	// the timings report then arrives on the terminal stream.
+	const decoder = new TextDecoder();
+	let output = "";
+	const closed = Promise.withResolvers<void>();
 	try {
+		await using terminal = new Bun.Terminal({
+			cols: 120,
+			rows: 40,
+			data(_terminal, data) {
+				output += decoder.decode(data, { stream: true });
+			},
+			exit() {
+				closed.resolve();
+			},
+		});
 		const start = performance.now();
 		const proc = Bun.spawn(["bun", "--preload", preloadPath, cliPath], {
 			cwd: cwd.path(),
 			env: buildEnv(home.path(), rssOut, true),
-			stdin: "ignore",
-			stdout: "pipe",
-			stderr: "pipe",
+			terminal,
 		});
-		const [exitCode, stdout, stderr] = await Promise.all([
-			proc.exited,
-			new Response(proc.stdout).text(),
-			new Response(proc.stderr).text(),
-		]);
+		const exitCode = await proc.exited;
 		const latencyMs = performance.now() - start;
-		if (exitCode !== 0 || !STARTUP_TIMINGS_PATTERN.test(stderr)) {
-			const timings = STARTUP_TIMINGS_PATTERN.test(stderr) ? "present" : "missing";
-			throw new Error(`CLI startup probe failed (exit ${exitCode}, timings ${timings}):\n${tail(stderr || stdout)}`);
+		// `exit` fires once the terminal is closed, after its pending output is delivered.
+		terminal.close();
+		await closed.promise;
+		if (exitCode !== 0 || !STARTUP_TIMINGS_PATTERN.test(output)) {
+			const timings = STARTUP_TIMINGS_PATTERN.test(output) ? "present" : "missing";
+			throw new Error(`CLI startup probe failed (exit ${exitCode}, timings ${timings}):\n${tail(output)}`);
 		}
 		return { latencyMs, rssBytes: await readRssBytes(rssOut) };
 	} finally {

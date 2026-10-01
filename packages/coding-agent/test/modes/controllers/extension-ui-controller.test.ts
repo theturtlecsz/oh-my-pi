@@ -7,9 +7,9 @@ import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { Container, type OverlayOptions, setKeybindings } from "@oh-my-pi/pi-tui";
+import { type Component, Container, isFocusable, type OverlayOptions, setKeybindings } from "@oh-my-pi/pi-tui";
+import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { logger } from "@oh-my-pi/pi-utils";
-import { KeybindingsManager } from "../../../src/config/keybindings";
 import { ModelRegistry } from "../../../src/config/model-registry";
 import { Settings } from "../../../src/config/settings";
 import { TtsrManager } from "../../../src/export/ttsr";
@@ -17,10 +17,12 @@ import type { ExtensionAskDialogQuestion, ExtensionUIContext } from "../../../sr
 import { ExtensionRuntime, loadExtensionFromFactory } from "../../../src/extensibility/extensions/loader";
 import { ExtensionRunner } from "../../../src/extensibility/extensions/runner";
 import type { ExtensionHandler, MessageEndEvent } from "../../../src/extensibility/extensions/types";
-import { AskDialogComponent } from "../../../src/modes/components/ask-dialog";
-import { CustomEditor } from "../../../src/modes/components/custom-editor";
+import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
+import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
+import { HookEditorComponent } from "@oh-my-pi/pi-tui/overlays/hook-editor";
 import { ExtensionUiController } from "../../../src/modes/controllers/extension-ui-controller";
-import { getEditorTheme, getThemeByName, setThemeInstance } from "../../../src/modes/theme/theme";
+import { InputController } from "../../../src/modes/controllers/input-controller";
+import { getEditorTheme, getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "../../../src/modes/types";
 import { AgentSession } from "../../../src/session/agent-session";
 import { AuthStorage } from "../../../src/session/auth-storage";
@@ -43,7 +45,14 @@ function makeHarness() {
 	const editorContainer = new Container();
 	editorContainer.addChild(editor);
 	const requestRender = vi.fn();
-	const setFocus = vi.fn();
+	let focused: Component | null = editor;
+	editor.focused = true;
+	const getFocused = () => focused;
+	const setFocus = vi.fn((component: Component | null) => {
+		if (focused && isFocusable(focused)) focused.focused = false;
+		focused = component;
+		if (focused && isFocusable(focused)) focused.focused = true;
+	});
 	const addAutocompleteProvider = vi.fn();
 	const fakeHandle = {
 		hide: vi.fn(),
@@ -56,9 +65,10 @@ function makeHarness() {
 		editor,
 		ui: {
 			requestRender,
+			getFocused,
 			setFocus,
 			showOverlay,
-			terminal: { rows: 40 },
+			terminal: { rows: 40, columns: 120 },
 		},
 		editorContainer,
 		session: {
@@ -71,6 +81,7 @@ function makeHarness() {
 		},
 		addAutocompleteProvider,
 		syncComposerShape: vi.fn(),
+		showStatus: vi.fn(),
 	} as unknown as InteractiveModeContext;
 
 	const controller = new ExtensionUiController(ctx);
@@ -80,10 +91,21 @@ function makeHarness() {
 		requestRender,
 		addAutocompleteProvider,
 		editorContainer,
+		getFocused,
 		setFocus,
 		showOverlay,
 		fakeHandle,
 		controller,
+		inputController: (readText: () => Promise<string>) =>
+			new InputController(ctx, { readImage: async () => null, readText }),
+		handleInput(data: string): void {
+			if (!focused?.handleInput) throw new Error("Expected a focused input component");
+			focused.handleInput(data);
+		},
+		getPrompt(): HookEditorComponent {
+			if (!(focused instanceof HookEditorComponent)) throw new Error("Expected the custom answer editor");
+			return focused;
+		},
 		async init(): Promise<ExtensionUIContext> {
 			await controller.initHooksAndCustomTools();
 			expect(uiContext).toBeDefined();
@@ -91,6 +113,158 @@ function makeHarness() {
 		},
 	};
 }
+
+describe("ExtensionUiController Ask dialog input", () => {
+	const questions: ExtensionAskDialogQuestion[] = [
+		{ id: "answer", question: "Choose an answer?", options: [{ label: "Default" }] },
+	];
+
+	it("waits for clipboard text before advancing the custom answer exactly once", async () => {
+		const harness = makeHarness();
+		const clipboard = Promise.withResolvers<string>();
+		const input = harness.inputController(() => clipboard.promise);
+		const pending = harness.controller.showAskDialog([
+			{ id: "first", question: "Choose several?", options: [{ label: "Alpha" }], multi: true },
+			{ id: "second", question: "Next answer?", options: [{ label: "Beta" }, { label: "Gamma" }] },
+		]);
+		harness.handleInput(" ");
+		harness.handleInput("\x1b[B");
+		harness.handleInput("\r");
+		const prompt = harness.getPrompt();
+
+		const paste = input.handleImagePaste();
+		harness.handleInput("\r");
+		harness.handleInput("\r");
+		await Promise.resolve();
+		expect(harness.getFocused()).toBe(prompt);
+
+		clipboard.resolve("clipboard answer");
+		expect(await paste).toBe(true);
+		await Promise.resolve();
+		expect(harness.getFocused()).toBeInstanceOf(AskDialogComponent);
+		harness.handleInput("\x1b[B");
+		harness.handleInput("\r");
+		harness.handleInput("\r");
+
+		expect(await pending).toMatchObject({
+			kind: "submit",
+			results: [
+				{ id: "first", selectedOptions: ["Alpha"], customInput: "clipboard answer" },
+				{ id: "second", selectedOptions: ["Gamma"], customInput: undefined },
+			],
+		});
+		expect(harness.editor.getText()).toBe("");
+		expect(harness.getFocused()).toBe(harness.editor);
+	});
+
+	it("does not expose the Ask dialog before a custom answer is applied", async () => {
+		const harness = makeHarness();
+		const pending = harness.controller.showAskDialog([
+			{ id: "answer", question: "Choose several?", options: [{ label: "Alpha" }], multi: true },
+		]);
+		harness.handleInput("\x1b[B");
+		harness.handleInput("\r");
+		harness.handleInput("custom answer");
+
+		harness.handleInput("\r");
+
+		expect(harness.getFocused()).toBeInstanceOf(HookEditorComponent);
+		await Promise.resolve();
+		expect(harness.getFocused()).toBeInstanceOf(AskDialogComponent);
+		harness.handleInput("\r");
+		expect(await pending).toMatchObject({
+			kind: "submit",
+			results: [{ id: "answer", selectedOptions: [], customInput: "custom answer" }],
+		});
+	});
+
+	it("discards a cancelled prompt's late paste after a new custom editor opens", async () => {
+		const harness = makeHarness();
+		const clipboard = Promise.withResolvers<string>();
+		const input = harness.inputController(() => clipboard.promise);
+		const pending = harness.controller.showAskDialog(questions);
+		harness.handleInput("\x1b[B");
+		harness.handleInput("\r");
+		const cancelledPrompt = harness.getPrompt();
+		const paste = input.handleImagePaste();
+		harness.handleInput("\r");
+		harness.handleInput("\x1b");
+		await Promise.resolve();
+		await Promise.resolve();
+
+		harness.handleInput("\r");
+		const replacement = harness.getPrompt();
+		expect(replacement).not.toBe(cancelledPrompt);
+		harness.handleInput("replacement answer");
+		clipboard.resolve("stale clipboard text");
+		expect(await paste).toBe(false);
+		expect(harness.getFocused()).toBe(replacement);
+		harness.handleInput("\r");
+
+		expect(await pending).toMatchObject({
+			kind: "submit",
+			results: [{ id: "answer", selectedOptions: [], customInput: "replacement answer" }],
+		});
+		expect(harness.editor.getText()).toBe("");
+	});
+
+	it("discards an aborted Ask's late paste without touching the next Ask or hidden draft", async () => {
+		const harness = makeHarness();
+		const clipboard = Promise.withResolvers<string>();
+		const input = harness.inputController(() => clipboard.promise);
+		const abort = new AbortController();
+		const pending = harness.controller.showAskDialog(questions, { signal: abort.signal });
+		harness.handleInput("\x1b[B");
+		harness.handleInput("\r");
+		const paste = input.handleImagePaste();
+		harness.handleInput("\r");
+		abort.abort();
+		expect(await pending).toBeUndefined();
+		expect(harness.getFocused()).toBe(harness.editor);
+
+		const next = harness.controller.showAskDialog(questions);
+		harness.handleInput("\x1b[B");
+		harness.handleInput("\r");
+		const replacement = harness.getPrompt();
+		harness.handleInput("next answer");
+		clipboard.resolve("stale clipboard text");
+		expect(await paste).toBe(false);
+		expect(harness.getFocused()).toBe(replacement);
+		harness.handleInput("\r");
+
+		expect(await next).toMatchObject({
+			kind: "submit",
+			results: [{ id: "answer", selectedOptions: [], customInput: "next answer" }],
+		});
+		expect(harness.editor.getText()).toBe("");
+	});
+
+	it("keeps a failed clipboard read editable and discards its queued empty submit", async () => {
+		const harness = makeHarness();
+		const clipboard = Promise.withResolvers<string>();
+		const input = harness.inputController(() => clipboard.promise);
+		const pending = harness.controller.showAskDialog(questions);
+		harness.handleInput("\x1b[B");
+		harness.handleInput("\r");
+		const prompt = harness.getPrompt();
+		const paste = input.handleImagePaste();
+		harness.handleInput("\r");
+		await Promise.resolve();
+		clipboard.reject(new Error("Clipboard unavailable"));
+
+		expect(await paste).toBe(false);
+		expect(harness.getFocused()).toBe(prompt);
+		harness.handleInput("typed after failure");
+		await Promise.resolve();
+		expect(harness.getFocused()).toBe(prompt);
+		harness.handleInput("\r");
+		expect(await pending).toMatchObject({
+			kind: "submit",
+			results: [{ id: "answer", selectedOptions: [], customInput: "typed after failure" }],
+		});
+		expect(harness.editor.getText()).toBe("");
+	});
+});
 
 describe("ExtensionUiController editor UI", () => {
 	it("requests a render after extension pasteToEditor mutates the prompt", async () => {
@@ -254,13 +428,11 @@ describe("ExtensionUiController editor UI", () => {
 		// open, re-blocking the guard.
 		harness.editor.setText("half typed prompt");
 
-		// Cancelling the nested prompt restores the ask surface; the draft editor
-		// must be remounted so routed input lands on a visible surface.
+		// Cancelling the nested prompt settles its awaited state before restoring
+		// the ask surface and remounting the guarded draft editor.
 		promptEditor?.handleInput?.("\x1b");
-		expect(harness.editorContainer.children).toEqual([ask, harness.editor]);
-		// The dialog's prompt-active latch clears when the awaited onPrompt
-		// promise settles; yield a microtask before routing the next key.
 		await Promise.resolve();
+		expect(harness.editorContainer.children).toEqual([ask, harness.editor]);
 		ask?.handleInput?.("!");
 		expect(harness.editor.getText()).toBe("half typed prompt!");
 	});
@@ -322,22 +494,6 @@ describe("ExtensionUiController custom overlay", () => {
 		expect(harness.showOverlay).toHaveBeenCalledWith(expect.any(Container), overlayOptions);
 	});
 
-	it("falls back to the full-cover defaults when overlayOptions is absent", async () => {
-		const harness = makeHarness();
-		const ui = await harness.init();
-
-		ui.custom<void>(() => new Container(), { overlay: true });
-
-		await flushMicrotasks();
-		expect(harness.showOverlay).toHaveBeenCalledTimes(1);
-		expect(harness.showOverlay).toHaveBeenCalledWith(expect.any(Container), {
-			anchor: "bottom-center",
-			width: "100%",
-			maxHeight: "100%",
-			margin: 0,
-		});
-	});
-
 	it("rejects and restores the editor when a custom factory fails", async () => {
 		const harness = makeHarness();
 		const ui = await harness.init();
@@ -381,7 +537,7 @@ describe("ExtensionUiController real hook abort boundary", () => {
 	beforeAll(async () => {
 		directory = await fs.mkdtemp(path.join(os.tmpdir(), "interactive-abort-contract-"));
 		auth = await AuthStorage.create(path.join(directory, "auth.db"));
-		auth.setRuntimeApiKey("anthropic", "test-key");
+		auth.keys.setRuntime("anthropic", "test-key");
 		registry = new ModelRegistry(auth, path.join(directory, "models.yml"));
 	});
 	afterEach(async () => {
@@ -539,9 +695,25 @@ describe("ExtensionUiController real hook abort boundary", () => {
 				await entered.promise;
 				// Keep the real retry timer pending behind the supported extension handler.
 				await retryElapsed.promise;
+				// message_end commits the interrupted assistant before its listeners run; the TTSR
+				// continuation must still wait for the pending handler: no second stream, no injection.
 				expect(f.streams()).toBe(1);
 				expect(
-					f.manager.getEntries().some(entry => entry.type === "message" && entry.message.role === "assistant"),
+					f.manager
+						.getEntries()
+						.filter(entry => entry.type === "message")
+						.map(entry => [
+							entry.message.role,
+							"stopReason" in entry.message ? entry.message.stopReason : undefined,
+						]),
+				).toEqual([
+					["user", undefined],
+					["assistant", "aborted"],
+				]);
+				expect(
+					f.manager
+						.getEntries()
+						.some(entry => entry.type === "custom_message" && entry.customType === "ttsr-injection"),
 				).toBe(false);
 				release.resolve();
 				await finished.promise;

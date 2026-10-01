@@ -31,7 +31,7 @@ describe("persisted no-tool turn continuation", () => {
 	beforeEach(() => {
 		tempDir = TempDir.createSync("omp-persisted-turn-");
 		auth = createInMemoryAuthStorage();
-		auth.setRuntimeApiKey("anthropic", "test-key");
+		auth.keys.setRuntime("anthropic", "test-key");
 	});
 	afterEach(async () => {
 		vi.restoreAllMocks();
@@ -96,6 +96,7 @@ describe("persisted no-tool turn continuation", () => {
 	it("coalesces one restored entry, waits for real startup, includes preparation notices, and persists one answer", async () => {
 		const held = Promise.withResolvers<void>();
 		const reached = Promise.withResolvers<void>();
+		// oxlint-disable-next-line prefer-const -- captured by closures before assignment
 		let request!: PersistedTurnContinuationRequest;
 		let accepted: unknown;
 		const fixture = await setup(pi => {
@@ -356,6 +357,7 @@ describe("persisted no-tool turn continuation", () => {
 	it.each(["text", "json", "owner"] as const)(
 		"print %s invocation settles owned work before output and disposal",
 		async mode => {
+			// oxlint-disable-next-line prefer-const -- captured by closures before assignment
 			let request!: PersistedTurnContinuationRequest;
 			let accepted: unknown;
 			const f = await setup(pi =>

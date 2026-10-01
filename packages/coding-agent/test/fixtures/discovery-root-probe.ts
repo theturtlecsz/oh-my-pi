@@ -11,6 +11,7 @@ import { loadSlashCommands } from "../../src/extensibility/slash-commands";
 import { getServerForFile, loadConfig } from "../../src/lsp/config";
 import { discoverAgents } from "../../src/task/discovery";
 import { ReadTool } from "../../src/tools/read";
+import { cfgDefaultThinkingLevel } from "../../src/session/settings";
 
 const cwd = process.cwd();
 const settings = await Settings.loadReadOnly({ cwd });
@@ -45,7 +46,7 @@ process.stdout.write(
 		cwd: process.cwd(),
 		settingsCwd: settings.getCwd(),
 		auditModel: settings.getModelRole("audit") ?? null,
-		thinking: settings.get("defaultThinkingLevel"),
+		thinking: cfgDefaultThinkingLevel.get(settings),
 		agent: agents.agents.find(agent => agent.name === "root-agent")?.description ?? null,
 		extension:
 			extensions.extensions

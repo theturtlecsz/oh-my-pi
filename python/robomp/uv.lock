@@ -180,11 +180,7 @@ wheels = [
 [[package]]
 name = "omp-rpc"
 version = "0.1.0"
-source = { registry = "../../../../../tmp/dist" }
-sdist = { path = "omp_rpc-0.1.0.tar.gz" }
-wheels = [
-    { path = "omp_rpc-0.1.0-py3-none-any.whl" },
-]
+source = { editable = "../omp-rpc" }
 
 [[package]]
 name = "packaging"
@@ -477,7 +473,7 @@ requires-dist = [
     { name = "click", specifier = ">=8.1" },
     { name = "fastapi", specifier = ">=0.112" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "omp-rpc", specifier = ">=0.1.0" },
+    { name = "omp-rpc", editable = "../omp-rpc" },
     { name = "pydantic", specifier = ">=2.6" },
     { name = "pydantic-settings", specifier = ">=2.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },

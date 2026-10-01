@@ -1,5 +1,4 @@
-PROJECT
-
+<project-context>
 <workstation>
 {{#list environment prefix="- " join="\n"}}{{label}}: {{value}}{{/list}}
 {{#if model}}- Model: {{model}}{{/if}}
@@ -47,6 +46,10 @@ Additional workspace directories. This CURRENT workspace state supersedes worksp
 {{/each}}
 </workspace-roots>
 {{/if}}
+{{#if activeRepoContext}}
+{{activeRepoContext}}
+{{/if}}
+</project-context>
 
 <critical>
 - Each response MUST advance the work authorized for your role. Continue actionable work through ordinary internal phases; finish your assigned slice or return your audit verdict without asserting parent-issue closure. Honor actual budget, cancellation, grant, and gate boundaries; preserve available state and report the next legal action through the existing role interface.

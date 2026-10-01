@@ -7,7 +7,7 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ExtensionRunner, loadExtensions } from "@oh-my-pi/pi-coding-agent";
+import { ExtensionRunner, Settings, TOP_LEVEL_AGENT, loadExtensions } from "@oh-my-pi/pi-coding-agent";
 import { discoverAgents, getAgent } from "@oh-my-pi/pi-coding-agent/task";
 import { finalizeSubprocessOutput } from "@oh-my-pi/pi-coding-agent/task/executor";
 import { createWorkBackend } from "../../extensions/workflow/work";
@@ -50,6 +50,13 @@ if (!tool) throw new Error("work tool missing");
 const uiCalls: string[] = [];
 const fableModel = { id: "claude-fable-5", provider: "anthropic", name: "Claude Fable 5", api: "anthropic-messages" };
 const sessionId = `smoke-${phase}`;
+/** Real isolated settings for the runner (upstream reads registry handles from it), with the audit role pinned. */
+function harnessSettings(auditModel?: string): Settings {
+	const settings = Settings.isolated();
+	if (auditModel) settings.setModelRole("audit", auditModel);
+	return settings;
+}
+
 const runner = new ExtensionRunner(
 	loaded.extensions,
 	loaded.runtime,
@@ -59,10 +66,10 @@ const runner = new ExtensionRunner(
 	undefined,
 	// AC-4 (OMP-38): @audit resolves to the SESSION'S OWN family — the gate must
 	// accept a same-family auditor; independence is fresh context, not family.
-	{ getModelRole: (role: string) => (role === "audit" ? "anthropic/claude-fable-5" : undefined), get: () => undefined, getStorage: () => undefined } as never,
+	harnessSettings("anthropic/claude-fable-5"),
 	undefined,
 	undefined,
-	0,
+	TOP_LEVEL_AGENT,
 );
 runner.initialize(
 	{

@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { measureBaseline } from "../../../scripts/cpk0-baseline";
 import { generateInventory } from "../../../scripts/cpk0-inventory";
-import * as git from "../src/utils/git";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
 
 const repoRoot = path.resolve(import.meta.dir, "../../..");
 
@@ -234,7 +234,7 @@ describe("CPK-0 zero mutation verification (OMP-204-s05)", () => {
 	});
 
 	it("discovery and baseline paths perform zero Git, network, or source mutations", async () => {
-		const repo = await git.repo.resolve(repoRoot);
+		const repo = vcs.gitInfo(repoRoot);
 		expect(repo).not.toBeNull();
 		const { gitDir, commonDir } = repo!;
 

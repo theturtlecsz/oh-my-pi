@@ -1,20 +1,32 @@
 import type { CpkSupervisionProposal } from "../extensibility/cpk/supervision-proposal";
 import { isCpkSupervisionRuleClass, proposalFromAdvisorNote } from "../extensibility/cpk/supervision-proposal";
-import { type AdvisorCategory, type AdvisorSeverity, advisorNoteDedupeKey, advisorSeverityRank } from "./advise-tool";
-import { type AdvisorEmissionClassification, AdvisorEmissionGuard } from "./emission-guard";
+import {
+	type AdvisorAdmissionAuthority,
+	type AdvisorCategory,
+	type AdvisorSeverity,
+	advisorSeverityRank,
+} from "./advise-tool";
+import {
+	type AdvisorAdmission,
+	AdvisorEmissionGuard,
+	type AdvisorSuppressionReason,
+	screenAdvisorNote,
+} from "./emission-guard";
 
 /**
  * One supervision decision. `proposal` is set only when the note is delivered.
- * `duplicate-rank` is AdviseTool's whitespace-key escalation check; the other
- * suppression reasons are the emission guard's, plus `invalid` when the note
- * cannot be parsed into a CPK-6 proposal.
+ * `empty`, `noise`, `duplicate` (rank-aware) and `budget` are the emission
+ * guard's verdicts; `invalid` is the gate's own, when the note cannot be parsed
+ * into a CPK-6 proposal.
  */
-export type AdvisorSupervisionReason = "delivered" | "duplicate-rank" | "noise" | "invalid" | "duplicate" | "budget";
+export type AdvisorSupervisionReason = "delivered" | "empty" | "noise" | "invalid" | "duplicate" | "budget";
 
 export interface AdvisorSupervisionDecision {
 	deliver: boolean;
 	reason: AdvisorSupervisionReason;
 	proposal?: CpkSupervisionProposal;
+	/** Still-pending note of the same update displaced by this admission (see {@link AdvisorAdmission}). */
+	displacedKey?: string;
 }
 
 export interface AdvisorSupervisionInput {
@@ -22,6 +34,8 @@ export interface AdvisorSupervisionInput {
 	severity?: AdvisorSeverity;
 	category?: string;
 	transcriptIndex: number;
+	/** Withheld behind an in-progress primary turn (displaceable) rather than routed now. */
+	pending?: boolean;
 }
 
 /** Per rule-class tally. Missing category (or a non-canonical one) is `unclassified`. */
@@ -35,25 +49,37 @@ export type AdvisorSupervisionClass = AdvisorCategory | "unclassified";
 
 export type AdvisorSupervisionReport = Partial<Record<AdvisorSupervisionClass, AdvisorSupervisionClassStats>>;
 
+const SUPPRESSION_ACK_REASON: Record<Exclude<AdvisorSupervisionReason, "delivered">, AdvisorSuppressionReason> = {
+	empty: "empty",
+	noise: "noise",
+	invalid: "invalid",
+	duplicate: "duplicate",
+	budget: "rate-limit",
+};
+
 /**
- * Composes AdviseTool's rank dedupe, CPK-6 proposal parsing, and the emission
- * guard into one decision.
+ * Composes CPK-6 proposal parsing with the stock emission guard into one
+ * decision, and serves as an {@link AdviseTool}'s admission authority.
  *
- * Order: whitespace-key rank (recorded even when a later stage suppresses) →
- * empty-after-trim noise, with no parse → `proposalFromAdvisorNote` error as
- * `invalid` (never thrown) → emission-guard classify → otherwise delivered
- * with the proposal.
+ * The emission guard stays the single dedupe/budget authority, so the gate
+ * admits and acknowledges exactly what the legacy arm does for every
+ * well-formed note (the canary compares the two). Order: the guard's stateless
+ * empty/noise screen, with no parse → `proposalFromAdvisorNote` error as
+ * `invalid` (never thrown, no guard state touched) → emission-guard admission
+ * (rank-aware duplicate, per-update budget) → otherwise delivered with the
+ * proposal.
  *
  * Tallies accumulate until {@link AdvisorSupervisionGate.reset}. `beginUpdate`
- * only reopens the emission guard's per-update budget, after any deferred
- * flush the tool has already run. {@link AdvisorSupervisionGate.report}
+ * only reopens the emission guard's per-update budget. {@link AdvisorSupervisionGate.report}
  * returns a fresh object.
  */
-export class AdvisorSupervisionGate {
-	readonly #guard = new AdvisorEmissionGuard();
-	/** Highest rank passed through for each whitespace-collapsed note. */
-	#ranks = new Map<string, number>();
+export class AdvisorSupervisionGate implements AdvisorAdmissionAuthority {
+	readonly #guard: AdvisorEmissionGuard;
 	#stats = new Map<AdvisorSupervisionClass, AdvisorSupervisionClassStats>();
+
+	constructor(opts: { budgetPerUpdate?: number } = {}) {
+		this.#guard = new AdvisorEmissionGuard({ budgetPerUpdate: opts.budgetPerUpdate });
+	}
 
 	decide(input: AdvisorSupervisionInput): AdvisorSupervisionDecision {
 		const decision = this.#decide(input);
@@ -61,15 +87,50 @@ export class AdvisorSupervisionGate {
 		return decision;
 	}
 
-	/** Reopen the per-update emission budget. Rank history and tallies stay. */
+	admit(
+		note: string,
+		opts: {
+			rank: number;
+			pending: boolean;
+			severity?: AdvisorSeverity;
+			category?: AdvisorCategory;
+			transcriptIndex?: number;
+		},
+	): AdvisorAdmission {
+		const decision = this.decide({
+			note,
+			severity: opts.severity,
+			category: opts.category,
+			transcriptIndex: opts.transcriptIndex ?? 0,
+			pending: opts.pending,
+		});
+		if (decision.deliver) {
+			return decision.displacedKey === undefined
+				? { accepted: true }
+				: { accepted: true, displacedKey: decision.displacedKey };
+		}
+		return {
+			accepted: false,
+			reason: SUPPRESSION_ACK_REASON[decision.reason as Exclude<AdvisorSupervisionReason, "delivered">],
+		};
+	}
+
+	escalatePending(note: string, rank: number): void {
+		this.#guard.escalatePending(note, rank);
+	}
+
+	markRouted(note: string): void {
+		this.#guard.markRouted(note);
+	}
+
+	/** Reopen the per-update emission budget. Dedupe history and tallies stay. */
 	beginUpdate(): void {
 		this.#guard.beginUpdate();
 	}
 
-	/** Drop rank history, emission-guard state, and tallies. */
+	/** Drop emission-guard state and tallies. */
 	reset(): void {
 		this.#guard.reset();
-		this.#ranks.clear();
 		this.#stats.clear();
 	}
 
@@ -87,14 +148,8 @@ export class AdvisorSupervisionGate {
 	}
 
 	#decide(input: AdvisorSupervisionInput): AdvisorSupervisionDecision {
-		const key = advisorNoteDedupeKey(input.note);
-		const rank = advisorSeverityRank(input.severity);
-		const previous = this.#ranks.get(key) ?? 0;
-		if (rank <= previous) return { deliver: false, reason: "duplicate-rank" };
-		// Record before later stages so a suppressed note still occupies the rank.
-		this.#ranks.set(key, rank);
-
-		if (input.note.trim().length === 0) return { deliver: false, reason: "noise" };
+		const screened = screenAdvisorNote(input.note);
+		if (screened) return { deliver: false, reason: screened };
 
 		let proposal: CpkSupervisionProposal;
 		try {
@@ -103,9 +158,19 @@ export class AdvisorSupervisionGate {
 			return { deliver: false, reason: "invalid" };
 		}
 
-		const verdict: AdvisorEmissionClassification = this.#guard.classify(input.note);
-		if (verdict !== "accepted") return { deliver: false, reason: verdict };
-		return { deliver: true, reason: "delivered", proposal };
+		const admission = this.#guard.admit(input.note, {
+			rank: advisorSeverityRank(input.severity),
+			pending: input.pending ?? false,
+		});
+		if (!admission.accepted) {
+			return {
+				deliver: false,
+				reason: admission.reason === "rate-limit" ? "budget" : (admission.reason ?? "duplicate"),
+			};
+		}
+		return admission.displacedKey === undefined
+			? { deliver: true, reason: "delivered", proposal }
+			: { deliver: true, reason: "delivered", proposal, displacedKey: admission.displacedKey };
 	}
 
 	#tally(category: string | undefined, decision: AdvisorSupervisionDecision): void {

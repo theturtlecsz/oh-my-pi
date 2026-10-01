@@ -631,6 +631,9 @@ const repoRoot = join(import.meta.dir, "..");
 const havePinnedCommits = PINNED.every(
 	sha => spawnSync("git", ["cat-file", "-e", `${sha}^{commit}`], { cwd: repoRoot }).status === 0,
 );
+// The calibration fixture is the accepted 18.0.6 record, kept verbatim when docs/upstream-baseline.json advanced past it;
+// the counts asserted below belong to that record, not to whatever baseline is current.
+const CALIBRATION_RECORD = "docs/upstream-18.0.6-record.json";
 const calibrationDirs: string[] = [];
 
 afterAll(() => {
@@ -641,7 +644,7 @@ describe.if(havePinnedCommits)("18.0.6 calibration", () => {
 	test("the accepted baseline record passes", () => {
 		const result = spawnSync(
 			"bun",
-			["scripts/verify-upstream-handoff.ts", "--record", "docs/upstream-baseline.json", "--allow-pending"],
+			["scripts/verify-upstream-handoff.ts", "--record", CALIBRATION_RECORD, "--allow-pending"],
 			{ cwd: repoRoot, encoding: "utf8" },
 		);
 		expect(result.status, result.stderr).toBe(0);
@@ -658,7 +661,7 @@ describe.if(havePinnedCommits)("18.0.6 calibration", () => {
 		const removed = lines.splice(1, 1)[0];
 		const removedPath = removed.split("\t")[0];
 		writeFileSync(join(dir, "matrix.tsv"), lines.join("\n"));
-		const record = JSON.parse(await Bun.file(join(repoRoot, "docs/upstream-baseline.json")).text());
+		const record = JSON.parse(await Bun.file(join(repoRoot, CALIBRATION_RECORD)).text());
 		record.matrix = join(dir, "matrix.tsv");
 		writeFileSync(join(dir, "record.json"), JSON.stringify(record));
 		const result = spawnSync(
@@ -676,7 +679,7 @@ describe.if(havePinnedCommits)("18.0.6 calibration", () => {
 	test("a record missing one upstream-change entry fails itemized under Unaccounted upstream changes", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "omp-guardrail-calib-"));
 		calibrationDirs.push(dir);
-		const record = JSON.parse(await Bun.file(join(repoRoot, "docs/upstream-baseline.json")).text());
+		const record = JSON.parse(await Bun.file(join(repoRoot, CALIBRATION_RECORD)).text());
 		const removed = record.upstream_changes.splice(500, 1)[0] as string;
 		const removedPath = removed.split(" ").slice(2).join(" ");
 		writeFileSync(join(dir, "record.json"), JSON.stringify(record));

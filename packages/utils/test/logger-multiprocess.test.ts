@@ -22,6 +22,7 @@ async function makeProbe(logsDir: string): Promise<string> {
 			`import { info, setTransports } from ${JSON.stringify(loggerModuleUrl)};\n` +
 			`setTransports({ file: ${JSON.stringify(logsDir)} });\n` +
 			`info("multiprocess probe");\n` +
+			`await new Promise<void>(resolve => setImmediate(resolve));\n` +
 			`fs.writeSync(1, "ready\\n");\n` +
 			`await new Promise<void>(resolve => {\n` +
 			`\tconst watcher = fs.watch(${JSON.stringify(logsDir)}, (_event, name) => {\n` +
@@ -166,6 +167,8 @@ describe("multiprocess file logging", () => {
 			`import { info, setTransports } from ${JSON.stringify(loggerModuleUrl)};\n` +
 				`setTransports({ file: ${JSON.stringify(logsDir)} });\n` +
 				`info("second probe");\n` +
+				// Retention runs on an unref'd setImmediate after logger setup; let it fire before exit.
+				`await new Promise(resolve => setImmediate(resolve));\n` +
 				`setTransports({ file: false });\n`,
 		);
 		const secondProbe = Bun.spawn([process.execPath, secondProbePath], {

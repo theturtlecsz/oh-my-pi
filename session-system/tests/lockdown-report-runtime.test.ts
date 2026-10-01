@@ -9,13 +9,16 @@ import {
 	unresolvedLinks,
 } from "./fixtures/lockdown-report.ts";
 
+/** Upstream-owned settings registry modules a lockdown proposal may link without a fork patch. */
+const UPSTREAM_SETTINGS_MODULES = new Set(["packages/coding-agent/src/tools/settings.ts"]);
+
 describe("unattended lockdown report - runtime defaults", () => {
 	const readmePath = path.join(REPORT_DIR, "README.md");
 	const runtimePath = path.join(REPORT_DIR, "runtime-defaults.md");
 	const inventoryPath = path.join(REPO_ROOT, "docs/upstream-fork-inventory.tsv");
 
 	const EXPECTED_CODE_FILES = [
-		"packages/coding-agent/src/config/settings-schema.ts",
+		"packages/coding-agent/src/tools/settings.ts",
 		"packages/coding-agent/src/task/executor.ts",
 		"packages/coding-agent/src/session/agent-session.ts",
 		"packages/coding-agent/src/extensibility/extensions/runner.ts",
@@ -118,7 +121,9 @@ describe("unattended lockdown report - runtime defaults", () => {
 		const packageLinks = linkedFiles.filter(f => f.startsWith("packages/"));
 		expect(packageLinks.length).toBeGreaterThanOrEqual(6);
 
-		for (const pkgFile of packageLinks) {
+		// Upstream 18.x declares settings in per-domain registry modules the fork does
+		// not patch, so a settings default proposal links an upstream-owned file.
+		for (const pkgFile of packageLinks.filter(f => !UPSTREAM_SETTINGS_MODULES.has(f))) {
 			expect(sharedRows.has(pkgFile)).toBe(true);
 		}
 	});

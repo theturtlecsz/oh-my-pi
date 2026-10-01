@@ -8,7 +8,7 @@
 //                   and /done must produce ONLY the owner-only refusal notify (no select/confirm/write)
 //   legacy-host     handlers called directly with a ctx LACKING taskDepth (old omp) — must stay locked (fail closed)
 import * as path from "node:path";
-import { ExtensionRunner, loadExtensions, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { ExtensionRunner, TOP_LEVEL_AGENT, loadExtensions, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 
 const probe = process.argv[2];
 const mode = process.argv[3];
@@ -108,7 +108,7 @@ if (mode === "legacy-host") {
 		undefined,
 		undefined,
 		undefined,
-		depth,
+		depth === 0 ? TOP_LEVEL_AGENT : { ...TOP_LEVEL_AGENT, kind: "sub", depth },
 	);
 	const capturingUi = {
 		theme: { fg: (_c: string, t: string) => t },

@@ -136,17 +136,15 @@ async function runLegacy(ops: readonly Op[]): Promise<{ delivered: Delivery[]; t
 	const tool = new AdviseTool(
 		(note, severity, category, index) => {
 			if (category === undefined || index === undefined) throw new Error("legacy callback missing fields");
-			if (guard.accept(note)) delivered.push({ note, severity, category, index });
+			delivered.push({ note, severity, category, index });
 		},
-		{ transcriptIndex: () => cursor },
+		{ guard, transcriptIndex: () => cursor },
 	);
 	for (const op of ops) {
 		if (op.type === "update") {
 			tool.beginUpdate(op.inProgress);
-			guard.beginUpdate();
 		} else if (op.type === "reset") {
 			tool.resetDeliveredNotes();
-			guard.reset();
 		} else {
 			cursor = op.index;
 			const result = await tool.execute("tc", { note: op.note, severity: op.severity, category: op.category });
@@ -166,7 +164,7 @@ async function runGated(ops: readonly Op[]): Promise<{ delivered: Delivery[]; te
 			if (category === undefined || index === undefined) throw new Error("gated callback missing fields");
 			delivered.push({ note, severity, category, index });
 		},
-		{ gate, transcriptIndex: () => cursor },
+		{ guard: gate, transcriptIndex: () => cursor },
 	);
 	for (const op of ops) {
 		if (op.type === "update") tool.beginUpdate(op.inProgress);
@@ -180,48 +178,18 @@ async function runGated(ops: readonly Op[]): Promise<{ delivered: Delivery[]; te
 	return { delivered, texts };
 }
 
-describe("AdvisorEmissionGuard.classify", () => {
-	it("uses accept's order, and accept is classify === accepted", () => {
-		const viaAccept = new AdvisorEmissionGuard();
-		const viaClassify = new AdvisorEmissionGuard();
-		const notes = [
-			"",
-			"   ",
-			"Stop.",
-			"LGTM",
-			"Done.",
-			"No issue; continue.",
-			"Move retries into the queue, not the request path.",
-			"move retries into the queue, not the request path",
-			"Second concrete concern about env vars.",
-		];
-		for (const note of notes) {
-			const verdict = viaClassify.classify(note);
-			expect(viaAccept.accept(note)).toBe(verdict === "accepted");
-		}
-		// "Stop." after the budget is spent is still noise: filler is checked first.
-		expect(viaClassify.classify("Stop.")).toBe("noise");
-		viaClassify.beginUpdate();
-		// Exact repeat of an accepted note in the next update is duplicate, and
-		// does not spend the new budget.
-		expect(viaClassify.classify("Move retries into the queue, not the request path.")).toBe("duplicate");
-		expect(viaClassify.classify("Second concrete concern about env vars.")).toBe("accepted");
-		expect(viaClassify.classify("Third concrete concern about the lock.")).toBe("budget");
-	});
-});
-
 describe("AdvisorSupervisionGate", () => {
 	it("is star-exported from the advisor barrel", () => {
 		expect(AdvisorSupervisionGateFromBarrel).toBe(AdvisorSupervisionGate);
 	});
 
-	it("drops a whitespace final-update note as noise and a missing category as invalid", async () => {
+	it("drops a whitespace final-update note as empty and a missing category as invalid", async () => {
 		const gate = new AdvisorSupervisionGate();
 		const delivered: unknown[] = [];
 		const tool = new AdviseTool(
 			(note, severity, category, index) => delivered.push({ note, severity, category, index }),
 			{
-				gate,
+				guard: gate,
 				transcriptIndex: () => 7,
 			},
 		);
@@ -231,7 +199,7 @@ describe("AdvisorSupervisionGate", () => {
 			severity: "concern",
 			category: "possible-false-positive",
 		});
-		expect(toolText(blank)).toBe("Recorded.");
+		expect(toolText(blank)).toBe("Dropped: empty note.");
 		expect(blank.details).toEqual({ note: "   ", severity: "concern", category: "possible-false-positive" });
 		expect(delivered).toEqual([]);
 
@@ -239,30 +207,30 @@ describe("AdvisorSupervisionGate", () => {
 			note: "Concrete advice about retries.",
 			severity: "concern",
 		} as AdviseParams);
-		expect(toolText(missing)).toBe("Recorded.");
+		expect(toolText(missing)).toBe("Dropped: not a usable supervision note.");
 		expect(delivered).toEqual([]);
 
 		const direct = new AdvisorSupervisionGate();
 		expect(
 			direct.decide({ note: "   ", severity: "nit", category: "possible-false-positive", transcriptIndex: 4 }),
-		).toEqual({ deliver: false, reason: "noise" });
+		).toEqual({ deliver: false, reason: "empty" });
 		expect(() => direct.decide({ note: "Concrete advice about retries.", transcriptIndex: 5 })).not.toThrow();
 		expect(direct.decide({ note: "Concrete advice about the queue.", transcriptIndex: 6 })).toEqual({
 			deliver: false,
 			reason: "invalid",
 		});
 		expect(direct.report()).toEqual({
-			"possible-false-positive": { proposed: 1, delivered: 0, suppressed: { noise: 1 } },
+			"possible-false-positive": { proposed: 1, delivered: 0, suppressed: { empty: 1 } },
 			unclassified: { proposed: 2, delivered: 0, suppressed: { invalid: 2 } },
 		});
 		expect(gate.report()).toEqual({
-			"possible-false-positive": { proposed: 1, delivered: 0, suppressed: { noise: 1 } },
+			"possible-false-positive": { proposed: 1, delivered: 0, suppressed: { empty: 1 } },
 			unclassified: { proposed: 1, delivered: 0, suppressed: { invalid: 1 } },
 		});
 	});
 
-	it("classifies Stop after a spent budget as noise, a later normalized repeat as duplicate, and the second new note as budget", () => {
-		const gate = new AdvisorSupervisionGate();
+	it("classifies Stop after a spent budget as noise, the second new note as budget, a normalized repeat as duplicate, and a severity escalation as delivered", () => {
+		const gate = new AdvisorSupervisionGate({ budgetPerUpdate: 1 });
 		const seen: { category?: string; decision: AdvisorSupervisionDecision }[] = [];
 		const take = (category: string | undefined, decision: AdvisorSupervisionDecision) => {
 			seen.push({ category, decision });
@@ -310,35 +278,37 @@ describe("AdvisorSupervisionGate", () => {
 
 		gate.beginUpdate();
 		expect(gate.report()).toEqual(foldReport(seen));
+		// A punctuation/case variant at the same rank is the guard's rank-aware duplicate.
 		expect(
 			take(
 				"semantic-concern",
 				gate.decide({
 					note: "move retries into the queue, not the request path!",
-					severity: "blocker",
+					severity: "nit",
 					category: "semantic-concern",
 					transcriptIndex: 3,
 				}),
 			),
 		).toEqual({ deliver: false, reason: "duplicate" });
-		// Same whitespace key at the same rank never reaches the emission guard.
+		// The same text escalated to a blocker is a new admission, never a duplicate.
 		expect(
 			take(
 				"semantic-concern",
 				gate.decide({
 					note: "Move retries into the queue, not the request path.",
-					severity: "nit",
+					severity: "blocker",
 					category: "semantic-concern",
 					transcriptIndex: 4,
 				}),
-			),
-		).toEqual({ deliver: false, reason: "duplicate-rank" });
+			).reason,
+		).toBe("delivered");
 
 		const snap = gate.report();
 		expect(snap).toEqual(foldReport(seen));
 		const semantic = snap["semantic-concern"];
 		if (!semantic) throw new Error("missing semantic-concern tally");
 		semantic.proposed = 0;
+		semantic.delivered = 0;
 		semantic.suppressed.duplicate = 0;
 		expect(gate.report()).toEqual(foldReport(seen));
 
@@ -354,14 +324,14 @@ describe("AdvisorSupervisionGate", () => {
 		).toBe("delivered");
 	});
 
-	it("records rank even when a later stage suppresses, and does not let that suppression spend the budget", () => {
-		const gate = new AdvisorSupervisionGate();
+	it("lets no suppressed note occupy a rank or spend the budget", () => {
+		const gate = new AdvisorSupervisionGate({ budgetPerUpdate: 1 });
 		expect(
 			gate.decide({ note: "Stop.", severity: "nit", category: "semantic-concern", transcriptIndex: 0 }).reason,
 		).toBe("noise");
 		expect(
 			gate.decide({ note: "Stop.", severity: "nit", category: "semantic-concern", transcriptIndex: 1 }).reason,
-		).toBe("duplicate-rank");
+		).toBe("noise");
 		expect(
 			gate.decide({ note: "Stop.", severity: "blocker", category: "semantic-concern", transcriptIndex: 2 }).reason,
 		).toBe("noise");
@@ -375,28 +345,29 @@ describe("AdvisorSupervisionGate", () => {
 		});
 		expect(invalid.reason).toBe("invalid");
 		expect(invalid.proposal).toBeUndefined();
-		// Same rank was recorded on the invalid parse, so a valid retag at nit is duplicate-rank.
-		expect(
-			gate.decide({
-				note: "Concrete advice about retries.",
-				severity: "nit",
-				category: "semantic-concern",
-				transcriptIndex: 5,
-			}).reason,
-		).toBe("duplicate-rank");
+		// The invalid parse never reached the guard: a valid retag at the same rank
+		// is admitted and takes the single slot none of the suppressions spent.
 		const delivered = gate.decide({
-			note: "Other concrete advice about the lock.",
-			severity: "concern",
-			category: "gate-defect",
-			transcriptIndex: 6,
+			note: "Concrete advice about retries.",
+			severity: "nit",
+			category: "semantic-concern",
+			transcriptIndex: 5,
 		});
 		expect(delivered.reason).toBe("delivered");
-		expect(delivered.proposal?.severity).toBe("concern");
-		expect(delivered.proposal?.transcriptIndex).toBe(6);
+		expect(delivered.proposal?.severity).toBe("nit");
+		expect(delivered.proposal?.transcriptIndex).toBe(5);
+		expect(
+			gate.decide({
+				note: "Other concrete advice about the lock.",
+				severity: "concern",
+				category: "gate-defect",
+				transcriptIndex: 6,
+			}).reason,
+		).toBe("budget");
 		expect(gate.report().unclassified).toEqual({ proposed: 1, delivered: 0, suppressed: { invalid: 1 } });
 	});
 
-	it("says Duplicate advice ignored only for duplicate-rank and keeps a deferred index", async () => {
+	it("acknowledges each guard verdict truthfully and keeps a deferred index", async () => {
 		const gate = new AdvisorSupervisionGate();
 		const delivered: Delivery[] = [];
 		let cursor = 0;
@@ -405,7 +376,7 @@ describe("AdvisorSupervisionGate", () => {
 				if (category === undefined || index === undefined) throw new Error("missing callback fields");
 				delivered.push({ note, severity, category, index });
 			},
-			{ gate, transcriptIndex: () => cursor },
+			{ guard: gate, transcriptIndex: () => cursor },
 		);
 
 		tool.beginUpdate(false);
@@ -420,13 +391,18 @@ describe("AdvisorSupervisionGate", () => {
 			severity: "nit",
 			category: "model-procedure-miss",
 		});
-		const stopAgain = await tool.execute("tc-4", { note: "Stop.", severity: "blocker", category: "gate-defect" });
-		expect(toolText(first)).toBe("Recorded.");
-		expect(toolText(stop)).toBe("Recorded.");
-		expect(toolText(second)).toBe("Recorded.");
-		expect(toolText(stopAgain)).toBe("Duplicate advice ignored.");
+		const repeat = await tool.execute("tc-4", {
+			note: "check the retry queue bounds",
+			severity: "nit",
+			category: "policy-ambiguity",
+		});
+		expect(toolText(first)).toBe("Delivered.");
+		expect(toolText(stop)).toBe("Dropped: nothing actionable.");
+		expect(toolText(second)).toBe("Delivered.");
+		expect(toolText(repeat)).toBe("Dropped: already raised.");
 		expect(delivered).toEqual([
 			{ note: "Check the retry queue bounds.", severity: "nit", category: "semantic-concern", index: 0 },
+			{ note: "Check the env var name next.", severity: "nit", category: "model-procedure-miss", index: 0 },
 		]);
 
 		delivered.length = 0;
@@ -438,7 +414,7 @@ describe("AdvisorSupervisionGate", () => {
 			severity: "nit",
 			category: "semantic-concern",
 		});
-		expect(toolText(deferred)).toContain("Deferred");
+		expect(toolText(deferred)).toBe("Queued for the end of the turn. Do not re-raise.");
 		cursor = 6;
 		await tool.execute("tc-6", {
 			note: "Deferred concrete concern about retries.",
@@ -464,10 +440,10 @@ describe("AdvisorSupervisionGate", () => {
 		]);
 	});
 
-	it("flushes deferred notes before reopening the budget", async () => {
-		const gate = new AdvisorSupervisionGate();
+	it("routes a deferred note at the completion flush without re-admitting it", async () => {
+		const gate = new AdvisorSupervisionGate({ budgetPerUpdate: 1 });
 		const notes: string[] = [];
-		const tool = new AdviseTool(note => notes.push(note), { gate, transcriptIndex: () => 1 });
+		const tool = new AdviseTool(note => notes.push(note), { guard: gate, transcriptIndex: () => 1 });
 		tool.beginUpdate(true);
 		await tool.execute("tc-1", {
 			note: "Deferred concrete concern about the queue.",
@@ -480,13 +456,14 @@ describe("AdvisorSupervisionGate", () => {
 			category: "gate-defect",
 		});
 		expect(notes).toEqual(["Blocker: a destructive command is running."]);
+		// The concern was admitted (and charged to the in-progress update) when
+		// emitted; the blocker needs no slot, so the flush routes the concern.
 		tool.beginUpdate(false);
-		expect(notes).toEqual(["Blocker: a destructive command is running."]);
-		expect(gate.report()["semantic-concern"]).toEqual({
-			proposed: 1,
-			delivered: 0,
-			suppressed: { budget: 1 },
-		});
+		expect(notes).toEqual([
+			"Blocker: a destructive command is running.",
+			"Deferred concrete concern about the queue.",
+		]);
+		expect(gate.report()["semantic-concern"]).toEqual({ proposed: 1, delivered: 1, suppressed: {} });
 		expect(gate.report()["gate-defect"]).toEqual({ proposed: 1, delivered: 1, suppressed: {} });
 	});
 });

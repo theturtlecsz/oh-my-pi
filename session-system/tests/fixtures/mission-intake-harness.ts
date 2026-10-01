@@ -2,7 +2,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { loadExtensions, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent";
+import { ExtensionRunner, Settings, TOP_LEVEL_AGENT } from "@oh-my-pi/pi-coding-agent";
 import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
 
 const probe = process.argv[2];
@@ -114,6 +114,13 @@ const artifactsDir = path.join(probe, ".artifacts");
 fs.mkdirSync(artifactsDir, { recursive: true });
 const localProtocolOptions = { getArtifactsDir: () => artifactsDir, getSessionId: () => "session-test" };
 const model = { id: "claude-fable-5", provider: "anthropic", name: "Claude Fable 5", api: "anthropic-messages" };
+/** Real isolated settings for the runner (upstream reads registry handles from it), with the audit role pinned. */
+function harnessSettings(auditModel?: string): Settings {
+	const settings = Settings.isolated();
+	if (auditModel) settings.setModelRole("audit", auditModel);
+	return settings;
+}
+
 const runner = new ExtensionRunner(
 	loaded.extensions,
 	loaded.runtime,
@@ -121,10 +128,10 @@ const runner = new ExtensionRunner(
 	{ getCwd: () => probe, getBranch: () => [], getSessionId: () => "session-test", getArtifactsDir: () => artifactsDir } as never,
 	{ getAvailable: () => [model], hasProvider: () => true } as never,
 	undefined,
-	{ getModelRole: () => undefined, get: () => undefined, getStorage: () => undefined } as never,
+	harnessSettings(),
 	localProtocolOptions,
 	undefined,
-	0,
+	TOP_LEVEL_AGENT,
 );
 runner.initialize(
 	{

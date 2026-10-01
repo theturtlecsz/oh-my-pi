@@ -9,16 +9,14 @@ import {
 	cleanupTaskBranches,
 	commitToBranch,
 	ensureIsolation,
-	getGitNoIndexNullPath,
 	getRepoRoot,
 	ISOLATION_BASELINE_MAX_CONTENT_BYTES,
 	IsolationBaselineTooLargeError,
 	mergeTaskBranches,
-	parseIsolationMode,
+	parseIsolationBackend,
 } from "@oh-my-pi/pi-coding-agent/task/worktree";
-import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
-import * as jj from "@oh-my-pi/pi-coding-agent/utils/jj";
 import * as natives from "@oh-my-pi/pi-natives";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { removeWithRetries, setWorktreesDir } from "@oh-my-pi/pi-utils";
 
 const tempDirs: string[] = [];
@@ -72,29 +70,19 @@ async function disableAutoMaintenance(repo: string): Promise<void> {
 
 afterEach(async () => {
 	vi.restoreAllMocks();
-	jj.repo.clearRootCache();
 	await Promise.all(tempDirs.splice(0).map(dir => removeWithRetries(dir)));
 });
 describe("worktree isolation helpers", () => {
-	it("returns platform-specific null path for git --no-index diffs", () => {
-		const expected = process.platform === "win32" ? "NUL" : "/dev/null";
-		expect(getGitNoIndexNullPath()).toBe(expected);
-	});
-
-	it("maps every isolation mode to the native backend contract", () => {
-		expect(parseIsolationMode("none")).toBeUndefined();
-		expect(parseIsolationMode("auto")).toBeUndefined();
-		expect(parseIsolationMode("apfs")).toBe(natives.IsoBackendKind.Apfs);
-		expect(parseIsolationMode("btrfs")).toBe(natives.IsoBackendKind.Btrfs);
-		expect(parseIsolationMode("zfs")).toBe(natives.IsoBackendKind.Zfs);
-		expect(parseIsolationMode("reflink")).toBe(natives.IsoBackendKind.LinuxReflink);
-		expect(parseIsolationMode("overlayfs")).toBe(natives.IsoBackendKind.Overlayfs);
-		expect(parseIsolationMode("fuse-overlay")).toBe(natives.IsoBackendKind.Overlayfs);
-		expect(parseIsolationMode("projfs")).toBe(natives.IsoBackendKind.Projfs);
-		expect(parseIsolationMode("fuse-projfs")).toBe(natives.IsoBackendKind.Projfs);
-		expect(parseIsolationMode("block-clone")).toBe(natives.IsoBackendKind.WindowsBlockClone);
-		expect(parseIsolationMode("rcopy")).toBe(natives.IsoBackendKind.Rcopy);
-		expect(parseIsolationMode("worktree")).toBe(natives.IsoBackendKind.Rcopy);
+	it("maps every isolation backend to the native backend contract", () => {
+		expect(parseIsolationBackend("auto")).toBeUndefined();
+		expect(parseIsolationBackend("apfs")).toBe(natives.IsoBackendKind.Apfs);
+		expect(parseIsolationBackend("btrfs")).toBe(natives.IsoBackendKind.Btrfs);
+		expect(parseIsolationBackend("zfs")).toBe(natives.IsoBackendKind.Zfs);
+		expect(parseIsolationBackend("reflink")).toBe(natives.IsoBackendKind.LinuxReflink);
+		expect(parseIsolationBackend("overlayfs")).toBe(natives.IsoBackendKind.Overlayfs);
+		expect(parseIsolationBackend("projfs")).toBe(natives.IsoBackendKind.Projfs);
+		expect(parseIsolationBackend("block-clone")).toBe(natives.IsoBackendKind.WindowsBlockClone);
+		expect(parseIsolationBackend("rcopy")).toBe(natives.IsoBackendKind.Rcopy);
 	});
 
 	// Regression for #8939: baseline capture buffered every untracked byte into
@@ -126,7 +114,67 @@ describe("worktree isolation helpers", () => {
 		expect((error as IsolationBaselineTooLargeError).contentBytes).toBeGreaterThan(
 			ISOLATION_BASELINE_MAX_CONTENT_BYTES,
 		);
-		expect((error as Error).message).toContain("task.isolation.mode: none");
+		expect((error as Error).message).toContain("task.isolation.enabled: false");
+	});
+
+	// Regression: the staged and unstaged diffs were rendered in full before the
+	// #8939 gate ran, so a working tree whose index-vs-HEAD diff was enormous
+	// (a jj conflict commit exported to git materialises every side as a
+	// `.jjconflict-*` subtree) grew one omp process to 141 GB and took the host
+	// down. The renderer now stops at the budget; the caller sees the same typed
+	// refusal it gets for oversized untracked content, with no measured total.
+	it("refuses to snapshot a working tree whose staged diff exceeds the isolation budget", async () => {
+		const repo = await createGitRepo();
+		await runGit(repo, ["config", "user.email", "test@example.com"]);
+		await runGit(repo, ["config", "user.name", "Test User"]);
+		await fs.writeFile(path.join(repo, "README.md"), "hi\n");
+		await runGit(repo, ["add", "README.md"]);
+		await runGit(repo, ["commit", "-q", "-m", "init"]);
+		await fs.writeFile(path.join(repo, "staged.txt"), "staged content that outgrows a tiny budget\n".repeat(64));
+		await runGit(repo, ["add", "staged.txt"]);
+
+		const budget = 256;
+		const error = await captureBaseline(repo, budget).then(
+			() => null,
+			(err: unknown) => err,
+		);
+		expect(error).toBeInstanceOf(IsolationBaselineTooLargeError);
+		expect((error as IsolationBaselineTooLargeError).budgetBytes).toBe(budget);
+		expect((error as IsolationBaselineTooLargeError).contentBytes).toBeUndefined();
+		expect((error as Error).message).toContain("task.isolation.enabled: false");
+
+		const within = await captureBaseline(repo);
+		expect(within.root.staged).toContain("+++ b/staged.txt");
+	});
+
+	// The unstaged diff is rendered against what the staged diff left of the
+	// budget. If that remaining-budget arithmetic regressed to the full budget,
+	// a large-but-admissible staged patch followed by a large unstaged patch
+	// would buffer nearly twice the budget before anything refused.
+	it("charges the unstaged diff against the budget the staged diff left", async () => {
+		const repo = await createGitRepo();
+		await runGit(repo, ["config", "user.email", "test@example.com"]);
+		await runGit(repo, ["config", "user.name", "Test User"]);
+		await fs.writeFile(path.join(repo, "README.md"), "hi\n");
+		await fs.writeFile(path.join(repo, "tracked.txt"), "tracked\n");
+		await runGit(repo, ["add", "README.md", "tracked.txt"]);
+		await runGit(repo, ["commit", "-q", "-m", "init"]);
+		await fs.writeFile(path.join(repo, "staged.txt"), "staged line\n".repeat(20));
+		await runGit(repo, ["add", "staged.txt"]);
+		await fs.writeFile(path.join(repo, "tracked.txt"), "unstaged line\n".repeat(20));
+
+		const { staged, unstaged } = (await captureBaseline(repo)).root;
+		// Each patch fits on its own; only their sum crosses the budget.
+		const budget = Math.max(staged.length, unstaged.length) + 16;
+		expect(staged.length + unstaged.length).toBeGreaterThan(budget);
+
+		const error = await captureBaseline(repo, budget).then(
+			() => null,
+			(err: unknown) => err,
+		);
+		expect(error).toBeInstanceOf(IsolationBaselineTooLargeError);
+		expect((error as IsolationBaselineTooLargeError).contentBytes).toBeUndefined();
+		expect(unstaged).toContain("+unstaged line");
 	});
 
 	it("sizes an untracked symlink itself rather than its target", async () => {
@@ -367,7 +415,7 @@ describe("worktree isolation helpers", () => {
 				await runGit(repo, ["commit", "-q", "-m", "task-change-ignored-note"]);
 				await runGit(repo, ["checkout", "-q", BASE_BRANCH]);
 				try {
-					vi.spyOn(git.patch, "canApplyText").mockResolvedValue(true);
+					vi.spyOn(natives.VcsGitRepo.prototype, "canApplyPatch").mockResolvedValue(true);
 					await fs.writeFile(path.join(repo, "merged.txt"), "user wip\n");
 					await fs.writeFile(path.join(repo, magicName), "untracked wip\n");
 					await fs.writeFile(buildLog, "ignored build artifact\n");
@@ -662,7 +710,7 @@ describe("detachGitDir", () => {
 		const iso = await copyTree(wt);
 		const statusBefore = await runGit(iso, ["status", "--porcelain=v1"]);
 
-		const result = await git.detachGitDir(iso, commonDir);
+		const result = await vcs.detachGitDir(iso, commonDir);
 
 		expect(result).toBe("detached");
 		// Working tree (staged/unstaged/untracked) is preserved verbatim.
@@ -692,24 +740,22 @@ describe("detachGitDir", () => {
 		expect(await runGit(wt, ["rev-parse", "omp-fetched"])).toBe(taskCommit);
 	});
 
-	it("keeps shared git metadata intact when the index cannot be read", async () => {
+	it.skipIf(process.getuid?.() === 0)("keeps shared git metadata intact when the index cannot be read", async () => {
 		const { wt, commonDir } = await makeLinkedWorktree();
 		const iso = await copyTree(wt);
 		const gitEntry = path.join(iso, ".git");
 		const pointerBefore = await fs.readFile(gitEntry, "utf8");
 		const indexPath = await runGit(iso, ["rev-parse", "--path-format=absolute", "--git-path", "index"]);
-		const bunFile = Bun.file;
-		vi.spyOn(Bun, "file").mockImplementation(((file: string | URL, options?: BlobPropertyBag) => {
-			const handle = bunFile(file, options);
-			if (file.toString() === indexPath) {
-				vi.spyOn(handle, "bytes").mockRejectedValue(
-					Object.assign(new Error("permission denied"), { code: "EACCES" }),
-				);
-			}
-			return handle;
-		}) as typeof Bun.file);
-
-		await expect(git.detachGitDir(iso, commonDir)).rejects.toMatchObject({ code: "EACCES" });
+		const indexMode = (await fs.stat(indexPath)).mode;
+		await fs.chmod(indexPath, 0);
+		try {
+			await expect(vcs.detachGitDir(iso, commonDir)).rejects.toMatchObject({
+				code: "Io",
+				stderr: expect.stringContaining("Permission denied"),
+			});
+		} finally {
+			await fs.chmod(indexPath, indexMode);
+		}
 		expect(await fs.readFile(gitEntry, "utf8")).toBe(pointerBefore);
 		expect(await runGit(iso, ["status", "--porcelain=v1"])).toBe("");
 	});
@@ -729,7 +775,7 @@ describe("detachGitDir", () => {
 		);
 		const iso = await copyTree(src); // full `.git` directory copied — its own ODB
 
-		expect(await git.detachGitDir(iso, srcCommon)).toBe("independent");
+		expect(await vcs.detachGitDir(iso, srcCommon)).toBe("independent");
 		// Its objects are self-contained: no alternates file was written.
 		expect(await Bun.file(path.join(iso, ".git", "objects", "info", "alternates")).exists()).toBe(false);
 	});
@@ -747,7 +793,7 @@ describe("detachGitDir", () => {
 		const iso = await copyTree(wt);
 		const statusBefore = await runGit(iso, ["status", "--porcelain=v1"]);
 
-		expect(await git.detachGitDir(iso, commonDir)).toBe("detached");
+		expect(await vcs.detachGitDir(iso, commonDir)).toBe("detached");
 		// The unborn branch name is preserved and the common dir is now private.
 		expect(await runGit(iso, ["symbolic-ref", "HEAD"])).toBe("refs/heads/fresh-orphan");
 		const isoCommon = path.resolve(
@@ -786,7 +832,7 @@ describe("detachGitDir", () => {
 		expect(await Bun.file(path.join(wt, "drop", "d.txt")).exists()).toBe(false);
 
 		const iso = await copyTree(wt);
-		expect(await git.detachGitDir(iso, commonDir)).toBe("detached");
+		expect(await vcs.detachGitDir(iso, commonDir)).toBe("detached");
 
 		// The detached isolation still honours sparse checkout: `drop/d.txt` keeps
 		// its skip-worktree bit and is NOT reported as a deletion (which delta
@@ -802,6 +848,7 @@ describe("detachGitDir", () => {
 		tempDirs.push(origin);
 		await runGit(origin, ["init", "-q", "-b", "main"]);
 		await disableAutoMaintenance(origin);
+		await runGit(origin, ["config", "core.fsmonitor", "false"]);
 		await runGit(origin, ["config", "user.email", "src@example.com"]);
 		await runGit(origin, ["config", "user.name", "Source User"]);
 		await fs.writeFile(path.join(origin, "one.txt"), "one\n");
@@ -813,25 +860,29 @@ describe("detachGitDir", () => {
 
 		const clone = path.join(origin, "..", `${path.basename(origin)}-shallow`);
 		tempDirs.push(clone);
-		await runGit(origin, ["clone", "-q", "--depth", "1", `file://${origin}`, clone]);
+		await runGit(origin, ["-c", "core.fsmonitor=false", "clone", "-q", "--depth", "1", `file://${origin}`, clone]);
 		await runGit(clone, ["config", "user.email", "src@example.com"]);
 		await runGit(clone, ["config", "user.name", "Source User"]);
 		await runGit(clone, ["config", "core.fileMode", "false"]);
+		// Git's fsmonitor/split-index interaction can crash during fixture setup.
+		await runGit(clone, ["config", "core.fsmonitor", "false"]);
 		await runGit(clone, ["config", "core.splitIndex", "true"]);
 		const wt = path.join(origin, "..", `${path.basename(origin)}-shallow-wt`);
 		tempDirs.push(wt);
 		await runGit(clone, ["worktree", "add", "-q", wt, "-b", "feature/parent", "HEAD"]);
 		// Split the worktree's own index so it references a sharedindex.* file.
-		await runGit(wt, ["update-index", "--split-index"]);
+		await runGit(wt, ["-c", "core.fsmonitor=false", "update-index", "--split-index"]);
 		const commonDir = path.resolve(
 			(await runGit(clone, ["rev-parse", "--path-format=absolute", "--git-common-dir"])).trim(),
 		);
 
 		const iso = await copyTree(wt);
-		expect(await git.detachGitDir(iso, commonDir)).toBe("detached");
+		expect(await vcs.detachGitDir(iso, commonDir)).toBe("detached");
 
 		// filemode parity: an explicit core.fileMode=false survives re-init.
 		expect(await runGit(iso, ["config", "core.fileMode"])).toBe("false");
+		// The detached repo must not inherit an unrelated global fsmonitor daemon.
+		await runGit(iso, ["config", "core.fsmonitor", "false"]);
 		// Split index: status works (sharedindex.* was carried) and stays clean.
 		expect(await runGit(iso, ["status", "--porcelain=v1"])).toBe("");
 		// Shallow boundary: history traversal stops cleanly instead of failing
@@ -854,7 +905,7 @@ describe("detachGitDir", () => {
 		const aliasCommonDir = path.join(aliasMain, ".git");
 
 		const iso = await copyTree(wt);
-		expect(await git.detachGitDir(iso, aliasCommonDir)).toBe("detached");
+		expect(await vcs.detachGitDir(iso, aliasCommonDir)).toBe("detached");
 
 		// Isolation is fully functional: task branch + commit stay private.
 		await runGit(iso, ["checkout", "-q", "-b", "feature/a", baseSha]);
@@ -913,6 +964,10 @@ describe("applyNestedPatches", () => {
 		await disableAutoMaintenance(fixtureParent);
 		await runGit(fixtureParent, ["config", "user.email", "test@example.com"]);
 		await runGit(fixtureParent, ["config", "user.name", "Test User"]);
+		// beforeEach copies both repos with fs.cp; auto maintenance would race
+		// the copy the same way as in the commitToBranch fixture below.
+		await runGit(fixtureParent, ["config", "maintenance.auto", "false"]);
+		await runGit(fixtureParent, ["config", "gc.auto", "0"]);
 		await fs.writeFile(path.join(fixtureParent, ".gitignore"), "sub/\n");
 		await runGit(fixtureParent, ["add", "."]);
 		await runGit(fixtureParent, ["commit", "-q", "-m", "parent-init"]);
@@ -923,6 +978,8 @@ describe("applyNestedPatches", () => {
 		await disableAutoMaintenance(fixtureNested);
 		await runGit(fixtureNested, ["config", "user.email", "test@example.com"]);
 		await runGit(fixtureNested, ["config", "user.name", "Test User"]);
+		await runGit(fixtureNested, ["config", "maintenance.auto", "false"]);
+		await runGit(fixtureNested, ["config", "gc.auto", "0"]);
 		await fs.writeFile(path.join(fixtureNested, "file.txt"), "v1\n");
 		await runGit(fixtureNested, ["add", "."]);
 		await runGit(fixtureNested, ["commit", "-q", "-m", "nested-init"]);
@@ -1038,6 +1095,12 @@ describe("commitToBranch preserves agent commits", () => {
 		await disableAutoMaintenance(fixtureRepo);
 		await runGit(fixtureRepo, ["config", "user.email", "test@example.com"]);
 		await runGit(fixtureRepo, ["config", "user.name", "Test User"]);
+		// `git commit` kicks off `git maintenance run --auto`, which writes
+		// `.git/objects/maintenance.lock` and removes it again. beforeEach copies
+		// this repo with fs.cp, and a lock that disappears between readdir and
+		// lstat fails the copy with ENOENT.
+		await runGit(fixtureRepo, ["config", "maintenance.auto", "false"]);
+		await runGit(fixtureRepo, ["config", "gc.auto", "0"]);
 		await fs.writeFile(
 			path.join(fixtureRepo, "EXP_CLEAN_COMMIT.txt"),
 			"line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n",
