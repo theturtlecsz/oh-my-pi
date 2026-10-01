@@ -270,6 +270,13 @@ export async function discoverSystemPromptOverride(cwd?: string): Promise<System
 	return undefined;
 }
 
+interface SystemPromptFilesResult {
+	override: SystemPromptOverride | undefined;
+	customization: string | null;
+}
+
+const NO_SYSTEM_PROMPT_FILES: SystemPromptFilesResult = { override: undefined, customization: null };
+
 /** Unlike literal prompt inputs, explicit template paths never fall back to inline text. */
 export async function loadSystemPromptTemplateFile(filePath: string): Promise<string> {
 	const text = await Bun.file(filePath).text();
@@ -705,34 +712,20 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	const inlineToolDescriptors = providedInlineToolDescriptors ?? false;
 	const resolvedCwd = cwd ?? getProjectDir();
 	let resolvedSystemPromptTemplate = options.systemPromptTemplate;
-	let resolvedCustomPromptInput = providedResolvedCustomPrompt;
 	const hasExplicitCustomPrompt = customPrompt !== undefined || providedResolvedCustomPrompt !== undefined;
 	if (resolvedSystemPromptTemplate !== undefined && hasExplicitCustomPrompt) {
 		throw new Error("systemPromptTemplate cannot be combined with a literal custom system prompt");
 	}
-	if (resolvedSystemPromptTemplate === undefined && !hasExplicitCustomPrompt) {
-		const override = await discoverSystemPromptOverride(resolvedCwd);
-		if (override?.kind === "template" && override.content !== undefined) {
-			resolvedSystemPromptTemplate = override.content;
-		} else if (override?.content !== undefined) {
-			resolvedCustomPromptInput = override.content;
-		}
-	}
-	const hasDiscoveredTemplate =
-		resolvedSystemPromptTemplate !== undefined && options.systemPromptTemplate === undefined;
 	if (resolvedSystemPromptTemplate !== undefined && !resolvedSystemPromptTemplate.trim()) {
-		if (hasDiscoveredTemplate) {
-			logger.warn("Ignoring empty discovered system prompt template; using the bundled prompt");
-			resolvedSystemPromptTemplate = undefined;
-		} else {
-			throw new Error("System prompt template must not be empty");
-		}
+		throw new Error("System prompt template must not be empty");
 	}
+	// An explicit literal prompt or selected template owns block 0, so neither the
+	// SYSTEM.md override discovery nor the capability-path walk-up runs.
+	const callerControlsCustomPrompt = hasExplicitCustomPrompt || resolvedSystemPromptTemplate !== undefined;
 
 	const prepDefaults = {
 		resolvedCustomPrompt: undefined as string | undefined,
 		resolvedAppendPrompt: undefined as string | undefined,
-		systemPromptCustomization: null as string | null,
 		contextFiles: dedupeContainedContextFiles(providedContextFiles ?? []),
 		skills: providedSkills ?? ([] as Skill[]),
 		workspaceTree: {
@@ -781,13 +774,20 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		return result.value;
 	}
 
-	// An explicit literal prompt or selected template owns block 0; the secondary
-	// capability-path SYSTEM.md walk-up must not silently augment either.
-	const callerControlsCustomPrompt =
-		hasExplicitCustomPrompt || resolvedSystemPromptTemplate !== undefined || resolvedCustomPromptInput !== undefined;
-	const systemPromptCustomizationPromise: Promise<string | null> = callerControlsCustomPrompt
-		? Promise.resolve(null)
-		: logger.time("loadSystemPromptFiles", loadSystemPromptFiles, { cwd: resolvedCwd });
+	// Override discovery walks the same capability as loadSystemPromptFiles, so it
+	// runs inside that deadlined step (OMP-248): a hung walk degrades to the
+	// bundled prompt instead of blocking startup. A discovered override owns
+	// block 0, so the secondary walk-up then must not augment it.
+	const systemPromptFilesPromise: Promise<SystemPromptFilesResult> = callerControlsCustomPrompt
+		? Promise.resolve(NO_SYSTEM_PROMPT_FILES)
+		: (async () => {
+				const override = await discoverSystemPromptOverride(resolvedCwd);
+				if (override?.content !== undefined) return { override, customization: null };
+				return {
+					override: undefined,
+					customization: await logger.time("loadSystemPromptFiles", loadSystemPromptFiles, { cwd: resolvedCwd }),
+				};
+			})();
 	const contextFilesPromise = (async () => {
 		const primary = providedContextFiles
 			? providedContextFiles
@@ -844,9 +844,9 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 					.then(override => override ?? bundledPersonality);
 
 	const [
-		resolvedCustomPrompt,
+		providedCustomPrompt,
 		resolvedAppendPrompt,
-		systemPromptCustomization,
+		systemPromptFiles,
 		contextFiles,
 		skills,
 		workspaceTree,
@@ -855,8 +855,8 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	] = await Promise.all([
 		withDeadline(
 			"customPrompt",
-			resolvedCustomPromptInput !== undefined
-				? Promise.resolve(resolvedCustomPromptInput)
+			providedResolvedCustomPrompt !== undefined
+				? Promise.resolve(providedResolvedCustomPrompt)
 				: resolvePromptInput(customPrompt, "system prompt"),
 			prepDefaults.resolvedCustomPrompt,
 		),
@@ -867,7 +867,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 				: resolvePromptInput(appendSystemPrompt, "append system prompt"),
 			prepDefaults.resolvedAppendPrompt,
 		),
-		withDeadline("loadSystemPromptFiles", systemPromptCustomizationPromise, prepDefaults.systemPromptCustomization),
+		withDeadline("loadSystemPromptFiles", systemPromptFilesPromise, NO_SYSTEM_PROMPT_FILES),
 		withDeadline("loadProjectContextFiles", contextFilesPromise, prepDefaults.contextFiles).then(
 			dedupeContainedContextFiles,
 		),
@@ -877,6 +877,11 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		withDeadline("loadPersonalityOverride", personalityPromise, bundledPersonality),
 	]);
 	clearTimeout(deadlineTimer);
+	const { override: discoveredOverride, customization: systemPromptCustomization } = systemPromptFiles;
+	const hasDiscoveredTemplate = discoveredOverride?.kind === "template";
+	if (hasDiscoveredTemplate) resolvedSystemPromptTemplate = discoveredOverride.content;
+	const resolvedCustomPrompt =
+		discoveredOverride !== undefined && !hasDiscoveredTemplate ? discoveredOverride.content : providedCustomPrompt;
 	const agentsMdFiles = Array.from(new Set(workspaceTree.agentsMdFiles)).sort().slice(0, AGENTS_MD_LIMIT);
 
 	// Only the required instruction-prep steps are surfaced; decorative steps
