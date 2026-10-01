@@ -29,12 +29,12 @@ ATTENDED_CHECKS: tuple[str, ...] = ("jobs-worker-kill-restart",)
 UNATTENDED_CHECKS: tuple[str, ...] = ATTENDED_CHECKS + tuple(f"lock-{n}" for n in range(1, 13))
 ROLLOUT_CHECK = "omp16-rollout"
 
-_PASS = "pass"
+_QUALIFIED_RESULT = "pass"
 
 
 def _entry_passed(entry: object, release: str | None) -> bool:
     """Whether an entry is a well-formed pass; ``release`` None skips the check."""
-    if not isinstance(entry, Mapping) or entry.get("result") != _PASS:
+    if not isinstance(entry, Mapping) or entry.get("result") != _QUALIFIED_RESULT:
         return False
     return release is None or entry.get("release") == release
 
