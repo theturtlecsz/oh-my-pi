@@ -24,6 +24,7 @@ __all__ = [
     "merge",
     "path_allowed",
     "push",
+    "reset_worktree",
 ]
 
 
@@ -126,6 +127,31 @@ def add_worktree(
     dest.parent.mkdir(parents=True, exist_ok=True)
     git(ctrl, "worktree", "add", "--detach", str(dest), str(base))
     return dest
+
+
+def reset_worktree(
+    control_repo: Path | str,
+    worktrees_dir: Path | str,
+    name: str,
+    commit: str,
+) -> Path:
+    """Reset an existing registered worktree to commit, or create it if absent."""
+    ctrl = Path(control_repo)
+    dest = Path(worktrees_dir) / name
+    if not os.path.lexists(dest):
+        return add_worktree(ctrl, worktrees_dir, name, commit)
+
+    out = git(ctrl, "worktree", "list", "--porcelain")
+    dest_resolved = dest.resolve()
+    for line in out.decode("utf-8", errors="surrogateescape").splitlines():
+        if line.startswith("worktree "):
+            entry_path = Path(line[len("worktree "):])
+            if entry_path == dest or entry_path.resolve() == dest_resolved:
+                git(dest, "reset", "--hard", commit)
+                git(dest, "clean", "-ffdx")
+                return dest
+
+    raise CandidateGitError("worktree_conflict")
 
 
 def _match_segments(path_segments: list[str], pat_segments: list[str]) -> bool:

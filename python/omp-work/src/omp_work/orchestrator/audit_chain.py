@@ -41,7 +41,7 @@ FROM omp_jobs.job_events e
 JOIN omp_jobs.jobs j
   ON j.job_id = e.job_id AND j.workspace_id = %s AND j.source = 'native'
 WHERE e.kind = 'orch_step' AND e.payload->>'mission_id' = %s
-ORDER BY e.seq
+ORDER BY e.at, e.job_id, e.seq
 """
 
 
