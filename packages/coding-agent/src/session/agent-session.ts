@@ -19,7 +19,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { isPromise } from "node:util/types";
-import type { Clipboard, InMemorySnapshotStore } from "@oh-my-pi/hashline";
 import {
 	type AfterToolCallContext,
 	type AfterToolCallResult,
@@ -280,7 +279,6 @@ import {
 } from "../tools/browser/tab-supervisor";
 import type { CheckpointState, CompletedRewindState } from "../tools/checkpoint";
 import { releaseComputerSessionsForOwner } from "../tools/computer/supervisor";
-import { normalizeLocalScheme, resolveToCwd } from "../tools/path-utils";
 import { nativePlainReadProvenance } from "../tools/read";
 import { isAutoQaEnabled } from "../tools/report-tool-issue";
 import {
@@ -4978,7 +4976,7 @@ export class AgentSession implements SettingsScope {
 				await this.#emitSessionEvent(displayEvent);
 			} catch (error) {
 				if (originalAttempt) {
-					messageEndPersistence?.release();
+					originalSlot?.release();
 					if (
 						!originalAttempt.delivered &&
 						(event.type === "message_start" || event.type === "message_end") &&

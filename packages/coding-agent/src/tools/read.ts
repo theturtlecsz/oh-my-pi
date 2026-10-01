@@ -2143,8 +2143,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						parsed.kind === "none" &&
 						!suffixResolution &&
 						bridgePromise === undefined &&
-						!isRemoteMountPath(absolutePath) &&
-						!pathTargetsSsh(absolutePath);
+						!isRemoteMountPath(absolutePath);
 					const rawSelector = isRawSelector(sel);
 					const requestedStart = offset ? Math.max(0, offset - 1) : 0;
 					const expandStart = !rawSelector && offset !== undefined && offset > 1;

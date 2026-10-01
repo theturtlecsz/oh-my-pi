@@ -450,7 +450,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		}
 
 		await this.runner.enterTaskResultProcessing(this.tool.name, toolCallId);
-		return this.processResult(toolCallId, effectiveParams, result, context, executionError);
+		return this.processResult(toolCallId, effectiveParams, result, context, executionError, pendingAdditionalContext);
 	}
 
 	/** Shared result-hook merge; recovery passes a real native result without re-executing the tool. */
@@ -460,6 +460,8 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		result: AgentToolResult<TDetails, TParameters>,
 		context?: AgentToolContext,
 		executionError?: Error,
+		/** `tool_call` handler context, forwarded only for a non-error result. */
+		pendingAdditionalContext?: string,
 	): Promise<AgentToolResult<TDetails, TParameters>> {
 		// Emit tool_result event - extensions can modify the result and error status
 		if (this.runner.hasHandlers("tool_result")) {

@@ -92,8 +92,9 @@ function parseExtensionSource(source: string, importerPath: string): ParseResult
 }
 
 const REQUIRE_BINDING = 1 << 0;
-const EXPORTS_BINDING = 1 << 1;
-const MODULE_BINDING = 1 << 2;
+const OBJECT_BINDING = 1 << 1;
+const EXPORTS_BINDING = 1 << 2;
+const MODULE_BINDING = 1 << 3;
 
 interface StructuralAstNode {
 	readonly type: string;
@@ -144,6 +145,8 @@ function trackedBinding(name: unknown): number {
 	switch (name) {
 		case "require":
 			return REQUIRE_BINDING;
+		case "Object":
+			return OBJECT_BINDING;
 		case "exports":
 			return EXPORTS_BINDING;
 		case "module":
