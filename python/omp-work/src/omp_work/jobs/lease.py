@@ -18,6 +18,7 @@ from psycopg.types.json import Jsonb
 
 from omp_work.contracts.r02.validate import validate_instance
 from omp_work.jobs.store import JobError, NativeJobStore, OperationOutcome
+from omp_work.v1.agent_stop import read_stop_state
 from omp_work.v1.canonical import canonical_json
 
 _OUTCOMES = {"succeeded": "sealed", "failed": "failed"}
@@ -39,7 +40,10 @@ def renew_lease(
     """Add ``lease_seconds`` to the job lease and its reservation expiry.
 
     The reservation is ``{job_id}:{fence}``. A repeated operation id replays
-    the stored job and does not extend a second time.
+    the stored job and does not extend a second time. While the workspace's
+    agent stop is engaged the renewal is refused with ``agent_stop_engaged``
+    and writes nothing, so the worker's renewal loop stops and the job
+    reconciles back to the backlog on lease expiry.
     """
     worker_id, fence = _require_holder(worker_id, fence)
     request = {
@@ -52,6 +56,11 @@ def renew_lease(
     with store.transaction(workspace_id, actor_id) as cur:
 
         def apply() -> dict[str, object]:
+            if read_stop_state(cur, workspace_id)["stopped"]:
+                raise JobError(
+                    "agent_stop_engaged",
+                    ("agent stop is engaged",),
+                )
             cur.execute(
                 """
                 UPDATE omp_jobs.jobs

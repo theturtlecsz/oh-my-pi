@@ -774,6 +774,7 @@ class RecordAlarmSignalPayload(StrictModel):
         "budget_exceeded",
         "safety_check_failed",
         "credential_appeared",
+        "owner_approval_attempt",
     ]
     work_id: UUID | None = None
     subject: str = Field(min_length=1, max_length=200)
@@ -2160,6 +2161,7 @@ RelayIntent = Literal[
     "confirm_scope",
     "edit_scope",
     "answer_decision",
+    "release_stop",
 ]
 
 
@@ -2263,6 +2265,20 @@ class RelayOwnerIntentPayload(StrictModel):
                 )
             ):
                 raise ValueError("unused field for answer_decision")
+        elif self.intent == "release_stop":
+            if any(
+                v is not None
+                for v in (
+                    self.mission_id,
+                    self.revision,
+                    self.priority,
+                    self.decision_id,
+                    self.draft,
+                    self.answer,
+                    self.expires_at,
+                )
+            ):
+                raise ValueError("unused field for release_stop")
         return self
 
 
@@ -2604,6 +2620,7 @@ class Approval(StrictModel):
         "OMP-403",
         "OMP-415",
         "OMP-416",
+        "OMP-430",
     ]
     attestation: hex64 | None = None
 

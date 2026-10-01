@@ -121,16 +121,21 @@ def watch_tick(
     status_source: Callable[[], bool | StopStatusView] | WorkClient | None = None,
     read_status: Callable[[], bool | StopStatusView] | WorkClient | None = None,
     run_cmd: Callable[[list[str]], Any] | None = None,
+    paused: set[str] | None = None,
 ) -> bool:
     """Evaluate one tick of the stop watcher.
 
     Reads the current workspace stop status. If stopped (or if reading fails
     after having been stopped, preserving the last known enforcing state),
     checks whether each unit is active via ``systemctl --user is-active <unit>``
-    and stops it with ``systemctl --user stop <unit>`` if active.
+    and stops it with ``systemctl --user stop <unit>`` if active. Every unit it
+    stops joins ``paused``.
 
-    Units are never started by the watcher; the owner restarts units after
-    release.
+    A tick that reads released starts each unit in ``paused`` once with
+    ``systemctl --user start <unit>`` and then clears the set, so the owner's
+    release resumes exactly the units the stop paused. ``paused`` is the
+    caller's set: ``watch`` keeps one across ticks. A unit that was never
+    stopped is never started.
     """
     if callable(last_known_stopped) or isinstance(last_known_stopped, WorkClient):
         actual_status_source = last_known_stopped
@@ -158,11 +163,19 @@ def watch_tick(
         current_stopped = actual_last_known
 
     if current_stopped:
+        stopped_units = paused if paused is not None else set()
         for unit in units:
             res = runner(["systemctl", "--user", "is-active", unit])
             rc = res.returncode if hasattr(res, "returncode") else res
             if rc == 0:
                 runner(["systemctl", "--user", "stop", unit])
+                stopped_units.add(unit)
+        return current_stopped
+
+    if paused:
+        for unit in sorted(paused):
+            runner(["systemctl", "--user", "start", unit])
+        paused.clear()
 
     return current_stopped
 
@@ -181,6 +194,7 @@ def watch(
 ) -> None:
     """Periodically tick the stop watcher against the provided WorkClient."""
     last_known_stopped = False
+    paused: set[str] = set()
     ticks = 0
     while True:
         if stop_event is not None and stop_event.is_set():
@@ -192,6 +206,7 @@ def watch(
             last_known_stopped,
             status_source=client,
             run_cmd=run_cmd,
+            paused=paused,
         )
         ticks += 1
         if max_ticks is not None and ticks >= max_ticks:

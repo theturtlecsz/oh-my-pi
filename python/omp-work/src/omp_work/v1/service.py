@@ -995,7 +995,9 @@ class WorkService:
         if operation == "mission.status":
             if ident is None:
                 raise AssertionError("ident is None")
-            return self._store.read(workspace_id, actor_id, "mission", str(ident))
+            return self._store.read(
+                workspace_id, actor_id, "mission", str(ident), standing=True
+            )
         if operation == "evidence.inspect":
             return self._store.receipt(workspace_id, actor_id, ident)
         return StopStatusView.model_validate(

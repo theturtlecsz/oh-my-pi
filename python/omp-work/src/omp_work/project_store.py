@@ -53,6 +53,7 @@ from omp_work.standing_policy import (
     validate_policy,
 )
 from omp_work.v1.decision_records import find_decision
+from omp_work.v1.missions import open_missions, project_mission_progress
 from omp_work.v1.store_shared import WorkStoreError, row_json
 
 if TYPE_CHECKING:
@@ -417,7 +418,7 @@ class ProjectStoreMixin:
     def read_project(
         self, workspace_id: UUID, actor_id: UUID, project_id: UUID
     ) -> dict[str, object]:
-        """The whole project: record, profile, missions and history."""
+        """The whole project: record, profile, missions, mission progress and history."""
         with self._transaction(workspace_id, actor_id) as cur:
             cur.execute(
                 f"SELECT {_PROJECT_FIELDS} FROM omp_work.projects"  # nosec B608 - static column list
@@ -471,6 +472,7 @@ class ProjectStoreMixin:
                 (workspace_id, project_id),
             )
             missions = [dict(row) for row in cur.fetchall()]
+            mission_progress = project_mission_progress(cur, workspace_id, project_id)
 
             cur.execute(
                 f"SELECT {_HISTORY_FIELDS} FROM omp_work.project_history"  # nosec B608 - static column list
@@ -509,6 +511,8 @@ class ProjectStoreMixin:
             view["refs"] = [row_json(row) for row in refs]
             view["repositories"] = [row_json(row) for row in repositories]
             view["missions"] = [row_json(row) for row in missions]
+            view["open_missions"] = open_missions(cur, workspace_id, project_id)
+            view["mission_progress"] = [row_json(row) for row in mission_progress]
             view["history"] = [row_json(row) for row in history]
             view["standing_mandate"] = row_json(mandate)
             view["standing_policies"] = [row_json(row) for row in policies]

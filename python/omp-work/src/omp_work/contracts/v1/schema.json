@@ -2714,7 +2714,8 @@
             "OMP-403",
             "OMP-426",
             "OMP-415",
-            "OMP-416"
+            "OMP-416",
+            "OMP-430"
           ],
           "title": "Issue",
           "type": "string"
@@ -11571,7 +11572,8 @@
                 "cost_threshold",
                 "budget_exceeded",
                 "safety_check_failed",
-                "credential_appeared"
+                "credential_appeared",
+                "owner_approval_attempt"
               ],
               "title": "Signal",
               "type": "string"
@@ -12312,7 +12314,8 @@
                 "change_priority",
                 "confirm_scope",
                 "edit_scope",
-                "answer_decision"
+                "answer_decision",
+                "release_stop"
               ],
               "title": "Intent",
               "type": "string"
@@ -24891,7 +24894,8 @@
                 "cost_threshold",
                 "budget_exceeded",
                 "safety_check_failed",
-                "credential_appeared"
+                "credential_appeared",
+                "owner_approval_attempt"
               ],
               "title": "Signal",
               "type": "string"
@@ -24956,7 +24960,8 @@
             "cost_threshold",
             "budget_exceeded",
             "safety_check_failed",
-            "credential_appeared"
+            "credential_appeared",
+            "owner_approval_attempt"
           ],
           "title": "Signal",
           "type": "string"
@@ -27446,7 +27451,8 @@
                 "change_priority",
                 "confirm_scope",
                 "edit_scope",
-                "answer_decision"
+                "answer_decision",
+                "release_stop"
               ],
               "title": "Intent",
               "type": "string"
@@ -27854,7 +27860,8 @@
             "change_priority",
             "confirm_scope",
             "edit_scope",
-            "answer_decision"
+            "answer_decision",
+            "release_stop"
           ],
           "title": "Intent",
           "type": "string"

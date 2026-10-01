@@ -22,6 +22,7 @@
     "decisions/0017-decision-target-binding.md",
     "decisions/0018-mission-events.md",
     "decisions/0019-client-contract.md",
+    "decisions/0020-relayed-stop-release-and-client-oversight.md",
     "examples.json",
     "manifest.json",
     "research-artifact-hash.json",

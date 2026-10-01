@@ -1,0 +1,22 @@
+{
+  "mission_id": "00000000-0000-7000-8000-000000000030",
+  "intake": {
+    "archetype": "small_code_change",
+    "source": {
+      "text": "Deliver the second client proof.",
+      "sha256": "d527e51c6878faf4ebaf6a401adee80ed9d3c12b95f9b117aa3d830534c9c5bf",
+      "spans": []
+    },
+    "goal": {
+      "id": "goal-1",
+      "statement": "Deliver the second client proof.",
+      "source_span_ids": []
+    }
+  },
+  "scope": {
+    "project_id": "00000000-0000-7000-8000-000000000020",
+    "risk_policy": "risk-policy",
+    "approval_policy": "approval-policy",
+    "effort_policy": "effort-policy"
+  }
+}
