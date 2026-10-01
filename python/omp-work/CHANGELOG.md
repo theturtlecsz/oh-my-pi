@@ -6,8 +6,12 @@
 
 - Mission events, resumable event cursors, and signed push subscriptions, including OMP-406 alerts and daily digests (`omp-work events push`).
 - Bounded intake publication requires an item budget (money, tokens, wall-clock, sub-agents).
-- Runtime stops an item and its sub-agents when its budget is spent; grokbot alerts at 50/80/100% (`omp-work budget-alerts`).
-- A mission without budget_policy is held with a decision record.
+- Runtime stops an item and its sub-agents when its budget is spent; budget notices at 50/80/100% are relayed as alarm signals to ops.alarm push subscribers (`omp-work budget-alerts`).
+- A mission without budget_policy admits under standing budget policy or is held with a decision record.
+- only owner or client principals engage the stop.
+- a stop pauses jobs, units and control-plane actions until the owner (or an owner-signed relay) releases.
+- `alarms init|run|digest` and OMP_GROKBOT_ALERT_* removed in favour of ops.alarm/ops.digest push.
+- tier 3 attempts and tier 2 no-policy refusals alert.
 - PostgreSQL operational bootstrap, migrations, health checks, and encrypted backup commands for the Work Ledger.
 - Authenticated loopback WorkService, typed clients, immutable work history, idempotent command handling, and closeout projections.
 - Idempotent Linear importer with hash-verified staging, restartable relation/focus validation, dry-run reconciliation with encrypted parity artifacts, and atomic promotion that preserves local edits, retires import-owned label joins, and fails closed on conflicts or canonical drift (`ops linear-import stage|reconcile|promote`).
