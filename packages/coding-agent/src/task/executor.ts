@@ -4330,7 +4330,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						reportSendError: (action, err) =>
 							logger.error("Extension send failed", { action, error: err.message }),
 						reportRuntimeError: err =>
-							logger.error("Extension error", { path: err.extensionPath, error: err.error }),
+							logger.error("Extension error", { path: err.extensionPath, event: err.event, error: err.error }),
 						filterActiveTools: toolNames => toolNames.filter(name => !isParentOwnedTool(name)),
 					});
 					AgentRegistry.global().syncSessionStatus(id, revived);
@@ -4429,7 +4429,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				initializeExtensions(session, {
 					reportSendError: (action, err) => logger.error("Extension send failed", { action, error: err.message }),
 					reportRuntimeError: err =>
-						logger.error("Extension error", { path: err.extensionPath, error: err.error }),
+						logger.error("Extension error", { path: err.extensionPath, event: err.event, error: err.error }),
 					trackExtensionSend: task => {
 						pendingExtensionMessages.push(task.catch(() => {}));
 					},

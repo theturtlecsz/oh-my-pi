@@ -88,6 +88,7 @@ describe("task executor extension abort handler", () => {
 			dispose: async () => {},
 			setIrcWakeTurnObserver: () => {},
 			subscribeRunState: () => () => {},
+			isAdvisorActive: () => false,
 		};
 		return session as AgentSession;
 	}
@@ -213,7 +214,7 @@ describe("task executor extension abort handler", () => {
 
 			expect(abortMock).toHaveBeenCalled();
 			expect(loggerErrorSpy).toHaveBeenCalledWith("Extension error", {
-				path: "<task-executor>",
+				path: "<runtime-init>",
 				event: "abort",
 				error:
 					faultKind === "null-prototype"

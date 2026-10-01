@@ -163,11 +163,15 @@ export async function initializeExtensions(session: AgentSession, options: Initi
 							stack: normalized.stack,
 						});
 					} catch (reportError) {
-						logger.error("Extension abort error reporting failed", {
-							path: "<runtime-init>",
-							error: normalized.message,
-							reportError: extensionAbortErrorMessage(reportError),
-						});
+						try {
+							logger.error("Extension abort error reporting failed", {
+								path: "<runtime-init>",
+								error: normalized.message,
+								reportError: extensionAbortErrorMessage(reportError),
+							});
+						} catch {
+							// Logger failure must not escape the void abort boundary.
+						}
 					}
 				});
 			},
