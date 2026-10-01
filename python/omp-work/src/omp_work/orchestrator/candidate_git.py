@@ -569,9 +569,15 @@ def _ssh_command(credential_path: Path) -> str:
     )
 
 
-def _remote_ref(control_repo: Path | str, remote: str, ref: str) -> str | None:
+def _remote_ref(
+    control_repo: Path | str,
+    remote: str,
+    ref: str,
+    *,
+    extra_env: Mapping[str, str] | None = None,
+) -> str | None:
     """The sha a remote advertises for ``ref``, or None when absent."""
-    out = git(control_repo, "ls-remote", remote, ref)
+    out = git(control_repo, "ls-remote", remote, ref, extra_env=extra_env)
     for line in out.decode("utf-8", errors="surrogateescape").splitlines():
         sha, sep, name = line.partition("\t")
         if sep and name == ref:
@@ -597,7 +603,7 @@ def _run_once(
 
     key = _intent_key(action, commit, remote, ref)
     if intents.open(key) is not None:
-        if _remote_ref(control_repo, remote, ref) == commit:
+        if _remote_ref(control_repo, remote, ref, extra_env=extra_env) == commit:
             intents.mark_done(key, commit)
             return
     else:

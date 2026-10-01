@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import hashlib
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from omp_work.orchestrator import candidate_git
 from omp_work.orchestrator.candidate_git import (
     CandidateGitError,
     IntentLog,
@@ -1180,5 +1182,81 @@ def test_push_and_merge_attacker_gitdir_write_no_marker(tmp_path: Path) -> None:
     assert _bare_ref(merge_remote, "refs/heads/main") == commit
     assert _count_lines(merge_count) == 1
     assert not marker.exists()
+
+
+def test_merge_retry_authenticated_ls_remote_uses_credential(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retry after mark_done crash forwards GIT_SSH_COMMAND to ls-remote."""
+    seed, commit = _make_candidate_commit(tmp_path, "auth-retry-seed")
+    remote, count = _make_bare_remote(tmp_path, "auth-retry-remote.git")
+    credential = tmp_path / "cred"
+    credential.write_text("key\n")
+    intents = InMemoryIntentLog(raise_once=True)
+    expected_ssh = _ssh_command(credential)
+
+    # First attempt: pushes successfully via git, but mark_done raises RuntimeError
+    with pytest.raises(RuntimeError):
+        merge(
+            seed,
+            commit,
+            str(remote),
+            "refs/heads/main",
+            intents=intents,
+            lease_ok=lambda: True,
+            credential_path=credential,
+        )
+
+    assert _bare_ref(remote, "refs/heads/main") == commit
+    assert _count_lines(count) == 1
+    key = _intent_key("merge", commit, str(remote), "refs/heads/main")
+    assert intents.open(key) is not None
+
+    captured_calls: list[tuple[tuple[str, ...], Mapping[str, str] | None]] = []
+    real_git = candidate_git.git
+
+    def authenticated_git(
+        repo: Path | str,
+        *args: str,
+        input: bytes | str | None = None,
+        index_file: Path | str | None = None,
+        extra_env: Mapping[str, str] | None = None,
+    ) -> bytes:
+        captured_calls.append((args, extra_env))
+        # An authenticated remote refuses git calls without the SSH credential
+        if args and args[0] == "ls-remote":
+            if not extra_env or extra_env.get("GIT_SSH_COMMAND") != expected_ssh:
+                raise CandidateGitError("git_failed")
+        return real_git(
+            repo,
+            *args,
+            input=input,
+            index_file=index_file,
+            extra_env=extra_env,
+        )
+
+    monkeypatch.setattr(candidate_git, "git", authenticated_git)
+
+    # Retry should query ls-remote with GIT_SSH_COMMAND and succeed without pushing again
+    merge(
+        seed,
+        commit,
+        str(remote),
+        "refs/heads/main",
+        intents=intents,
+        lease_ok=lambda: True,
+        credential_path=credential,
+    )
+
+    ls_remote_calls = [
+        (args, env) for args, env in captured_calls if args and args[0] == "ls-remote"
+    ]
+    assert len(ls_remote_calls) == 1
+    assert ls_remote_calls[0][1] is not None
+    assert ls_remote_calls[0][1].get("GIT_SSH_COMMAND") == expected_ssh
+    assert _bare_ref(remote, "refs/heads/main") == commit
+    assert _count_lines(count) == 1
+    assert intents.open(key) is None
+
 
 
