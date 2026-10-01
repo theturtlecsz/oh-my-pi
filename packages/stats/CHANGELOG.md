@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- A fork synced in the same clock tick as its parent no longer takes ownership of the parent's copied requests.
+
 ## [18.4.4] - 2026-09-29
 
 ### Added

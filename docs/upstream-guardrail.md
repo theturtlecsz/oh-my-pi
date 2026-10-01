@@ -157,6 +157,7 @@ bun test session-system/tests packages/work-client/test scripts/verify-upstream-
 ./node_modules/.bin/tsc --noEmit -p session-system
 bun run check:ts
 cargo fmt --all -- --check
+git ls-files -z -- 'crates/*.rs' | xargs -0 -r touch --
 cargo clippy --workspace --exclude brush-core --no-deps -- -D warnings -A clippy::cargo_common_metadata
 bun run test:ts
 bun run test:scripts
@@ -168,6 +169,8 @@ grep -q 'PASS' "$SMOKE_LOG"
 rm -f "$SMOKE_LOG"
 test -z "$(git status --porcelain --untracked-files=no)"
 ```
+
+Note: gate 7 first refreshes every tracked `.rs` under crates/ (lib roots, modules, build scripts, non-src lib paths) so cargo re-lints every member; a warm cache hid an OMP-401 lint; clippy evidence counts only from a run with this step.
 
 Settle against that scratch commit. Settle rewrites a fork-only proof when the path is identical at the record's fork and `HEAD`, and rewrites a proof equal to `pending:session-system/update.sh gates 3-12`. Conflict rows (`pending:resolve and name the focused test`) and Breaking Changes / Removed rows (`pending:decide re-fitted or not-applicable`) stay pending, so the command exits 1 and lists them:
 

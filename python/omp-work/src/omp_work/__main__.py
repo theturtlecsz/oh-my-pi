@@ -25,8 +25,14 @@ from .operations import stop as stop_ops
 from .operations.config import OperationsConfig
 from .operations.database import collect_health
 from .v1.client import WorkClient
-from .v1.models import Approval
+from .v1.models import (
+    Approval,
+    CommandEnvelope,
+    PutEventSubscription,
+    PutEventSubscriptionCommand,
+)
 from .v1.server import create_app
+from .v1.service import WorkError
 from .credential_watch import DEFAULT_ROOTS, watch_credentials
 from .budget_headroom import compute_headroom
 from .always_running import check_stall
@@ -179,20 +185,54 @@ def _run_events_command(args: argparse.Namespace) -> int:
         print(f"events: {error}", file=sys.stderr)
         return 255
     try:
-        try:
-            master_key = event_push.load_master_key(config_dir)
-        except ValueError as error:
-            print(f"events: {error}", file=sys.stderr)
-            return 2
-        allowed_hosts = event_push.load_allowed_hosts(config_dir)
-        result = event_push.run_push(
-            client,
-            workspace_id=workspace_id,
-            master_key=master_key,
-            allowed_hosts=allowed_hosts,
-        )
-        print(json.dumps(result, sort_keys=True))
-        return 0
+        if args.events_command == "push":
+            try:
+                master_key = event_push.load_master_key(config_dir)
+            except ValueError as error:
+                print(f"events: {error}", file=sys.stderr)
+                return 2
+            allowed_hosts = event_push.load_allowed_hosts(config_dir)
+            result = event_push.run_push(
+                client,
+                workspace_id=workspace_id,
+                master_key=master_key,
+                allowed_hosts=allowed_hosts,
+            )
+            print(json.dumps(result, sort_keys=True))
+            return 0
+        if args.events_command in ("subscribe", "subscriptions"):
+            try:
+                if args.events_command == "subscribe":
+                    envelope = CommandEnvelope(
+                        api_version="work.omp.dev/v1",
+                        workspace_id=workspace_id,
+                        operation_id=uuid4(),
+                        request_id=uuid4(),
+                        correlation_id=uuid4(),
+                        command=PutEventSubscriptionCommand(
+                            type="put_event_subscription",
+                            payload=PutEventSubscription(
+                                subscription_id=args.subscription_id,
+                                push_url=args.push_url,
+                                event_types=tuple(args.event_types),
+                            ),
+                        ),
+                    )
+                    response = client.execute(envelope)
+                    print(response.model_dump_json())
+                    return 0
+                page = client.event_subscriptions()
+                print(page.model_dump_json())
+                return 0
+            except WorkError as error:
+                diag = (
+                    f" {' '.join(str(d) for d in error.diagnostics)}"
+                    if error.diagnostics
+                    else ""
+                )
+                print(f"events: {error.code}{diag}", file=sys.stderr)
+                return 1
+        return 2
     except Exception as error:  # noqa: BLE001 - surfaced as the CLI failure code
         print(f"events: {error}", file=sys.stderr)
         return 255
@@ -340,6 +380,21 @@ def main(argv: list[str] | None = None) -> int | None:
     push_parser.add_argument("--bearer-file", type=Path)
     push_key_parser = events_sub.add_parser("push-key")
     push_key_parser.add_argument("--subscription", required=True, type=UUID)
+    subscribe_parser = events_sub.add_parser("subscribe")
+    subscribe_parser.add_argument("--client-config", required=True, type=Path)
+    subscribe_parser.add_argument("--bearer-file", type=Path)
+    subscribe_parser.add_argument("--subscription-id", required=True, type=UUID)
+    subscribe_parser.add_argument("--push-url", required=True)
+    subscribe_parser.add_argument(
+        "--event-type",
+        action="append",
+        required=True,
+        dest="event_types",
+        metavar="EVENT_TYPE",
+    )
+    subscriptions_parser = events_sub.add_parser("subscriptions")
+    subscriptions_parser.add_argument("--client-config", required=True, type=Path)
+    subscriptions_parser.add_argument("--bearer-file", type=Path)
 
     owner_key.add_parser(subcommands)
 

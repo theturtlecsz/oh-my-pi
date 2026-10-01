@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { $ } from "bun";
 import { isEnoent } from "../packages/utils/src/fs-error.ts";
+import { $which } from "../packages/utils/src/which";
 
 /**
  * Resolve target path from an export value (string, conditions object, or array).
@@ -244,12 +245,22 @@ export async function checkWorkspacePaths(
 }
 
 export async function writeWorkspacePaths(tsconfigPath: string, packagesDir: string, repoRoot: string): Promise<void> {
+	const oxfmt = $which("oxfmt");
+	if (!oxfmt) {
+		throw new Error("oxfmt not found on PATH. Run `bun run gen:workspace-paths`.");
+	}
+
 	const config = await readWorkspaceTsConfig(tsconfigPath);
 	const expectedPaths = await generateWorkspacePaths(packagesDir);
 	const updated = updateTsConfigPaths(config, expectedPaths);
 
 	await Bun.write(tsconfigPath, `${JSON.stringify(updated, null, "\t")}\n`);
-	await $`biome format --write ${tsconfigPath}`.cwd(repoRoot).quiet().nothrow();
+	try {
+		await $`${oxfmt} ${tsconfigPath}`.cwd(repoRoot).quiet();
+	} catch (err: unknown) {
+		const stderr = (err as { stderr?: Buffer | string })?.stderr?.toString().trim();
+		throw new Error(stderr ? `oxfmt failed: ${stderr}` : "oxfmt failed with nonzero exit code", { cause: err });
+	}
 }
 
 async function main(): Promise<void> {

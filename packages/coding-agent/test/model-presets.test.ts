@@ -23,6 +23,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { cfgDefaultThinkingLevel } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { isolateHost } from "./helpers/host-isolation";
 
 const SONNET = "anthropic/claude-sonnet-4-5";
 const SONNET_46 = "anthropic/claude-sonnet-4-6";
@@ -321,12 +322,9 @@ describe("model presets", () => {
 	it("refuses a preset with no default and no authed model before writing", async () => {
 		const dir = TempDir.createSync("@pi-model-presets-noauth-");
 		tempDirs.push(dir);
+		const isolation = isolateHost();
 		const noAuth = await AuthStorage.create(path.join(dir.path(), "auth.db"));
 		const registry = new ModelRegistry(noAuth, path.join(dir.path(), "models.yml"));
-		// An empty auth store is not enough on its own: provider env keys (including ones
-		// loaded from the host's ~/.env) and ambient AWS profiles still count as configured
-		// auth. Pin the credential oracle to "none" so the precondition holds on any host.
-		vi.spyOn(registry, "hasConfiguredAuth").mockReturnValue(false);
 		try {
 			const settings = Settings.isolated();
 			settings.setModelRole("default", SONNET);
@@ -354,6 +352,7 @@ describe("model presets", () => {
 			expect(settings.getModelRole("default")).toBe(SONNET);
 		} finally {
 			noAuth.close();
+			isolation.restore();
 		}
 	});
 

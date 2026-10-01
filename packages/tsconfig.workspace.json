@@ -2,216 +2,76 @@
 	"extends": "../tsconfig.base.json",
 	"compilerOptions": {
 		"paths": {
-			"@oh-my-pi/omp-stats": [
-				"./stats/src/index.ts"
-			],
-			"@oh-my-pi/omp-stats/client": [
-				"./stats/src/client/index.tsx"
-			],
-			"@oh-my-pi/omp-stats/client/components/*": [
-				"./stats/src/client/components/*.ts"
-			],
-			"@oh-my-pi/omp-stats/client/*": [
-				"./stats/src/client/*.ts"
-			],
-			"@oh-my-pi/omp-stats/*.js": [
-				"./stats/src/*.ts"
-			],
-			"@oh-my-pi/omp-stats/*": [
-				"./stats/src/*.ts"
-			],
-			"@oh-my-pi/omptype": [
-				"./omptype/src/index.ts"
-			],
-			"@oh-my-pi/omptype/*.js": [
-				"./omptype/src/*.ts"
-			],
-			"@oh-my-pi/omptype/*": [
-				"./omptype/src/*.ts"
-			],
-			"@oh-my-pi/pi-agent-core": [
-				"./agent/src/index.ts"
-			],
-			"@oh-my-pi/pi-agent-core/compaction": [
-				"./agent/src/compaction.ts"
-			],
-			"@oh-my-pi/pi-agent-core/compaction/*": [
-				"./agent/src/compaction/*.ts"
-			],
-			"@oh-my-pi/pi-agent-core/*": [
-				"./agent/src/*.ts"
-			],
-			"@oh-my-pi/pi-ai": [
-				"./ai/src/index.ts"
-			],
-			"@oh-my-pi/pi-ai/auth-broker": [
-				"./ai/src/auth-broker/index.ts"
-			],
-			"@oh-my-pi/pi-ai/auth-gateway": [
-				"./ai/src/auth-gateway/index.ts"
-			],
-			"@oh-my-pi/pi-ai/dialect": [
-				"./ai/src/dialect/index.ts"
-			],
-			"@oh-my-pi/pi-ai/embeddings": [
-				"./ai/src/embeddings/index.ts"
-			],
-			"@oh-my-pi/pi-ai/error": [
-				"./ai/src/error/index.ts"
-			],
-			"@oh-my-pi/pi-ai/images": [
-				"./ai/src/images/index.ts"
-			],
-			"@oh-my-pi/pi-ai/judgment": [
-				"./ai/src/judgment/index.ts"
-			],
-			"@oh-my-pi/pi-ai/oauth": [
-				"./ai/src/registry/oauth/index.ts"
-			],
-			"@oh-my-pi/pi-ai/registry": [
-				"./ai/src/registry/index.ts"
-			],
-			"@oh-my-pi/pi-ai/registry/oauth": [
-				"./ai/src/registry/oauth/index.ts"
-			],
-			"@oh-my-pi/pi-ai/rerank": [
-				"./ai/src/rerank/index.ts"
-			],
-			"@oh-my-pi/pi-ai/speech": [
-				"./ai/src/speech/index.ts"
-			],
-			"@oh-my-pi/pi-ai/transcription": [
-				"./ai/src/transcription/index.ts"
-			],
-			"@oh-my-pi/pi-ai/utils/harmony-leak": [
-				"./ai/src/utils/harmony-leak.ts"
-			],
-			"@oh-my-pi/pi-ai/utils/schema": [
-				"./ai/src/utils/schema/index.ts"
-			],
-			"@oh-my-pi/pi-ai/video": [
-				"./ai/src/video/index.ts"
-			],
-			"@oh-my-pi/pi-ai/providers/openai-codex/*": [
-				"./ai/src/providers/openai-codex/*.ts"
-			],
-			"@oh-my-pi/pi-ai/auth-gateway/*": [
-				"./ai/src/auth-gateway/*.ts"
-			],
-			"@oh-my-pi/pi-ai/utils/schema/*": [
-				"./ai/src/utils/schema/*.ts"
-			],
-			"@oh-my-pi/pi-ai/auth-broker/*": [
-				"./ai/src/auth-broker/*.ts"
-			],
-			"@oh-my-pi/pi-ai/providers/*": [
-				"./ai/src/providers/*.ts"
-			],
-			"@oh-my-pi/pi-ai/oauth/*": [
-				"./ai/src/registry/oauth/*.ts"
-			],
-			"@oh-my-pi/pi-ai/usage/*": [
-				"./ai/src/usage/*.ts"
-			],
-			"@oh-my-pi/pi-ai/utils/*": [
-				"./ai/src/utils/*.ts"
-			],
-			"@oh-my-pi/pi-ai/*.js": [
-				"./ai/src/*.ts"
-			],
-			"@oh-my-pi/pi-ai/*": [
-				"./ai/src/*.ts"
-			],
-			"@oh-my-pi/pi-catalog": [
-				"./catalog/src/index.ts"
-			],
-			"@oh-my-pi/pi-catalog/discovery": [
-				"./catalog/src/discovery/index.ts"
-			],
-			"@oh-my-pi/pi-catalog/identity": [
-				"./catalog/src/identity/index.ts"
-			],
-			"@oh-my-pi/pi-catalog/models.json": [
-				"./catalog/src/models.json"
-			],
-			"@oh-my-pi/pi-catalog/provider-models": [
-				"./catalog/src/provider-models/index.ts"
-			],
-			"@oh-my-pi/pi-catalog/provider-models/*": [
-				"./catalog/src/provider-models/*.ts"
-			],
-			"@oh-my-pi/pi-catalog/discovery/*": [
-				"./catalog/src/discovery/*.ts"
-			],
-			"@oh-my-pi/pi-catalog/identity/*": [
-				"./catalog/src/identity/*.ts"
-			],
-			"@oh-my-pi/pi-catalog/compat/*": [
-				"./catalog/src/compat/*.ts"
-			],
-			"@oh-my-pi/pi-catalog/wire/*": [
-				"./catalog/src/wire/*.ts"
-			],
-			"@oh-my-pi/pi-catalog/*.js": [
-				"./catalog/src/*.ts"
-			],
-			"@oh-my-pi/pi-catalog/*": [
-				"./catalog/src/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent": [
-				"./coding-agent/src/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/async": [
-				"./coding-agent/src/async/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/autoresearch": [
-				"./coding-agent/src/autoresearch/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/capability": [
-				"./coding-agent/src/capability/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/cli/gallery-fixtures": [
-				"./coding-agent/src/cli/gallery-fixtures/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/commit": [
-				"./coding-agent/src/commit/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/commit/agentic": [
-				"./coding-agent/src/commit/agentic/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/commit/agentic/tools": [
-				"./coding-agent/src/commit/agentic/tools/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/commit/analysis": [
-				"./coding-agent/src/commit/analysis/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/commit/changelog": [
-				"./coding-agent/src/commit/changelog/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/commit/conventional": [
-				"./coding-agent/src/commit/conventional/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/dap": [
-				"./coding-agent/src/dap/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/debug": [
-				"./coding-agent/src/debug/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/discovery": [
-				"./coding-agent/src/discovery/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/edit": [
-				"./coding-agent/src/edit/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/eval": [
-				"./coding-agent/src/eval/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/exa": [
-				"./coding-agent/src/exa/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/export/html": [
-				"./coding-agent/src/export/html/index.ts"
-			],
+			"@oh-my-pi/omp-stats": ["./stats/src/index.ts"],
+			"@oh-my-pi/omp-stats/client": ["./stats/src/client/index.tsx"],
+			"@oh-my-pi/omp-stats/client/components/*": ["./stats/src/client/components/*.ts"],
+			"@oh-my-pi/omp-stats/client/*": ["./stats/src/client/*.ts"],
+			"@oh-my-pi/omp-stats/*.js": ["./stats/src/*.ts"],
+			"@oh-my-pi/omp-stats/*": ["./stats/src/*.ts"],
+			"@oh-my-pi/omptype": ["./omptype/src/index.ts"],
+			"@oh-my-pi/omptype/*.js": ["./omptype/src/*.ts"],
+			"@oh-my-pi/omptype/*": ["./omptype/src/*.ts"],
+			"@oh-my-pi/pi-agent-core": ["./agent/src/index.ts"],
+			"@oh-my-pi/pi-agent-core/compaction": ["./agent/src/compaction.ts"],
+			"@oh-my-pi/pi-agent-core/compaction/*": ["./agent/src/compaction/*.ts"],
+			"@oh-my-pi/pi-agent-core/*": ["./agent/src/*.ts"],
+			"@oh-my-pi/pi-ai": ["./ai/src/index.ts"],
+			"@oh-my-pi/pi-ai/auth-broker": ["./ai/src/auth-broker/index.ts"],
+			"@oh-my-pi/pi-ai/auth-gateway": ["./ai/src/auth-gateway/index.ts"],
+			"@oh-my-pi/pi-ai/dialect": ["./ai/src/dialect/index.ts"],
+			"@oh-my-pi/pi-ai/embeddings": ["./ai/src/embeddings/index.ts"],
+			"@oh-my-pi/pi-ai/error": ["./ai/src/error/index.ts"],
+			"@oh-my-pi/pi-ai/images": ["./ai/src/images/index.ts"],
+			"@oh-my-pi/pi-ai/judgment": ["./ai/src/judgment/index.ts"],
+			"@oh-my-pi/pi-ai/oauth": ["./ai/src/registry/oauth/index.ts"],
+			"@oh-my-pi/pi-ai/registry": ["./ai/src/registry/index.ts"],
+			"@oh-my-pi/pi-ai/registry/oauth": ["./ai/src/registry/oauth/index.ts"],
+			"@oh-my-pi/pi-ai/rerank": ["./ai/src/rerank/index.ts"],
+			"@oh-my-pi/pi-ai/speech": ["./ai/src/speech/index.ts"],
+			"@oh-my-pi/pi-ai/transcription": ["./ai/src/transcription/index.ts"],
+			"@oh-my-pi/pi-ai/utils/harmony-leak": ["./ai/src/utils/harmony-leak.ts"],
+			"@oh-my-pi/pi-ai/utils/schema": ["./ai/src/utils/schema/index.ts"],
+			"@oh-my-pi/pi-ai/video": ["./ai/src/video/index.ts"],
+			"@oh-my-pi/pi-ai/providers/openai-codex/*": ["./ai/src/providers/openai-codex/*.ts"],
+			"@oh-my-pi/pi-ai/auth-gateway/*": ["./ai/src/auth-gateway/*.ts"],
+			"@oh-my-pi/pi-ai/utils/schema/*": ["./ai/src/utils/schema/*.ts"],
+			"@oh-my-pi/pi-ai/auth-broker/*": ["./ai/src/auth-broker/*.ts"],
+			"@oh-my-pi/pi-ai/providers/*": ["./ai/src/providers/*.ts"],
+			"@oh-my-pi/pi-ai/oauth/*": ["./ai/src/registry/oauth/*.ts"],
+			"@oh-my-pi/pi-ai/usage/*": ["./ai/src/usage/*.ts"],
+			"@oh-my-pi/pi-ai/utils/*": ["./ai/src/utils/*.ts"],
+			"@oh-my-pi/pi-ai/*.js": ["./ai/src/*.ts"],
+			"@oh-my-pi/pi-ai/*": ["./ai/src/*.ts"],
+			"@oh-my-pi/pi-catalog": ["./catalog/src/index.ts"],
+			"@oh-my-pi/pi-catalog/discovery": ["./catalog/src/discovery/index.ts"],
+			"@oh-my-pi/pi-catalog/identity": ["./catalog/src/identity/index.ts"],
+			"@oh-my-pi/pi-catalog/models.json": ["./catalog/src/models.json"],
+			"@oh-my-pi/pi-catalog/provider-models": ["./catalog/src/provider-models/index.ts"],
+			"@oh-my-pi/pi-catalog/provider-models/*": ["./catalog/src/provider-models/*.ts"],
+			"@oh-my-pi/pi-catalog/discovery/*": ["./catalog/src/discovery/*.ts"],
+			"@oh-my-pi/pi-catalog/identity/*": ["./catalog/src/identity/*.ts"],
+			"@oh-my-pi/pi-catalog/compat/*": ["./catalog/src/compat/*.ts"],
+			"@oh-my-pi/pi-catalog/wire/*": ["./catalog/src/wire/*.ts"],
+			"@oh-my-pi/pi-catalog/*.js": ["./catalog/src/*.ts"],
+			"@oh-my-pi/pi-catalog/*": ["./catalog/src/*.ts"],
+			"@oh-my-pi/pi-coding-agent": ["./coding-agent/src/index.ts"],
+			"@oh-my-pi/pi-coding-agent/async": ["./coding-agent/src/async/index.ts"],
+			"@oh-my-pi/pi-coding-agent/autoresearch": ["./coding-agent/src/autoresearch/index.ts"],
+			"@oh-my-pi/pi-coding-agent/capability": ["./coding-agent/src/capability/index.ts"],
+			"@oh-my-pi/pi-coding-agent/cli/gallery-fixtures": ["./coding-agent/src/cli/gallery-fixtures/index.ts"],
+			"@oh-my-pi/pi-coding-agent/commit": ["./coding-agent/src/commit/index.ts"],
+			"@oh-my-pi/pi-coding-agent/commit/agentic": ["./coding-agent/src/commit/agentic/index.ts"],
+			"@oh-my-pi/pi-coding-agent/commit/agentic/tools": ["./coding-agent/src/commit/agentic/tools/index.ts"],
+			"@oh-my-pi/pi-coding-agent/commit/analysis": ["./coding-agent/src/commit/analysis/index.ts"],
+			"@oh-my-pi/pi-coding-agent/commit/changelog": ["./coding-agent/src/commit/changelog/index.ts"],
+			"@oh-my-pi/pi-coding-agent/commit/conventional": ["./coding-agent/src/commit/conventional/index.ts"],
+			"@oh-my-pi/pi-coding-agent/dap": ["./coding-agent/src/dap/index.ts"],
+			"@oh-my-pi/pi-coding-agent/debug": ["./coding-agent/src/debug/index.ts"],
+			"@oh-my-pi/pi-coding-agent/discovery": ["./coding-agent/src/discovery/index.ts"],
+			"@oh-my-pi/pi-coding-agent/edit": ["./coding-agent/src/edit/index.ts"],
+			"@oh-my-pi/pi-coding-agent/eval": ["./coding-agent/src/eval/index.ts"],
+			"@oh-my-pi/pi-coding-agent/exa": ["./coding-agent/src/exa/index.ts"],
+			"@oh-my-pi/pi-coding-agent/export/html": ["./coding-agent/src/export/html/index.ts"],
 			"@oh-my-pi/pi-coding-agent/extensibility/custom-commands": [
 				"./coding-agent/src/extensibility/custom-commands/index.ts"
 			],
@@ -227,84 +87,34 @@
 			"@oh-my-pi/pi-coding-agent/extensibility/custom-tools": [
 				"./coding-agent/src/extensibility/custom-tools/index.ts"
 			],
-			"@oh-my-pi/pi-coding-agent/extensibility/extensions": [
-				"./coding-agent/src/extensibility/extensions/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/extensibility/hooks": [
-				"./coding-agent/src/extensibility/hooks/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/extensibility/plugins": [
-				"./coding-agent/src/extensibility/plugins/index.ts"
-			],
+			"@oh-my-pi/pi-coding-agent/extensibility/extensions": ["./coding-agent/src/extensibility/extensions/index.ts"],
+			"@oh-my-pi/pi-coding-agent/extensibility/hooks": ["./coding-agent/src/extensibility/hooks/index.ts"],
+			"@oh-my-pi/pi-coding-agent/extensibility/plugins": ["./coding-agent/src/extensibility/plugins/index.ts"],
 			"@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace": [
 				"./coding-agent/src/extensibility/plugins/marketplace/index.ts"
 			],
-			"@oh-my-pi/pi-coding-agent/hindsight": [
-				"./coding-agent/src/hindsight/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/ida": [
-				"./coding-agent/src/ida/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/if-bench": [
-				"./coding-agent/src/if-bench/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/internal-urls": [
-				"./coding-agent/src/internal-urls/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/judgment": [
-				"./coding-agent/src/judgment/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/lsp": [
-				"./coding-agent/src/lsp/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/lsp/clients": [
-				"./coding-agent/src/lsp/clients/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/markit": [
-				"./coding-agent/src/markit/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/mcp": [
-				"./coding-agent/src/mcp/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/mcp/transports": [
-				"./coding-agent/src/mcp/transports/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/memories": [
-				"./coding-agent/src/memories/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/memory-backend": [
-				"./coding-agent/src/memory-backend/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/modes": [
-				"./coding-agent/src/modes/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/modes/acp": [
-				"./coding-agent/src/modes/acp/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/modes/components": [
-				"./coding-agent/src/modes/components/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/secrets": [
-				"./coding-agent/src/secrets/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/stt": [
-				"./coding-agent/src/stt/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/task": [
-				"./coding-agent/src/task/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/tools": [
-				"./coding-agent/src/tools/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/tools/jfind": [
-				"./coding-agent/src/tools/jfind/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/web/scrapers": [
-				"./coding-agent/src/web/scrapers/index.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/web/search": [
-				"./coding-agent/src/web/search/index.ts"
-			],
+			"@oh-my-pi/pi-coding-agent/hindsight": ["./coding-agent/src/hindsight/index.ts"],
+			"@oh-my-pi/pi-coding-agent/ida": ["./coding-agent/src/ida/index.ts"],
+			"@oh-my-pi/pi-coding-agent/if-bench": ["./coding-agent/src/if-bench/index.ts"],
+			"@oh-my-pi/pi-coding-agent/internal-urls": ["./coding-agent/src/internal-urls/index.ts"],
+			"@oh-my-pi/pi-coding-agent/judgment": ["./coding-agent/src/judgment/index.ts"],
+			"@oh-my-pi/pi-coding-agent/lsp": ["./coding-agent/src/lsp/index.ts"],
+			"@oh-my-pi/pi-coding-agent/lsp/clients": ["./coding-agent/src/lsp/clients/index.ts"],
+			"@oh-my-pi/pi-coding-agent/markit": ["./coding-agent/src/markit/index.ts"],
+			"@oh-my-pi/pi-coding-agent/mcp": ["./coding-agent/src/mcp/index.ts"],
+			"@oh-my-pi/pi-coding-agent/mcp/transports": ["./coding-agent/src/mcp/transports/index.ts"],
+			"@oh-my-pi/pi-coding-agent/memories": ["./coding-agent/src/memories/index.ts"],
+			"@oh-my-pi/pi-coding-agent/memory-backend": ["./coding-agent/src/memory-backend/index.ts"],
+			"@oh-my-pi/pi-coding-agent/modes": ["./coding-agent/src/modes/index.ts"],
+			"@oh-my-pi/pi-coding-agent/modes/acp": ["./coding-agent/src/modes/acp/index.ts"],
+			"@oh-my-pi/pi-coding-agent/modes/components": ["./coding-agent/src/modes/components/index.ts"],
+			"@oh-my-pi/pi-coding-agent/secrets": ["./coding-agent/src/secrets/index.ts"],
+			"@oh-my-pi/pi-coding-agent/stt": ["./coding-agent/src/stt/index.ts"],
+			"@oh-my-pi/pi-coding-agent/task": ["./coding-agent/src/task/index.ts"],
+			"@oh-my-pi/pi-coding-agent/tools": ["./coding-agent/src/tools/index.ts"],
+			"@oh-my-pi/pi-coding-agent/tools/jfind": ["./coding-agent/src/tools/jfind/index.ts"],
+			"@oh-my-pi/pi-coding-agent/web/scrapers": ["./coding-agent/src/web/scrapers/index.ts"],
+			"@oh-my-pi/pi-coding-agent/web/search": ["./coding-agent/src/web/search/index.ts"],
 			"@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace/*": [
 				"./coding-agent/src/extensibility/plugins/marketplace/*.ts"
 			],
@@ -317,334 +127,113 @@
 			"@oh-my-pi/pi-coding-agent/extensibility/custom-tools/*": [
 				"./coding-agent/src/extensibility/custom-tools/*.ts"
 			],
-			"@oh-my-pi/pi-coding-agent/extensibility/extensions/*": [
-				"./coding-agent/src/extensibility/extensions/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/autoresearch/tournament/*": [
-				"./coding-agent/src/autoresearch/tournament/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/extensibility/plugins/*": [
-				"./coding-agent/src/extensibility/plugins/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/cli/gallery-fixtures/*": [
-				"./coding-agent/src/cli/gallery-fixtures/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/commit/agentic/tools/*": [
-				"./coding-agent/src/commit/agentic/tools/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/web/search/providers/*": [
-				"./coding-agent/src/web/search/providers/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/commit/conventional/*": [
-				"./coding-agent/src/commit/conventional/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/extensibility/hooks/*": [
-				"./coding-agent/src/extensibility/hooks/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/autoresearch/tools/*": [
-				"./coding-agent/src/autoresearch/tools/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/modes/controllers/*": [
-				"./coding-agent/src/modes/controllers/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/commit/changelog/*": [
-				"./coding-agent/src/commit/changelog/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/modes/components/*": [
-				"./coding-agent/src/modes/components/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/commit/analysis/*": [
-				"./coding-agent/src/commit/analysis/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/commit/agentic/*": [
-				"./coding-agent/src/commit/agentic/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/mcp/transports/*": [
-				"./coding-agent/src/mcp/transports/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/memory-backend/*": [
-				"./coding-agent/src/memory-backend/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/slash-commands/*": [
-				"./coding-agent/src/slash-commands/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/extensibility/*": [
-				"./coding-agent/src/extensibility/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/internal-urls/*": [
-				"./coding-agent/src/internal-urls/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/autoresearch/*": [
-				"./coding-agent/src/autoresearch/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/cli/commands/*": [
-				"./coding-agent/src/cli/commands/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/commit/utils/*": [
-				"./coding-agent/src/commit/utils/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/web/scrapers/*": [
-				"./coding-agent/src/web/scrapers/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/export/html/*": [
-				"./coding-agent/src/export/html/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/lsp/clients/*": [
-				"./coding-agent/src/lsp/clients/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/modes/utils/*": [
-				"./coding-agent/src/modes/utils/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/tools/jfind/*": [
-				"./coding-agent/src/tools/jfind/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/capability/*": [
-				"./coding-agent/src/capability/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/commit/git/*": [
-				"./coding-agent/src/commit/git/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/web/search/*": [
-				"./coding-agent/src/web/search/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/discovery/*": [
-				"./coding-agent/src/discovery/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/hindsight/*": [
-				"./coding-agent/src/hindsight/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/modes/acp/*": [
-				"./coding-agent/src/modes/acp/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/modes/rpc/*": [
-				"./coding-agent/src/modes/rpc/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/plan-mode/*": [
-				"./coding-agent/src/plan-mode/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/commands/*": [
-				"./coding-agent/src/commands/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/if-bench/*": [
-				"./coding-agent/src/if-bench/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/memories/*": [
-				"./coding-agent/src/memories/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/registry/*": [
-				"./coding-agent/src/registry/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/eval/js/*": [
-				"./coding-agent/src/eval/js/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/eval/py/*": [
-				"./coding-agent/src/eval/py/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/prompts/*": [
-				"./coding-agent/src/prompts/*.md"
-			],
-			"@oh-my-pi/pi-coding-agent/secrets/*": [
-				"./coding-agent/src/secrets/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/session/*": [
-				"./coding-agent/src/session/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/commit/*": [
-				"./coding-agent/src/commit/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/config/*": [
-				"./coding-agent/src/config/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/export/*": [
-				"./coding-agent/src/export/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/markit/*": [
-				"./coding-agent/src/markit/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/async/*": [
-				"./coding-agent/src/async/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/debug/*": [
-				"./coding-agent/src/debug/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/modes/*": [
-				"./coding-agent/src/modes/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/tools/*": [
-				"./coding-agent/src/tools/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/utils/*": [
-				"./coding-agent/src/utils/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/edit/*": [
-				"./coding-agent/src/edit/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/exec/*": [
-				"./coding-agent/src/exec/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/task/*": [
-				"./coding-agent/src/task/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/cli/*": [
-				"./coding-agent/src/cli/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/dap/*": [
-				"./coding-agent/src/dap/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/exa/*": [
-				"./coding-agent/src/exa/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/ida/*": [
-				"./coding-agent/src/ida/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/lsp/*": [
-				"./coding-agent/src/lsp/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/mcp/*": [
-				"./coding-agent/src/mcp/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/ssh/*": [
-				"./coding-agent/src/ssh/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/stt/*": [
-				"./coding-agent/src/stt/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/web/*": [
-				"./coding-agent/src/web/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/*.js": [
-				"./coding-agent/src/*.ts"
-			],
-			"@oh-my-pi/pi-coding-agent/*": [
-				"./coding-agent/src/*.ts"
-			],
-			"@oh-my-pi/pi-mnemopi": [
-				"./mnemopi/src/index.ts"
-			],
-			"@oh-my-pi/pi-mnemopi/beam": [
-				"./mnemopi/src/core/beam/index.ts"
-			],
-			"@oh-my-pi/pi-mnemopi/cli": [
-				"./mnemopi/src/cli.ts"
-			],
-			"@oh-my-pi/pi-mnemopi/core": [
-				"./mnemopi/src/core/index.ts"
-			],
-			"@oh-my-pi/pi-mnemopi/core/beam": [
-				"./mnemopi/src/core/beam/index.ts"
-			],
-			"@oh-my-pi/pi-mnemopi/diagnose": [
-				"./mnemopi/src/diagnose.ts"
-			],
-			"@oh-my-pi/pi-mnemopi/mcp": [
-				"./mnemopi/src/mcp-tools.ts"
-			],
-			"@oh-my-pi/pi-mnemopi/*.js": [
-				"./mnemopi/src/*.ts"
-			],
-			"@oh-my-pi/pi-mnemopi/*": [
-				"./mnemopi/src/*.ts"
-			],
-			"@oh-my-pi/pi-natives": [
-				"./natives"
-			],
-			"@oh-my-pi/pi-natives/clipboard": [
-				"./natives/clipboard"
-			],
-			"@oh-my-pi/pi-natives/desktop": [
-				"./natives/desktop"
-			],
-			"@oh-my-pi/pi-natives/path": [
-				"./natives/path"
-			],
-			"@oh-my-pi/pi-natives/vcs": [
-				"./natives/vcs"
-			],
-			"@oh-my-pi/pi-tui": [
-				"./tui/src/index.ts"
-			],
-			"@oh-my-pi/pi-tui/chrome": [
-				"./tui/src/chrome/index.ts"
-			],
-			"@oh-my-pi/pi-tui/render": [
-				"./tui/src/render/index.ts"
-			],
-			"@oh-my-pi/pi-tui/status-line": [
-				"./tui/src/status-line/index.ts"
-			],
-			"@oh-my-pi/pi-tui/theme": [
-				"./tui/src/theme/index.ts"
-			],
-			"@oh-my-pi/pi-tui/theme/defaults": [
-				"./tui/src/theme/defaults/index.ts"
-			],
-			"@oh-my-pi/pi-tui/tools": [
-				"./tui/src/tools/index.ts"
-			],
-			"@oh-my-pi/pi-tui/components/*": [
-				"./tui/src/components/*.ts"
-			],
-			"@oh-my-pi/pi-tui/theme/*": [
-				"./tui/src/theme/*.ts"
-			],
-			"@oh-my-pi/pi-tui/*.js": [
-				"./tui/src/*.ts"
-			],
-			"@oh-my-pi/pi-tui/*": [
-				"./tui/src/*.ts"
-			],
-			"@oh-my-pi/pi-utils": [
-				"./utils/src/index.ts"
-			],
-			"@oh-my-pi/pi-utils/ar": [
-				"./utils/src/ar/index.ts"
-			],
-			"@oh-my-pi/pi-utils/*.js": [
-				"./utils/src/*.ts"
-			],
-			"@oh-my-pi/pi-utils/*": [
-				"./utils/src/*.ts"
-			],
-			"@oh-my-pi/pi-wire": [
-				"./wire/src/index.ts"
-			],
-			"@oh-my-pi/pi-wire/*.js": [
-				"./wire/src/*.ts"
-			],
-			"@oh-my-pi/pi-wire/*": [
-				"./wire/src/*.ts"
-			],
-			"@oh-my-pi/pi-work-client": [
-				"./work-client/src/index.ts"
-			],
-			"@oh-my-pi/snapcompact": [
-				"./snapcompact/src/index.ts"
-			],
-			"@oh-my-pi/snapcompact/snapcompact": [
-				"./snapcompact/src/snapcompact.ts"
-			],
-			"@oh-my-pi/snapcompact/*": [
-				"./snapcompact/src/*.ts"
-			],
-			"@oh-my-pi/typescript-edit-benchmark/*.js": [
-				"./typescript-edit-benchmark/src/*.ts"
-			],
-			"@oh-my-pi/typescript-edit-benchmark/*": [
-				"./typescript-edit-benchmark/src/*.ts"
-			]
+			"@oh-my-pi/pi-coding-agent/extensibility/extensions/*": ["./coding-agent/src/extensibility/extensions/*.ts"],
+			"@oh-my-pi/pi-coding-agent/autoresearch/tournament/*": ["./coding-agent/src/autoresearch/tournament/*.ts"],
+			"@oh-my-pi/pi-coding-agent/extensibility/plugins/*": ["./coding-agent/src/extensibility/plugins/*.ts"],
+			"@oh-my-pi/pi-coding-agent/cli/gallery-fixtures/*": ["./coding-agent/src/cli/gallery-fixtures/*.ts"],
+			"@oh-my-pi/pi-coding-agent/commit/agentic/tools/*": ["./coding-agent/src/commit/agentic/tools/*.ts"],
+			"@oh-my-pi/pi-coding-agent/web/search/providers/*": ["./coding-agent/src/web/search/providers/*.ts"],
+			"@oh-my-pi/pi-coding-agent/commit/conventional/*": ["./coding-agent/src/commit/conventional/*.ts"],
+			"@oh-my-pi/pi-coding-agent/extensibility/hooks/*": ["./coding-agent/src/extensibility/hooks/*.ts"],
+			"@oh-my-pi/pi-coding-agent/autoresearch/tools/*": ["./coding-agent/src/autoresearch/tools/*.ts"],
+			"@oh-my-pi/pi-coding-agent/modes/controllers/*": ["./coding-agent/src/modes/controllers/*.ts"],
+			"@oh-my-pi/pi-coding-agent/commit/changelog/*": ["./coding-agent/src/commit/changelog/*.ts"],
+			"@oh-my-pi/pi-coding-agent/modes/components/*": ["./coding-agent/src/modes/components/*.ts"],
+			"@oh-my-pi/pi-coding-agent/commit/analysis/*": ["./coding-agent/src/commit/analysis/*.ts"],
+			"@oh-my-pi/pi-coding-agent/commit/agentic/*": ["./coding-agent/src/commit/agentic/*.ts"],
+			"@oh-my-pi/pi-coding-agent/mcp/transports/*": ["./coding-agent/src/mcp/transports/*.ts"],
+			"@oh-my-pi/pi-coding-agent/memory-backend/*": ["./coding-agent/src/memory-backend/*.ts"],
+			"@oh-my-pi/pi-coding-agent/slash-commands/*": ["./coding-agent/src/slash-commands/*.ts"],
+			"@oh-my-pi/pi-coding-agent/extensibility/*": ["./coding-agent/src/extensibility/*.ts"],
+			"@oh-my-pi/pi-coding-agent/internal-urls/*": ["./coding-agent/src/internal-urls/*.ts"],
+			"@oh-my-pi/pi-coding-agent/autoresearch/*": ["./coding-agent/src/autoresearch/*.ts"],
+			"@oh-my-pi/pi-coding-agent/cli/commands/*": ["./coding-agent/src/cli/commands/*.ts"],
+			"@oh-my-pi/pi-coding-agent/commit/utils/*": ["./coding-agent/src/commit/utils/*.ts"],
+			"@oh-my-pi/pi-coding-agent/web/scrapers/*": ["./coding-agent/src/web/scrapers/*.ts"],
+			"@oh-my-pi/pi-coding-agent/export/html/*": ["./coding-agent/src/export/html/*.ts"],
+			"@oh-my-pi/pi-coding-agent/lsp/clients/*": ["./coding-agent/src/lsp/clients/*.ts"],
+			"@oh-my-pi/pi-coding-agent/modes/utils/*": ["./coding-agent/src/modes/utils/*.ts"],
+			"@oh-my-pi/pi-coding-agent/tools/jfind/*": ["./coding-agent/src/tools/jfind/*.ts"],
+			"@oh-my-pi/pi-coding-agent/capability/*": ["./coding-agent/src/capability/*.ts"],
+			"@oh-my-pi/pi-coding-agent/commit/git/*": ["./coding-agent/src/commit/git/*.ts"],
+			"@oh-my-pi/pi-coding-agent/web/search/*": ["./coding-agent/src/web/search/*.ts"],
+			"@oh-my-pi/pi-coding-agent/discovery/*": ["./coding-agent/src/discovery/*.ts"],
+			"@oh-my-pi/pi-coding-agent/hindsight/*": ["./coding-agent/src/hindsight/*.ts"],
+			"@oh-my-pi/pi-coding-agent/modes/acp/*": ["./coding-agent/src/modes/acp/*.ts"],
+			"@oh-my-pi/pi-coding-agent/modes/rpc/*": ["./coding-agent/src/modes/rpc/*.ts"],
+			"@oh-my-pi/pi-coding-agent/plan-mode/*": ["./coding-agent/src/plan-mode/*.ts"],
+			"@oh-my-pi/pi-coding-agent/commands/*": ["./coding-agent/src/commands/*.ts"],
+			"@oh-my-pi/pi-coding-agent/if-bench/*": ["./coding-agent/src/if-bench/*.ts"],
+			"@oh-my-pi/pi-coding-agent/memories/*": ["./coding-agent/src/memories/*.ts"],
+			"@oh-my-pi/pi-coding-agent/registry/*": ["./coding-agent/src/registry/*.ts"],
+			"@oh-my-pi/pi-coding-agent/eval/js/*": ["./coding-agent/src/eval/js/*.ts"],
+			"@oh-my-pi/pi-coding-agent/eval/py/*": ["./coding-agent/src/eval/py/*.ts"],
+			"@oh-my-pi/pi-coding-agent/prompts/*": ["./coding-agent/src/prompts/*.md"],
+			"@oh-my-pi/pi-coding-agent/secrets/*": ["./coding-agent/src/secrets/*.ts"],
+			"@oh-my-pi/pi-coding-agent/session/*": ["./coding-agent/src/session/*.ts"],
+			"@oh-my-pi/pi-coding-agent/commit/*": ["./coding-agent/src/commit/*.ts"],
+			"@oh-my-pi/pi-coding-agent/config/*": ["./coding-agent/src/config/*.ts"],
+			"@oh-my-pi/pi-coding-agent/export/*": ["./coding-agent/src/export/*.ts"],
+			"@oh-my-pi/pi-coding-agent/markit/*": ["./coding-agent/src/markit/*.ts"],
+			"@oh-my-pi/pi-coding-agent/async/*": ["./coding-agent/src/async/*.ts"],
+			"@oh-my-pi/pi-coding-agent/debug/*": ["./coding-agent/src/debug/*.ts"],
+			"@oh-my-pi/pi-coding-agent/modes/*": ["./coding-agent/src/modes/*.ts"],
+			"@oh-my-pi/pi-coding-agent/tools/*": ["./coding-agent/src/tools/*.ts"],
+			"@oh-my-pi/pi-coding-agent/utils/*": ["./coding-agent/src/utils/*.ts"],
+			"@oh-my-pi/pi-coding-agent/edit/*": ["./coding-agent/src/edit/*.ts"],
+			"@oh-my-pi/pi-coding-agent/exec/*": ["./coding-agent/src/exec/*.ts"],
+			"@oh-my-pi/pi-coding-agent/task/*": ["./coding-agent/src/task/*.ts"],
+			"@oh-my-pi/pi-coding-agent/cli/*": ["./coding-agent/src/cli/*.ts"],
+			"@oh-my-pi/pi-coding-agent/dap/*": ["./coding-agent/src/dap/*.ts"],
+			"@oh-my-pi/pi-coding-agent/exa/*": ["./coding-agent/src/exa/*.ts"],
+			"@oh-my-pi/pi-coding-agent/ida/*": ["./coding-agent/src/ida/*.ts"],
+			"@oh-my-pi/pi-coding-agent/lsp/*": ["./coding-agent/src/lsp/*.ts"],
+			"@oh-my-pi/pi-coding-agent/mcp/*": ["./coding-agent/src/mcp/*.ts"],
+			"@oh-my-pi/pi-coding-agent/ssh/*": ["./coding-agent/src/ssh/*.ts"],
+			"@oh-my-pi/pi-coding-agent/stt/*": ["./coding-agent/src/stt/*.ts"],
+			"@oh-my-pi/pi-coding-agent/web/*": ["./coding-agent/src/web/*.ts"],
+			"@oh-my-pi/pi-coding-agent/*.js": ["./coding-agent/src/*.ts"],
+			"@oh-my-pi/pi-coding-agent/*": ["./coding-agent/src/*.ts"],
+			"@oh-my-pi/pi-mnemopi": ["./mnemopi/src/index.ts"],
+			"@oh-my-pi/pi-mnemopi/beam": ["./mnemopi/src/core/beam/index.ts"],
+			"@oh-my-pi/pi-mnemopi/cli": ["./mnemopi/src/cli.ts"],
+			"@oh-my-pi/pi-mnemopi/core": ["./mnemopi/src/core/index.ts"],
+			"@oh-my-pi/pi-mnemopi/core/beam": ["./mnemopi/src/core/beam/index.ts"],
+			"@oh-my-pi/pi-mnemopi/diagnose": ["./mnemopi/src/diagnose.ts"],
+			"@oh-my-pi/pi-mnemopi/mcp": ["./mnemopi/src/mcp-tools.ts"],
+			"@oh-my-pi/pi-mnemopi/*.js": ["./mnemopi/src/*.ts"],
+			"@oh-my-pi/pi-mnemopi/*": ["./mnemopi/src/*.ts"],
+			"@oh-my-pi/pi-natives": ["./natives"],
+			"@oh-my-pi/pi-natives/clipboard": ["./natives/clipboard"],
+			"@oh-my-pi/pi-natives/desktop": ["./natives/desktop"],
+			"@oh-my-pi/pi-natives/path": ["./natives/path"],
+			"@oh-my-pi/pi-natives/vcs": ["./natives/vcs"],
+			"@oh-my-pi/pi-tui": ["./tui/src/index.ts"],
+			"@oh-my-pi/pi-tui/chrome": ["./tui/src/chrome/index.ts"],
+			"@oh-my-pi/pi-tui/render": ["./tui/src/render/index.ts"],
+			"@oh-my-pi/pi-tui/status-line": ["./tui/src/status-line/index.ts"],
+			"@oh-my-pi/pi-tui/theme": ["./tui/src/theme/index.ts"],
+			"@oh-my-pi/pi-tui/theme/defaults": ["./tui/src/theme/defaults/index.ts"],
+			"@oh-my-pi/pi-tui/tools": ["./tui/src/tools/index.ts"],
+			"@oh-my-pi/pi-tui/components/*": ["./tui/src/components/*.ts"],
+			"@oh-my-pi/pi-tui/theme/*": ["./tui/src/theme/*.ts"],
+			"@oh-my-pi/pi-tui/*.js": ["./tui/src/*.ts"],
+			"@oh-my-pi/pi-tui/*": ["./tui/src/*.ts"],
+			"@oh-my-pi/pi-utils": ["./utils/src/index.ts"],
+			"@oh-my-pi/pi-utils/ar": ["./utils/src/ar/index.ts"],
+			"@oh-my-pi/pi-utils/*.js": ["./utils/src/*.ts"],
+			"@oh-my-pi/pi-utils/*": ["./utils/src/*.ts"],
+			"@oh-my-pi/pi-wire": ["./wire/src/index.ts"],
+			"@oh-my-pi/pi-wire/*.js": ["./wire/src/*.ts"],
+			"@oh-my-pi/pi-wire/*": ["./wire/src/*.ts"],
+			"@oh-my-pi/pi-work-client": ["./work-client/src/index.ts"],
+			"@oh-my-pi/snapcompact": ["./snapcompact/src/index.ts"],
+			"@oh-my-pi/snapcompact/snapcompact": ["./snapcompact/src/snapcompact.ts"],
+			"@oh-my-pi/snapcompact/*": ["./snapcompact/src/*.ts"],
+			"@oh-my-pi/typescript-edit-benchmark/*.js": ["./typescript-edit-benchmark/src/*.ts"],
+			"@oh-my-pi/typescript-edit-benchmark/*": ["./typescript-edit-benchmark/src/*.ts"]
 		}
 	},
-	"include": [
-		"*/src",
-		"*/test",
-		"*/tests",
-		"*/scripts",
-		"*/bench",
-		"*/bin",
-		"*/native"
-	],
-	"exclude": [
-		"*/node_modules",
-		"*/dist"
-	]
+	"include": ["*/src", "*/test", "*/tests", "*/scripts", "*/bench", "*/bin", "*/native"],
+	"exclude": ["*/node_modules", "*/dist"]
 }
