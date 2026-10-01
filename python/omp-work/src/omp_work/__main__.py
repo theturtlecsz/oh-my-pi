@@ -245,11 +245,17 @@ def _run_stop_command(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int | None:
+    raw = list(sys.argv[1:] if argv is None else argv)
+    if raw and raw[0] == "orchestrator":
+        from .orchestrator.service import main as orchestrator_main
+
+        return orchestrator_main(raw[1:])
+
     parser = argparse.ArgumentParser(prog="python -m omp_work")
     subcommands = parser.add_subparsers(
         dest="command",
         required=True,
-        metavar="{schema,hash,approve,validate,ops,serve,headroom,stall-check,parallel-admit,budget-alerts,projects,stop,alarms,jobs,owner-key}",
+        metavar="{schema,hash,approve,validate,ops,serve,headroom,stall-check,parallel-admit,budget-alerts,projects,stop,alarms,jobs,owner-key,orchestrator}",
     )
 
     schema = subcommands.add_parser("schema")
