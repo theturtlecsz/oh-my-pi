@@ -380,6 +380,7 @@ def _alert(
         "threshold_percent": threshold,
         "spent": str(spent) if dimension == "usd" else int(spent),
         "limit": str(limit) if dimension == "usd" else int(limit),
+        "work_id": str(work_id),
     }
     closeout = apply_commit(CloseoutRecord(event_id, "open"))
     cur.execute(

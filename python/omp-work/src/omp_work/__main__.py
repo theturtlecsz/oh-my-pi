@@ -48,47 +48,26 @@ _SAFE_OPERATION_ERRORS = {
 
 
 def _budget_alerts(workspace_id: UUID, actor_id: UUID) -> int:
-    """Sweep item budgets, then deliver committed or failed budget_alert rows.
-
-    The URL is ``OMP_GROKBOT_ALERT_URL``. The bearer token is the stripped
-    contents of the file named by ``OMP_GROKBOT_ALERT_TOKEN_FILE``. Either
-    missing, unreadable, or empty exits 2. On success the process prints the
-    number of alerts sent as JSON.
-    """
-    url = os.environ.get("OMP_GROKBOT_ALERT_URL", "").strip()
-    token_file = os.environ.get("OMP_GROKBOT_ALERT_TOKEN_FILE", "").strip()
-    if not url:
-        print("budget-alerts: OMP_GROKBOT_ALERT_URL is not set", file=sys.stderr)
-        return 2
-    if not token_file:
-        print("budget-alerts: OMP_GROKBOT_ALERT_TOKEN_FILE is not set", file=sys.stderr)
-        return 2
-    try:
-        token = Path(token_file).read_text(encoding="utf-8").strip()
-    except (OSError, UnicodeError):
-        print("budget-alerts: token file is unreadable", file=sys.stderr)
-        return 2
-    if not token:
-        print("budget-alerts: token file is empty", file=sys.stderr)
-        return 2
-
+    """Sweep item budgets, then relay committed or failed budget_alert rows into PostgresWorkStore."""
     from .jobs.budget import sweep_item_budgets
-    from .jobs.grokbot import deliver_budget_alerts
+    from .jobs.budget_relay import relay_budget_alerts
     from .jobs.store import NativeJobStore
+    from .v1.store import PostgresWorkStore
 
-    store = NativeJobStore(OperationsConfig.defaults())
+    config = OperationsConfig.defaults()
+    store = NativeJobStore(config)
+    work_store = PostgresWorkStore(config)
     sweep_item_budgets(
         store,
         operation_id=str(uuid4()),
         workspace_id=workspace_id,
         actor_id=actor_id,
     )
-    sent = deliver_budget_alerts(
+    sent = relay_budget_alerts(
         store,
+        work_store,
         workspace_id=workspace_id,
         actor_id=actor_id,
-        url=url,
-        token=token,
     )
     print(json.dumps(sent))
     return 0
