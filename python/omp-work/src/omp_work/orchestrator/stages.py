@@ -2,8 +2,9 @@
 
 ``bounds_for`` reads the recorded retry bound off the routing policy,
 ``decision_for`` builds the single owner-facing decision a pause carries, and
-``decide`` applies rules 8-10 (repair, then retry, then capacity and stage
-movement). Gates 1-7 are a later slice. All three are pure: they read only
+``decide`` applies gates 1-7 (stop, mission terminal, qualification, terminal
+request, authorization, scope/budget/blockers, owner confirm) and rules 8-10
+(repair, then retry, then capacity and stage movement). All three are pure: they read only
 their arguments, so equal inputs give equal results and no model output or
 clock can choose a stage.
 """
@@ -290,12 +291,60 @@ def decision_for(facts: Facts, rule_id: str) -> CreateDecisionPayload:
     )
 
 
+def _pause(
+    facts: Facts,
+    rule_id: str,
+    *,
+    bound: int | None = None,
+) -> Step:
+    return _step(
+        facts,
+        "pause",
+        rule_id,
+        next_stage=facts.stage,
+        bound=bound,
+        decision=decision_for(facts, rule_id),
+    )
+
+
 def decide(facts: Facts, bounds: Bounds) -> Step:
-    """Rules 8-10, first match within each outcome. Gates 1-7 are a later slice.
+    """Gates 1-7, then rules 8-10 (first match wins).
 
     Repair wins over retry, and both win over a busy capacity. A failed or
     crashed step that is not a repair retries, reroutes, or pauses.
     """
+    if facts.stop_engaged:
+        return _step(facts, "frozen", "stop-freeze", next_stage=facts.stage)
+
+    if facts.mission_status in ("abandoned", "completed", "failed"):
+        return _step(facts, "end", "mission-terminal", next_stage=None)
+
+    if not facts.qualified:
+        return _pause(facts, "release-qualification")
+
+    if facts.terminal_request is not None:
+        if facts.action is not None and facts.action.allowed:
+            kind: StepKind = "redefine" if facts.terminal_request == "redefine" else "abandon"
+            return _step(facts, kind, "terminal-with-basis", next_stage=None)
+        return _pause(facts, "terminal-needs-basis")
+
+    if facts.action is not None and not facts.action.allowed:
+        if facts.action.tier == 2:
+            return _pause(facts, "d35-tier2-no-policy")
+        if facts.stage == "merge":
+            return _pause(facts, "d41-merge-approval")
+        return _pause(facts, "d35-tier3")
+
+    if facts.new_scope:
+        return _pause(facts, "d21-new-scope")
+    if facts.budget_exhausted:
+        return _pause(facts, "budget-exhausted")
+    if facts.blocker is not None:
+        return _pause(facts, "unrecoverable-blocker")
+
+    if facts.stage == "confirm" and facts.outcome != "succeeded":
+        return _step(facts, "pause", "d23-owner-confirm", next_stage=facts.stage)
+
     outcome = facts.outcome
     if outcome == "failed":
         return _repair_or_retry(facts, bounds)
@@ -333,14 +382,7 @@ def _repair(facts: Facts, bounds: Bounds) -> Step:
     bound = bounds.repair_rounds
     if facts.repair_rounds < bounds.repair_rounds:
         return _step(facts, "repair", "repair-round", next_stage="implement", bound=bound)
-    return _step(
-        facts,
-        "pause",
-        "repair-bound",
-        next_stage=facts.stage,
-        bound=bound,
-        decision=decision_for(facts, "repair-bound"),
-    )
+    return _pause(facts, "repair-bound", bound=bound)
 
 
 def _retry(facts: Facts, bounds: Bounds) -> Step:
@@ -349,14 +391,7 @@ def _retry(facts: Facts, bounds: Bounds) -> Step:
         return _step(facts, "retry", "retry-policy", next_stage=facts.stage, bound=bound)
     if facts.alternate is not None:
         return _step(facts, "reroute", "reroute-alternate", next_stage=facts.stage, bound=bound)
-    return _step(
-        facts,
-        "pause",
-        "retry-bound",
-        next_stage=facts.stage,
-        bound=bound,
-        decision=decision_for(facts, "retry-bound"),
-    )
+    return _pause(facts, "retry-bound", bound=bound)
 
 
 def _succeeded(facts: Facts, bounds: Bounds) -> Step:

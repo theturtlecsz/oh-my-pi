@@ -310,3 +310,294 @@ def test_equal_facts_give_equal_steps() -> None:
     right = facts(stage="implement", outcome="failed", attempts=2, alternate=None)
     assert left == right
     assert decide(left, _BOUNDS) == decide(right, Bounds(max_retries=2, repair_rounds=3))
+
+
+# ==============================================================================
+# Gate rules 1-7: stop, mission terminal, qualification, terminal request,
+# refused actions, scope/budget/blockers, and owner confirm.
+# ==============================================================================
+
+
+@pytest.mark.parametrize(
+    "trigger",
+    [
+        {"mission_status": "abandoned"},
+        {"mission_status": "completed"},
+        {"mission_status": "failed"},
+        {"qualified": False},
+        {"terminal_request": "abandon"},
+        {"terminal_request": "redefine"},
+        {"action": verdict(tier=2, action_class="push_code", target_sha256=DIGEST, allowed=False)},
+        {
+            "stage": "merge",
+            "candidate_commit": "0123456789abcdef",
+            "target_ref": "main",
+            "action": verdict(tier=3, action_class="merge_protected_branch", target_sha256=DIGEST, allowed=False),
+        },
+        {"action": verdict(tier=3, action_class="broaden_scope", target_sha256=DIGEST, allowed=False)},
+        {"new_scope": True},
+        {"budget_exhausted": True},
+        {"blocker": "unrecoverable"},
+        {"stage": "confirm", "outcome": "none"},
+        {"stage": "confirm", "outcome": "waiting"},
+        {"stage": "evaluate", "outcome": "failed"},
+        {"stage": "audit", "outcome": "failed", "verdict": "fail"},
+        {"outcome": "crashed"},
+        {"capacity_free": False},
+        {
+            "mission_status": "failed",
+            "qualified": False,
+            "terminal_request": "abandon",
+            "action": verdict(tier=3, action_class="broaden_scope", target_sha256=DIGEST, allowed=False),
+            "new_scope": True,
+            "budget_exhausted": True,
+            "blocker": "hard-stop",
+            "capacity_free": False,
+        },
+    ],
+)
+def test_stop_engaged_wins_over_every_other_trigger(trigger: dict[str, object]) -> None:
+    fact = facts(stop_engaged=True, **trigger)
+    assert decide(fact, _BOUNDS) == Step(
+        kind="frozen",
+        stage=fact.stage,
+        next_stage=fact.stage,
+        rule_id="stop-freeze",
+        bound=None,
+        decision=None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("rule_id", "fact_overrides", "expected_options"),
+    [
+        (
+            "release-qualification",
+            {"qualified": False},
+            ("resume", "abandon"),
+        ),
+        (
+            "d35-tier2-no-policy",
+            {"action": verdict(tier=2, action_class="push_code", target_sha256=DIGEST, allowed=False)},
+            ("resume", "abandon"),
+        ),
+        (
+            "d41-merge-approval",
+            {
+                "stage": "merge",
+                "candidate_commit": "0123456789abcdef",
+                "target_ref": "main",
+                "action": verdict(tier=3, action_class="merge_protected_branch", target_sha256=DIGEST, allowed=False),
+            },
+            ("approve", "decline"),
+        ),
+        (
+            "d35-tier3",
+            {
+                "stage": "implement",
+                "action": verdict(tier=3, action_class="broaden_scope", target_sha256=DIGEST, allowed=False),
+            },
+            ("approve", "decline"),
+        ),
+        (
+            "d21-new-scope",
+            {"new_scope": True},
+            ("resume", "abandon"),
+        ),
+        (
+            "budget-exhausted",
+            {"budget_exhausted": True},
+            ("resume", "abandon"),
+        ),
+        (
+            "unrecoverable-blocker",
+            {"blocker": "infra-down"},
+            ("resume", "abandon"),
+        ),
+    ],
+)
+def test_gate_pauses_carry_rule_decision_id_and_options(
+    rule_id: str,
+    fact_overrides: dict[str, object],
+    expected_options: tuple[str, ...],
+) -> None:
+    fact = facts(**fact_overrides)
+    step = decide(fact, _BOUNDS)
+    assert step.kind == "pause"
+    assert step.rule_id == rule_id
+    assert step.stage == fact.stage
+    assert step.next_stage == fact.stage
+    assert step.bound is None
+    assert step.decision is not None
+    assert step.decision.decision_id == uuid5(
+        NAMESPACE_URL, f"omp-417:{fact.mission_id}:{fact.step_index}:{rule_id}"
+    )
+    assert step.decision.options == expected_options
+
+
+def test_terminal_allowed_and_refused_or_no_action() -> None:
+    allowed_abandon = facts(
+        terminal_request="abandon",
+        action=verdict(tier=1, action_class="mission_abandon", target_sha256=None, allowed=True),
+    )
+    assert decide(allowed_abandon, _BOUNDS) == Step(
+        kind="abandon",
+        stage=allowed_abandon.stage,
+        next_stage=None,
+        rule_id="terminal-with-basis",
+        bound=None,
+        decision=None,
+    )
+
+    allowed_cancel = facts(
+        terminal_request="cancel",
+        action=verdict(tier=1, action_class="mission_abandon", target_sha256=None, allowed=True),
+    )
+    assert decide(allowed_cancel, _BOUNDS) == Step(
+        kind="abandon",
+        stage=allowed_cancel.stage,
+        next_stage=None,
+        rule_id="terminal-with-basis",
+        bound=None,
+        decision=None,
+    )
+
+    allowed_redefine = facts(
+        terminal_request="redefine",
+        action=verdict(tier=1, action_class="redefine_scope", target_sha256=None, allowed=True),
+    )
+    assert decide(allowed_redefine, _BOUNDS) == Step(
+        kind="redefine",
+        stage=allowed_redefine.stage,
+        next_stage=None,
+        rule_id="terminal-with-basis",
+        bound=None,
+        decision=None,
+    )
+
+    refused = facts(
+        terminal_request="abandon",
+        action=verdict(tier=3, action_class="mission_abandon", target_sha256=None, allowed=False),
+    )
+    step_refused = decide(refused, _BOUNDS)
+    assert step_refused.kind == "pause"
+    assert step_refused.rule_id == "terminal-needs-basis"
+    assert step_refused.next_stage == refused.stage
+    assert step_refused.bound is None
+    assert step_refused.decision is not None
+    assert step_refused.decision.options == ("approve", "decline")
+    assert step_refused.decision.default_if_any == "decline"
+
+    no_action = facts(terminal_request="redefine", action=None)
+    step_no_action = decide(no_action, _BOUNDS)
+    assert step_no_action.kind == "pause"
+    assert step_no_action.rule_id == "terminal-needs-basis"
+    assert step_no_action.next_stage == no_action.stage
+    assert step_no_action.bound is None
+    assert step_no_action.decision is not None
+    assert step_no_action.decision.options == ("approve", "decline")
+    assert step_no_action.decision.default_if_any == "decline"
+
+
+def test_action_authorization_routes_by_stage_not_action_class() -> None:
+    # Unlisted tier 3 at merge -> d41 with target digest and exact merge question.
+    unlisted_merge = facts(
+        stage="merge",
+        candidate_commit="0123456789abcdef",
+        target_ref="main",
+        action=verdict(tier=3, action_class="not_a_v1_class", target_sha256=DIGEST, allowed=False),
+    )
+    step_merge = decide(unlisted_merge, _BOUNDS)
+    assert step_merge.kind == "pause"
+    assert step_merge.rule_id == "d41-merge-approval"
+    assert step_merge.decision is not None
+    assert step_merge.decision.action_class == "unlisted"
+    assert step_merge.decision.target_sha256 == DIGEST
+    exact_question = "Candidate 0123456789ab for mission m1 is verified and ready to merge into main. Merge it?"
+    assert step_merge.decision.question == exact_question
+
+    # merge_protected_branch at implement -> d35-tier3 (by stage, not action_class).
+    merge_at_implement = facts(
+        stage="implement",
+        action=verdict(tier=3, action_class="merge_protected_branch", target_sha256=DIGEST, allowed=False),
+    )
+    step_impl = decide(merge_at_implement, _BOUNDS)
+    assert step_impl.kind == "pause"
+    assert step_impl.rule_id == "d35-tier3"
+    assert step_impl.decision is not None
+    assert step_impl.decision.action_class == "merge_protected_branch"
+
+    # Tier 2 at push -> d35-tier2-no-policy, action_class is None.
+    tier2_at_push = facts(
+        stage="push",
+        action=verdict(tier=2, action_class="push_code", target_sha256=DIGEST, allowed=False),
+    )
+    step_push = decide(tier2_at_push, _BOUNDS)
+    assert step_push.kind == "pause"
+    assert step_push.rule_id == "d35-tier2-no-policy"
+    assert step_push.decision is not None
+    assert step_push.decision.action_class is None
+
+
+def test_confirm_unanswered_pauses_and_succeeded_advances_to_plan() -> None:
+    for outcome in ("none", "waiting", "failed", "crashed"):
+        unanswered = facts(stage="confirm", outcome=outcome)
+        assert decide(unanswered, _BOUNDS) == Step(
+            kind="pause",
+            stage="confirm",
+            next_stage="confirm",
+            rule_id="d23-owner-confirm",
+            bound=None,
+            decision=None,
+        )
+
+    answered = facts(stage="confirm", outcome="succeeded")
+    assert decide(answered, _BOUNDS) == Step(
+        kind="advance",
+        stage="confirm",
+        next_stage="plan",
+        rule_id="stage-order",
+        bound=None,
+        decision=None,
+    )
+
+
+def test_gate_precedence_rules() -> None:
+    refused = verdict(tier=3, action_class="broaden_scope", target_sha256=DIGEST, allowed=False)
+
+    # 1. Terminal status wins over not-qualified and refused action.
+    for status in ("abandoned", "completed", "failed"):
+        term = facts(mission_status=status, qualified=False, action=refused, new_scope=True)
+        assert decide(term, _BOUNDS) == Step(
+            kind="end",
+            stage=term.stage,
+            next_stage=None,
+            rule_id="mission-terminal",
+            bound=None,
+            decision=None,
+        )
+
+    # 2. Not-qualified wins over refused action and terminal request.
+    unqualified = facts(
+        qualified=False,
+        terminal_request="redefine",
+        action=refused,
+        new_scope=True,
+    )
+    assert decide(unqualified, _BOUNDS).rule_id == "release-qualification"
+
+    # 3. Terminal request wins over refused action.
+    term_req = facts(terminal_request="abandon", action=refused, new_scope=True)
+    assert decide(term_req, _BOUNDS).rule_id == "terminal-needs-basis"
+
+    # 4. Refused action wins over scope, budget, blocker.
+    auth = facts(action=refused, new_scope=True, budget_exhausted=True, blocker="hard-block")
+    assert decide(auth, _BOUNDS).rule_id == "d35-tier3"
+
+    # 5. new_scope wins over budget_exhausted.
+    scope = facts(new_scope=True, budget_exhausted=True, blocker="hard-block")
+    assert decide(scope, _BOUNDS).rule_id == "d21-new-scope"
+
+    # 6. budget_exhausted wins over blocker.
+    budget = facts(budget_exhausted=True, blocker="hard-block")
+    assert decide(budget, _BOUNDS).rule_id == "budget-exhausted"
