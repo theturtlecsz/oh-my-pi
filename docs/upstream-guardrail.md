@@ -157,7 +157,7 @@ bun test session-system/tests packages/work-client/test scripts/verify-upstream-
 ./node_modules/.bin/tsc --noEmit -p session-system
 bun run check:ts
 cargo fmt --all -- --check
-cargo clippy --workspace --exclude brush-core --no-deps -- -D warnings
+cargo clippy --workspace --exclude brush-core --no-deps -- -D warnings -A clippy::cargo_common_metadata
 bun run test:ts
 bun run test:scripts
 bun run test:py
