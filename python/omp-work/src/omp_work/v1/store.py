@@ -786,7 +786,7 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
                         "INSERT INTO omp_control.workspaces(workspace_id) VALUES(%s) ON CONFLICT DO NOTHING",
                         (envelope.workspace_id,),
                     )
-                    result = answer_decision(
+                    result, event = answer_decision(
                         cur,
                         envelope,
                         self._config.config_dir / "owner_allowed_signers",

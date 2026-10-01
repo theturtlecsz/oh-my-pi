@@ -64,7 +64,7 @@ def answer_decision(
     cur: psycopg.Cursor[dict[str, object]],
     envelope: CommandEnvelope,
     owner_allowed_signers: Path,
-) -> dict[str, object]:
+) -> tuple[dict[str, object], dict[str, object]]:
     payload = envelope.command.payload
     decision_id = str(payload.decision_id)
     record = find_record(cur, envelope.workspace_id, decision_id)
@@ -106,7 +106,7 @@ def answer_decision(
         ):
             raise WorkStoreError("approval_required", ("owner_signature_invalid",))
     mission_id = record.view["mission_id"]
-    return AnswerDecisionResult(
+    result = AnswerDecisionResult(
         type="answer_decision",
         decision_id=payload.decision_id,
         mission_id=mission_id if isinstance(mission_id, str) else None,
@@ -114,6 +114,9 @@ def answer_decision(
         resume_state=record.resume_state,
         expires_at=payload.expires_at,
     ).model_dump(mode="json")
+    if payload.owner_signature is None:
+        return result, result
+    return result, {**result, "owner_signature": payload.owner_signature}
 
 
 def find_record(

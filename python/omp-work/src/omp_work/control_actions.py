@@ -51,6 +51,7 @@ __all__ = [
     "ActionOutcome",
     "ActionStore",
     "Executor",
+    "HoldDecision",
     "Resolver",
     "perform",
 ]
@@ -90,6 +91,25 @@ class ActionOutcome:
     def class_(self) -> str:
         """The action class under a name that is not a Python keyword."""
         return self.action_class
+
+
+@dataclass(frozen=True)
+class HoldDecision:
+    """The caller-supplied content and identity of a tier 3 hold.
+
+    ``decision_id`` seeds the written decision and its envelope ids, so a
+    replay is the store's idempotent command and opens no second decision. The
+    remaining fields replace the constant hold texts; the action class, the
+    classified target digest, and the option set stay as ``perform`` computes
+    them.
+    """
+
+    decision_id: UUID
+    question: str
+    why_it_matters: str
+    risk_of_delay: str
+    evidence_refs: tuple[str, ...]
+    resume_state: str
 
 
 class ActionStore(Protocol):
@@ -149,8 +169,14 @@ def perform(
     executor: Executor,
     now: datetime,
     decision_id: UUID | None = None,
+    *,
+    hold: HoldDecision | None = None,
 ) -> ActionOutcome:
-    """Classify one submission and carry it out, hold it, or refuse it."""
+    """Classify one submission and carry it out, hold it, or refuse it.
+
+    ``hold`` carries the caller's content and identity for the tier 3 hold path
+    only; it is ignored once a ``decision_id`` presents a signed decision.
+    """
     operation = parse_submission(submission)
     resolved = resolver(operation)
     classification = classify(operation, resolved)
@@ -174,6 +200,7 @@ def perform(
                 operation,
                 now,
                 classification,
+                hold,
             )
         return _execute_tier3(
             store,
@@ -346,6 +373,7 @@ def _hold(
     operation: Operation,
     now: datetime,
     classification: Classification,
+    hold: HoldDecision | None = None,
 ) -> ActionOutcome:
     """Record the block and write the owner decision. Nothing runs.
 
@@ -363,7 +391,9 @@ def _hold(
             return ActionOutcome(
                 "refused", classification.action_class, 3, None, refused.code
             )
-    envelope = _decision_envelope(workspace_id, project_id, mission_id, classification)
+    envelope = _decision_envelope(
+        workspace_id, project_id, mission_id, classification, hold
+    )
     _receipt, result = store.execute(
         envelope,
         actor_id=actor_id,
@@ -451,27 +481,43 @@ def _decision_envelope(
     project_id: UUID,
     mission_id: UUID | None,
     classification: Classification,
+    hold: HoldDecision | None = None,
 ) -> CommandEnvelope:
+    decision_id = uuid4() if hold is None else hold.decision_id
+    question = _DECISION_QUESTION if hold is None else hold.question
+    why_it_matters = _DECISION_WHY if hold is None else hold.why_it_matters
+    risk_of_delay = _DECISION_RISK_OF_DELAY if hold is None else hold.risk_of_delay
+    evidence_refs = () if hold is None else hold.evidence_refs
+    resume_state = (
+        f"tier3:{classification.action_class}" if hold is None else hold.resume_state
+    )
     payload = CreateDecisionPayload(
-        decision_id=uuid4(),
+        decision_id=decision_id,
         project_id=project_id,
         mission_id=None if mission_id is None else str(mission_id),
-        question=_DECISION_QUESTION,
-        why_it_matters=_DECISION_WHY,
-        risk_of_delay=_DECISION_RISK_OF_DELAY,
+        question=question,
+        why_it_matters=why_it_matters,
+        risk_of_delay=risk_of_delay,
         options=_DECISION_OPTIONS,
+        evidence_refs=evidence_refs,
         default_if_any=_DECISION_DEFAULT,
         risk_of_each_choice=dict(_DECISION_RISKS),
         action_class=classification.action_class,
         target_sha256=classification.target_sha256,
-        resume_state=f"tier3:{classification.action_class}",
+        resume_state=resume_state,
     )
+    if hold is None:
+        operation_id = uuid4()
+        request_id = uuid4()
+        correlation_id = uuid4()
+    else:
+        operation_id = request_id = correlation_id = hold.decision_id
     return CommandEnvelope(
         api_version="work.omp.dev/v1",
         workspace_id=workspace_id,
-        operation_id=uuid4(),
-        request_id=uuid4(),
-        correlation_id=uuid4(),
+        operation_id=operation_id,
+        request_id=request_id,
+        correlation_id=correlation_id,
         command=CreateDecisionCommand(type="create_decision", payload=payload),
     )
 
