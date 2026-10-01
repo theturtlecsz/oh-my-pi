@@ -278,6 +278,49 @@ describe("pickElectronTarget", () => {
 		}
 	});
 
+	test.skipIf(process.platform !== "linux")(
+		"reuses a running browser through its profile lock when the launcher path differs",
+		async () => {
+			// A distro launcher (e.g. /usr/bin/chromium) execs a different binary
+			// (/usr/lib/chromium/chromium), so matching executable paths finds no
+			// candidate and a borrowed profile would be relaunched. Chromium records
+			// the owning PID in SingletonLock; discovery must adopt it. The launcher
+			// path here does not resolve to the running executable, reproducing that
+			// split without a real Chromium.
+			const cdp = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("{}") });
+			const profile = path.join(os.tmpdir(), `omp-cdp-lock-${crypto.randomUUID()}`);
+			const existing = await spawnDisposableExecutable([
+				`--user-data-dir=${profile}`,
+				`--remote-debugging-port=${cdp.port}`,
+			]);
+			const launcherPath = path.join(os.tmpdir(), `omp-cdp-launcher-${crypto.randomUUID()}`);
+			// A process that has already exited, so its PID is not running.
+			const dead = Bun.spawn([process.execPath, "-e", ""]);
+			const deadPid = dead.pid;
+			await dead.exited;
+			try {
+				await fs.mkdir(profile, { recursive: true });
+				// Point the lock at a PID that is not running: no adoption.
+				await fs.symlink(`${os.hostname()}-${deadPid}`, path.join(profile, "SingletonLock"));
+				expect(await findReusableCdp(launcherPath, { appArgs: [`--user-data-dir=${profile}`] })).toBeNull();
+				// A lock written by another host must not be adopted either.
+				await fs.rm(path.join(profile, "SingletonLock"));
+				await fs.symlink(`not-this-host-${existing.pid}`, path.join(profile, "SingletonLock"));
+				expect(await findReusableCdp(launcherPath, { appArgs: [`--user-data-dir=${profile}`] })).toBeNull();
+				await fs.rm(path.join(profile, "SingletonLock"));
+				await fs.symlink(`${os.hostname()}-${existing.pid}`, path.join(profile, "SingletonLock"));
+				expect(await findReusableCdp(launcherPath, { appArgs: [`--user-data-dir=${profile}`] })).toEqual({
+					cdpUrl: `http://127.0.0.1:${cdp.port}`,
+					pid: existing.pid,
+				});
+			} finally {
+				await existing.close();
+				cdp.stop(true);
+				await fs.rm(profile, { recursive: true, force: true });
+			}
+		},
+	);
+
 	test.skipIf(process.platform !== "linux")("reuses Chromium launched through a distro wrapper", async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-browser-wrapper-"));
 		const wrapper = path.join(root, "google-chrome");

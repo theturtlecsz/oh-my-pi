@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
+import * as os from "node:os";
 import * as path from "node:path";
 import { Process, ProcessStatus } from "@oh-my-pi/pi-natives";
 import { getBrowserProfilesDir } from "@oh-my-pi/pi-utils";
@@ -398,6 +399,22 @@ export async function findReusableCdp(
 	const candidates = Process.fromPath(wrapperTarget ?? executablePath).filter(
 		candidate => candidate.status() === ProcessStatus.Running,
 	);
+	if (process.platform === "linux" && normalizedRequestedUserDataDir !== null) {
+		// Some distro launchers exec a different binary (e.g. /usr/bin/chromium
+		// execs /usr/lib/chromium/chromium), so matching the requested path finds
+		// nothing and a borrowed profile looks unused. Chromium records its
+		// profile owner in this lock; adopt that PID instead. The profile match
+		// and CDP probe below still vet it, and it is only borrowed — never killed.
+		const lock = await fs.readlink(path.join(normalizedRequestedUserDataDir, "SingletonLock")).catch(() => undefined);
+		const localPrefix = `${os.hostname()}-`;
+		if (lock?.startsWith(localPrefix)) {
+			const pidText = lock.slice(localPrefix.length);
+			const owner = /^\d+$/.test(pidText) ? Process.fromPid(Number(pidText)) : null;
+			if (owner?.status() === ProcessStatus.Running && !candidates.some(candidate => candidate.pid === owner.pid)) {
+				candidates.push(owner);
+			}
+		}
+	}
 	const candidateArgs: string[][] = [];
 	let hasUnreadableCandidate = false;
 	for (const process of candidates) {

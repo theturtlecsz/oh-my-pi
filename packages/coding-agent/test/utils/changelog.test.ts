@@ -185,8 +185,6 @@ describe("selectStartupChangelog", () => {
 		expect(selection.markdown).not.toContain("## [1.0.0]");
 	});
 
-	// Lexing the 128 KiB single-word item is quadratic in the vendored marked inline
-	// tokenizer (~10 s on the shared host), so this case gets its own budget.
 	test("caps one oversized startup release and appends the full-changelog hint", () => {
 		const selection = selectStartupChangelog(
 			[release(2, 0, 0, `### Added\n\n- ${"x".repeat(STARTUP_CHANGELOG_MAX_BYTES * 2)}\nTAIL-ONE-RELEASE`)],
@@ -200,7 +198,7 @@ describe("selectStartupChangelog", () => {
 		expect(selection.markdown).toContain(STARTUP_CHANGELOG_FULL_HINT);
 		expect(selection.markdown).not.toContain("TAIL-ONE-RELEASE");
 		expect(Buffer.byteLength(selection.markdown ?? "")).toBeLessThanOrEqual(STARTUP_CHANGELOG_MAX_BYTES);
-	}, 30_000);
+	});
 
 	test("caps aggregate startup releases that exceed the byte budget and appends the full-changelog hint", () => {
 		const halfBudgetBody = "x".repeat(Math.ceil(STARTUP_CHANGELOG_MAX_BYTES / 2));

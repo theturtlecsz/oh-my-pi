@@ -3,6 +3,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { bunVersionMismatch } from "./bun-version-guard.ts";
 
 type Mode =
 	| "all"
@@ -1084,6 +1085,21 @@ if (import.meta.main) {
 		throw new Error(
 			`Unknown mode ${shellQuote(requestedMode)}. Expected one of: ${Object.keys(validModes).join(", ")}`,
 		);
+	}
+
+	if (requestedMode === "local" && !isDryRun) {
+		let packageManager = "";
+		try {
+			const pkg = (await Bun.file(path.join(repoRoot, "package.json")).json()) as { packageManager?: string };
+			packageManager = pkg.packageManager ?? "";
+		} catch {
+			// handled by mismatch check below
+		}
+		const mismatch = bunVersionMismatch(Bun.version, packageManager);
+		if (mismatch) {
+			process.stderr.write(`${mismatch}\n`);
+			process.exit(1);
+		}
 	}
 
 	const initialHostPackageJson = isDryRun ? null : await readHostPackageJson();

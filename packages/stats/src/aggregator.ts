@@ -262,14 +262,22 @@ const INGEST_TIERS_MS = [24 * 60 * 60 * 1000, 7 * 24 * 60 * 60 * 1000];
  * Order a full sync so recent activity lands first: transcripts modified in
  * the last day, then the last week, then the rest. Within a tier files go in
  * creation order, so a fork still follows its parent and the parent keeps
- * ownership of the entries the fork copied (first writer wins). The only
- * exception is a from-scratch ingest where a fork was touched more recently
- * than a parent idle for a day: the fork then owns the copied entries, which
- * changes per-session attribution but never totals.
+ * ownership of the entries the fork copied (first writer wins).
+ *
+ * Creation order is the file path, not the directory listing position: a
+ * folder's `readdir` order is filesystem-defined and unrelated to when each
+ * file appeared, and every session file in a folder shares the coarse birth
+ * time of the folder they were created in. Session files are named
+ * `<timestamp>_<id>.jsonl`, so path order *is* creation order inside a folder,
+ * which keeps a fork behind its parent when the two are born in the same
+ * kernel clock tick (copied entries then stay attributed to the parent). The
+ * only exception is a from-scratch ingest where a fork was touched more
+ * recently than a parent idle for a day: the fork then owns the copied
+ * entries, which changes per-session attribution but never totals.
  */
 async function orderForIngest(files: string[]): Promise<string[]> {
 	const now = Date.now();
-	const ranked: { file: string; tier: number; born: number; index: number }[] = [];
+	const ranked: { file: string; tier: number; born: number }[] = [];
 	for (let start = 0; start < files.length; start += SYNC_METADATA_FILES) {
 		const batch = files.slice(start, start + SYNC_METADATA_FILES);
 		const stats = await Promise.all(batch.map(file => fs.promises.stat(file).catch(() => null)));
@@ -281,11 +289,12 @@ async function orderForIngest(files: string[]): Promise<string[]> {
 				file: batch[i],
 				tier: tier === -1 ? INGEST_TIERS_MS.length : tier,
 				born: stat ? stat.birthtimeMs || stat.ctimeMs : 0,
-				index: start + i,
 			});
 		}
 	}
-	ranked.sort((a, b) => a.tier - b.tier || a.born - b.born || a.index - b.index);
+	// Path order breaks the born-time tie: it is the on-disk creation order
+	// (see the doc comment), unlike the arbitrary directory listing position.
+	ranked.sort((a, b) => a.tier - b.tier || a.born - b.born || (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
 	return ranked.map(entry => entry.file);
 }
 

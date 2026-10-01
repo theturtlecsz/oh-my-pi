@@ -10,6 +10,7 @@ import {
 	type AdvisorAdmission,
 	AdvisorEmissionGuard,
 	type AdvisorSuppressionReason,
+	normalizeAdvisorNote,
 	screenAdvisorNote,
 } from "./emission-guard";
 
@@ -69,13 +70,19 @@ const SUPPRESSION_ACK_REASON: Record<Exclude<AdvisorSupervisionReason, "delivere
  * (rank-aware duplicate, per-update budget) → otherwise delivered with the
  * proposal.
  *
- * Tallies accumulate until {@link AdvisorSupervisionGate.reset}. `beginUpdate`
- * only reopens the emission guard's per-update budget. {@link AdvisorSupervisionGate.report}
- * returns a fresh object.
+ * Tallies accumulate until {@link AdvisorSupervisionGate.reset}. A delivery
+ * admitted with `pending` is not counted until {@link AdvisorSupervisionGate.markRouted};
+ * the normalized note keeps the class it was admitted under. A displaced
+ * pending note, or a live (`pending: false`) delivery of that same note, is
+ * dropped from the queue so it is not counted again. `beginUpdate` only
+ * reopens the emission guard's per-update budget and keeps that queue.
+ * {@link AdvisorSupervisionGate.report} returns a fresh object.
  */
 export class AdvisorSupervisionGate implements AdvisorAdmissionAuthority {
 	readonly #guard: AdvisorEmissionGuard;
 	#stats = new Map<AdvisorSupervisionClass, AdvisorSupervisionClassStats>();
+	/** Normalized note → class for a pending delivery not yet routed or evicted. */
+	#pending = new Map<string, AdvisorSupervisionClass>();
 
 	constructor(opts: { budgetPerUpdate?: number } = {}) {
 		this.#guard = new AdvisorEmissionGuard({ budgetPerUpdate: opts.budgetPerUpdate });
@@ -83,7 +90,7 @@ export class AdvisorSupervisionGate implements AdvisorAdmissionAuthority {
 
 	decide(input: AdvisorSupervisionInput): AdvisorSupervisionDecision {
 		const decision = this.#decide(input);
-		this.#tally(input.category, decision);
+		this.#tally(input, decision);
 		return decision;
 	}
 
@@ -120,18 +127,25 @@ export class AdvisorSupervisionGate implements AdvisorAdmissionAuthority {
 	}
 
 	markRouted(note: string): void {
+		const key = normalizeAdvisorNote(note);
+		const cls = this.#pending.get(key);
+		if (cls !== undefined) {
+			this.#statsFor(cls).delivered += 1;
+			this.#pending.delete(key);
+		}
 		this.#guard.markRouted(note);
 	}
 
-	/** Reopen the per-update emission budget. Dedupe history and tallies stay. */
+	/** Reopen the per-update emission budget. Dedupe history, tallies, and pending delivery keys stay. */
 	beginUpdate(): void {
 		this.#guard.beginUpdate();
 	}
 
-	/** Drop emission-guard state and tallies. */
+	/** Drop emission-guard state, tallies, and pending delivery keys. */
 	reset(): void {
 		this.#guard.reset();
 		this.#stats.clear();
+		this.#pending.clear();
 	}
 
 	/** Snapshot of tallies since the last {@link reset}. */
@@ -173,19 +187,31 @@ export class AdvisorSupervisionGate implements AdvisorAdmissionAuthority {
 			: { deliver: true, reason: "delivered", proposal, displacedKey: admission.displacedKey };
 	}
 
-	#tally(category: string | undefined, decision: AdvisorSupervisionDecision): void {
-		const key: AdvisorSupervisionClass = isCpkSupervisionRuleClass(category) ? category : "unclassified";
-		let stats = this.#stats.get(key);
+	#statsFor(cls: AdvisorSupervisionClass): AdvisorSupervisionClassStats {
+		let stats = this.#stats.get(cls);
 		if (!stats) {
 			stats = { proposed: 0, delivered: 0, suppressed: {} };
-			this.#stats.set(key, stats);
+			this.#stats.set(cls, stats);
 		}
+		return stats;
+	}
+
+	#tally(input: AdvisorSupervisionInput, decision: AdvisorSupervisionDecision): void {
+		const cls: AdvisorSupervisionClass = isCpkSupervisionRuleClass(input.category) ? input.category : "unclassified";
+		const stats = this.#statsFor(cls);
 		stats.proposed += 1;
-		if (decision.deliver) {
-			stats.delivered += 1;
+		if (decision.deliver && input.pending === true) {
+			this.#pending.set(normalizeAdvisorNote(input.note), cls);
+		}
+		if (decision.displacedKey !== undefined) this.#pending.delete(decision.displacedKey);
+		if (!decision.deliver) {
+			if (decision.reason !== "delivered") {
+				stats.suppressed[decision.reason] = (stats.suppressed[decision.reason] ?? 0) + 1;
+			}
 			return;
 		}
-		if (decision.reason === "delivered") return;
-		stats.suppressed[decision.reason] = (stats.suppressed[decision.reason] ?? 0) + 1;
+		if (input.pending === true) return;
+		stats.delivered += 1;
+		if (input.pending === false) this.#pending.delete(normalizeAdvisorNote(input.note));
 	}
 }
