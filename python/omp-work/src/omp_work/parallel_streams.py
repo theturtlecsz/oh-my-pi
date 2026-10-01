@@ -2,6 +2,10 @@
 
 Implements heartbeat, SKIP LOCKED-style claim, path leases, budget reserve,
 provider partitions. Store: ACTIVE/parallel-runtime/parallel.db
+
+``tick``, ``enqueue``, and ``claim_one`` raise
+``RuntimeError("control_plane_owns_admission")`` when
+``OperationsConfig.defaults().config_dir / "orchestrator.json"`` exists.
 """
 from __future__ import annotations
 
@@ -14,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from omp_work.operations.config import OperationsConfig
 from omp_work.routing import policy as routing_policy
 
 ACTIVE = Path(
@@ -100,6 +105,12 @@ def write_heartbeat(*, in_flight: int, admittable_backlog: int) -> None:
         )
 
 
+def _refuse_if_control_plane_owns_admission() -> None:
+    """The orchestrator config means this loop no longer admits work."""
+    if (OperationsConfig.defaults().config_dir / "orchestrator.json").is_file():
+        raise RuntimeError("control_plane_owns_admission")
+
+
 def enqueue(
     *,
     job_id: str,
@@ -110,6 +121,7 @@ def enqueue(
     packet_path: str | None = None,
     depends_on: list[str] | None = None,
 ) -> dict[str, Any]:
+    _refuse_if_control_plane_owns_admission()
     init_db()
     pol = load_policy()
     parts = pol.get("provider_partitions") or {}
@@ -175,6 +187,7 @@ def _lease_held(c: sqlite3.Connection, path_glob: str) -> str | None:
 
 def claim_one() -> dict[str, Any] | None:
     """Atomically claim one backlog job if slot/lease/partition/reserve allow."""
+    _refuse_if_control_plane_owns_admission()
     init_db()
     pol = load_policy()
     max_n = int(pol.get("in_flight_max") or 10)
@@ -320,6 +333,7 @@ def status() -> dict[str, Any]:
 
 def tick() -> dict[str, Any]:
     """One admit-loop tick: claim until full or backlog empty; refresh heartbeat."""
+    _refuse_if_control_plane_owns_admission()
     init_db()
     pol = load_policy()
     if pol.get("live_slots_open") is False:

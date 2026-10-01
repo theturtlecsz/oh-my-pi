@@ -23,12 +23,21 @@ from omp_work.jobs.usage import record_usage
 from omp_work.operations.database import _jobs_migration_state, check_migrations
 
 __all__ = [
+    "Frozen",
     "Handler",
     "JobWorker",
     "Settlement",
     "WorkerConfig",
     "load_handler",
 ]
+
+
+class Frozen(Exception):
+    """The handler left its job leased and unsettled.
+
+    ``JobWorker.tick`` catches this from ``observe`` or ``run``, does not
+    settle, and returns the job id. The lease, fence, and reservation stay.
+    """
 
 
 @dataclass
@@ -191,7 +200,11 @@ class JobWorker:
         raise RuntimeError(f"No handler found for job {job.get('job_id')} with kind {job.get('kind')}")
 
     def tick(self) -> str | None:
-        """Run one worker cycle: reconcile, claim, execute with renewal, settle, and drain outbox."""
+        """Run one worker cycle: reconcile, claim, execute with renewal, settle, and drain outbox.
+
+        ``observe`` runs when the job has ``lease_expired`` or ``lease_resumed``.
+        ``Frozen`` from the handler leaves the job leased and unsettled.
+        """
         reconcile_jobs(
             self.store,
             operation_id=str(uuid4()),
@@ -218,14 +231,21 @@ class JobWorker:
 
         with self.store.transaction(self.workspace_id, self.actor_id) as cur:
             cur.execute(
-                "SELECT 1 FROM omp_jobs.job_events WHERE job_id=%s AND kind='lease_expired' LIMIT 1",
+                """
+                SELECT 1 FROM omp_jobs.job_events
+                WHERE job_id=%s AND kind IN ('lease_expired', 'lease_resumed')
+                LIMIT 1
+                """,
                 (job_id,),
             )
-            has_expired = cur.fetchone() is not None
+            resume_from_saved = cur.fetchone() is not None
 
         settlement: Settlement | None = None
-        if has_expired:
-            settlement = handler.observe(self, job)
+        try:
+            if resume_from_saved:
+                settlement = handler.observe(self, job)
+        except Frozen:
+            return job_id
 
         if settlement is None:
             stop_renew = threading.Event()
@@ -251,7 +271,10 @@ class JobWorker:
             thread = threading.Thread(target=_renew_loop, daemon=True)
             thread.start()
             try:
-                settlement = handler.run(self, job)
+                try:
+                    settlement = handler.run(self, job)
+                except Frozen:
+                    return job_id
             finally:
                 stop_renew.set()
                 thread.join()

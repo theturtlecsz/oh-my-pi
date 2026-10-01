@@ -45,6 +45,10 @@ from robomp.sandbox import GitTransport, Workspace, _prepare_slot_runtime_env, _
 log = logging.getLogger(__name__)
 
 
+class UnattendedRefused(Exception):
+    """Refusal of an agent task while the deployment runs unattended (D35)."""
+
+
 @dataclass(slots=True, frozen=True)
 class ReleaseTaskContext:
     """Release verdict and failure context supplied to an agent round."""
@@ -797,7 +801,13 @@ async def run_task(
     directive: DirectiveInfo | None = None,
     thread: tuple[ThreadMessage, ...] = (),
 ) -> str | None:
-    """Async wrapper that runs the synchronous RPC driver on a worker thread."""
+    """Async wrapper that runs the synchronous RPC driver on a worker thread.
+
+    Raises ``UnattendedRefused`` before any session when the deployment runs
+    unattended (D35): a timer-started agent session is not part of the product.
+    """
+    if inputs.settings.unattended:
+        raise UnattendedRefused(f"agent task {task_kind!r} refused while unattended")
     review_mode = task_kind == "review_pr" or inputs.workspace.branch.startswith("review/pr-")
     loop = asyncio.get_running_loop()
     release_binding: ReleaseToolContext | None = None
@@ -909,4 +919,11 @@ def _capture_natives_cache(inputs: TaskInputs) -> None:
     )
 
 
-__all__ = ["DirectiveInfo", "ReleaseTaskContext", "TaskInputs", "ThreadMessage", "run_task"]
+__all__ = [
+    "DirectiveInfo",
+    "ReleaseTaskContext",
+    "TaskInputs",
+    "ThreadMessage",
+    "UnattendedRefused",
+    "run_task",
+]

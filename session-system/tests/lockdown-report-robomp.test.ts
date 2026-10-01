@@ -105,16 +105,16 @@ describe("unattended lockdown report - robomp", () => {
 		expect(row02!.Breaks.toLowerCase()).toContain("edits still run");
 	});
 
-	test("python/robomp/src/worker.py has no inventory row in upstream-fork-inventory.tsv", async () => {
+	test("python/robomp/src/worker.py has one shared inventory row, not a fork-only row", async () => {
 		const robompWorker = "python/robomp/src/worker.py";
 		const rowIsRobompWorker = (line: string) => line.split("\t")[0]?.trim() === robompWorker;
 
 		const inventoryText = await Bun.file(inventoryPath).text();
-		for (const line of inventoryText.split("\n")) {
-			const filePath = line.split("\t")[0]?.trim();
-			if (!filePath) continue;
-			expect(rowIsRobompWorker(line)).toBe(false);
-		}
+		const rows = inventoryText.split("\n").filter(line => rowIsRobompWorker(line));
+		expect(rows).toHaveLength(1);
+		const cells = rows[0].split("\t");
+		expect(cells[1]).toBe("shared");
+		expect(cells[2]).toBe("modified");
 
 		const otherWorkerLine = "python/omp-work/src/omp_work/jobs/worker.py\tfork-only\tadded";
 		expect(rowIsRobompWorker(otherWorkerLine)).toBe(false);

@@ -94,6 +94,17 @@ def load_config(path: str | Path) -> dict[str, Any]:
     return data
 
 
+def _worker_capabilities(config: dict[str, Any]) -> list[str]:
+    """Capabilities this process will register, matching ``run_worker``'s default."""
+    caps = config.get("capabilities")
+    if isinstance(caps, list):
+        return [str(item) for item in caps]
+    handlers = config.get("handlers")
+    if isinstance(handlers, dict):
+        return [str(item) for item in handlers]
+    return []
+
+
 def _get_operations_config(config: dict[str, Any]) -> OperationsConfig:
     ops = config.get("operations")
     if ops is None:
@@ -124,6 +135,8 @@ def run_worker(path: str | Path, once: bool = False) -> int:
     worker_id = str(config["worker_id"])
 
     # Hold a pg advisory lock keyed on worker_id for the process lifetime; a second instance exits 3.
+    # A worker whose capabilities include omp.orchestrator also holds the workspace
+    # controller lock. A second such process, whatever its worker_id, exits 3.
     conn_kwargs = ops_config.connection_kwargs("omp_work_app")
     lock_conn = psycopg.connect(**conn_kwargs, autocommit=True)
     with lock_conn.cursor() as cur:
@@ -134,6 +147,15 @@ def run_worker(path: str | Path, once: bool = False) -> int:
         if not row or not row[0]:
             lock_conn.close()
             sys.exit(3)
+        if "omp.orchestrator" in _worker_capabilities(config):
+            cur.execute(
+                "SELECT pg_try_advisory_lock(hashtextextended('omp_jobs.controller:' || %s, 0))",
+                (str(config["workspace_id"]),),
+            )
+            held = cur.fetchone()
+            if not held or not held[0]:
+                lock_conn.close()
+                sys.exit(3)
 
     # SIGTERM finishes the current job, exits 0, no drain.
     stop_event = threading.Event()

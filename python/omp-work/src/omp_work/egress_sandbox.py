@@ -349,6 +349,8 @@ def _run_sandbox_body(
     workservice: tuple[str, int] | None = None,
     ca_cert_path: str | Path | None = None,
     root: str | None = None,
+    ro_binds: Sequence[str | Path] = (),
+    worktree: str | Path | None = None,
 ) -> int:
     """Shared sandbox body. ``root`` names the worker profile in config.json."""
     resolved: dict[str, str] = {}
@@ -496,6 +498,10 @@ def _run_sandbox_body(
             "sockets_root": str(sockets_root) if mask_sockets_root else None,
             "sandbox_dir": str(sandbox_dir) if mask_sockets_root else None,
         }
+        if worktree is not None:
+            config["worktree"] = str(worktree)
+        if ro_binds:
+            config["ro_binds"] = [str(item) for item in ro_binds]
         config_path.write_text(json.dumps(config), encoding="utf-8")
 
         helper_cmd = [
@@ -567,12 +573,17 @@ def run_sandboxed(
     gateway: RelayGateway | None = None,
     workservice: tuple[str, int] | None = None,
     ca_cert_path: str | Path | None = None,
+    root: str | None = None,
+    ro_binds: Sequence[str | Path] = (),
+    worktree: str | Path | None = None,
 ) -> int:
     """Run argv inside an isolated egress sandbox.
 
     Missing tools or setup failure raises :class:`SandboxUnavailable`, and a
     research identity raises :class:`ResearchStageRefused` before any tool
-    lookup, probe, or socket. Returns the worker's exit status.
+    lookup, probe, or socket. ``root`` selects the jail profile (``research``
+    is launched only by :func:`run_research_stage`; ``worker`` is the worktree
+    jail). Returns the worker's exit status.
     """
     if identity.stage == "research":
         raise ResearchStageRefused("research_stage_launcher")
@@ -587,6 +598,9 @@ def run_sandboxed(
         gateway,
         workservice,
         ca_cert_path,
+        root=root,
+        ro_binds=ro_binds,
+        worktree=worktree,
     )
 
 

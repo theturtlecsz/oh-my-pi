@@ -1,11 +1,16 @@
-"""Research-stage filesystem jail for the egress sandbox (OMP-431-s08-s02).
+"""Filesystem jail for the egress sandbox (OMP-431-s08-s02, OMP-417 worker).
 
 Started by the helper as ``unshare --mount --pid --fork python -m
-omp_work.egress_research_jail <config>``. The CA certificate is read before any
-mount. ``/`` is made rprivate, a tmpfs becomes the new root, and ``pivot_root``
-switches to it. setup_ok is created through the old root, that old root is
-detached, and the worker is exec'd with the s07 setpriv flags. chroot is not
-used. Every import is at module load, before the pivot.
+omp_work.egress_research_jail <config>``. ``/`` is made rprivate, a tmpfs
+becomes the new root, and ``pivot_root`` switches to it. setup_ok is created
+through the old root, that old root is detached, and the worker is exec'd
+with the s07 setpriv flags. chroot is not used. Every import is at module
+load, before the pivot.
+
+A research root reads the CA certificate before any mount and lands in
+``/home/research``. A worker root is that same jail plus one read-write bind
+of the linked worktree at ``/work`` and the caller's read-only file binds.
+The research profile does not take those binds.
 """
 
 from __future__ import annotations
@@ -14,6 +19,7 @@ import ctypes
 import errno
 import json
 import os
+import re
 from pathlib import Path
 import sys
 
@@ -33,6 +39,20 @@ _MS_BIND = 0x1000
 _MS_REC = 0x4000
 _MS_REMOUNT = 32
 _MS_PRIVATE = 1 << 18
+# A user namespace rejects MS_REMOUNT when a flag the source mount already
+# carries (nosuid, nodev, relatime, ...) is dropped. Keep those.
+_REMOUNT_KEEP = {
+    "nosuid": 2,
+    "nodev": 4,
+    "noexec": 8,
+    "nosymfollow": 256,
+    "noatime": 1024,
+    "nodiratime": 2048,
+    "relatime": 1 << 21,
+    "strictatime": 1 << 24,
+    "lazytime": 1 << 25,
+}
+_MOUNT_ESCAPE = re.compile(r"\\([0-7]{3})")
 _MNT_DETACH = 2
 
 _HOST_TREES = ("bin", "lib", "lib64", "sbin")
@@ -92,6 +112,8 @@ def _write_etc(new: Path, ca: bytes) -> None:
     (etc / "resolv.conf").write_text(RESOLV_CONF_TEXT, encoding="utf-8")
     (etc / "nsswitch.conf").write_text(NSSWITCH_CONF_TEXT, encoding="utf-8")
     (etc / "hosts").write_text(HOSTS_TEXT, encoding="utf-8")
+    if not ca:
+        return
     cert = new / JAIL_CA_CERT.lstrip("/")
     cert.parent.mkdir(parents=True)
     cert.write_bytes(ca)
@@ -163,12 +185,13 @@ def _pivot_and_exec(
     setpriv: str,
     argv: list[str],
     env: dict[str, str],
+    cwd: str = RESEARCH_HOME,
 ) -> None:
     old = new / ".old"
     old.mkdir(mode=0o755)
     os.chdir(new)
     _syscall_ok(_libc.pivot_root(str(new).encode(), str(old).encode()), "pivot_root")
-    os.chdir(RESEARCH_HOME)
+    os.chdir(cwd)
     _mark_setup_ok(setup_ok)
     _syscall_ok(_libc.umount2(b"/.old", _MNT_DETACH), "umount2")
     os.rmdir("/.old")
@@ -184,6 +207,84 @@ def _pivot_and_exec(
         sys.exit(127)
 
 
+def _bind_rw_dir(source: str, target: Path) -> None:
+    target.mkdir(parents=True)
+    _mount(source, str(target), None, _MS_BIND)
+
+
+def _unescape_mount(text: str) -> str:
+    return _MOUNT_ESCAPE.sub(lambda match: chr(int(match.group(1), 8)), text)
+
+
+def _mount_options(target: str) -> set[str]:
+    """Per-mount options of ``target`` from mountinfo, or an empty set."""
+    wanted = os.path.normpath(target)
+    for line in Path("/proc/self/mountinfo").read_text(encoding="utf-8").splitlines():
+        parts = line.split()
+        if len(parts) < 6 or _unescape_mount(parts[4]) != wanted:
+            continue
+        return set(parts[5].split(","))
+    return set()
+
+
+def _bind_ro_file(source: str, target: Path) -> None:
+    """Bind one host file read-only. The caller's path is the path inside the jail."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not target.exists():
+        target.touch()
+    destination = str(target)
+    _mount(source, destination, None, _MS_BIND)
+    flags = _MS_BIND | _MS_REMOUNT | _MS_RDONLY
+    options = _mount_options(destination)
+    for name, bit in _REMOUNT_KEEP.items():
+        if name in options:
+            flags |= bit
+    _mount("none", destination, None, flags)
+
+
+def _build_worker_root(config_path: Path, config: dict) -> Path:
+    """Research jail plus /work read-write and the named read-only files."""
+    worktree = config.get("worktree")
+    if not isinstance(worktree, str) or not worktree.startswith("/"):
+        sys.stderr.write("worker jail: worktree is missing\n")
+        sys.exit(1)
+    _mount("none", "/", None, _MS_REC | _MS_PRIVATE)
+    new = config_path.parent / "worker-root"
+    new.mkdir(mode=0o755)
+    _mount("tmpfs", str(new), "tmpfs", 0)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+    os.chmod(new, 0o755)  # nosec B103 - the unprivileged worker must traverse the jail root
+    _rbind_readonly("/usr", new / "usr")
+    for name in _HOST_TREES:
+        _place_host_tree(new, name)
+    _write_etc(new, b"")
+    _bind_devices(new)
+    _mount_proc(new)
+    tmp = new / "tmp"
+    tmp.mkdir()
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+    os.chmod(tmp, 0o1777)  # nosec B103 - sticky world-writable /tmp is the POSIX contract inside the jail
+    _bind_rw_dir(worktree, new / "work")
+    for raw in config.get("ro_binds") or ():
+        if not isinstance(raw, str) or not raw.startswith("/") or raw == "/":
+            sys.stderr.write("worker jail: read-only bind is not an absolute file\n")
+            sys.exit(1)
+        _bind_ro_file(raw, new / raw.lstrip("/"))
+    return new
+
+
+def _main_worker(config: dict, config_path: Path) -> None:
+    env = _worker_env(config, None)
+    setpriv = _executable("setpriv")
+    argv = [str(item) for item in config["argv"]]
+    try:
+        new = _build_worker_root(config_path, config)
+    except OSError as exc:
+        sys.stderr.write(f"worker jail: {exc}\n")
+        sys.exit(1)
+    _pivot_and_exec(new, config.get("setup_ok"), setpriv, argv, env, cwd="/work")
+
+
 def main() -> None:
     if len(sys.argv) != 2:
         sys.stderr.write("Usage: python3 -m omp_work.egress_research_jail <config.json>\n")
@@ -194,6 +295,9 @@ def main() -> None:
     except (OSError, json.JSONDecodeError) as exc:
         sys.stderr.write(f"research jail: cannot read config: {exc}\n")
         sys.exit(1)
+    if config.get("root") == "worker":
+        _main_worker(config, config_path)
+        return
     ca = _ca_bytes(config)
     env = _worker_env(config, config.get("workdir"))
     setpriv = _executable("setpriv")

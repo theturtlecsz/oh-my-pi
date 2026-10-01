@@ -5,6 +5,7 @@ import json
 import os
 import secrets
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
@@ -84,6 +85,7 @@ def write_capability(
     workspaces: tuple[UUID, ...],
     scopes: tuple[str, ...],
     candidate_ids: tuple[UUID, ...] | None = None,
+    expires_at: datetime | None = None,
 ) -> Path:
     if "work.candidate.read" in scopes and not candidate_ids:
         raise ValueError(
@@ -98,6 +100,10 @@ def write_capability(
     }
     if candidate_ids is not None:
         data["candidate_ids"] = [str(candidate) for candidate in candidate_ids]
+    if expires_at is not None:
+        if expires_at.tzinfo is None:
+            raise ValueError("expires_at must be timezone-aware")
+        data["expires_at"] = expires_at.astimezone(UTC).isoformat()
     path = capabilities_dir(config) / f"{name}.json"
     _write_secret(path, json.dumps(data, indent=2, sort_keys=True))
     return path
@@ -150,6 +156,33 @@ def provision_owner(
         owner_id=owner_id,
         base_url=base_url,
         bearer_file=bearer,
+    )
+
+
+def provision_task_capability(
+    config: OperationsConfig,
+    *,
+    workspace_id: UUID,
+    candidate_ids: tuple[UUID, ...],
+    expires_at: datetime,
+    name: str,
+) -> Path:
+    """Mint a candidate reader whose lease ends at ``expires_at``.
+
+    The capability is the candidate-reader principal (actor_kind
+    ``task-agent``, scope ``work.candidate.read``, one workspace, and the
+    candidate allowlist) with ``expires_at`` stored in the same JSON. A
+    capability written without ``expires_at`` is unchanged.
+    """
+    return write_capability(
+        config,
+        name,
+        actor_id=uuid4(),
+        actor_kind="task-agent",
+        workspaces=(workspace_id,),
+        scopes=("work.candidate.read",),
+        candidate_ids=candidate_ids,
+        expires_at=expires_at,
     )
 
 

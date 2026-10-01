@@ -281,8 +281,13 @@ def claim_job(
     ``compatibility.workers``. No match returns ``job: None``.
 
     While the workspace's agent stop is engaged the claim leases nothing and
-    returns ``job: None`` without touching any job row; the owner's release
-    resumes from the backlog on the next claim.
+    returns ``job: None`` without touching any job row.
+
+    Before taking a backlog job, a claim returns a job already leased to the
+    calling worker when that job has a ``lease_resumed`` event not yet followed
+    by ``resume_claimed``. It appends ``resume_claimed`` and does not change
+    the worker, fence, or reservation. Any other claim leases from the backlog
+    as usual.
     """
     limits = _require_resource_limits(resource_limits)
     if not isinstance(worker_id, str) or not worker_id:
@@ -312,6 +317,11 @@ def claim_job(
                 raise JobError("job_worker_unavailable", ("unknown worker",))
             if worker["state"] != "active":
                 raise JobError("job_worker_unavailable", ("worker is not active",))
+            resumed = _claim_resumed(
+                store, cur, workspace_id, worker_id, operation_id
+            )
+            if resumed is not None:
+                return resumed
             held = set(_json_list(worker["capabilities"]))
             reserved_res = _reserved_resources(cur, workspace_id, worker_id)
             free = int(worker["capacity"]) - sum(reserved_res.values())
@@ -380,6 +390,53 @@ def claim_job(
             cur, operation_id, workspace_id, "job_claim", request, apply
         )
     return _public(operation_id, outcome)
+
+
+def _claim_resumed(
+    store: NativeJobStore,
+    cur: Any,
+    workspace_id: UUID,
+    worker_id: str,
+    operation_id: str,
+) -> dict[str, object] | None:
+    """Return this worker's resumed lease, appending ``resume_claimed`` once."""
+    cur.execute(
+        """
+        SELECT j.job_id, j.fence
+        FROM omp_jobs.jobs j
+        WHERE j.workspace_id=%s AND j.source='native' AND j.status='admitted'
+          AND j.worker_id=%s
+          AND EXISTS (
+            SELECT 1 FROM omp_jobs.job_events resumed
+            WHERE resumed.job_id=j.job_id AND resumed.kind='lease_resumed'
+              AND NOT EXISTS (
+                SELECT 1 FROM omp_jobs.job_events claimed
+                WHERE claimed.job_id=resumed.job_id
+                  AND claimed.kind='resume_claimed'
+                  AND claimed.seq > resumed.seq
+              )
+          )
+        ORDER BY j.created_at, j.job_id
+        FOR UPDATE OF j
+        LIMIT 1
+        """,
+        (workspace_id, worker_id),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return None
+    job_id = str(row["job_id"])
+    fence = int(row["fence"])
+    store.append_event(
+        cur,
+        workspace_id=workspace_id,
+        job_id=job_id,
+        kind="resume_claimed",
+        actor=worker_id,
+        operation_id=operation_id,
+        payload={"worker_id": worker_id, "fence": fence},
+    )
+    return {"status": "applied", "job": store.job_view(cur, workspace_id, job_id)}
 
 
 def _public(operation_id: str, outcome: OperationOutcome) -> dict[str, object]:
