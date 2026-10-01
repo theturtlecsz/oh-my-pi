@@ -105,6 +105,27 @@ export function parseSessionContent(content: string): SessionLoadResult {
 	};
 }
 
+/**
+ * Stream at most `maxBytes` of a file. A stream over `file.slice()` that stops
+ * before EOF never ends on Bun 1.3, so the bound is applied to the chunks.
+ */
+async function* streamFilePrefix(file: Bun.BunFile, maxBytes: number): AsyncGenerator<Uint8Array> {
+	if (!Number.isFinite(maxBytes)) {
+		yield* file.stream();
+		return;
+	}
+	let remaining = maxBytes;
+	if (remaining <= 0) return;
+	for await (const chunk of file.stream()) {
+		if (chunk.byteLength >= remaining) {
+			yield chunk.subarray(0, remaining);
+			return;
+		}
+		remaining -= chunk.byteLength;
+		yield chunk;
+	}
+}
+
 /** Parse session JSONL and visit each entry without retaining prior entries. */
 export async function visitEntriesFromFileStream(
 	filePath: string,
@@ -226,9 +247,7 @@ export async function visitEntriesFromFileStream(
 	};
 
 	try {
-		const file = Bun.file(filePath);
-		const source = Number.isFinite(maxBytes) ? file.slice(0, maxBytes) : file;
-		for await (const chunk of source.stream()) {
+		for await (const chunk of streamFilePrefix(Bun.file(filePath), maxBytes)) {
 			if (stopped) break;
 			bytesSinceYield += chunk.byteLength;
 			options.onBytesConsumed?.(chunk.byteLength);
