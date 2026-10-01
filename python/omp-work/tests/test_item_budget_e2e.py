@@ -1,3 +1,4 @@
+# ruff: noqa: F811
 """OMP-404-s08: End-to-end proof of item budget lifecycle on PostgreSQL.
 
 Verifies the complete item budget lifecycle across the ledger and jobs substrates:
@@ -9,8 +10,8 @@ Verifies the complete item budget lifecycle across the ledger and jobs substrate
 4. Parent job plus one child job (parent_job_id) for the item; record usage (price_usd 0)
    on the child only: 500, 300, 300 tokens. The outbox has tokens alerts at 50, 80, and 100;
    parent and child are cancelled; a new root job enqueue for the item raises budget_exceeded.
-5. deliver_budget_alerts sends all pending alerts (the three tokens ones included)
-   to a loopback http.server stub (shut down in teardown), once each; a second call sends 0.
+5. relay_budget_alerts relays all pending alerts (the three tokens ones included)
+   to PostgresWorkStore; a second call relays 0.
 """
 
 from __future__ import annotations
@@ -41,10 +42,9 @@ from test_bounded_intake_publish import (
     _envelope,
     _seed_omp249,
 )
-from test_budget_alerts_grokbot import _url, alert_server  # noqa: F401 (fixture)
 
 from omp_work.jobs.admission import enqueue_job
-from omp_work.jobs.grokbot import deliver_budget_alerts
+from omp_work.jobs.budget_relay import relay_budget_alerts
 from omp_work.jobs.store import JobError, NativeJobStore
 from omp_work.jobs.usage import record_usage
 from omp_work.mission_budget import admit_mission_budget, mission_intake_draft
@@ -57,7 +57,7 @@ from omp_work.v1.service import Principal, WorkError, WorkService
 from omp_work.v1.store import PostgresWorkStore
 
 
-def test_item_budget_e2e(native_jobs, alert_server) -> None:
+def test_item_budget_e2e(native_jobs) -> None:
     config = native_jobs.service.config
     workspace_id = uuid4()
     job_store = NativeJobStore(config)
@@ -367,28 +367,40 @@ def test_item_budget_e2e(native_jobs, alert_server) -> None:
         )
     assert exc_info.value.code == "budget_exceeded"
 
-    # 5. jobs.grokbot.deliver_budget_alerts sends all pending alerts (the three tokens ones included)
-    # to a loopback http.server stub (shut down in teardown), once each; a second call sends 0.
-    sent_count = deliver_budget_alerts(
+    # 5. relay_budget_alerts relays all pending alerts (the three tokens ones included)
+    # to PostgresWorkStore: the tokens 50/80/100 rows become cost_threshold x2 and
+    # budget_exceeded x1 record_alarm_signal events; a second call relays 0.
+    sent_count = relay_budget_alerts(
         job_store,
+        work_store,
         workspace_id=workspace_id,
         actor_id=OWNER,
-        url=_url(alert_server),
-        token="grokbot-test-token",
     )
     assert sent_count >= 3
-    received_token_thresholds = {
-        req["body"]["threshold_percent"]
-        for req in alert_server.requests
-        if req["body"].get("dimension") == "tokens"
-    }
-    assert {50, 80, 100}.issubset(received_token_thresholds)
 
-    second_sent = deliver_budget_alerts(
+    with job_store.transaction(workspace_id, OWNER) as cur:
+        cur.execute(
+            """
+            SELECT payload
+            FROM omp_audit.domain_events
+            WHERE workspace_id=%s AND event_type='record_alarm_signal'
+            ORDER BY sequence
+            """,
+            (workspace_id,),
+        )
+        events = cur.fetchall()
+    alarm_signals = [
+        ev["payload"]["signal"]
+        for ev in events
+        if ev["payload"].get("work_id") == str(published_work_id)
+    ]
+    assert alarm_signals.count("cost_threshold") == 2
+    assert alarm_signals.count("budget_exceeded") == 1
+
+    second_sent = relay_budget_alerts(
         job_store,
+        work_store,
         workspace_id=workspace_id,
         actor_id=OWNER,
-        url=_url(alert_server),
-        token="grokbot-test-token",
     )
     assert second_sent == 0
