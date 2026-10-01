@@ -85,49 +85,104 @@ completeness. Any unaccounted fork behavior, unaccounted upstream change,
 unresolved conflict, or failed proof fails the PR and emits the itemized
 incompatibility report, grouped by those categories, into the step summary.
 
-## Preparing a review (candidate → record)
+## Repeatable intake
 
-1. Freeze the fork commit the review covers (`git rev-parse HEAD`) and create
-   `docs/upstream-review-<target-sha12>.json` with: `upstream_repo`,
-   `upstream_version` (candidate version), `base` (previous accepted target or
-   merge base), `fork` (frozen fork commit), `target` (candidate commit),
-   `version_min` (first version above the accepted baseline), `version_max`
-   (candidate version), and the companion flat paths (`docs/upstream-review-<target-sha12>-*.tsv`, `-handoff.md`).
-2. Freeze the source and upstream-change manifests once:
-   `bun scripts/verify-upstream-handoff.ts --record <review.json> --write-sources`
-   (writes the sources TSV and embeds the `upstream_changes` manifest in the
-   record JSON).
-3. Build the matrix and changelog ledger; keep `pending:<command>` proofs while
-   work is in flight and iterate manually with `--allow-pending`.
-4. Acceptance is strict everywhere it counts: the updater's pre-merge review,
-   its post-merge gate 1, and CI's upstream-update review all run without
-   `--allow-pending` — no pending proof can ride an incorporation.
+Upstream updates follow a disciplined intake procedure to incorporate upstream releases without breaking the fork's modifications, tests, or build.
 
-Committing the review record is expected and safe: the updater allows HEAD to
-differ from the record's `fork` pin only by changes under `docs/upstream-review-`
-(guardrail bookkeeping); any other divergence refuses the merge until the
-review is re-run against the current fork state.
+### Weekly patch check
 
-## Guarded updater
+As part of weekly discovery (`.github/workflows/upstream-watch.yml`), immediately after a new stable upstream candidate commit `$C` is discovered, the workflow runs:
 
-`session-system/update.sh <full-40-hex-candidate-commit>`:
+```
+bun scripts/upstream-patch-check.ts --target $C
+```
 
-- **Pre-merge** (candidate not an ancestor): refuses to merge unless
-  `docs/upstream-review-<sha12>.json` exists, pins exactly the supplied
-  target with `fork` equal to the current HEAD (drift confined to
-  `docs/upstream-review-` allowed), and passes the strict
-  `verify-upstream-handoff --record …` review (no pending proofs). Only then
-  `git merge --no-ff <commit>`, then stop.
-- **Post-merge** (candidate is an ancestor): gate 1 re-verifies the accepted
-  baseline record (strict), gate 2 checks the fork-behavior inventory, then the
-  full TS/Rust/Python/PostgreSQL gate chain (gates 3–12) with a clean-tree check.
+The patch check uses `git merge-tree` to test the three-way merge between the accepted baseline target, the fork HEAD, and the candidate commit. When an upstream edit touches the exact lines modified by a shared fork patch, the check fails with exit code 1, reports `BROKEN <path> [shared]`, prints the inventory behavior description, and records the broken patch in the workflow job summary. A patch-check failure warns the team before intake begins that upstream changes break an active fork patch and will require code re-fitting during integration.
 
-## Advancing the baseline
+### Merge, not rebase
 
-After a guarded incorporation is accepted and cut over, the update PR replaces
-`docs/upstream-baseline.json` with the candidate's review record (plus
-`accepted_at`) and regenerates the fork inventory against the new baseline in
-the same PR — CI's full review gates exactly that PR. The 18.0.6 record
-(`docs/upstream-18.0.6-*.tsv`, `docs/upstream-18.0.6-upgrade.md`) remains the
-accepted baseline and the guardrail's known-good calibration case
-(`PASS: sources=869 forkPaths=378 shared=50 changelogEntries=129 upstreamPaths=1961`).
+The fork incorporates upstream releases strictly via **merge** (`git merge --no-ff`), never by rebasing the fork onto upstream. Rebasing would rewrite fork commit hashes, disrupt active worktrees, replay thousands of upstream commits through the fork history, and invalidate the immutable divergence base required by the fork-behavior inventory and handoff verification oracles. Merging preserves linear fork development while cleanly bounding upstream integration commits.
+
+### Why intake is an owner session
+
+Intake is executed exclusively in an owner session (by Chris or an authorized owner session), never by automated background workers, for three reasons:
+1. **Flood rebase avoidance**: Automated flood worker tasks use rebase and fast-forward (`--ff-only`) merges. Running intake under flood would attempt to replay upstream commits onto task worktrees.
+2. **Main branch freeze**: The `main` branch must remain frozen while the merge, conflict resolution, test repairs, and gate suites run to avoid racing concurrent changes.
+3. **Deployment**: The completed intake result is deployed directly to the running environment (`bash /home/thetu/flood/deploy-omp.sh`).
+
+### Ordered intake procedure
+
+The exact ordered commands to execute an upstream intake (OMP-401-s07):
+
+```bash
+# 1. Stop background workers and prepare repository
+systemctl --user stop flood
+cd /home/thetu/flood-repos/oh-my-pi
+git remote get-url upstream || git remote add upstream https://github.com/can1357/oh-my-pi.git
+git fetch upstream
+
+# 2. Discover the candidate commit C and version V
+bun scripts/upstream-discovery.ts --json   # C, V (e.g. 8b25ad4a0562, 18.4.6)
+
+# 3. Create isolated intake worktree branched from main
+git worktree add ../oh-my-pi-intake -b intake/${C:0:12} main
+cd ../oh-my-pi-intake
+
+# 4. Seed the review record and companions
+bun scripts/upstream-review-seed.ts --target $C --version $V
+
+# 5. Switch to a scratch branch for integration and testing
+git switch -c scratch/${C:0:12}
+git config rerere.enabled true
+git merge --no-ff $C   # resolve conflicts, repair tests, run gates 3-12
+
+# 6. Settle automated proofs against the passing scratch commit
+R=docs/upstream-review-${C:0:12}
+bun scripts/upstream-review-seed.ts --record $R.json --settle --gates-passed-at $(git rev-parse HEAD)
+
+# 7. Fill remaining pending proofs manually:
+#    - In $R-matrix.tsv: fill conflict rows with concrete resolutions and focused test proofs.
+#    - In $R-changelog.tsv: fill Breaking Changes / Removed rows with dispositions (re-fitted or not-applicable) and proof details.
+#    Verify strict review passes:
+bun scripts/verify-upstream-handoff.ts --record $R.json
+
+# 8. Return to intake branch and commit the settled review record
+git switch intake/${C:0:12}
+git add $R* && git commit -m "OMP-401: review $V"
+
+# 9. Execute guarded pre-merge (rerere applies scratch resolutions)
+bash session-system/update.sh $C   # merge; rerere; commit
+
+# 10. Cherry-pick repairs from scratch branch, then advance the baseline
+git cherry-pick <repairs>
+# Advance baseline: replace docs/upstream-baseline.json with review record plus accepted_at
+# Regenerate inventory and check patches:
+bun scripts/upstream-inventory.ts --write
+bun scripts/upstream-inventory.ts --patches
+git add docs/upstream-baseline.json docs/upstream-fork-inventory.tsv && git commit -m "OMP-401: advance baseline to $V"
+
+# 11. Run full post-merge verification gates (gates 1-12)
+bash session-system/update.sh $C
+
+# 12. Push intake branch and merge PR (merge commit only, no squash/rebase)
+git push origin intake/${C:0:12}
+
+# 13. Fast-forward main, deploy, and resume workers
+cd ../oh-my-pi && git fetch origin && git merge --ff-only origin/main
+bash /home/thetu/flood/deploy-omp.sh
+systemctl --user start flood
+```
+
+### Fork patches
+
+The shared rows in `docs/upstream-fork-inventory.tsv` (`scope == shared`) represent the single canonical list of all fork patches modifying upstream-owned files.
+- `bun scripts/upstream-inventory.ts --patches` lists every shared row along with its line delta (`+added -removed`), classification, and behavior description, followed by a total patch and line summary.
+- The seed placeholder (`fork change (describe)`) is strictly rejected on shared rows by `checkInventory` — every shared fork patch must be accompanied by an accurate human description of its behavior and classification (`retained` · `re-fitted` · `dropped`).
+
+### Settled gate proofs and semantic validation (E1058)
+
+Running `--settle` records gate passage proofs in the matrix and changelog ledgers:
+```
+session-system/update.sh gates 3-12 passed at <commit12> (operator-recorded)
+```
+As noted in architecture finding E1058, this proof is an operator assertion confirming that the automated test suite executed and passed at that specific commit. It is **not** semantic validation of individual upstream behavioral changes or feature additions. Semantic validation of upstream breaking changes, removed functionality, and conflict resolutions requires human analysis, targeted test coverage, and deliberate disposition recorded in the review ledger.
