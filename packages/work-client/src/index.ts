@@ -1524,6 +1524,48 @@ export class WorkClient {
 		}) as Promise<ClientResponse>;
 	}
 
+	/** GET /v1/workspaces/{workspace_id}/client/projects — project.list. */
+	clientProjects(): Promise<ClientResponse> {
+		return this.request("GET", `/v1/workspaces/${this.workspaceId}/client/projects`) as Promise<ClientResponse>;
+	}
+
+	/** GET /v1/workspaces/{workspace_id}/client/projects/{project_id}/status — project.status. */
+	clientProjectStatus(projectId: UUID): Promise<ClientResponse> {
+		return this.request(
+			"GET",
+			`/v1/workspaces/${this.workspaceId}/client/projects/${encodeURIComponent(projectId)}/status`,
+		) as Promise<ClientResponse>;
+	}
+
+	/** GET /v1/workspaces/{workspace_id}/client/projects/{project_id}/decisions — project.decisions. */
+	clientProjectDecisions(projectId: UUID): Promise<ClientResponse> {
+		return this.request(
+			"GET",
+			`/v1/workspaces/${this.workspaceId}/client/projects/${encodeURIComponent(projectId)}/decisions`,
+		) as Promise<ClientResponse>;
+	}
+
+	/** GET /v1/workspaces/{workspace_id}/client/missions/{mission_id} — mission.status. */
+	clientMission(missionId: UUID): Promise<ClientResponse> {
+		return this.request(
+			"GET",
+			`/v1/workspaces/${this.workspaceId}/client/missions/${encodeURIComponent(missionId)}`,
+		) as Promise<ClientResponse>;
+	}
+
+	/** GET /v1/workspaces/{workspace_id}/client/stop — stop.status. */
+	clientStopStatus(): Promise<ClientResponse> {
+		return this.request("GET", `/v1/workspaces/${this.workspaceId}/client/stop`) as Promise<ClientResponse>;
+	}
+
+	/** POST /v1/workspaces/{workspace_id}/client/stop — stop.engage; body {request_id, payload}. */
+	clientEngageStop(reason: string, requestId: UUID = crypto.randomUUID()): Promise<ClientResponse> {
+		return this.request("POST", `/v1/workspaces/${this.workspaceId}/client/stop`, {
+			request_id: requestId,
+			payload: { reason },
+		}) as Promise<ClientResponse>;
+	}
+
 	execution(grantIdOrKey?: string): Promise<ExecutionView> {
 		const suffix = grantIdOrKey ? `/${encodeURIComponent(grantIdOrKey)}` : "";
 		return this.request("GET", `/v1/workspaces/${this.workspaceId}/execution${suffix}`) as Promise<ExecutionView>;

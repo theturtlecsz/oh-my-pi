@@ -73,6 +73,7 @@ from .agent_stop import allowed_while_stopped, read_stop_state, stop_result
 from .decision_records import answer_decision, create_decision, list_decisions
 from .missions import execute as execute_mission
 from .missions import read_mission, unconfirmed_missions_for_work
+from .mission_standing import mission_standing
 from .owner_relay import relay_owner_intent
 from .mission_intake import answer_mission_draft, draft_mission_intake
 from .mission_event_store import (
@@ -295,6 +296,7 @@ class WorkStore(Protocol):
         value: str,
         *,
         candidate_allowlist: frozenset[UUID] | None = None,
+        standing: bool = False,
     ) -> dict[str, object]: ...
     def activity(
         self,
@@ -6555,6 +6557,7 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
         value: str,
         *,
         candidate_allowlist: frozenset[UUID] | None = None,
+        standing: bool = False,
     ) -> dict[str, object]:
         with self._transaction(workspace_id, actor_id) as cur:
             if kind == "item":
@@ -6850,6 +6853,8 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
                 )
                 return {"grant": grant, "items": items, "active_item": active_item}
             if kind == "mission":
+                if standing:
+                    return mission_standing(cur, workspace_id, value)
                 return read_mission(cur, workspace_id, value)
             raise WorkStoreError("invalid_request")
 
