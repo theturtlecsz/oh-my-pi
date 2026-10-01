@@ -254,7 +254,10 @@ With `$C` an ancestor of HEAD, `update.sh` runs gates 1–12:
 ```bash
 set -euo pipefail
 bash session-system/update.sh "$C"
+bun session-system/qualify-installed.ts
 ```
+
+This step is CI's full-mode installed qualification (Work Ledger PostgreSQL job); a failure stops the intake before the PR is opened, and `test:py` alone skips these tests. Host prerequisites the script needs: uv Python 3.13 (`uv python install 3.13`), bubblewrap, PostgreSQL 18 binaries on PATH, and natives refreshed by update.sh.
 
 Push the intake branch, open the pull request, and merge it with a merge commit (`gh pr merge --merge`). Then fast-forward the frozen `main` checkout, deploy, and start flood:
 
