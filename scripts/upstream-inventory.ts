@@ -10,11 +10,14 @@
 // silently add, change, or remove fork behavior.
 //
 //   bun scripts/upstream-inventory.ts [--baseline docs/upstream-baseline.json]
-//     [--inventory docs/upstream-fork-inventory.tsv] [--head <rev>] [--write]
+//     [--inventory docs/upstream-fork-inventory.tsv] [--head <rev>] [--write] [--patches]
 //
 // --write regenerates the machine columns (scope/state/head_blob), preserves
 // existing behavior/classification text, seeds new rows from commit subjects,
 // and drops rows whose paths no longer diverge.
+//
+// --patches prints one tab-separated line per shared row (path, state, +added,
+// -removed, classification, behavior) and a total summary line.
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -99,6 +102,11 @@ export function checkInventory(computed: DivergingPath[], rows: InventoryRow[]):
 		if (rowsByPath.has(row.path)) errors.push(`inventory: duplicate row for ${row.path}`);
 		rowsByPath.set(row.path, row);
 		if (!row.behavior.trim()) errors.push(`inventory: ${row.path} has an empty behavior description`);
+		if (row.scope === "shared" && row.behavior.startsWith("fork change (describe)")) {
+			errors.push(
+				`inventory: ${row.path} changes upstream-owned code but its behavior is the seed placeholder — name the fork patch`,
+			);
+		}
 		if (!["retained", "re-fitted", "dropped"].includes(row.classification)) {
 			errors.push(`inventory: ${row.path} has invalid classification '${row.classification}'`);
 		}
@@ -171,6 +179,34 @@ export function buildSubjectIndex(logText: string, maxSubjects = 5): Map<string,
 	return index;
 }
 
+export interface NumstatEntry {
+	added: number;
+	removed: number;
+}
+
+/** Parse `git diff --numstat --no-renames` output into a map of path -> { added, removed }. */
+export function parseNumstat(text: string): Map<string, NumstatEntry> {
+	const map = new Map<string, NumstatEntry>();
+	for (const line of text.split(/\r?\n/)) {
+		if (!line.trim()) continue;
+		const tab1 = line.indexOf("\t");
+		if (tab1 < 0) continue;
+		const tab2 = line.indexOf("\t", tab1 + 1);
+		if (tab2 < 0) continue;
+		const addedStr = line.slice(0, tab1);
+		const removedStr = line.slice(tab1 + 1, tab2);
+		const rawPath = line.slice(tab2 + 1);
+		const added = addedStr === "-" ? 0 : parseInt(addedStr, 10);
+		const removed = removedStr === "-" ? 0 : parseInt(removedStr, 10);
+		const path = unquoteGitPath(rawPath);
+		map.set(path, {
+			added: Number.isNaN(added) ? 0 : added,
+			removed: Number.isNaN(removed) ? 0 : removed,
+		});
+	}
+	return map;
+}
+
 // ---------------------------------------------------------------------------
 // CLI
 // ---------------------------------------------------------------------------
@@ -213,10 +249,12 @@ async function main(): Promise<void> {
 	let inventoryPath = "docs/upstream-fork-inventory.tsv";
 	let head = "HEAD";
 	let write = false;
+	let patches = false;
 	const argv = process.argv.slice(2);
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
 		if (arg === "--write") write = true;
+		else if (arg === "--patches") patches = true;
 		else if (arg === "--baseline") baselinePath = argv[++i] ?? "";
 		else if (arg === "--inventory") inventoryPath = argv[++i] ?? "";
 		else if (arg === "--head") head = argv[++i] ?? "";
@@ -224,6 +262,11 @@ async function main(): Promise<void> {
 			console.error(`usage error: unexpected argument ${arg}`);
 			process.exit(2);
 		}
+	}
+
+	if (patches && write) {
+		console.error("usage error: --patches and --write cannot be combined");
+		process.exit(2);
 	}
 
 	const baselineFile = Bun.file(baselinePath);
@@ -238,6 +281,37 @@ async function main(): Promise<void> {
 	}
 
 	const headTree = head === "HEAD" ? await worktreeTree() : head;
+
+	if (patches) {
+		const inventoryFile = Bun.file(inventoryPath);
+		if (!(await inventoryFile.exists())) {
+			console.error(
+				`ERROR: inventory missing: ${inventoryPath} — run \`bun scripts/upstream-inventory.ts --write\``,
+			);
+			process.exit(1);
+		}
+		let rows: InventoryRow[];
+		try {
+			rows = parseInventoryTsv(await inventoryFile.text());
+		} catch (err) {
+			console.error(`ERROR: ${err instanceof Error ? err.message : err}`);
+			process.exit(1);
+		}
+		const numstatText = await git(["diff", "--numstat", "--no-renames", baseline.target, headTree]);
+		const numstat = parseNumstat(numstatText);
+		const sharedRows = rows.filter(r => r.scope === "shared");
+		let totalAdded = 0;
+		let totalRemoved = 0;
+		for (const r of sharedRows) {
+			const stat = numstat.get(r.path) ?? { added: 0, removed: 0 };
+			totalAdded += stat.added;
+			totalRemoved += stat.removed;
+			console.log([r.path, r.state, `+${stat.added}`, `-${stat.removed}`, r.classification, r.behavior].join("\t"));
+		}
+		console.log(`TOTAL ${sharedRows.length} patches +${totalAdded} -${totalRemoved}`);
+		return;
+	}
+
 	const diffTreeText = await git(["diff-tree", "-r", "--no-renames", "--abbrev=40", baseline.target, headTree]);
 	// The inventory file itself is guardrail bookkeeping, not fork behavior: a
 	// self-row recording its own blob hash has no fixpoint (the hash changes the
