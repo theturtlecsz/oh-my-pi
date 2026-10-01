@@ -425,8 +425,14 @@ def _index_tree(
         empty_worktree = Path(tmp) / "empty"
         empty_worktree.mkdir()
         git(repo, "read-tree", base, index_file=index_path)
-        deletions = [p for p in sorted(changed) if changed[p] is None]
-        additions = [p for p in sorted(changed) if changed[p] is not None]
+        deletions: list[str] = []
+        additions: list[tuple[str, tuple[str, bytes]]] = []
+        for path in sorted(changed):
+            entry = changed[path]
+            if entry is None:
+                deletions.append(path)
+            else:
+                additions.append((path, entry))
 
         for path in deletions:
             git(
@@ -438,10 +444,7 @@ def _index_tree(
                 index_file=index_path,
                 extra_env={"GIT_WORK_TREE": str(empty_worktree)},
             )
-        for path in additions:
-            entry = changed[path]
-            assert entry is not None
-            mode, content = entry
+        for path, (mode, content) in additions:
             blob = _write_scanned_blob(repo, content)
             git(
                 repo,
