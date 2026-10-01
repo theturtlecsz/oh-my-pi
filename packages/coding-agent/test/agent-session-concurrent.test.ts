@@ -3546,629 +3546,90 @@ describe("AgentSession TTSR resume gate", () => {
 		expect(session.isStreaming).toBe(false);
 		expect(extensionRunner.emitSessionStop).toHaveBeenCalledTimes(1);
 	});
-});
 
-// Concurrent native results must retain their original response's reminder and retry ownership.
-describe("same-message native AST", () => {
-	it.each(["union", "target-held", "late-during", "late-after", "duplicate"] as const)(
-		"preserves one completed retry and the admitted rule set (%s)",
-		async mode => {
-			const trace: object[] = [];
-			const started = performance.now();
-			const record = (stage: string, details: object = {}) =>
-				trace.push({ stage, ms: performance.now() - started, ...details });
-			const ready = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
-			const release = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
-			const returned = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
-			const triggeredA = Promise.withResolvers<void>();
-			const providerTerminal = Promise.withResolvers<void>();
-			const hookEntered = Promise.withResolvers<void>();
-			const hookRelease = Promise.withResolvers<void>();
-			const firstTimer = Promise.withResolvers<void>();
-			const continuationStarted = Promise.withResolvers<void>();
-			const continuationRelease = Promise.withResolvers<void>();
-			const late = mode === "late-during" || mode === "late-after";
-			const names =
-				mode === "duplicate" ? ["same-message-a", "same-message-a"] : ["same-message-a", "same-message-b"];
-			const expected = late || mode === "duplicate" ? [names[0]!] : names;
-			let retryTimers = 0;
-			let streams = 0;
-			let originalAborts = 0;
-			let continuationAborts = 0;
-			let continuationFinished = false;
-			let retryInput = "";
-			const timestamps: number[] = [];
-			const notifications: string[][] = [];
-			const notices: string[] = [];
-			const schedulerSpy = vi.spyOn(scheduler, "wait").mockImplementation(async (delay, options) => {
-				if (delay === 50) retryTimers++;
-				record("scheduler-enter", { delay });
-				await originalSchedulerWait(delay, options);
-				record("scheduler-complete", { delay });
-				if (delay === 50) firstTimer.resolve();
-			});
-			const manager = new TtsrManager({
-				enabled: true,
-				contextMode: "discard",
-				interruptMode: "always",
-				repeatMode: "once",
-				repeatGap: 10,
-			});
-			for (const [index, name] of names.entries()) {
-				if (mode === "duplicate" && index === 1) continue;
-				manager.addRule({
-					name,
-					path: `/rehearsal/${name}.md`,
-					content: `Use safe${index} instead of danger${index}.`,
-					astCondition: [mode === "duplicate" ? "danger($$$ARGS)" : `danger${index}($$$ARGS)`],
-					scope: [mode === "duplicate" ? "tool:write(file*.ts)" : `tool:write(file${index}.ts)`],
-					_source: { provider: "test", providerName: "test", path: `/rehearsal/${name}.md`, level: "project" },
-				});
-			}
-			const actualCheck = manager.checkAstSnapshot.bind(manager);
-			const checkSpy = vi.spyOn(manager, "checkAstSnapshot").mockImplementation(async (snapshot, context) => {
-				const index = context.streamKey?.includes("same-message-0") ? 0 : 1;
-				record("ast-enter", { index, snapshot, context });
-				const matches = await actualCheck(snapshot, context);
-				record("native-result", { index, names: matches.map(rule => rule.name) });
-				expect(matches.map(rule => rule.name)).toEqual([names[index]]);
-				ready[index]!.resolve();
-				await release[index]!.promise;
-				record("ast-return", { index });
-				returned[index]!.resolve();
-				return matches;
-			});
-			const message = (
-				content: AssistantMessage["content"],
-				stopReason: AssistantMessage["stopReason"],
-				timestamp: number,
-			): AssistantMessage => ({
-				role: "assistant",
-				content,
-				api: "anthropic-messages",
-				provider: "anthropic",
-				model: "mock",
-				stopReason,
-				timestamp,
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
-			});
-			const calls: ToolCall[] = names.map((_name, index) => ({
-				type: "toolCall",
-				id: `same-message-${index}`,
-				name: "write",
-				arguments: {
-					path: `file${index}.ts`,
-					content: mode === "duplicate" ? `danger(${index});` : `danger${index}();`,
-				},
-			}));
-			const tool: AgentTool = {
-				name: "write",
-				label: "Write",
-				description: "Rehearsal write",
-				parameters: type({ path: "string", content: "string" }),
-				matcherEntries: args => {
-					const value = args as { path: string; content: string };
-					return [{ path: value.path, digest: value.content }];
-				},
-				execute: async () => {
-					throw new Error("Interrupted tools must not execute");
-				},
-			};
-			const agent = new Agent({
-				getApiKey: () => "test-key",
-				convertToLlm,
-				initialState: { model: getBundledModel("anthropic", "claude-sonnet-4-5")!, tools: [tool] },
-				streamFn: (_model, context, options) => {
-					streams++;
-					record("stream-start", { streams });
-					const stream = new AssistantMessageEventStream();
-					if (streams === 1)
-						queueMicrotask(() => {
-							const partial = message(calls, "toolUse", 1720000000000);
-							options?.signal?.addEventListener(
-								"abort",
-								() => {
-									originalAborts++;
-									record("original-provider-abort");
-									// Agent may emit its own aborted message_end before this provider terminal event.
-									void providerTerminal.promise.then(() => {
-										record("provider-terminal-release");
-										stream.push({
-											type: "error",
-											reason: "aborted",
-											error: { ...partial, stopReason: "aborted" },
-										});
-									});
-								},
-								{ once: true },
-							);
-							stream.push({ type: "start", partial });
-							for (const [contentIndex, call] of calls.entries()) {
-								stream.push({ type: "toolcall_start", contentIndex, partial });
-								stream.push({
-									type: "toolcall_delta",
-									contentIndex,
-									delta: JSON.stringify(call.arguments),
-									partial,
-								});
-								stream.push({ type: "toolcall_end", contentIndex, toolCall: call, partial });
-							}
-						});
-					else {
-						retryInput = JSON.stringify(context.messages);
-						options?.signal?.addEventListener(
-							"abort",
-							() => {
-								continuationAborts++;
-							},
-							{ once: true },
-						);
-						continuationStarted.resolve();
-						void continuationRelease.promise.then(() => {
-							const done = message(
-								[{ type: "text", text: "Both corrected writes completed." }],
-								"stop",
-								1720000000001,
-							);
-							stream.push({ type: "start", partial: done });
-							stream.push({ type: "done", reason: "stop", message: done });
-							continuationFinished = true;
-						});
-					}
-					return stream;
-				},
-			});
-			const abortSpy = vi.spyOn(agent, "abort");
-			agent.subscribe(event => {
-				if (event.type === "message_update" && event.assistantMessageEvent.type === "toolcall_delta") {
-					timestamps.push(event.message.timestamp);
-					record("delta-enter", { timestamp: event.message.timestamp, originalAborts });
-				}
-				if (event.type === "message_end") record("core-message-end", { message: event.message });
-				if (event.type === "agent_end") record("core-agent-end");
-			});
-			const sessionManager = SessionManager.inMemory();
-			const runtime = new ExtensionRuntime();
-			const extension = await loadExtensionFromFactory(
-				pi => {
-					pi.on("message_end", async event => {
-						if (
-							mode !== "target-held" ||
-							event.message.role !== "assistant" ||
-							event.message.stopReason !== "aborted"
-						)
-							return;
-						record("target-hook-enter");
-						hookEntered.resolve();
-						await hookRelease.promise;
-						record("target-hook-exit");
-					});
-				},
-				os.tmpdir(),
-				new EventBus(),
-				runtime,
-				"same-message-target",
-			);
-			const extensionRunner = new ExtensionRunner(
-				[extension],
-				runtime,
-				os.tmpdir(),
-				sessionManager,
-				sharedModelRegistry,
-			);
-			const session = new AgentSession({
-				agent,
-				sessionManager,
-				extensionRunner,
-				settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false }),
-				modelRegistry: sharedModelRegistry,
-				ttsrManager: manager,
-			});
-			session.subscribe(event => {
-				if (event.type === "notice") notices.push(event.message);
-				if (event.type === "ttsr_triggered") {
-					const matched = event.rules.map(rule => rule.name);
-					notifications.push(matched);
-					record("triggered", { names: matched });
-					if (matched.includes(names[0]!)) triggeredA.resolve();
-				}
-			});
-			const injections = () =>
-				sessionManager
-					.getEntries()
-					.filter(entry => entry.type === "custom_message" && entry.customType === "ttsr-injection");
-			const prompted = session.prompt("Write both files safely.");
-			try {
-				await untilAborted(AbortSignal.timeout(3000), Promise.all(ready.map(gate => gate.promise)));
-				expect(originalAborts).toBe(0);
-				expect(timestamps).toEqual([1720000000000, 1720000000000]);
-				release[0]!.resolve();
-				await untilAborted(AbortSignal.timeout(3000), triggeredA.promise);
-				if (mode === "target-held") await untilAborted(AbortSignal.timeout(3000), hookEntered.promise);
-				if (!late) {
-					release[1]!.resolve();
-					await returned[1]!.promise;
-				}
-				providerTerminal.resolve();
-				if (mode === "target-held") {
-					await untilAborted(AbortSignal.timeout(3000), firstTimer.promise);
-					await originalSchedulerWait(0);
-					record("target-held-after-first-real-timer", { streams, abortPending: session.isTtsrAbortPending });
-					expect(streams).toBe(1);
-					expect(session.isTtsrAbortPending).toBe(true);
-					expect(injections()).toEqual([]);
-					expect(
-						sessionManager
-							.getEntries()
-							.some(
-								entry =>
-									entry.type === "message" &&
-									entry.message.role === "assistant" &&
-									entry.message.stopReason === "aborted",
-							),
-					).toBe(false);
-					expect(notices).toEqual([]);
-					hookRelease.resolve();
-				}
-				await untilAborted(AbortSignal.timeout(3000), continuationStarted.promise);
-				if (mode === "late-during") {
-					record("release-b-during-continuation");
-					release[1]!.resolve();
-					await returned[1]!.promise;
-					await originalSchedulerWait(0);
-					expect(continuationAborts).toBe(0);
-					expect(agent.state.isStreaming).toBe(true);
-				}
-				continuationRelease.resolve();
-				await untilAborted(AbortSignal.timeout(3000), prompted);
-				await session.waitForIdle();
-				if (mode === "late-after") {
-					record("release-b-after-session-idle");
-					release[1]!.resolve();
-					await returned[1]!.promise;
-					await originalSchedulerWait(0);
-					await session.waitForIdle();
-				}
-				record("consumer-result", {
-					streams,
-					originalAborts,
-					continuationAborts,
-					retryTimers,
-					continuationFinished,
-					notifications,
-					notices,
-					persistedRules: sessionManager.getInjectedTtsrRules(),
-					injections: injections(),
-					retryInput,
-				});
-				expect(abortSpy).toHaveBeenCalledTimes(1);
-				expect(originalAborts).toBe(1);
-				expect(continuationAborts).toBe(0);
-				expect(streams).toBe(2);
-				expect(retryTimers).toBe(1);
-				expect(continuationFinished).toBe(true);
-				expect(injections()).toHaveLength(1);
-				expect(sessionManager.getInjectedTtsrRules().sort()).toEqual(expected);
-				expect(notifications).toEqual(late ? [[names[0]!]] : [[names[0]!], [names[1]!]]);
-				expect(notices).toEqual([]);
-				for (const name of expected)
-					expect(retryInput.match(new RegExp(`rule=\\\\?"${name}`, "g"))).toHaveLength(1);
-				if (late) expect(retryInput).not.toContain(names[1]!);
-				if (mode === "target-held")
-					expect(
-						sessionManager
-							.getEntries()
-							.some(
-								entry =>
-									entry.type === "message" &&
-									entry.message.role === "assistant" &&
-									entry.message.stopReason === "aborted",
-							),
-					).toBe(true);
-				expect(
-					sessionManager
-						.getEntries()
-						.some(
-							entry =>
-								entry.type === "message" &&
-								entry.message.role === "assistant" &&
-								entry.message.stopReason === "stop",
-						),
-				).toBe(true);
-			} finally {
-				release.forEach(gate => {
-					gate.resolve();
-				});
-				providerTerminal.resolve();
-				hookRelease.resolve();
-				continuationRelease.resolve();
-				process.stdout.write(`SAME_MESSAGE_TRACE ${JSON.stringify({ mode, trace })}\n`);
-				await session.dispose();
-				checkSpy.mockRestore();
-				abortSpy.mockRestore();
-				schedulerSpy.mockRestore();
-			}
-		},
-		10000,
-	);
-});
-
-// Fault injection: omit one supported processing observation, while real persistence continues.
-describe("failed attempt retirement", () => {
-	it("failed attempt cannot interrupt a fresh user prompt when its old native AST result returns", async () => {
-		const trace: object[] = [];
-		const started = performance.now();
-		const record = (stage: string, detail: object = {}) =>
-			trace.push({ stage, ms: performance.now() - started, ...detail });
-		const ready = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
-		const release = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
-		const returnedB = Promise.withResolvers<void>();
-		const triggeredA = Promise.withResolvers<void>();
-		const freshStarted = Promise.withResolvers<void>();
-		const freshRelease = Promise.withResolvers<void>();
-		const manager = new TtsrManager({
+	// OMP-272 on the 18.4.8 TTSR path: AST rules run once in beforeToolCall on finalized
+	// arguments, so a verdict can still land after its attempt was aborted. That late
+	// verdict must not schedule recovery against the next, fresh prompt.
+	it("an aborted attempt's late AST verdict does not interrupt a fresh prompt", async () => {
+		const target = path.join(tempDir, "late-verdict.ts");
+		const parameters = type({ path: "string", content: "string" });
+		let executed = 0;
+		const writeTool: AgentTool<typeof parameters> = {
+			name: "write",
+			label: "Write",
+			description: "Write a file",
+			parameters,
+			matcherDigest: args => {
+				if (!args || typeof args !== "object" || !("content" in args)) return undefined;
+				return typeof args.content === "string" ? args.content : undefined;
+			},
+			execute: async () => {
+				executed++;
+				return { content: [{ type: "text", text: "Written" }] };
+			},
+		};
+		const mock = createMockModel({
+			responses: [
+				{ content: [{ type: "toolCall", name: "write", arguments: { path: target, content: "danger0();" } }] },
+			],
+			handler: () => ({ content: ["Fresh answer"] }),
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model: getBundledModel("anthropic", "claude-sonnet-4-5")!, tools: [writeTool] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const ttsrManager = new TtsrManager({
 			enabled: true,
-			contextMode: "discard",
 			interruptMode: "always",
+			contextMode: "discard",
 			repeatMode: "once",
 			repeatGap: 10,
 		});
-		const names = ["failed-attempt-a", "failed-attempt-b"];
-		for (const [index, name] of names.entries())
-			manager.addRule({
-				name,
-				path: `/rehearsal/${name}.md`,
-				content: `Replace danger${index} with safe${index}.`,
-				astCondition: [`danger${index}($$$ARGS)`],
-				scope: [`tool:write(file${index}.ts)`],
-				_source: { provider: "test", providerName: "test", path: `/rehearsal/${name}.md`, level: "project" },
-			});
-		const actualCheck = manager.checkAstSnapshot.bind(manager);
-		const checkSpy = vi.spyOn(manager, "checkAstSnapshot").mockImplementation(async (snapshot, context) => {
-			const index = context.streamKey?.includes("failed-call-0") ? 0 : 1;
-			record("ast-enter", { index, snapshot, context });
+		ttsrManager.addRule({
+			name: "late-verdict",
+			path: "late-verdict.md",
+			content: "Replace danger0 with safe0.",
+			astCondition: ["danger0($$$ARGS)"],
+			scope: ["tool:write(*.ts)"],
+			_source: { provider: "test", providerName: "test", path: "late-verdict.md", level: "project" },
+		});
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const actualCheck = ttsrManager.checkAstSnapshot.bind(ttsrManager);
+		vi.spyOn(ttsrManager, "checkAstSnapshot").mockImplementation(async (snapshot, context) => {
 			const matches = await actualCheck(snapshot, context);
-			record("native-result", { index, names: matches.map(rule => rule.name) });
-			expect(matches.map(rule => rule.name)).toEqual([names[index]]);
-			ready[index]!.resolve();
-			await release[index]!.promise;
-			record("ast-return", { index });
-			if (index === 1) returnedB.resolve();
+			expect(matches.map(rule => rule.name)).toEqual(["late-verdict"]);
+			entered.resolve();
+			await release.promise;
 			return matches;
 		});
-		let omitted = false;
-		let observationRestored = false;
-		const actualObserve = TtsrCoordinator.prototype.observeProcessing;
-		const observationSpy = vi
-			.spyOn(TtsrCoordinator.prototype, "observeProcessing")
-			.mockImplementation(function (this: TtsrCoordinator, event, processing) {
-				if (
-					!omitted &&
-					event.type === "message_end" &&
-					event.message.role === "assistant" &&
-					event.message.stopReason === "aborted" &&
-					event.message.timestamp === 1720000000100
-				) {
-					omitted = true;
-					record("fault-omit-first-aborted-observation", { timestamp: event.message.timestamp });
-					return;
-				}
-				return actualObserve.call(this, event, processing);
-			});
-		let timers = 0;
-		const schedulerSpy = vi.spyOn(scheduler, "wait").mockImplementation(async (delay, options) => {
-			if (delay === 50) timers++;
-			record("scheduler-enter", { delay });
-			await originalSchedulerWait(delay, options);
-			record("scheduler-complete", { delay });
-		});
-		const message = (
-			content: AssistantMessage["content"],
-			stopReason: AssistantMessage["stopReason"],
-			timestamp: number,
-		): AssistantMessage => ({
-			role: "assistant",
-			content,
-			stopReason,
-			timestamp,
-			api: "anthropic-messages",
-			provider: "anthropic",
-			model: "mock",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
-		});
-		const calls: ToolCall[] = names.map((_name, index) => ({
-			type: "toolCall",
-			id: `failed-call-${index}`,
-			name: "write",
-			arguments: { path: `file${index}.ts`, content: `danger${index}();` },
-		}));
-		const tool: AgentTool = {
-			name: "write",
-			label: "Write",
-			description: "Rehearsal write",
-			parameters: type({ path: "string", content: "string" }),
-			matcherEntries: args => {
-				const value = args as { path: string; content: string };
-				return [{ path: value.path, digest: value.content }];
-			},
-			execute: async () => {
-				throw new Error("Interrupted tool must not execute");
-			},
-		};
-		let streams = 0;
-		let initialAborts = 0;
-		let freshAborts = 0;
-		const timestamps: number[] = [];
-		const notifications: string[][] = [];
-		const notices: string[] = [];
-		const agent = new Agent({
-			getApiKey: () => "test-key",
-			convertToLlm,
-			initialState: { model: getBundledModel("anthropic", "claude-sonnet-4-5")!, tools: [tool] },
-			streamFn: (_model, _context, options) => {
-				streams++;
-				record("stream-start", { streams });
-				const stream = new AssistantMessageEventStream();
-				if (streams === 1)
-					queueMicrotask(() => {
-						const partial = message(calls, "toolUse", 1720000000100);
-						options?.signal?.addEventListener(
-							"abort",
-							() => {
-								initialAborts++;
-								record("initial-abort");
-								stream.push({ type: "error", reason: "aborted", error: { ...partial, stopReason: "aborted" } });
-							},
-							{ once: true },
-						);
-						stream.push({ type: "start", partial });
-						for (const [contentIndex, call] of calls.entries()) {
-							stream.push({ type: "toolcall_start", contentIndex, partial });
-							stream.push({
-								type: "toolcall_delta",
-								contentIndex,
-								delta: JSON.stringify(call.arguments),
-								partial,
-							});
-							stream.push({ type: "toolcall_end", contentIndex, toolCall: call, partial });
-						}
-					});
-				else
-					queueMicrotask(() => {
-						const partial = message([{ type: "text", text: "Independent answer." }], "stop", 1720000000200);
-						options?.signal?.addEventListener(
-							"abort",
-							() => {
-								freshAborts++;
-								record("fresh-user-stream-aborted");
-								stream.push({ type: "error", reason: "aborted", error: { ...partial, stopReason: "aborted" } });
-							},
-							{ once: true },
-						);
-						stream.push({ type: "start", partial });
-						void freshRelease.promise.then(() => stream.push({ type: "done", reason: "stop", message: partial }));
-					});
-				return stream;
-			},
-		});
-		const abortSpy = vi.spyOn(agent, "abort");
-		agent.subscribe(event => {
-			if (event.type === "message_update" && event.assistantMessageEvent.type === "toolcall_delta")
-				timestamps.push(event.message.timestamp);
-			if (
-				event.type === "message_start" &&
-				event.message.role === "assistant" &&
-				event.message.timestamp === 1720000000200
-			) {
-				record("fresh-assistant-start");
-				freshStarted.resolve();
-			}
-			if (event.type === "message_end") record("core-message-end", { message: event.message });
-		});
-		const journal = SessionManager.inMemory();
-		const session = new AgentSession({
+		const sessionManager = SessionManager.inMemory();
+		session = new AgentSession({
 			agent,
-			sessionManager: journal,
-			settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false }),
+			sessionManager,
+			settings: Settings.isolated(),
 			modelRegistry: sharedModelRegistry,
-			ttsrManager: manager,
+			ttsrManager,
 		});
-		session.subscribe(event => {
-			if (event.type === "notice") {
-				notices.push(event.message);
-				record("notice", { message: event.message });
-			}
-			if (event.type === "ttsr_triggered") {
-				const matched = event.rules.map(rule => rule.name);
-				notifications.push(matched);
-				record("triggered", { names: matched });
-				if (matched.includes(names[0]!)) triggeredA.resolve();
-			}
-		});
-		let freshPrompt: Promise<boolean> | undefined;
-		const firstPrompt = session.prompt("First request.");
-		try {
-			await untilAborted(AbortSignal.timeout(3000), Promise.all(ready.map(gate => gate.promise)));
-			expect(initialAborts).toBe(0);
-			expect(timestamps).toEqual([1720000000100, 1720000000100]);
-			release[0]!.resolve();
-			await untilAborted(AbortSignal.timeout(3000), triggeredA.promise);
-			await untilAborted(AbortSignal.timeout(3000), firstPrompt);
-			await session.waitForIdle();
-			expect(omitted).toBe(true);
-			expect(notices).toHaveLength(1);
-			expect(session.isTtsrAbortPending).toBe(false);
-			expect(
-				journal
-					.getEntries()
-					.some(
-						entry =>
-							entry.type === "message" &&
-							entry.message.role === "assistant" &&
-							entry.message.timestamp === 1720000000100,
-					),
-			).toBe(true);
-			observationSpy.mockRestore();
-			observationRestored = true;
-			record("first-prompt-settled", { streams, notices, timers });
-			freshPrompt = session.prompt("Independent new user request.");
-			await untilAborted(AbortSignal.timeout(3000), freshStarted.promise);
-			record("release-old-b-into-fresh-prompt");
-			release[1]!.resolve();
-			await returnedB.promise;
-			await originalSchedulerWait(0);
-			record("fresh-prompt-after-old-b", { freshAborts, streams, timers, notices, notifications });
-			expect(freshAborts).toBe(0);
-			freshRelease.resolve();
-			await untilAborted(AbortSignal.timeout(3000), freshPrompt);
-			await session.waitForIdle();
-			expect(abortSpy).toHaveBeenCalledTimes(1);
-			expect(streams).toBe(2);
-			expect(timers).toBe(1);
-			expect(notifications).toEqual([[names[0]!]]);
-			expect(notices).toHaveLength(1);
-			expect(journal.getInjectedTtsrRules()).toEqual([]);
-			expect(
-				journal
-					.getEntries()
-					.some(entry => entry.type === "custom_message" && entry.customType === "ttsr-injection"),
-			).toBe(false);
-			expect(
-				journal
-					.getEntries()
-					.some(
-						entry =>
-							entry.type === "message" &&
-							entry.message.role === "assistant" &&
-							entry.message.timestamp === 1720000000200 &&
-							entry.message.stopReason === "stop",
-					),
-			).toBe(true);
-		} finally {
-			release.forEach(gate => {
-				gate.resolve();
-			});
-			freshRelease.resolve();
-			process.stdout.write(`FAILED_ATTEMPT_TRACE ${JSON.stringify(trace)}\n`);
-			await session.dispose();
-			if (!observationRestored) observationSpy.mockRestore();
-			checkSpy.mockRestore();
-			abortSpy.mockRestore();
-			schedulerSpy.mockRestore();
-		}
-	}, 10000);
+
+		const first = session.prompt("Write the source file");
+		await entered.promise;
+		const aborting = session.abort();
+		release.resolve();
+		await aborting;
+		await first;
+
+		await session.prompt("Answer without tools");
+		await session.waitForIdle();
+
+		expect(executed).toBe(0);
+		expect(mock.calls).toHaveLength(2);
+		expect(JSON.stringify(mock.calls[1]?.context.messages)).not.toContain("Replace danger0 with safe0.");
+		const last = agent.state.messages.at(-1);
+		if (last?.role !== "assistant") throw new Error("Expected the fresh prompt's assistant turn");
+		expect(last.stopReason).toBe("stop");
+		expect(sessionManager.getEntries().filter(entry => entry.type === "ttsr_injection")).toEqual([]);
+	});
 });

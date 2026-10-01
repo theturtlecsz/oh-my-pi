@@ -241,8 +241,13 @@ export class TtsrCoordinator {
 		if (!this.#manager?.hasAstRules()) return undefined;
 		const toolCall = { ...ctx.toolCall, arguments: ctx.args };
 		const matchContext = this.#inspector.matchContext(toolCall, 0);
+		const generation = this.#host.promptGeneration();
 		const matches = await this.#checkAstStream(matchContext, toolCall);
 		if (matches.length === 0) return undefined;
+		// A verdict that lands after its prompt was aborted or superseded still keeps the
+		// matched call from running, but must not schedule recovery against the next prompt (OMP-272).
+		if (this.#host.promptGeneration() !== generation)
+			return { block: true, reason: this.#formatAbortReason(matches) };
 		// The assistant message already ended and was recorded with its tool use, so it is the
 		// settled continuation target an interrupt's attempt verifies (OMP-272).
 		this.#assistantProcessing.set(ctx.assistantMessage.timestamp, {
