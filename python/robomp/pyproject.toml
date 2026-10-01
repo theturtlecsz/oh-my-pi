@@ -33,6 +33,9 @@ dev = [
 [project.scripts]
 robomp = "robomp.cli:main"
 
+[tool.uv.sources]
+omp-rpc = { path = "../omp-rpc", editable = true }
+
 [tool.setuptools]
 package-dir = { "robomp" = "src" }
 packages = ["robomp", "robomp.proxy"]
