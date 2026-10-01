@@ -396,7 +396,7 @@ def test_bundled_bunx_runs_declared_local_executable_without_global_bun(
     assert Path(bunx_path).is_relative_to(release.root)
 
     check_result = subprocess.run(
-        ["bunx", "--no-install", "biome", "check", "."],
+        ["bunx", "--no-install", "oxlint", "."],
         cwd=release.root / "source/packages/work-client",
         env=managed_env,
         capture_output=True,
