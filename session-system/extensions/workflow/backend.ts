@@ -434,6 +434,14 @@ export interface BatchOutcome {
 	text: string; // result line for the tool response
 }
 
+/** Route the service returns from draft_mission_intake (OMP-426). */
+export type MissionDraftOutcome = "clarify" | "held" | "awaiting_owner" | "proceeded";
+
+export interface DraftMissionResult {
+	outcome: MissionDraftOutcome;
+	questions: string[];
+}
+
 /** Model-facing evidence kinds — every kind exists in work.omp.dev/v1.
  *  There is deliberately no generic "evidence" default: the ledger records
  *  typed receipts only. The session review is `closeout`; audit receipts are
@@ -545,6 +553,8 @@ export interface WorkflowBackend {
 	stampPlan(target: NowRef, stamp: PlanStamp): Promise<{ issue: NowRef; plannedCandidateId?: string }>;
 	appendEvidence(issue: NowRef, kind: EvidenceKind, body: string, meta: EvidenceMeta, authorizationRef?: string): Promise<CloseAttemptOutcome | EvidenceReceipt | void>;
 	createIssue(input: { title: string; description?: string; project?: string; queue?: boolean; question?: string }): Promise<NowRef>;
+	/** Publish one bounded intake as a mission. A retry resends the claim's mission_id and request_id. */
+	draftMission(input: { title: string; blueprint: string; project?: string }): Promise<DraftMissionResult>;
 	createBatch(input: CreateBatchInput): Promise<BatchOutcome>;
 	/** OMP-139: one atomic same-session found-and-fixed filing — the BACKLOG
 	 *  child (inheriting the parent's project), its child→parent edge, and the

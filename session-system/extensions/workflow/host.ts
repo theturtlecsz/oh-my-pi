@@ -136,6 +136,7 @@ export type CanonicalAction =
 	| "append_evidence"
 	| "run_audit"
 	| "create_work"
+	| "draft_mission"
 	| "queue_work"
 	| "revise_work"
 	| "set_now"
@@ -150,7 +151,7 @@ export type CanonicalAction =
 
 const ACTIONS = [
 	"get_work", "tree", "waiting", "my_now", "status", "list_work",
-	"append_evidence", "run_audit", "create_work", "queue_work", "revise_work",
+	"append_evidence", "run_audit", "create_work", "draft_mission", "queue_work", "revise_work",
 	"set_now", "record_health", "waive_delivery", "cancel_work",
 	"get_execution", "seal_execution_criteria", "stamp_execution_plan", "begin_execution_review", "stop_execution",
 ] as const;
@@ -335,6 +336,14 @@ export function renderPlanPacket(packet: PlanPacket | undefined): string[] {
 		"plan body (exact stored bytes):",
 		packet.planBody ?? "(no stored plan body)",
 	];
+}
+
+/** Plain tool line for one draft_mission_intake route (OMP-416). */
+function missionIntakeReply(drafted: { outcome: string; questions: string[] }): string {
+	if (drafted.outcome === "awaiting_owner") return "awaits the owner's confirmation";
+	if (drafted.outcome === "held") return "held until a budget exists";
+	if (drafted.outcome === "proceeded") return "proceeding";
+	return drafted.questions.join("\n");
 }
 
 /** Render the deterministic three-line next-action banner for live close attempts (OMP-168). */
@@ -3699,12 +3708,12 @@ export function createWorkflowHost(cfg: HostConfig) {
 			parameters: z.object({
 				action: z.enum(ACTION_ENUM),
 				work: z.string().optional().describe("Work key (e.g. HOME-31) or ledger work id"),
-				title: z.string().optional().describe("Work title (create_work, revise_work)"),
-				description: z.string().optional().describe("Work description markdown (create_work, revise_work)"),
+				title: z.string().optional().describe("Work title (create_work, revise_work, draft_mission)"),
+				description: z.string().optional().describe("Work description markdown (create_work, revise_work, draft_mission)"),
 				scope: z.string().optional().describe("Work scope (create_work, revise_work)"),
 				acceptance_criteria: z.array(z.string()).optional().describe("Work acceptance criteria array (create_work, revise_work)"),
 				expected_revision_id: z.string().optional().describe("Expected current revision ID to prevent stale revisions (revise_work)"),
-				project: z.string().optional().describe("Project name (create_work target, record_health, list_work filter)"),
+				project: z.string().optional().describe("Project name (create_work target, draft_mission, record_health, list_work filter)"),
 				health: z.enum(["onTrack", "atRisk", "offTrack"]).optional().describe("Project health (record_health)"),
 				body: z.string().optional().describe("Receipt body or close reason; record_health is status-only and refuses body"),
 				kind: kindEnum.optional().describe(KIND_DESCRIPTION),
@@ -4216,6 +4225,39 @@ export function createWorkflowHost(cfg: HostConfig) {
 								intakeSelected = true;
 							}
 							return okText(`created ${created.key}${params.queue ? ` + ${backend.queueNoun}` : ""}${selectsNow ? " + NOW" : ""}`, { identifier: created.key, now: selectsNow });
+						}
+						case "draft_mission": {
+							if (intakeActive && intakeScanRequired && !intakeScanDelivered) {
+								return deny(
+									"Intake visible scan required before publication: deliver a standalone tool-free assistant message containing 'Figured out myself', 'Asking you', and 'Leaving for later' headings first.",
+								);
+							}
+							if (!params.title) return deny("title required");
+							let blueprint = params.description ?? "";
+							if (intakeActive) {
+								const saved = await readLatestIntakeBlueprint(ctx, params.description);
+								if (!saved) {
+									return deny("intake_blueprint_missing: save and lint local://intake-{slug}.md before publishing");
+								}
+								if (params.description === undefined || params.description !== saved.content) {
+									return deny(`intake_blueprint_mismatch: description must exactly match ${saved.url}; save the changed bytes and re-run intake lint`);
+								}
+								if (hasExplicitMultiDeliverableDeclaration(saved.content)) {
+									return deny("intake_decomposition_required: blueprint declares multiple deliverables without native blocking relations; save one local://intake-{slug}.md per independent complaint, or publish one linked batch when the slices truly block each other");
+								}
+								blueprint = saved.content;
+							} else if (!params.description) {
+								return deny("description required");
+							}
+							const target = fileTarget(params.project);
+							const singleRefusal = unscopedRefusal(target);
+							if (singleRefusal) return deny(singleRefusal);
+							if (!target) return deny("project required");
+							const detail = `"${params.title}"\n→ project ${target}\n\n${blueprint}`;
+							const gate = confirmWrite("draft_mission", "Model wants to draft a mission", detail, params);
+							if (!gate.approved) return deny(gate.preview);
+							const drafted = await backend.draftMission({ title: params.title, blueprint, project: target });
+							return okText(missionIntakeReply(drafted), { outcome: drafted.outcome });
 						}
 						case "queue_work": {
 							if (!params.work) return deny("work key required");
