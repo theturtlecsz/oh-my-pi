@@ -33,8 +33,11 @@ async function withDiscoveryHome<T>(fn: (paths: DiscoveryPaths) => Promise<T>): 
 	const homedirSpy = spyOn(os, "homedir").mockReturnValue(home);
 	const previousHome = process.env.HOME;
 	const previousUserProfile = process.env.USERPROFILE;
+	// The CI runner pins PI_CODING_AGENT_DIR per chunk; user prompts must resolve under the fake home.
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.HOME = home;
 	process.env.USERPROFILE = home;
+	delete process.env.PI_CODING_AGENT_DIR;
 	__resetDirsFromEnvForTests();
 	try {
 		return await fn({
@@ -48,6 +51,8 @@ async function withDiscoveryHome<T>(fn: (paths: DiscoveryPaths) => Promise<T>): 
 		else process.env.HOME = previousHome;
 		if (previousUserProfile === undefined) delete process.env.USERPROFILE;
 		else process.env.USERPROFILE = previousUserProfile;
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		__resetDirsFromEnvForTests();
 	}
 }
