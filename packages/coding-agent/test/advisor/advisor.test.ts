@@ -1235,10 +1235,14 @@ describe("advisor", () => {
 		it("validates parameters using ArkType", () => {
 			const onAdvice = vi.fn();
 			const tool = new AdviseTool(onAdvice);
-			const valid = tool.parameters({ note: "x", severity: "concern" });
+			const valid = tool.parameters({ note: "x", severity: "concern", category: "semantic-concern" });
 			expect(valid instanceof type.errors).toBe(false);
 
-			const invalid = tool.parameters({ note: 123, severity: "invalid" });
+			// category is REQUIRED (OMP-55) — a note without one is refused.
+			const missingCategory = tool.parameters({ note: "x", severity: "concern" });
+			expect(missingCategory instanceof type.errors).toBe(true);
+
+			const invalid = tool.parameters({ note: 123, severity: "invalid" as never, category: "semantic-concern" });
 			expect(invalid instanceof type.errors).toBe(true);
 		});
 	});

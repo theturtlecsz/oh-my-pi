@@ -96,6 +96,7 @@ it.each(["concern", "nit", "blocker"] as const)(
 					return toolResponse("advice-1", "advise", {
 						note: "late terminal advice",
 						severity,
+						category: "semantic-concern",
 					});
 				}
 				return textResponse("advisor quiet");
@@ -196,6 +197,7 @@ it.each(["concern", "nit", "blocker"] as const)(
 		const liveResult = await advise.execute("live-next", {
 			note: "live next-turn concern",
 			severity: "concern",
+			category: "semantic-concern",
 		});
 		expect(contentText(liveResult.content)).toMatch(/Delivered|Queued/);
 		releaseNextProvider.resolve();

@@ -19,7 +19,7 @@ import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 const ADVISE_CALL = {
 	type: "toolCall",
 	name: "advise",
-	arguments: { note: "Check the null path before the retry.", severity: "concern" },
+	arguments: { note: "Check the null path before the retry.", severity: "concern", category: "semantic-concern" },
 } as const;
 
 describe("advisor advise-only turn terminates the review", () => {
@@ -142,7 +142,11 @@ describe("advisor advise-only turn terminates the review", () => {
 					{
 						type: "toolCall",
 						name: "advise",
-						arguments: { note: "The retry budget is never decremented.", severity: "concern" },
+						arguments: {
+							note: "The retry budget is never decremented.",
+							severity: "concern",
+							category: "semantic-concern",
+						},
 					},
 				],
 			},
