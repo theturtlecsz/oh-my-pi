@@ -78,6 +78,16 @@ async function copyExecutable(source: string, destination: string): Promise<void
 	await fs.chmod(destination, 0o755);
 }
 
+/** Export an exact commit to a tar file without copying working-tree files or Git configuration. */
+export async function archiveCommit(cwd: string, commitSha: string, outputPath: string): Promise<void> {
+	if (!/^[0-9a-f]{40,64}$/.test(commitSha)) throw new Error("Archive requires a full commit SHA");
+	await fs.mkdir(path.dirname(outputPath), { recursive: true });
+	await $`git archive --format=tar --output=${path.resolve(outputPath)} ${commitSha}`.cwd(cwd).quiet();
+}
+
+/** Git operations release staging performs that pi-vcs does not cover (spy seam for tests). */
+export const releaseGit = { archive: archiveCommit };
+
 /** Stage a clean HEAD at its final installation path. Never installs links, starts services, or activates it. */
 export async function stageRelease(options: StageReleaseOptions): Promise<StagedReleaseManifest> {
 	if (process.platform === "win32") throw new Error("Source release staging currently requires a POSIX host");
@@ -235,13 +245,3 @@ if (import.meta.main) {
 		})}\n`,
 	);
 }
-
-/** Export an exact commit to a tar file without copying working-tree files or Git configuration. */
-export async function archiveCommit(cwd: string, commitSha: string, outputPath: string): Promise<void> {
-	if (!/^[0-9a-f]{40,64}$/.test(commitSha)) throw new Error("Archive requires a full commit SHA");
-	await fs.mkdir(path.dirname(outputPath), { recursive: true });
-	await $`git archive --format=tar --output=${path.resolve(outputPath)} ${commitSha}`.cwd(cwd).quiet();
-}
-
-/** Git operations release staging performs that pi-vcs does not cover (spy seam for tests). */
-export const releaseGit = { archive: archiveCommit };

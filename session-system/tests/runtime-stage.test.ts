@@ -184,6 +184,41 @@ describe("release staging admission", () => {
 		expect(await Bun.file(path.join(release, "staging.json")).json()).toMatchObject({ status: "INCOMPLETE" });
 		expect(await releaseFileSha256(path.join(release, "bin/bun"))).toBe(await releaseFileSha256(process.execPath));
 	});
+
+	test("the command-line entry point stages a real commit past the archive step", async () => {
+		const { source, release, options } = await fixture();
+		const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+		await Bun.write(path.join(source, "package.json"), JSON.stringify({ packageManager: `bun@${Bun.version}` }));
+		await Bun.write(path.join(source, "packages/natives/package.json"), JSON.stringify({ version: "18.0.6" }));
+		await $`git init -q && git add -A && git -c user.name=t -c user.email=t@t commit -qm fixture`
+			.cwd(source)
+			.env(env)
+			.quiet();
+		const result = Bun.spawnSync({
+			cmd: [
+				process.execPath,
+				path.join(import.meta.dir, "../runtime/stage.ts"),
+				"--source",
+				source,
+				"--destination",
+				release,
+				"--bun",
+				options.bunPath,
+				"--bun-version",
+				"0.0.0",
+				"--uv",
+				options.uvPath,
+				"--python",
+				options.pythonPath,
+				"--native",
+				options.nativeAddonPaths[0],
+			],
+			env,
+		});
+		expect(result.exitCode).not.toBe(0);
+		expect(result.stderr.toString()).toContain("Bun version mismatch");
+		expect(await Bun.file(path.join(release, "source/package.json")).exists()).toBe(true);
+	});
 });
 
 describe("release verification", () => {
