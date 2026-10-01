@@ -835,6 +835,11 @@ export interface FailingTest {
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 const FILE_HEADER_RE = /^(\S.*\.test\.[cm]?[jt]sx?):$/;
 const FAIL_MARKER_RE = /^\(fail\)\s+(.*?)(?:\s+\[[\d.]+\s*m?s\])?$/;
+// A `bun test --parallel` worker that dies (watchdog SIGKILL, OOM kill, crash)
+// reports no `(fail)` marker; bun prints `✗ <file> (worker crashed: <reason>)`
+// under the file's header instead. Surface it as its own failing test so the
+// chunk's progress line and failure report name the file the gate must rerun.
+const WORKER_CRASH_RE = /^✗\s+(.*?)\s+\(worker crashed:\s*(.*?)\)\s*$/;
 export function extractFailingTests(output: string): FailingTest[] {
 	const failing: FailingTest[] = [];
 	let currentFile = "";
@@ -851,6 +856,16 @@ export function extractFailingTests(output: string): FailingTest[] {
 		if (fail) {
 			failing.push({
 				name: currentFile ? `${currentFile} > ${fail[1]}` : fail[1],
+				detail: buffer.join("\n").trim(),
+			});
+			buffer = [];
+			continue;
+		}
+		const crash = WORKER_CRASH_RE.exec(line);
+		if (crash) {
+			const file = currentFile || crash[1];
+			failing.push({
+				name: `${file} > worker crashed: ${crash[2]}`,
 				detail: buffer.join("\n").trim(),
 			});
 			buffer = [];
