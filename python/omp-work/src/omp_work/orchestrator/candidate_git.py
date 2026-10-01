@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 import fnmatch
 import hashlib
 import os
 from pathlib import Path
+import shlex
 import stat
 import subprocess  # nosec B404 - git argv lists only; executable is the literal "git", no shell
 import tempfile
@@ -20,7 +21,9 @@ __all__ = [
     "check_envelope",
     "freeze",
     "git",
+    "merge",
     "path_allowed",
+    "push",
 ]
 
 
@@ -543,4 +546,129 @@ def audit_inputs(control_repo: Path | str, base: str, commit: str) -> dict[str, 
         "candidate_tree_sha": tree,
         "changed_paths": changed_paths,
     }
+
+
+def _intent_key(action: str, commit: str, remote: str, ref: str) -> str:
+    """Stable sha256 hex key over the four intent fields."""
+    joined = "\0".join((action, commit, remote, ref))
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+
+def _ssh_command(credential_path: Path) -> str:
+    """The GIT_SSH_COMMAND that uses only ``credential_path`` as the identity."""
+    return shlex.join(
+        [
+            "ssh",
+            "-i",
+            str(credential_path),
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            "BatchMode=yes",
+        ]
+    )
+
+
+def _remote_ref(
+    control_repo: Path | str,
+    remote: str,
+    ref: str,
+    *,
+    extra_env: Mapping[str, str] | None = None,
+) -> str | None:
+    """The sha a remote advertises for ``ref``, or None when absent."""
+    out = git(control_repo, "ls-remote", remote, ref, extra_env=extra_env)
+    for line in out.decode("utf-8", errors="surrogateescape").splitlines():
+        sha, sep, name = line.partition("\t")
+        if sep and name == ref:
+            return sha
+    return None
+
+
+def _run_once(
+    *,
+    control_repo: Path | str,
+    commit: str,
+    remote: str,
+    ref: str,
+    action: str,
+    args: list[str],
+    intents: IntentLog,
+    lease_ok: Callable[[], bool],
+    extra_env: Mapping[str, str] | None = None,
+) -> None:
+    """Lease-check, dedup against the remote ref, then run one non-forced git call."""
+    if not lease_ok():
+        raise CandidateGitError("lease_dead")
+
+    key = _intent_key(action, commit, remote, ref)
+    if intents.open(key) is not None:
+        if _remote_ref(control_repo, remote, ref, extra_env=extra_env) == commit:
+            intents.mark_done(key, commit)
+            return
+    else:
+        intents.record_intent(key, action, f"{remote} {ref}")
+
+    git(control_repo, *args, extra_env=extra_env)
+    intents.mark_done(key, commit)
+
+
+def push(
+    control_repo: Path | str,
+    commit: str,
+    remote: str,
+    ref: str,
+    *,
+    intents: IntentLog,
+    lease_ok: Callable[[], bool],
+) -> None:
+    """Fast-forward ``remote``/``ref`` to ``commit`` without force and without a lease.
+
+    Refuses with ``lease_dead`` before any git call or intent when ``lease_ok``
+    is false. An open intent whose remote ref already equals ``commit`` is only
+    completed. The push is never forced (no ``+``, no ``--force``).
+    """
+    _run_once(
+        control_repo=control_repo,
+        commit=commit,
+        remote=remote,
+        ref=ref,
+        action="push",
+        args=["push", remote, f"{commit}:{ref}"],
+        intents=intents,
+        lease_ok=lease_ok,
+    )
+
+
+def merge(
+    control_repo: Path | str,
+    commit: str,
+    remote: str,
+    target_ref: str,
+    *,
+    intents: IntentLog,
+    lease_ok: Callable[[], bool],
+    credential_path: Path | str | None,
+) -> None:
+    """Fast-forward ``target_ref`` to ``commit`` using only ``credential_path``.
+
+    Refuses with ``credential_required`` when no credential is given, before the
+    lease check, the intent, or any git call. Otherwise behaves as :func:`push`
+    with action ``merge``: dead lease refuses, an open intent whose ref already
+    equals ``commit`` completes, and the update is fast-forward only, never forced.
+    """
+    if credential_path is None:
+        raise CandidateGitError("credential_required")
+    extra_env = {"GIT_SSH_COMMAND": _ssh_command(Path(credential_path))}
+    _run_once(
+        control_repo=control_repo,
+        commit=commit,
+        remote=remote,
+        ref=target_ref,
+        action="merge",
+        args=["push", remote, f"{commit}:{target_ref}"],
+        intents=intents,
+        lease_ok=lease_ok,
+        extra_env=extra_env,
+    )
 
