@@ -176,7 +176,8 @@ export async function readOversight(client: WorkClient): Promise<OversightSnapsh
 		const response = await client.clientProjectDecisions(project.projectId);
 		for (const value of asArray(resultOf(response).decisions)) {
 			const read = readDecision(value);
-			if (!read || !read.pending || decisions.has(read.decision.decision_id)) continue;
+			if (!read?.pending) continue;
+			if (decisions.has(read.decision.decision_id)) continue;
 			decisions.set(read.decision.decision_id, read.decision);
 		}
 	}

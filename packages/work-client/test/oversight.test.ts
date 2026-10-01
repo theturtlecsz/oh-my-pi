@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test";
-import type { ClientResponse } from "../src/index";
-import { WorkClient, engageOversightStop, readOversight } from "../src/index";
-import type { Fetch } from "../src/index";
+import type { ClientResponse, Fetch } from "../src/index";
+import { engageOversightStop, readOversight, WorkClient } from "../src/index";
 
 const BASE = "http://127.0.0.1:54322";
 const WORKSPACE = "00000000-0000-0000-0000-000000000001";
@@ -71,7 +70,9 @@ function fixture() {
 				state.stopped = true;
 				state.reason = body.payload.reason;
 				state.changedAt = "2026-10-01T00:00:00Z";
-				return Response.json(applied({ type: "engage_stop", stopped: true, reason: body.payload.reason }, "stop.engage"));
+				return Response.json(
+					applied({ type: "engage_stop", stopped: true, reason: body.payload.reason }, "stop.engage"),
+				);
 			}
 			return Response.json(
 				read(
@@ -106,8 +107,20 @@ function fixture() {
 					{
 						project_id: P1,
 						mission_progress: [
-							{ mission_id: M1, objective: "ship oversight", status: "running", revision: 4, updated_at: "2026-09-30T10:00:00Z" },
-							{ mission_id: M2, objective: "write docs", status: "completed", revision: 2, updated_at: "2026-09-29T10:00:00Z" },
+							{
+								mission_id: M1,
+								objective: "ship oversight",
+								status: "running",
+								revision: 4,
+								updated_at: "2026-09-30T10:00:00Z",
+							},
+							{
+								mission_id: M2,
+								objective: "write docs",
+								status: "completed",
+								revision: 2,
+								updated_at: "2026-09-29T10:00:00Z",
+							},
 						],
 					},
 					"project.status",
@@ -120,7 +133,13 @@ function fixture() {
 					{
 						project_id: P2,
 						mission_progress: [
-							{ mission_id: M3, objective: "audit ledger", status: "blocked", revision: 1, updated_at: "2026-09-28T10:00:00Z" },
+							{
+								mission_id: M3,
+								objective: "audit ledger",
+								status: "blocked",
+								revision: 1,
+								updated_at: "2026-09-28T10:00:00Z",
+							},
 						],
 					},
 					"project.status",
