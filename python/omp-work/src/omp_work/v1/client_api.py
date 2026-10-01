@@ -133,25 +133,31 @@ def _projection(
 ) -> tuple[str | None, tuple[str, ...], tuple[UUID, ...]]:
     """state, evidence, and decisions for one client read.
 
-    Mission state is the mission's status. Stop state is stopped or running.
-    Project decisions contribute their decision ids. Evidence inspect cites
-    the requested receipt. Every other read leaves those fields empty.
+    Mission state is the mission's status. Its decisions are the decision_id
+    of each pending_decisions row, in order; a missing key yields none.
+    Stop state is stopped or running. Project decisions contribute their
+    decision ids. Evidence inspect cites the requested receipt. Every other
+    read leaves those fields empty.
     """
     if operation == "mission.status":
         status = view.get("status")
-        return (None if status is None else str(status), (), ())
+        return (
+            None if status is None else str(status),
+            (),
+            _decision_ids(view, "pending_decisions"),
+        )
     if operation == "stop.status":
         return ("stopped" if view.get("stopped") else "running", (), ())
     if operation == "evidence.inspect":
         evidence = () if ident is None else (str(ident),)
         return (None, evidence, ())
     if operation == "project.decisions":
-        return (None, (), _decision_ids(view))
+        return (None, (), _decision_ids(view, "decisions"))
     return (None, (), ())
 
 
-def _decision_ids(view: dict[str, Any]) -> tuple[UUID, ...]:
-    rows = view.get("decisions")
+def _decision_ids(view: dict[str, Any], key: str) -> tuple[UUID, ...]:
+    rows = view.get(key)
     if not isinstance(rows, (list, tuple)):
         return ()
     ids: list[UUID] = []
