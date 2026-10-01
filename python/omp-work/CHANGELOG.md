@@ -52,6 +52,7 @@
 - tier-classified control actions — tier 1 runs, tier 2 needs a covering standing policy or budget, tier 3 is held with a pending owner decision and runs once after a signed approval whose target is unchanged; disposable cloud resources are recorded so deleting them stays tier 2.
 - Signed mission-event push: `omp-work events push` delivers each client's subscribed mission events to its registered `push_url` as bearer-less POSTs signed per subscription (Idempotency-Key is the event id) and advances a cursor only past delivered events, and `omp-work events push-key --subscription ID` prints a subscription's signing key (OMP-415).
 - `ops controller message|designate|show` designates the workspace's owner controller: `message` prints the exact bytes to sign, `designate` writes the owner-signed `<config_dir>/owner-controller.json` (mode 0600) and exits 1 without writing when the signature does not verify, and `show` reports the designated controller or null (OMP-416).
+- `omp-work events subscribe` and `omp-work events subscriptions` register and list push subscriptions, and the work-ledger installer renders an `omp-events-push` timer that runs `omp-work events push` every 5 minutes in place of the removed `alarms run` / `alarms digest`.
 
 ### Changed
 
