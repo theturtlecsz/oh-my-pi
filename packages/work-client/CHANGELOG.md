@@ -4,6 +4,7 @@
 
 ### Added
 
+- `readOversight` assembles one WebUI oversight snapshot (workspace stop plus per-project missions and pending decisions) over the client-contract reads, and `engageOversightStop` engages the stop through `stop.engage` alone (OMP-425).
 - Synced contract digest for record_external_delivery (OMP-283).
 - Research client bindings generated from the canonical contract schemas: campaigns, trials, observations, deliverable bindings, and component compatibility (OMP-322).
 
