@@ -8,6 +8,7 @@ import { classifyUnexpectedStop } from "@oh-my-pi/pi-coding-agent/session/unexpe
 import { type JevUsageEntry, resetDefaultJevBreaker } from "@oh-my-pi/pi-coding-agent/tiny/jev-client";
 import type { FetchImpl } from "@oh-my-pi/pi-utils";
 import { type StubJevServer, startStubJevServer } from "./stub-jev-server";
+import { cfgJevAutoThinking, cfgJevEnabled, cfgJevUnexpectedStop } from "@oh-my-pi/pi-coding-agent/tiny/jev-settings";
 
 type SpyOnGetter = (
 	target: unknown,
@@ -48,9 +49,9 @@ describe("Jev default off", () => {
 		const settings = Settings.isolated();
 		settings.setModelRole("smol", `${model.provider}/${model.id}`);
 
-		expect(settings.get("jev.enabled")).toBe(false);
-		expect(settings.get("jev.autoThinking")).toBe(false);
-		expect(settings.get("jev.unexpectedStop")).toBe(false);
+		expect(cfgJevEnabled.get(settings)).toBe(false);
+		expect(cfgJevAutoThinking.get(settings)).toBe(false);
+		expect(cfgJevUnexpectedStop.get(settings)).toBe(false);
 
 		const registry = {
 			getAvailable: () => [model],
@@ -82,7 +83,7 @@ describe("Jev default off", () => {
 			return fetch(`${stub.baseUrl}${url.pathname}${url.search}`, init);
 		};
 
-		const difficultyResult = await classifyDifficulty("Write a parser for arithmetic expressions", {
+		const difficultyResult = await classifyDifficulty({ request: "Write a parser for arithmetic expressions" }, {
 			settings,
 			registry,
 			model,

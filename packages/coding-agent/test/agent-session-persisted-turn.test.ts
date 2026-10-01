@@ -31,7 +31,7 @@ describe("persisted no-tool turn continuation", () => {
 	beforeEach(() => {
 		tempDir = TempDir.createSync("omp-persisted-turn-");
 		auth = createInMemoryAuthStorage();
-		auth.setRuntimeApiKey("anthropic", "test-key");
+		auth.keys.setRuntime("anthropic", "test-key");
 	});
 	afterEach(async () => {
 		vi.restoreAllMocks();

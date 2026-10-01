@@ -1170,6 +1170,7 @@ describe("AgentSession advisor toggle", () => {
 			const deferred = await adviseTool.execute("deferred-before-quota", {
 				note: "The final result still needs a regression test.",
 				severity: "nit",
+				category: "semantic-concern",
 			});
 			if (deferred.content.length === 0) throw new Error("Expected the advise tool to acknowledge the call");
 			// Behavior, not wording: a note deferred behind an in-progress turn
@@ -1237,12 +1238,14 @@ describe("AgentSession advisor toggle", () => {
 				const result = await tool.execute(`${prefix}-${i}`, {
 					note: `${prefix} note ${i}`,
 					severity: "concern",
+					category: "semantic-concern",
 				});
 				expect(JSON.stringify(result.content)).toContain("Queued for the end of the turn");
 			}
 			const rejected = await tool.execute(`${prefix}-${budget + 1}`, {
 				note: `${prefix} note ${budget + 1}`,
 				severity: "concern",
+				category: "semantic-concern",
 			});
 			expect(JSON.stringify(rejected.content)).toContain("budget is spent");
 		};

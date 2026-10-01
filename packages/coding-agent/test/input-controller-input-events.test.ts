@@ -158,9 +158,9 @@ describe("interactive native input ingress", () => {
 		await h.pressSubmit(FOLLOW_UP);
 
 		expect(seen).toEqual([
-			{ type: "input", source: "interactive", text: "original [Image #1]", images: [originalImage] },
-			{ type: "input", source: "interactive", text: "changed [Image #1]", images: [originalImage] },
-			{ type: "input", source: "interactive", text: "changed [Image #1]", images: [transformedImage] },
+			{ type: "input", source: "interactive", text: "original [Image #1]", originalText: "original [Image #1]", images: [originalImage] },
+			{ type: "input", source: "interactive", text: "changed [Image #1]", originalText: "original [Image #1]", images: [originalImage] },
+			{ type: "input", source: "interactive", text: "changed [Image #1]", originalText: "original [Image #1]", images: [transformedImage] },
 		]);
 		expect(h.prompt.mock.calls).toEqual([
 			["changed [Image #1] final", { streamingBehavior: "followUp", images: [transformedImage] }],
@@ -630,7 +630,7 @@ describe("interactive native input ingress", () => {
 		});
 		h.editor.setText("original");
 		await h.pressSubmit(ENTER);
-		expect(seen).toEqual([{ type: "input", source: "interactive", text: "original", images: undefined }]);
+		expect(seen).toEqual([{ type: "input", source: "interactive", text: "original", originalText: "original", images: undefined }]);
 		expect(h.prompt.mock.calls).toEqual([["transformed", { streamingBehavior: "steer", images: undefined }]]);
 
 		const callback = vi.fn();

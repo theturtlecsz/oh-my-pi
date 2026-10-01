@@ -16,6 +16,7 @@ import { SessionManager } from "../src/session/session-manager";
 import { type PersistedTaskBindingV1, taskRecoveryHash } from "../src/task/recovery";
 import { EventBus } from "../src/utils/event-bus";
 import { createAssistantMessage, createInMemoryAuthStorage } from "./helpers/agent-session-setup";
+import { cfgToolsApproval } from "../src/tools/settings";
 
 type RevocationBoundary =
 	| "after-validation"
@@ -35,7 +36,7 @@ afterEach(async () => {
 async function createRecoveryFixture(boundary: RevocationBoundary) {
 	const temp = TempDir.createSync("task-result-guards-");
 	const auth = createInMemoryAuthStorage();
-	auth.setRuntimeApiKey("anthropic", "test-key");
+	auth.keys.setRuntime("anthropic", "test-key");
 	const manager = SessionManager.create(temp.path(), temp.path());
 	const anchor = manager.appendCustomMessageEntry("execution-test", "Original assignment", false, {}, "agent");
 	manager.appendCustomEntry("prompt-preparation", {
@@ -212,7 +213,7 @@ describe("task recovery result commit guards", () => {
 					queueMicrotask(() =>
 						queueMicrotask(() => {
 							revoked = true;
-							if (boundary === "loaded-policy") f.session.settings.set("tools.approval", { task: "deny" });
+							if (boundary === "loaded-policy") cfgToolsApproval.set(f.session.settings, { task: "deny" });
 							else aborting = f.session.abort();
 						}),
 					);

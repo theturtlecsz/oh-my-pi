@@ -111,7 +111,7 @@ describe("auto-thinking Jev classifier", () => {
 
 		// Case 1: jev.enabled is false
 		const fixture1 = createFixture({ jevEnabled: false, jevAutoThinking: true });
-		const effort1 = await classifyDifficulty("fix parsing bug", fixture1.deps);
+		const effort1 = await classifyDifficulty({ request: "fix parsing bug" }, fixture1.deps);
 
 		expect(stub.requests).toHaveLength(0);
 		expect(completeSimpleSpy).toHaveBeenCalledTimes(1);
@@ -121,7 +121,7 @@ describe("auto-thinking Jev classifier", () => {
 
 		// Case 2: jev.autoThinking is false
 		const fixture2 = createFixture({ jevEnabled: true, jevAutoThinking: false });
-		const effort2 = await classifyDifficulty("fix parsing bug", fixture2.deps);
+		const effort2 = await classifyDifficulty({ request: "fix parsing bug" }, fixture2.deps);
 
 		expect(stub.requests).toHaveLength(0);
 		expect(completeSimpleSpy).toHaveBeenCalledTimes(1);
@@ -145,7 +145,7 @@ describe("auto-thinking Jev classifier", () => {
 		});
 
 		const fixture = createFixture();
-		const effort = await classifyDifficulty("refactor database connection pool", fixture.deps);
+		const effort = await classifyDifficulty({ request: "refactor database connection pool" }, fixture.deps);
 
 		expect(effort).toBe(Effort.High);
 		expect(completeSimpleSpy).not.toHaveBeenCalled();
@@ -181,7 +181,7 @@ describe("auto-thinking Jev classifier", () => {
 		});
 
 		const fixture = createFixture({ autoThinkingConfidence: 0.5 });
-		const effort = await classifyDifficulty("ambiguous request", fixture.deps);
+		const effort = await classifyDifficulty({ request: "ambiguous request" }, fixture.deps);
 
 		expect(effort).toBeUndefined();
 		expect(completeSimpleSpy).not.toHaveBeenCalled();
@@ -207,14 +207,14 @@ describe("auto-thinking Jev classifier", () => {
 		// Ceiling is max on a model supporting max
 		const maxModel = buildLadderModel("mock-max", MAX_LADDER);
 		const maxFixture = createFixture({ model: maxModel, autoThinkingMaxEffort: "max" });
-		const maxEffort = await classifyDifficulty("drop table and migrate in-place", maxFixture.deps);
+		const maxEffort = await classifyDifficulty({ request: "drop table and migrate in-place" }, maxFixture.deps);
 
 		expect(maxEffort).toBe(Effort.Max);
 		expect(completeSimpleSpy).not.toHaveBeenCalled();
 
 		// Ceiling is xhigh
 		const xhighFixture = createFixture({ model: maxModel, autoThinkingMaxEffort: "xhigh" });
-		const xhighEffort = await classifyDifficulty("drop table and migrate in-place", xhighFixture.deps);
+		const xhighEffort = await classifyDifficulty({ request: "drop table and migrate in-place" }, xhighFixture.deps);
 
 		expect(xhighEffort).toBe(Effort.XHigh);
 		expect(completeSimpleSpy).not.toHaveBeenCalled();
@@ -222,7 +222,7 @@ describe("auto-thinking Jev classifier", () => {
 		// Model ladder tops out at xhigh even with max requested
 		const xhighModel = buildLadderModel("mock-xhigh", XHIGH_LADDER);
 		const cappedModelFixture = createFixture({ model: xhighModel, autoThinkingMaxEffort: "max" });
-		const cappedEffort = await classifyDifficulty("drop table and migrate in-place", cappedModelFixture.deps);
+		const cappedEffort = await classifyDifficulty({ request: "drop table and migrate in-place" }, cappedModelFixture.deps);
 
 		expect(cappedEffort).toBe(Effort.XHigh);
 	});
@@ -241,7 +241,7 @@ describe("auto-thinking Jev classifier", () => {
 			live_cutover: { probability: 0.1 },
 		});
 		const noReproFixture = createFixture({ model: maxModel, autoThinkingMaxEffort: "max" });
-		expect(await classifyDifficulty("flaky bug with no repro", noReproFixture.deps)).toBe(Effort.Max);
+		expect(await classifyDifficulty({ request: "flaky bug with no repro" }, noReproFixture.deps)).toBe(Effort.Max);
 
 		// live_cutover >= 0.7
 		stub.setAnswers({
@@ -253,7 +253,7 @@ describe("auto-thinking Jev classifier", () => {
 			live_cutover: { probability: 0.75 },
 		});
 		const liveCutoverFixture = createFixture({ model: maxModel, autoThinkingMaxEffort: "max" });
-		expect(await classifyDifficulty("zero-downtime cutover", liveCutoverFixture.deps)).toBe(Effort.Max);
+		expect(await classifyDifficulty({ request: "zero-downtime cutover" }, liveCutoverFixture.deps)).toBe(Effort.Max);
 
 		// all signals below 0.7 -> XHigh
 		stub.setAnswers({
@@ -265,7 +265,7 @@ describe("auto-thinking Jev classifier", () => {
 			live_cutover: { probability: 0.69 },
 		});
 		const noSignalFixture = createFixture({ model: maxModel, autoThinkingMaxEffort: "max" });
-		expect(await classifyDifficulty("regular hard task", noSignalFixture.deps)).toBe(Effort.XHigh);
+		expect(await classifyDifficulty({ request: "regular hard task" }, noSignalFixture.deps)).toBe(Effort.XHigh);
 
 		expect(completeSimpleSpy).not.toHaveBeenCalled();
 	});
@@ -278,7 +278,7 @@ describe("auto-thinking Jev classifier", () => {
 		} as never);
 
 		const fixture = createFixture();
-		const effort = await classifyDifficulty("investigate issue", fixture.deps);
+		const effort = await classifyDifficulty({ request: "investigate issue" }, fixture.deps);
 
 		expect(effort).toBe(Effort.Medium);
 		expect(completeSimpleSpy).toHaveBeenCalledTimes(1);
@@ -296,7 +296,7 @@ describe("auto-thinking Jev classifier", () => {
 		} as never);
 
 		const fixture = createFixture();
-		const effort = await classifyDifficulty("investigate issue", fixture.deps);
+		const effort = await classifyDifficulty({ request: "investigate issue" }, fixture.deps);
 
 		expect(effort).toBe(Effort.Low);
 		expect(completeSimpleSpy).toHaveBeenCalledTimes(1);
@@ -312,7 +312,7 @@ describe("auto-thinking Jev classifier", () => {
 		} as never);
 
 		const fixture = createFixture();
-		const effort = await classifyDifficulty("investigate issue", fixture.deps);
+		const effort = await classifyDifficulty({ request: "investigate issue" }, fixture.deps);
 
 		expect(effort).toBe(Effort.High);
 		expect(completeSimpleSpy).toHaveBeenCalledTimes(1);
@@ -331,7 +331,7 @@ describe("auto-thinking Jev classifier", () => {
 		});
 
 		const fixture1 = createFixture();
-		await classifyDifficulty("small feature", fixture1.deps);
+		await classifyDifficulty({ request: "small feature" }, fixture1.deps);
 
 		expect(entries).toHaveLength(1);
 		expect(entries[0].feature).toBe("auto_thinking");
@@ -349,7 +349,7 @@ describe("auto-thinking Jev classifier", () => {
 		} as never);
 
 		const fixture2 = createFixture();
-		await classifyDifficulty("retry feature", fixture2.deps);
+		await classifyDifficulty({ request: "retry feature" }, fixture2.deps);
 
 		expect(entries).toHaveLength(2);
 		expect(entries[0].feature).toBe("auto_thinking");

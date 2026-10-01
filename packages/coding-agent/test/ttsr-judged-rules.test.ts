@@ -63,6 +63,7 @@ function setup(rules: Rule[], judge: Judge) {
 		sessionManager: { getCwd: () => "/work", appendTtsrInjection: vi.fn() } as unknown as SessionManager,
 		settings: {} as Settings,
 		emitSessionEvent: async () => {},
+		emitNotice: () => {},
 		schedulePostPromptTask: vi.fn(),
 		scheduleAgentContinue: vi.fn(),
 		promptGeneration: () => 0,

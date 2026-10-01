@@ -102,7 +102,7 @@ describe("executor instruction-prep degradation reporting", () => {
 
 		const authStorage = await AuthStorage.create(tempDir.join("auth.db"));
 		const model = getBundledModel("openai", "gpt-4o-mini");
-		authStorage.setRuntimeApiKey(model.provider, "test-api-key");
+		authStorage.keys.setRuntime(model.provider, "test-api-key");
 		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.json"));
 
 		const settings = Settings.isolated();

@@ -537,7 +537,7 @@ describe("ExtensionUiController real hook abort boundary", () => {
 	beforeAll(async () => {
 		directory = await fs.mkdtemp(path.join(os.tmpdir(), "interactive-abort-contract-"));
 		auth = await AuthStorage.create(path.join(directory, "auth.db"));
-		auth.setRuntimeApiKey("anthropic", "test-key");
+		auth.keys.setRuntime("anthropic", "test-key");
 		registry = new ModelRegistry(auth, path.join(directory, "models.yml"));
 	});
 	afterEach(async () => {

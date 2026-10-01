@@ -136,17 +136,15 @@ async function runLegacy(ops: readonly Op[]): Promise<{ delivered: Delivery[]; t
 	const tool = new AdviseTool(
 		(note, severity, category, index) => {
 			if (category === undefined || index === undefined) throw new Error("legacy callback missing fields");
-			if (guard.accept(note)) delivered.push({ note, severity, category, index });
+			delivered.push({ note, severity, category, index });
 		},
-		{ transcriptIndex: () => cursor },
+		{ guard, transcriptIndex: () => cursor },
 	);
 	for (const op of ops) {
 		if (op.type === "update") {
 			tool.beginUpdate(op.inProgress);
-			guard.beginUpdate();
 		} else if (op.type === "reset") {
 			tool.resetDeliveredNotes();
-			guard.reset();
 		} else {
 			cursor = op.index;
 			const result = await tool.execute("tc", { note: op.note, severity: op.severity, category: op.category });
@@ -166,7 +164,7 @@ async function runGated(ops: readonly Op[]): Promise<{ delivered: Delivery[]; te
 			if (category === undefined || index === undefined) throw new Error("gated callback missing fields");
 			delivered.push({ note, severity, category, index });
 		},
-		{ gate, transcriptIndex: () => cursor },
+		{ guard: gate, transcriptIndex: () => cursor },
 	);
 	for (const op of ops) {
 		if (op.type === "update") tool.beginUpdate(op.inProgress);
@@ -180,36 +178,6 @@ async function runGated(ops: readonly Op[]): Promise<{ delivered: Delivery[]; te
 	return { delivered, texts };
 }
 
-describe("AdvisorEmissionGuard.classify", () => {
-	it("uses accept's order, and accept is classify === accepted", () => {
-		const viaAccept = new AdvisorEmissionGuard();
-		const viaClassify = new AdvisorEmissionGuard();
-		const notes = [
-			"",
-			"   ",
-			"Stop.",
-			"LGTM",
-			"Done.",
-			"No issue; continue.",
-			"Move retries into the queue, not the request path.",
-			"move retries into the queue, not the request path",
-			"Second concrete concern about env vars.",
-		];
-		for (const note of notes) {
-			const verdict = viaClassify.classify(note);
-			expect(viaAccept.accept(note)).toBe(verdict === "accepted");
-		}
-		// "Stop." after the budget is spent is still noise: filler is checked first.
-		expect(viaClassify.classify("Stop.")).toBe("noise");
-		viaClassify.beginUpdate();
-		// Exact repeat of an accepted note in the next update is duplicate, and
-		// does not spend the new budget.
-		expect(viaClassify.classify("Move retries into the queue, not the request path.")).toBe("duplicate");
-		expect(viaClassify.classify("Second concrete concern about env vars.")).toBe("accepted");
-		expect(viaClassify.classify("Third concrete concern about the lock.")).toBe("budget");
-	});
-});
-
 describe("AdvisorSupervisionGate", () => {
 	it("is star-exported from the advisor barrel", () => {
 		expect(AdvisorSupervisionGateFromBarrel).toBe(AdvisorSupervisionGate);
@@ -221,7 +189,7 @@ describe("AdvisorSupervisionGate", () => {
 		const tool = new AdviseTool(
 			(note, severity, category, index) => delivered.push({ note, severity, category, index }),
 			{
-				gate,
+				guard: gate,
 				transcriptIndex: () => 7,
 			},
 		);
@@ -405,7 +373,7 @@ describe("AdvisorSupervisionGate", () => {
 				if (category === undefined || index === undefined) throw new Error("missing callback fields");
 				delivered.push({ note, severity, category, index });
 			},
-			{ gate, transcriptIndex: () => cursor },
+			{ guard: gate, transcriptIndex: () => cursor },
 		);
 
 		tool.beginUpdate(false);
@@ -467,7 +435,7 @@ describe("AdvisorSupervisionGate", () => {
 	it("flushes deferred notes before reopening the budget", async () => {
 		const gate = new AdvisorSupervisionGate();
 		const notes: string[] = [];
-		const tool = new AdviseTool(note => notes.push(note), { gate, transcriptIndex: () => 1 });
+		const tool = new AdviseTool(note => notes.push(note), { guard: gate, transcriptIndex: () => 1 });
 		tool.beginUpdate(true);
 		await tool.execute("tc-1", {
 			note: "Deferred concrete concern about the queue.",

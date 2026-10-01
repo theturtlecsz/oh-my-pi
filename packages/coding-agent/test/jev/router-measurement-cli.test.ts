@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import type { Model } from "@oh-my-pi/pi-ai";
+import { Effort, type Model } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { Settings } from "../../src/config/settings";
+import { cfgDefaultThinkingLevel } from "../../src/session/settings";
+import { cfgJevAutoThinking, cfgJevEnabled, cfgJevUnexpectedStop } from "../../src/tiny/jev-settings";
 import type { CurrentSmolHarness } from "../../../../docs/reports/jev-measurement/harness";
 import { withoutJevSettings } from "../../../../docs/reports/jev-measurement/router-harness";
 import { jevEnvPath } from "../../../../docs/reports/jev-measurement/router-transport";
@@ -166,16 +169,11 @@ describe("run-router CLI and current harness construction", () => {
 		let factoryCalled = false;
 		const mockModel: Model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 
+		// jev.enabled is forced off by withoutJevSettings.
+		const harnessSettings = Settings.isolated({ "jev.enabled": true });
+		for (const role of ["smol", "tiny", "judge"]) harnessSettings.setModelRole(role, "mock/mock-model");
 		const mockHarness: CurrentSmolHarness = {
-			settings: {
-				get: (key: string) => {
-					if (key === "jev.enabled") return true; // will be forced off by withoutJevSettings
-					if (key === "providers.autoThinkingModel") return "online";
-					if (key === "providers.unexpectedStopModel") return "online";
-					return undefined;
-				},
-				getModelRole: (role: string) => (role === "smol" || role === "tiny" ? "mock/mock-model" : undefined),
-			} as unknown as CurrentSmolHarness["settings"],
+			settings: harnessSettings,
 			registry: {
 				getAvailable: () => [mockModel],
 				getApiKey: async () => "mock-key",
@@ -202,21 +200,17 @@ describe("run-router CLI and current harness construction", () => {
 	});
 
 	it("withoutJevSettings forces Jev decision flags off while preserving other settings", () => {
-		const rawSettings = {
-			get: (key: string) => {
-				if (key === "jev.enabled") return true;
-				if (key === "jev.autoThinking") return true;
-				if (key === "jev.unexpectedStop") return true;
-				if (key === "providers.autoThinkingModel") return "online";
-				return undefined;
-			},
-			otherMethod: () => "ok",
-		};
+		const rawSettings = Settings.isolated({
+			"jev.enabled": true,
+			"jev.autoThinking": true,
+			"jev.unexpectedStop": true,
+			defaultThinkingLevel: "high",
+		});
 
-		const wrapped = withoutJevSettings(rawSettings as unknown as CurrentSmolHarness["settings"]);
-		expect(wrapped.get("jev.enabled")).toBe(false);
-		expect(wrapped.get("jev.autoThinking")).toBe(false);
-		expect(wrapped.get("jev.unexpectedStop")).toBe(false);
-		expect(wrapped.get("providers.autoThinkingModel")).toBe("online");
+		const wrapped = withoutJevSettings(rawSettings);
+		expect(cfgJevEnabled.get(wrapped)).toBe(false);
+		expect(cfgJevAutoThinking.get(wrapped)).toBe(false);
+		expect(cfgJevUnexpectedStop.get(wrapped)).toBe(false);
+		expect(cfgDefaultThinkingLevel.get(wrapped)).toBe(Effort.High);
 	});
 });

@@ -985,6 +985,9 @@ describe("AgentSession TTSR resume gate", () => {
 					notices.push(message);
 				},
 				promptGeneration: () => generation,
+				sessionGeneration: () => generation,
+				ruleJudge: () => undefined,
+				deliverRuleWarning: async () => {},
 				schedulePostPromptTask: (run, options) => {
 					tasks.push({ run, skip: options?.onSkip });
 				},
@@ -1206,7 +1209,7 @@ describe("AgentSession TTSR resume gate", () => {
 		expect(f.deferred).toHaveLength(1);
 		const target = await f.trigger(302);
 		const newer = f.coordinator.resumeGate;
-		f.deferred[0]?.onSkip?.();
+		f.deferred[0]?.onSkip?.("aborted");
 		f.deferred[0]?.onError?.();
 		f.agent.clearAllQueues();
 		f.deferred[0]?.shouldContinue?.();

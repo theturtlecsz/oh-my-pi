@@ -746,14 +746,15 @@ describe("advisor", () => {
 			const delivered: { note: string; severity?: string }[] = [];
 			const tool = new AdviseTool(
 				(note, severity) => delivered.push({ note, severity }),
-				new AdvisorEmissionGuard(),
+				{ guard: new AdvisorEmissionGuard() },
 			);
 			const note = "The migration drops the users table without a backup.";
 
-			await tool.execute("e-0", { note, severity: "nit" });
+			await tool.execute("e-0", { note, severity: "nit", category: "semantic-concern" });
 			const blocker = await tool.execute("e-1", {
 				note: "THE MIGRATION DROPS THE USERS TABLE WITHOUT A BACKUP!",
 				severity: "blocker",
+				category: "semantic-concern",
 			});
 			expect(delivered).toEqual([
 				{ note, severity: "nit" },
@@ -762,8 +763,8 @@ describe("advisor", () => {
 			expect(JSON.stringify(blocker.content)).toContain("Delivered.");
 
 			// Equal/lower retags of the delivered blocker are duplicates.
-			const concern = await tool.execute("e-2", { note, severity: "concern" });
-			const nit = await tool.execute("e-3", { note, severity: "nit" });
+			const concern = await tool.execute("e-2", { note, severity: "concern", category: "semantic-concern" });
+			const nit = await tool.execute("e-3", { note, severity: "nit", category: "semantic-concern" });
 			expect(JSON.stringify(concern.content)).toContain("Dropped: already raised");
 			expect(JSON.stringify(nit.content)).toContain("Dropped: already raised");
 			expect(delivered).toHaveLength(2);
@@ -790,7 +791,7 @@ describe("advisor", () => {
 
 			// A second distinct concern in a later in-progress update queues its own slot.
 			tool.beginUpdate(true);
-			await tool.execute("tc-3", { note: "Minor naming cleanup.", severity: "nit" });
+			await tool.execute("tc-3", { note: "Minor naming cleanup.", severity: "nit", category: "semantic-concern" });
 
 			// Completing the turn deterministically flushes both withheld notes,
 			// oldest first — no reliance on the advisor model re-raising them.
@@ -864,7 +865,7 @@ describe("advisor", () => {
 			const delivered: string[] = [];
 			// Mirror AgentSession: admission (filter + per-update budget) runs at
 			// emission; routing never re-filters.
-			const tool = new AdviseTool(note => delivered.push(note), new AdvisorEmissionGuard());
+			const tool = new AdviseTool(note => delivered.push(note), { guard: new AdvisorEmissionGuard() });
 			const concerns = [
 				"Bare `location` cannot work outside the page; inspect with `await page.url()`.",
 				"Scope navigation to the visualizer's own `.viz-container`.",
@@ -875,7 +876,7 @@ describe("advisor", () => {
 			// Each concern arrives in its own in-progress advisor update.
 			for (const [i, note] of concerns.entries()) {
 				tool.beginUpdate(true);
-				await tool.execute(`c-${i}`, { note, severity: "concern" });
+				await tool.execute(`c-${i}`, { note, severity: "concern", category: "semantic-concern" });
 			}
 			// All withheld mid-turn — nothing reaches the primary yet.
 			expect(delivered).toEqual([]);
@@ -893,12 +894,12 @@ describe("advisor", () => {
 			// unconditional "will be delivered automatically" promised delivery for
 			// notes the guard had already rejected, and the advice was lost.
 			const delivered: string[] = [];
-			const tool = new AdviseTool(note => delivered.push(note), new AdvisorEmissionGuard({ budgetPerUpdate: 1 }));
+			const tool = new AdviseTool(note => delivered.push(note), { guard: new AdvisorEmissionGuard({ budgetPerUpdate: 1 }) });
 
 			tool.beginUpdate(true);
-			const accepted = await tool.execute("x-0", { note: "First mid-turn concern.", severity: "concern" });
-			const rejected = await tool.execute("x-1", { note: "Second mid-turn concern.", severity: "concern" });
-			const rejected2 = await tool.execute("x-2", { note: "Third mid-turn concern.", severity: "concern" });
+			const accepted = await tool.execute("x-0", { note: "First mid-turn concern.", severity: "concern", category: "semantic-concern" });
+			const rejected = await tool.execute("x-1", { note: "Second mid-turn concern.", severity: "concern", category: "semantic-concern" });
+			const rejected2 = await tool.execute("x-2", { note: "Third mid-turn concern.", severity: "concern", category: "semantic-concern" });
 			expect(JSON.stringify(accepted.content)).toContain("Queued for the end of the turn");
 			for (const result of [rejected, rejected2]) {
 				const text = JSON.stringify(result.content);
@@ -918,14 +919,14 @@ describe("advisor", () => {
 			const delivered: { note: string; severity?: string }[] = [];
 			const tool = new AdviseTool(
 				(note, severity) => delivered.push({ note, severity }),
-				new AdvisorEmissionGuard({ budgetPerUpdate: 1 }),
+				{ guard: new AdvisorEmissionGuard({ budgetPerUpdate: 1 }) },
 			);
 
 			tool.beginUpdate(true);
-			await tool.execute("e-0", { note: "Nit: rename the helper.", severity: "nit" });
-			await tool.execute("e-1", { note: "Concern: the helper drops the lock early.", severity: "concern" });
+			await tool.execute("e-0", { note: "Nit: rename the helper.", severity: "nit", category: "semantic-concern" });
+			await tool.execute("e-1", { note: "Concern: the helper drops the lock early.", severity: "concern", category: "semantic-concern" });
 			// A blocker in the same update delivers live without touching the slot.
-			await tool.execute("e-2", { note: "Blocker: the write path is broken.", severity: "blocker" });
+			await tool.execute("e-2", { note: "Blocker: the write path is broken.", severity: "blocker", category: "semantic-concern" });
 			expect(delivered).toEqual([{ note: "Blocker: the write path is broken.", severity: "blocker" }]);
 
 			tool.beginUpdate(false);
@@ -942,14 +943,14 @@ describe("advisor", () => {
 			const delivered: { note: string; severity?: string }[] = [];
 			const tool = new AdviseTool(
 				(note, severity) => delivered.push({ note, severity }),
-				new AdvisorEmissionGuard({ budgetPerUpdate: 1 }),
+				{ guard: new AdvisorEmissionGuard({ budgetPerUpdate: 1 }) },
 			);
 
 			tool.beginUpdate(true);
-			await tool.execute("p-0", { note: "Nit from the first review.", severity: "nit" });
+			await tool.execute("p-0", { note: "Nit from the first review.", severity: "nit", category: "semantic-concern" });
 			tool.beginUpdate(true);
-			await tool.execute("p-1", { note: "Nit from the second review.", severity: "nit" });
-			const escalation = await tool.execute("p-2", { note: "Concern from the second review.", severity: "concern" });
+			await tool.execute("p-1", { note: "Nit from the second review.", severity: "nit", category: "semantic-concern" });
+			const escalation = await tool.execute("p-2", { note: "Concern from the second review.", severity: "concern", category: "semantic-concern" });
 			// The concern was admitted — the SECOND review's nit paid for it.
 			expect(JSON.stringify(escalation.content)).toContain("Queued for the end of the turn");
 
@@ -967,17 +968,17 @@ describe("advisor", () => {
 			const delivered: { note: string; severity?: string }[] = [];
 			const tool = new AdviseTool(
 				(note, severity) => delivered.push({ note, severity }),
-				new AdvisorEmissionGuard({ budgetPerUpdate: 3 }),
+				{ guard: new AdvisorEmissionGuard({ budgetPerUpdate: 3 }) },
 			);
 
 			tool.beginUpdate(true);
 			// Three free slots: nit, nit, concern all accepted.
-			await tool.execute("b-0", { note: "Nit: naming.", severity: "nit" });
-			await tool.execute("b-1", { note: "Nit: formatting.", severity: "nit" });
-			await tool.execute("b-2", { note: "Concern: lock leak.", severity: "concern" });
+			await tool.execute("b-0", { note: "Nit: naming.", severity: "nit", category: "semantic-concern" });
+			await tool.execute("b-1", { note: "Nit: formatting.", severity: "nit", category: "semantic-concern" });
+			await tool.execute("b-2", { note: "Concern: lock leak.", severity: "concern", category: "semantic-concern" });
 			// Budget full (3/3). New concern evicts the lowest-rank entry (a nit),
 			// not the first note or the existing concern.
-			await tool.execute("b-3", { note: "Concern: null deref.", severity: "concern" });
+			await tool.execute("b-3", { note: "Concern: null deref.", severity: "concern", category: "semantic-concern" });
 
 			tool.beginUpdate(false);
 			// Flush delivers 3 notes: the surviving nit, first concern, second concern.
@@ -999,18 +1000,18 @@ describe("advisor", () => {
 			const delivered: { note: string; severity?: string }[] = [];
 			const tool = new AdviseTool(
 				(note, severity) => delivered.push({ note, severity }),
-				new AdvisorEmissionGuard({ budgetPerUpdate: 2 }),
+				{ guard: new AdvisorEmissionGuard({ budgetPerUpdate: 2 }) },
 			);
 
 			tool.beginUpdate(true);
 			// Slot 1: "A" admitted as nit.
-			await tool.execute("d-0", { note: "Issue A.", severity: "nit" });
+			await tool.execute("d-0", { note: "Issue A.", severity: "nit", category: "semantic-concern" });
 			// Re-emit "A" as concern — escalates in place; the slot's rank follows.
-			await tool.execute("d-1", { note: "Issue A.", severity: "concern" });
+			await tool.execute("d-1", { note: "Issue A.", severity: "concern", category: "semantic-concern" });
 			// Slot 2: "B" admitted as concern.
-			await tool.execute("d-2", { note: "Issue B.", severity: "concern" });
+			await tool.execute("d-2", { note: "Issue B.", severity: "concern", category: "semantic-concern" });
 			// Budget full (2/2), all slots at concern rank: "C" displaces nothing.
-			const rejected = await tool.execute("d-3", { note: "Issue C.", severity: "concern" });
+			const rejected = await tool.execute("d-3", { note: "Issue C.", severity: "concern", category: "semantic-concern" });
 			expect(JSON.stringify(rejected.content)).toContain("Dropped:");
 
 			tool.beginUpdate(false);
@@ -1028,14 +1029,15 @@ describe("advisor", () => {
 			// following concern is still reserved and flushed — and the noise call
 			// is told it carried no content.
 			const delivered: string[] = [];
-			const tool = new AdviseTool(note => delivered.push(note), new AdvisorEmissionGuard({ budgetPerUpdate: 1 }));
+			const tool = new AdviseTool(note => delivered.push(note), { guard: new AdvisorEmissionGuard({ budgetPerUpdate: 1 }) });
 
 			tool.beginUpdate(true);
-			const noise = await tool.execute("n-0", { note: "Stop.", severity: "concern" });
+			const noise = await tool.execute("n-0", { note: "Stop.", severity: "concern", category: "semantic-concern" });
 			expect(JSON.stringify(noise.content)).toContain("nothing actionable");
 			await tool.execute("n-1", {
 				note: "The migration drops the users table without a backup.",
 				severity: "concern",
+				category: "semantic-concern",
 			});
 			tool.beginUpdate(false);
 			expect(delivered).toEqual(["The migration drops the users table without a backup."]);
@@ -1047,12 +1049,12 @@ describe("advisor", () => {
 			// must say so — mislabeling it "Duplicate advice ignored." told the
 			// advisor the note had already landed, so it never re-raised.
 			const delivered: string[] = [];
-			const tool = new AdviseTool(note => delivered.push(note), new AdvisorEmissionGuard({ budgetPerUpdate: 1 }));
+			const tool = new AdviseTool(note => delivered.push(note), { guard: new AdvisorEmissionGuard({ budgetPerUpdate: 1 }) });
 
 			tool.beginUpdate(false);
-			const first = await tool.execute("s-0", { note: "First distinct live concern.", severity: "concern" });
-			const second = await tool.execute("s-1", { note: "Second distinct live concern.", severity: "concern" });
-			const third = await tool.execute("s-2", { note: "Third distinct live concern.", severity: "concern" });
+			const first = await tool.execute("s-0", { note: "First distinct live concern.", severity: "concern", category: "semantic-concern" });
+			const second = await tool.execute("s-1", { note: "Second distinct live concern.", severity: "concern", category: "semantic-concern" });
+			const third = await tool.execute("s-2", { note: "Third distinct live concern.", severity: "concern", category: "semantic-concern" });
 			expect(JSON.stringify(first.content)).toContain("Delivered.");
 			for (const result of [second, third]) {
 				const text = JSON.stringify(result.content);
@@ -1069,14 +1071,15 @@ describe("advisor", () => {
 			const delivered: { note: string; severity?: string }[] = [];
 			const tool = new AdviseTool(
 				(note, severity) => delivered.push({ note, severity }),
-				new AdvisorEmissionGuard({ budgetPerUpdate: 1 }),
+				{ guard: new AdvisorEmissionGuard({ budgetPerUpdate: 1 }) },
 			);
 
 			tool.beginUpdate(false);
-			await tool.execute("r-0", { note: "Nit: rename the helper.", severity: "nit" });
+			await tool.execute("r-0", { note: "Nit: rename the helper.", severity: "nit", category: "semantic-concern" });
 			const concern = await tool.execute("r-1", {
 				note: "Concern: the helper drops the lock early.",
 				severity: "concern",
+				category: "semantic-concern",
 			});
 			expect(JSON.stringify(concern.content)).toContain("Dropped:");
 			expect(delivered).toEqual([{ note: "Nit: rename the helper.", severity: "nit" }]);
@@ -1091,18 +1094,18 @@ describe("advisor", () => {
 			const delivered: { note: string; severity?: string }[] = [];
 			const tool = new AdviseTool(
 				(note, severity) => delivered.push({ note, severity }),
-				new AdvisorEmissionGuard({ budgetPerUpdate: 1 }),
+				{ guard: new AdvisorEmissionGuard({ budgetPerUpdate: 1 }) },
 			);
 			const note = "The migration drops the users table without a backup.";
 			const escalatedNote = "THE MIGRATION DROPS THE USERS TABLE WITHOUT A BACKUP!";
 
 			tool.beginUpdate(true);
-			await tool.execute("e-0", { note, severity: "concern" });
+			await tool.execute("e-0", { note, severity: "concern", category: "semantic-concern" });
 			// Reserved, not delivered.
 			expect(delivered).toEqual([]);
 
 			tool.beginUpdate(true);
-			await tool.execute("e-1", { note: escalatedNote, severity: "blocker" });
+			await tool.execute("e-1", { note: escalatedNote, severity: "blocker", category: "semantic-concern" });
 			// The blocker escalation is delivered live, at blocker severity.
 			expect(delivered).toEqual([{ note: escalatedNote, severity: "blocker" }]);
 
@@ -1119,11 +1122,11 @@ describe("advisor", () => {
 			const delivered: { note: string; severity?: string }[] = [];
 			const tool = new AdviseTool(
 				(note, severity) => delivered.push({ note, severity }),
-				new AdvisorEmissionGuard({ budgetPerUpdate: 1 }),
+				{ guard: new AdvisorEmissionGuard({ budgetPerUpdate: 1 }) },
 			);
 
 			tool.beginUpdate(true);
-			await tool.execute("f-0", { note: "Nit held behind the turn.", severity: "nit" });
+			await tool.execute("f-0", { note: "Nit held behind the turn.", severity: "nit", category: "semantic-concern" });
 			expect(delivered).toEqual([]);
 
 			tool.flushDeferredNotes();
@@ -1131,13 +1134,13 @@ describe("advisor", () => {
 
 			// Same update continues: the flushed nit's slot is charged and routed,
 			// so a distinct concern is rate-limited — no second delivery.
-			const concern = await tool.execute("f-1", { note: "Concern after the flush.", severity: "concern" });
+			const concern = await tool.execute("f-1", { note: "Concern after the flush.", severity: "concern", category: "semantic-concern" });
 			expect(JSON.stringify(concern.content)).toContain("budget");
 			expect(delivered).toHaveLength(1);
 
 			// The next advisor update starts with a fresh budget.
 			tool.beginUpdate(false);
-			await tool.execute("f-2", { note: "Concern after the flush.", severity: "concern" });
+			await tool.execute("f-2", { note: "Concern after the flush.", severity: "concern", category: "semantic-concern" });
 			expect(delivered).toEqual([
 				{ note: "Nit held behind the turn.", severity: "nit" },
 				{ note: "Concern after the flush.", severity: "concern" },
@@ -1146,10 +1149,10 @@ describe("advisor", () => {
 
 		it("resetDeliveredNotes resets the guard and the pending backlog together", async () => {
 			const delivered: string[] = [];
-			const tool = new AdviseTool(note => delivered.push(note), new AdvisorEmissionGuard({ budgetPerUpdate: 1 }));
+			const tool = new AdviseTool(note => delivered.push(note), { guard: new AdvisorEmissionGuard({ budgetPerUpdate: 1 }) });
 
 			tool.beginUpdate(true);
-			await tool.execute("q-0", { note: "Queued but never flushed.", severity: "concern" });
+			await tool.execute("q-0", { note: "Queued but never flushed.", severity: "concern", category: "semantic-concern" });
 			tool.resetDeliveredNotes();
 
 			// The pending reservation is gone: no flush replay after the reset.
@@ -1157,7 +1160,7 @@ describe("advisor", () => {
 			expect(delivered).toEqual([]);
 
 			// The guard's dedupe memory is gone too: the same note admits again.
-			await tool.execute("q-1", { note: "Queued but never flushed.", severity: "concern" });
+			await tool.execute("q-1", { note: "Queued but never flushed.", severity: "concern", category: "semantic-concern" });
 			expect(delivered).toEqual(["Queued but never flushed."]);
 		});
 

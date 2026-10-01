@@ -351,7 +351,7 @@ describe("overflow: path survives before model", () => {
 describe("inline extension statuses", () => {
 	function buildPathOnlyComponent() {
 		const session = createStatusLineSession("inline status test");
-		const component = new StatusLineComponent(session);
+		const component = statusLines.track(new StatusLineComponent(session, statusLineHost));
 		component.updateSettings({
 			preset: "custom",
 			leftSegments: ["path"],

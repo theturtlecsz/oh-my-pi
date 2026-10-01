@@ -17,7 +17,7 @@ import * as path from "node:path";
 import { removeWithRetries, VERSION } from "@oh-my-pi/pi-utils";
 import { lookup } from "../../src/config/registry";
 import { Settings } from "../../src/config/settings";
-import { CURRENT_SETUP_VERSION } from "../../src/modes/setup-version";
+import { CURRENT_SETUP_VERSION } from "@oh-my-pi/pi-tui/setup/setup-version";
 import {
 	CHANGELOG_COMMAND_USAGE,
 	type ChangelogEntry,

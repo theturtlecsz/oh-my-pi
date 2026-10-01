@@ -5,6 +5,8 @@ import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { logger, TempDir } from "@oh-my-pi/pi-utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
+import { cfgModelRoles } from "../../src/config/model-settings";
+import { cfgThemeDark } from "../../src/modes/settings";
 
 describe("Settings backup-on-rewrite and real agent dir guard", () => {
 	let settingsState: SettingsTestState | undefined;
@@ -35,7 +37,7 @@ describe("Settings backup-on-rewrite and real agent dir guard", () => {
 		fs.writeFileSync(configPath, initialContent, "utf8");
 
 		const s = await Settings.init({ agentDir, cwd: projectDir });
-		s.set("theme.dark", "theme-1");
+		cfgThemeDark.set(s, "theme-1");
 		await s.flush();
 
 		expect(fs.readFileSync(configPath, "utf8")).toContain("theme-1");
@@ -53,7 +55,7 @@ describe("Settings backup-on-rewrite and real agent dir guard", () => {
 
 		const savedContents: string[] = [initialContent];
 		for (let i = 1; i <= 7; i++) {
-			s.set("theme.dark", `theme-${i}`);
+			cfgThemeDark.set(s, `theme-${i}`);
 			await s.flush();
 			savedContents.push(fs.readFileSync(configPath, "utf8"));
 		}
@@ -108,7 +110,7 @@ describe("Settings backup-on-rewrite and real agent dir guard", () => {
 		// Verify fake real config file was not altered
 		expect(fs.readFileSync(realConfigPath, "utf8")).toBe("theme:\n  dark: original-theme\n");
 
-		s.set("modelRoles", { smol: "mock/smol-model" });
+		cfgModelRoles.set(s, { smol: "mock/smol-model" });
 		await s.flush();
 
 		expect(warnSpy).toHaveBeenCalledWith(
@@ -134,7 +136,7 @@ describe("Settings backup-on-rewrite and real agent dir guard", () => {
 		const warnSpy = vi.spyOn(logger, "warn");
 
 		const s = await Settings.init({ agentDir: realAgentDir, cwd: projectDir });
-		s.set("theme.dark", "should-not-persist");
+		cfgThemeDark.set(s, "should-not-persist");
 		await s.flush();
 
 		expect(warnSpy).toHaveBeenCalledWith(
@@ -161,7 +163,7 @@ describe("Settings backup-on-rewrite and real agent dir guard", () => {
 		const s = await Settings.init({ agentDir: realAgentDir, cwd: projectDir });
 		s.setModelRole("default", "smoke/test-model-role");
 		s.setModelRole("smol", "mock/smol-model");
-		s.set("theme.dark", "new-theme");
+		cfgThemeDark.set(s, "new-theme");
 		await s.flush();
 
 		expect(warnSpy).toHaveBeenCalledWith(
@@ -178,8 +180,8 @@ describe("Settings backup-on-rewrite and real agent dir guard", () => {
 		expect(updatedConfig).not.toContain("smoke/");
 		expect(updatedConfig).not.toContain("mock/");
 
-		s.set("modelRoles", { custom: "mock/custom-model" });
-		s.set("theme.dark", "newer-theme");
+		cfgModelRoles.set(s, { custom: "mock/custom-model" });
+		cfgThemeDark.set(s, "newer-theme");
 		await s.flush();
 
 		expect(warnSpy).toHaveBeenCalledWith(
@@ -192,8 +194,8 @@ describe("Settings backup-on-rewrite and real agent dir guard", () => {
 		expect(finalConfig).not.toContain("mock/custom-model");
 
 		// Test a mixed map with both valid and mock roles plus an ordinary setting
-		s.set("modelRoles", { default: "openai/gpt-4o", smol: "mock/smol-fake" });
-		s.set("theme.dark", "mixed-map-theme");
+		cfgModelRoles.set(s, { default: "openai/gpt-4o", smol: "mock/smol-fake" });
+		cfgThemeDark.set(s, "mixed-map-theme");
 		await s.flush();
 
 		expect(warnSpy).toHaveBeenCalledWith(

@@ -58,17 +58,15 @@ async function runLegacy(ops: readonly Op[]): Promise<{ delivered: Delivery[]; t
 	let cursor = -1;
 	const tool = new AdviseTool(
 		(note, severity, category, index) => {
-			if (guard.accept(note)) pushDelivery(delivered, note, severity, category, index);
+			pushDelivery(delivered, note, severity, category, index);
 		},
-		{ transcriptIndex: () => cursor },
+		{ guard, transcriptIndex: () => cursor },
 	);
 	for (const op of ops) {
 		if (op.type === "update") {
 			tool.beginUpdate(op.inProgress);
-			guard.beginUpdate();
 		} else if (op.type === "reset") {
 			tool.resetDeliveredNotes();
-			guard.reset();
 		} else {
 			cursor = op.index;
 			const result = await tool.execute("tc", { note: op.note, severity: op.severity, category: op.category });

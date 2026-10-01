@@ -887,7 +887,7 @@ describe("AgentSession owner-routed async delivery", () => {
 			});
 			const authStorage = await AuthStorage.create(":memory:");
 			authStorages.push(authStorage);
-			authStorage.setRuntimeApiKey("anthropic", "test-key");
+			authStorage.keys.setRuntime("anthropic", "test-key");
 
 			const sessionManager = SessionManager.inMemory();
 			session = new AgentSession({
@@ -933,7 +933,7 @@ describe("AgentSession owner-routed async delivery", () => {
 			});
 			const authStorage = await AuthStorage.create(":memory:");
 			authStorages.push(authStorage);
-			authStorage.setRuntimeApiKey("anthropic", "test-key");
+			authStorage.keys.setRuntime("anthropic", "test-key");
 
 			session = new AgentSession({
 				agent,
@@ -964,7 +964,7 @@ describe("AgentSession owner-routed async delivery", () => {
 			});
 			const authStorage = await AuthStorage.create(":memory:");
 			authStorages.push(authStorage);
-			authStorage.setRuntimeApiKey("anthropic", "test-key");
+			authStorage.keys.setRuntime("anthropic", "test-key");
 
 			session = new AgentSession({
 				agent,
@@ -1003,7 +1003,7 @@ describe("AgentSession owner-routed async delivery", () => {
 			});
 			const authStorage = await AuthStorage.create(":memory:");
 			authStorages.push(authStorage);
-			authStorage.setRuntimeApiKey("anthropic", "test-key");
+			authStorage.keys.setRuntime("anthropic", "test-key");
 
 			session = new AgentSession({
 				agent,

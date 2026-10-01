@@ -41,7 +41,9 @@ import {
 	taskRecoveryHash,
 	taskResultRecoveryState,
 } from "@oh-my-pi/pi-coding-agent/task/recovery";
-import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, type TaskToolDetails } from "@oh-my-pi/pi-coding-agent/task/types";
+import type { TaskToolDetails } from "@oh-my-pi/pi-tui/tools/task";
+import { TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "@oh-my-pi/pi-coding-agent/task/types";
+import { cfgToolsApproval } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import * as outputMeta from "@oh-my-pi/pi-coding-agent/tools/output-meta";
 import { nativePlainReadProvenance, ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { logger, TempDir, untilAborted } from "@oh-my-pi/pi-utils";
@@ -228,7 +230,7 @@ describe("native task recovery session integration", () => {
 			},
 		});
 		const provider = `task-recovery-${crypto.randomUUID()}`;
-		auth.setRuntimeApiKey(provider, "local-test");
+		auth.keys.setRuntime(provider, "local-test");
 		models.registerProvider(provider, {
 			baseUrl: `${server.url}v1`,
 			api: "openai-completions",
@@ -360,7 +362,7 @@ describe("native task recovery session integration", () => {
 					enableLsp: false,
 					eventBus: created.eventBus,
 				}),
-				0,
+				() => 0,
 			);
 			await initializeExtensions(session, { reportSendError: () => {}, reportRuntimeError: () => {} });
 			return { snapshot, journal, restored: session };
@@ -625,7 +627,7 @@ describe("native task recovery session integration", () => {
 				enableLsp: false,
 				eventBus: created.eventBus,
 			}),
-			0,
+			() => 0,
 		);
 		await initializeExtensions(created.session, { reportSendError: () => {}, reportRuntimeError: () => {} });
 		return { f, snapshot, beforeChild, journal, created };
@@ -1862,7 +1864,7 @@ describe("native task recovery session integration", () => {
 				const other = path.join(f.root.path(), "other-child.jsonl");
 				await Bun.write(other, Bun.file(snapshot.binding.child.sessionFile));
 				await manager!.setSessionFile(other);
-			} else if (change === "policy") created.session.settings.set("tools.approval", { task: "deny" });
+			} else if (change === "policy") cfgToolsApproval.set(created.session.settings, { task: "deny" });
 			else if (change === "owner") await created.session.sendUserMessage(ownerResume, { deliverAs: "followUp" });
 			else deny = true;
 			release.resolve();
@@ -2005,7 +2007,7 @@ describe("native task recovery session integration", () => {
 				settings: f.settings,
 				enableLsp: false,
 			}),
-			0,
+			() => 0,
 		);
 		await ensurePersistedRoster(AgentRegistry.global(), parentFile!);
 		await expect(AgentLifecycleManager.global().ensureLive(binding.child.registryId)).rejects.toThrow(
@@ -2077,7 +2079,7 @@ describe("native task recovery session integration", () => {
 				enableLsp: false,
 				eventBus: next.eventBus,
 			}),
-			0,
+			() => 0,
 		);
 		await initializeExtensions(next.session, { reportSendError: () => {}, reportRuntimeError: () => {} });
 		const before = f.calls.length;
@@ -2608,7 +2610,7 @@ describe("native task recovery session integration", () => {
 		const snapshot = await f.takeSnapshot();
 		const state = taskResultRecoveryState(f.manager.getEntries(), f.manager.getBranch(), snapshot.binding);
 		expect(state.processing?.record.readyEntryId).toBe(state.ready?.entryId);
-		f.settings.set("tools.approval", { read: "deny" });
+		cfgToolsApproval.set(f.settings, { read: "deny" });
 		release.resolve();
 		await untilAborted(
 			AbortSignal.timeout(10000),
@@ -2632,7 +2634,7 @@ describe("native task recovery session integration", () => {
 		await fs.rm(snapshot.artifactsDir, { recursive: true, force: true });
 		for (const [name, bytes] of snapshot.artifacts) await Bun.write(path.join(snapshot.artifactsDir, name), bytes);
 		await Bun.write(snapshot.file, snapshot.journal);
-		f.settings.set("tools.approval", {});
+		cfgToolsApproval.set(f.settings, {});
 		AgentLifecycleManager.resetGlobalForTests();
 		AgentRegistry.resetGlobalForTests();
 		const journal = await SessionManager.open(snapshot.file);
@@ -3235,7 +3237,7 @@ describe("native task recovery session integration", () => {
 					enableLsp: false,
 					eventBus,
 				}),
-				0,
+				() => 0,
 			);
 			await initializeExtensions(restored, { reportSendError: () => {}, reportRuntimeError: () => {} });
 			const before = f.calls.length;
@@ -3695,7 +3697,7 @@ describe("native task recovery session integration", () => {
 						enableLsp: false,
 						eventBus,
 					}),
-					0,
+					() => 0,
 				);
 
 			await initializeExtensions(cached, { reportSendError: () => {}, reportRuntimeError: () => {} });
@@ -3727,7 +3729,7 @@ describe("native task recovery session integration", () => {
 			const registry = AgentRegistry.global();
 			const originalRef = registry.get(snapshot.binding.child.registryId)!;
 			if (change === "owner-input") await cached.sendUserMessage("Owner correction", { deliverAs: "followUp" });
-			if (change === "policy") cached.settings.set("tools.approval", { task: "deny" });
+			if (change === "policy") cfgToolsApproval.set(cached.settings, { task: "deny" });
 			if (change === "registry") registry.register({ ...originalRef, session: null, status: "parked" });
 			if (change === "revival") {
 				const attaches = vi.spyOn(registry, "attachSession");

@@ -55,7 +55,7 @@ describe("AgentSession hidden next-turn dispatch authority", () => {
 			streamFn: mock.stream,
 		});
 		authStorage = await AuthStorage.create(":memory:");
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),

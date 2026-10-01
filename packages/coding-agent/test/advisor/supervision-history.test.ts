@@ -250,9 +250,12 @@ interface DriveResult {
 async function driveLegacyPair(events: AdvisorReplayEvent[]): Promise<DriveResult> {
 	const deliveredNotes: string[] = [];
 	const guard = new AdvisorEmissionGuard();
-	const tool = new AdviseTool(note => {
-		if (guard.accept(note)) deliveredNotes.push(note);
-	});
+	const tool = new AdviseTool(
+		note => {
+			deliveredNotes.push(note);
+		},
+		{ guard },
+	);
 	const advises: DrivenAdvise[] = [];
 	let updateSeq = -1;
 	let inProgress = false;
@@ -261,7 +264,6 @@ async function driveLegacyPair(events: AdvisorReplayEvent[]): Promise<DriveResul
 			updateSeq++;
 			inProgress = event.inProgress;
 			tool.beginUpdate(event.inProgress);
-			guard.beginUpdate();
 			continue;
 		}
 		advises.push({

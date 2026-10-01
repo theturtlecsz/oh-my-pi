@@ -19,7 +19,7 @@ import {
 	taskRecoveryHash,
 	taskResultRecoveryState,
 } from "../src/task/recovery";
-import type { TaskToolDetails } from "../src/task/types";
+import type { TaskToolDetails } from "@oh-my-pi/pi-tui/tools/task";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 let root: string;

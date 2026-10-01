@@ -5,7 +5,7 @@ import * as ai from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { type SettingPath, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import type { CustomEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
@@ -29,9 +29,9 @@ type Harness = {
 
 const activeHarnesses: Harness[] = [];
 const sharedAuthStorage = createInMemoryAuthStorage();
-sharedAuthStorage.setRuntimeApiKey("mock", "test-key");
-sharedAuthStorage.setRuntimeApiKey("anthropic", "test-key");
-sharedAuthStorage.setRuntimeApiKey("typesafe", "test-key");
+sharedAuthStorage.keys.setRuntime("mock", "test-key");
+sharedAuthStorage.keys.setRuntime("anthropic", "test-key");
+sharedAuthStorage.keys.setRuntime("typesafe", "test-key");
 const sharedModelRegistry = new ModelRegistry(sharedAuthStorage);
 
 afterAll(() => {
@@ -60,7 +60,7 @@ function unexpectedStopResponse(text: string): MockResponse {
 
 async function createHarness(
 	responses: MockResponse[],
-	settingsOverrides: Partial<Record<SettingPath, unknown>> = {},
+	settingsOverrides: Readonly<Record<string, unknown>> = {},
 ): Promise<Harness> {
 	const tempDir = TempDir.createSync("@pi-unexpected-stop-jev-");
 	const mock = createMockModel({ responses });
