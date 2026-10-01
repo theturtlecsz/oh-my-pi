@@ -86,7 +86,7 @@ import {
 } from "./backend";
 import { pendingOpsDir, type WorkClientConfig } from "./config";
 import { candidateDrift, type CandidateDriftShape, freezeCandidateCommit, headCommit, pushCandidate } from "./git";
-import { ackOps as ackClaimOps, claimPendingOp, dropPendingOp, intentFingerprint, readPendingClaims, resolvePendingOp } from "./pending-ops";
+import { ackOps as ackClaimOps, claimPendingOp, dropPendingOp, intentFingerprint, type PendingRecord, readPendingClaims, resolvePendingOp } from "./pending-ops";
 import { procedureDigestLines, spawnRunner } from "./procedures";
 import { defaultRun, stageContextLines } from "./stage-context";
 import { bounded, healthWord, oneRecovery, redactSecrets } from "./status";
