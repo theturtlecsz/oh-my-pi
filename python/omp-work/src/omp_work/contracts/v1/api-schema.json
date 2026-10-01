@@ -9553,7 +9553,8 @@
                 "change_priority",
                 "confirm_scope",
                 "edit_scope",
-                "answer_decision"
+                "answer_decision",
+                "release_stop"
               ],
               "title": "Intent",
               "type": "string"
@@ -22846,7 +22847,8 @@
             "change_priority",
             "confirm_scope",
             "edit_scope",
-            "answer_decision"
+            "answer_decision",
+            "release_stop"
           ],
           "title": "Intent",
           "type": "string"
@@ -32632,7 +32634,8 @@
                 "change_priority",
                 "confirm_scope",
                 "edit_scope",
-                "answer_decision"
+                "answer_decision",
+                "release_stop"
               ],
               "title": "Intent",
               "type": "string"

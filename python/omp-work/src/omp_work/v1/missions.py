@@ -827,24 +827,25 @@ def _budget_admission(
     draft: MissionDraft, provenance: object, mission_id: UUID
 ) -> tuple[MissionBudgetAdmission, str | None]:
     """Effective budget for submit and revise: the draft, else the project's standing budget."""
-    if draft.budget_policy is not None:
-        effective: object = draft.budget_policy.model_dump(mode="json")
-        budget_source: str | None = "mission"
-    else:
-        standing = _standing_budget(provenance)
-        if standing is None:
-            effective = None
-            budget_source = None
-        else:
-            effective = standing
-            budget_source = "project"
+    standing = _standing_budget(provenance)
     admission = admit_mission_budget(
         {
             "mission_id": str(mission_id),
             "project_id": str(draft.project_id),
-            "budget_policy": effective,
-        }
+            "budget_policy": (
+                draft.budget_policy.model_dump(mode="json")
+                if draft.budget_policy is not None
+                else None
+            ),
+        },
+        standing_budget=standing,
     )
+    if draft.budget_policy is not None:
+        budget_source: str | None = "mission"
+    elif standing is not None:
+        budget_source = "project"
+    else:
+        budget_source = None
     return admission, budget_source
 
 

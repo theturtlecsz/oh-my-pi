@@ -97,6 +97,22 @@ def relay_owner_intent(
         mission = None
         decision_id = payload.decision_id
         answer = payload.answer
+    elif payload.intent == "release_stop":
+        signed = _signed(config_dir, envelope.workspace_id, payload)
+        if not signed:
+            raise WorkStoreError("approval_required", ("owner_signature_required",))
+        cur.execute(
+            "INSERT INTO omp_control.workspaces(workspace_id) VALUES(%s) ON CONFLICT DO NOTHING",
+            (envelope.workspace_id,),
+        )
+        event = {
+            "type": "release_stop",
+            "stopped": False,
+            "reason": payload.instruction.text,
+        }
+        mission = None
+        decision_id = None
+        answer = None
     else:
         raise WorkStoreError("unavailable")
 

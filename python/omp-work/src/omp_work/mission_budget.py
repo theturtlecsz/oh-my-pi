@@ -31,17 +31,25 @@ class MissionBudgetAdmission:
 _BUDGET_OPTIONS = ["set a budget", "cancel the mission"]
 
 
-def admit_mission_budget(mission: Mapping[str, Any]) -> MissionBudgetAdmission:
+def admit_mission_budget(
+    mission: Mapping[str, Any], *, standing_budget: Any = None
+) -> MissionBudgetAdmission:
     """Evaluate a mission's budget_policy for admission into bounded intake.
 
     If budget_policy is present and non-None, validates it as an ItemBudget
     (raising pydantic.ValidationError if malformed) and returns state="admitted".
-    If budget_policy is missing or None, returns state="held" with budget=None
+    Else if standing_budget is non-None, validates it as an ItemBudget
+    (raising pydantic.ValidationError if malformed) and returns state="admitted".
+    If neither is present, returns state="held" with budget=None
     and an OMP-414 decision record dictionary.
     """
     budget_policy = mission.get("budget_policy")
     if budget_policy is not None:
         budget = ItemBudget.model_validate(budget_policy)
+        return MissionBudgetAdmission(state="admitted", budget=budget, decision=None)
+
+    if standing_budget is not None:
+        budget = ItemBudget.model_validate(standing_budget)
         return MissionBudgetAdmission(state="admitted", budget=budget, decision=None)
 
     mission_id = mission.get("mission_id")

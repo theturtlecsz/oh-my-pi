@@ -16,7 +16,9 @@ def allowed_while_stopped(command: Command) -> bool:
     pause/stop/cancel transitions (so a running agent halts instead of wedging).
     Everything else is refused before any handler runs.
     """
-    if command.type in {"engage_stop", "release_stop"}:
+    if command.type in {"engage_stop", "release_stop", "record_alarm_signal"}:
+        return True
+    if command.type == "relay_owner_intent" and command.payload.intent == "release_stop":
         return True
     return (
         command.type == "set_execution_state"
