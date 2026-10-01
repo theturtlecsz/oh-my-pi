@@ -38,12 +38,12 @@ pytest_plugins = ("test_workflow_service",)
 
 
 @pytest.fixture(autouse=True)
-def _bind_defaults_to_fixture(native_jobs, monkeypatch) -> None:  # noqa: F811
+def _bind_defaults_to_fixture(native_jobs, monkeypatch) -> None:
     """Point OperationsConfig.defaults() at the fixture service so main() uses it."""
     monkeypatch.setattr(
         OperationsConfig,
         "defaults",
-        classmethod(lambda cls: native_jobs.service.config),  # noqa: ARG005
+        classmethod(lambda cls: native_jobs.service.config),
     )
 
 
