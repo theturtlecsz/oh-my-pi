@@ -110,6 +110,7 @@ class JobWorker:
         self.store = store
         self.config = config
         self._started = False
+        self.cancel_requested = threading.Event()
 
         def _get(key: str, default: Any = None) -> Any:
             if isinstance(config, dict):
@@ -248,6 +249,7 @@ class JobWorker:
             return job_id
 
         if settlement is None:
+            self.cancel_requested = threading.Event()
             stop_renew = threading.Event()
             renewal_failed = threading.Event()
 
@@ -266,6 +268,7 @@ class JobWorker:
                         )
                     except Exception:  # noqa: BLE001 - renewal failure indicates lost lease or cancelled job
                         renewal_failed.set()
+                        self.cancel_requested.set()
                         break
 
             thread = threading.Thread(target=_renew_loop, daemon=True)
