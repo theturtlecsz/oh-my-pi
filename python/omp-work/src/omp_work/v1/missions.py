@@ -455,6 +455,27 @@ def project_mission_progress(
     return rows
 
 
+def _latest_mission_snapshots(
+    cur: psycopg.Cursor[dict[str, object]],
+    workspace_id: UUID | str,
+) -> list[MissionView]:
+    ws_id = UUID(str(workspace_id)) if not isinstance(workspace_id, UUID) else workspace_id
+    cur.execute(
+        "SELECT DISTINCT ON (aggregate_id) payload FROM omp_audit.domain_events"
+        " WHERE workspace_id=%s AND aggregate_type='mission'"
+        " AND outcome='applied' AND event_type = ANY(%s)"
+        " ORDER BY aggregate_id, sequence DESC",
+        (ws_id, list(_MISSION_EVENTS)),
+    )
+    views: list[MissionView] = []
+    for row in cur.fetchall():
+        payload = row["payload"] if isinstance(row, dict) else row[0]
+        view = _mission_from_payload(payload)
+        if view is not None:
+            views.append(view)
+    return views
+
+
 def open_missions(
     cur: psycopg.Cursor[dict[str, object]],
     workspace_id: UUID,
@@ -469,19 +490,7 @@ def open_missions(
     (completed, failed, abandoned) drops it. Ordered by created_at, then
     mission_id.
     """
-    cur.execute(
-        "SELECT DISTINCT ON (aggregate_id) payload FROM omp_audit.domain_events"
-        " WHERE workspace_id=%s AND aggregate_type='mission'"
-        " AND outcome='applied' AND event_type = ANY(%s)"
-        " ORDER BY aggregate_id, sequence DESC",
-        (workspace_id, list(_MISSION_EVENTS)),
-    )
-    views: list[MissionView] = []
-    for row in cur.fetchall():
-        payload = row["payload"] if isinstance(row, dict) else row[0]
-        view = _mission_from_payload(payload)
-        if view is not None:
-            views.append(view)
+    views = _latest_mission_snapshots(cur, workspace_id)
     project_key = str(project_id)
     open_views = [
         view
@@ -501,6 +510,33 @@ def open_missions(
             "created_at": view.created_at.isoformat(),
         }
         for view in open_views
+    ]
+
+
+def running_missions(
+    cur: psycopg.Cursor[dict[str, object]],
+    workspace_id: UUID | str,
+) -> list[dict[str, object]]:
+    """Workspace missions whose latest status is running.
+
+    Ordered by created_at then mission_id.
+    """
+    views = _latest_mission_snapshots(cur, workspace_id)
+    running_views = [
+        view
+        for view in views
+        if view.status == MissionStatus.RUNNING or view.status.value == "running"
+    ]
+    running_views.sort(key=lambda view: (view.created_at, str(view.mission_id)))
+    return [
+        {
+            "mission_id": str(view.mission_id),
+            "project_id": str(view.project_id),
+            "objective": view.objective,
+            "status": view.status.value,
+            "created_at": view.created_at.isoformat(),
+        }
+        for view in running_views
     ]
 
 
