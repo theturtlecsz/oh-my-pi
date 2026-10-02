@@ -14,8 +14,6 @@ from artifact bytes. Each test verifies a concrete boundary:
 - managed_trials filters out non-managed campaigns and returns (trial, receipt, reasons).
 """
 
-# ruff: noqa: F811
-
 from __future__ import annotations
 
 import base64
@@ -29,6 +27,8 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import psycopg
 import pytest
+from psycopg.rows import dict_row
+
 from native_jobs_support import native_jobs  # noqa: F401 (fixture)
 from omp_work.jobs.admission import claim_job, enqueue_job
 from omp_work.jobs.lease import settle_job
@@ -46,16 +46,13 @@ from omp_work.research.receipt import (
     managed_job_id,
 )
 from omp_work.v1.canonical import sha256
-from psycopg.rows import dict_row
 from test_research_contract import (
     _admit_payload,
     _manifest,
+    _receipt as _append_receipt,
     _register_component,
     _sample_spec,
     _trial_payload,
-)
-from test_research_contract import (
-    _receipt as _append_receipt,
 )
 from test_workflow_service import OWNER, _command, _create
 
@@ -743,21 +740,88 @@ def test_managed_trials_returns_only_managed_campaign_trials(native_jobs) -> Non
     receipt_bytes = _receipt_bytes(fix)
     _commit(fix, receipt_bytes=receipt_bytes)
 
-    # Propose an unsettled trial in the same managed campaign
-    unsettled_trial_id = uuid4()
+    # Propose two more unsettled trials in the first managed campaign
+    trial_2_id = UUID("33333333-3333-3333-3333-333333333333")
+    trial_4_id = UUID("22222222-2222-2222-2222-222222222222")
+    for t_id, digest in ((trial_2_id, "2" * 64), (trial_4_id, "4" * 64)):
+        status, body = _command(
+            fix.service,
+            fix.workspace_id,
+            {
+                "type": "propose_research_trial",
+                "payload": _trial_payload(
+                    fix.campaign_id,
+                    fix.item["work_id"],
+                    fix.policy_sha,
+                    fix.evaluator_sha,
+                    fix.components["environment"],
+                    trial_id=t_id,
+                    candidate_digest=digest,
+                ),
+            },
+        )
+        assert status == 200, body
+
+    manifest, manifest_sha = _manifest(
+        workers=(fix.worker_component,),
+        evaluators=(fix.evaluator_sha,),
+        audits=(fix.components["audit"],),
+        releases=(fix.components["release"],),
+        environments=(fix.components["environment"],),
+    )
+
+    # Create a second managed campaign to prove multi-campaign inclusion and cross-campaign ordering
+    managed_2_spec, managed_2_spec_sha = _sample_spec()
+    managed_campaign_2_id = uuid4()
+    status, body = _command(
+        fix.service,
+        fix.workspace_id,
+        {
+            "type": "create_research_campaign",
+            "payload": {
+                "campaign_id": str(managed_campaign_2_id),
+                "work_id": fix.item["work_id"],
+                "revision_id": fix.item["revision_id"],
+                "domain": "machine_learning",
+                "spec": managed_2_spec,
+                "spec_sha256": managed_2_spec_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    status, body = _command(
+        fix.service,
+        fix.workspace_id,
+        {
+            "type": "admit_research_campaign",
+            "payload": _admit_payload(
+                managed_campaign_2_id,
+                fix.item["work_id"],
+                fix.item["revision_id"],
+                managed_2_spec_sha,
+                fix.policy_sha,
+                manifest,
+                manifest_sha,
+            ),
+        },
+    )
+    assert status == 200, body
+
+    # Propose an unsettled trial in the second managed campaign
+    trial_3_id = UUID("11111111-1111-1111-1111-111111111111")
     status, body = _command(
         fix.service,
         fix.workspace_id,
         {
             "type": "propose_research_trial",
             "payload": _trial_payload(
-                fix.campaign_id,
+                managed_campaign_2_id,
                 fix.item["work_id"],
                 fix.policy_sha,
                 fix.evaluator_sha,
                 fix.components["environment"],
-                trial_id=unsettled_trial_id,
-                candidate_digest="d" * 64,
+                trial_id=trial_3_id,
+                candidate_digest="3" * 64,
             ),
         },
     )
@@ -782,13 +846,6 @@ def test_managed_trials_returns_only_managed_campaign_trials(native_jobs) -> Non
         },
     )
     assert status == 200, body
-    manifest, manifest_sha = _manifest(
-        workers=(fix.worker_component,),
-        evaluators=(fix.evaluator_sha,),
-        audits=(fix.components["audit"],),
-        releases=(fix.components["release"],),
-        environments=(fix.components["environment"],),
-    )
     status, body = _command(
         fix.service,
         fix.workspace_id,
@@ -824,16 +881,27 @@ def test_managed_trials_returns_only_managed_campaign_trials(native_jobs) -> Non
     )
     assert status == 200, body
 
+    # Set timestamps: fix.trial_id is earlier; trial_2_id, trial_3_id, trial_4_id share exact proposed_at to prove trial_id tie-break
+    t_early = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
+    t_tied = datetime(2026, 1, 2, 0, 0, 0, tzinfo=UTC)
     store = _store(fix)
     with store.transaction(fix.workspace_id, fix.actor_id) as cur:
+        cur.execute(
+            "UPDATE omp_research.trials SET proposed_at=%s WHERE trial_id=%s",
+            (t_early, fix.trial_id),
+        )
+        cur.execute(
+            "UPDATE omp_research.trials SET proposed_at=%s WHERE trial_id = ANY(%s)",
+            (t_tied, [trial_2_id, trial_3_id, trial_4_id]),
+        )
         results = managed_trials(
             cur, fix.workspace_id, fix.item["work_id"], data_dir=fix.data_dir
         )
 
-    # 2 trials from the managed campaign; non-managed campaign is excluded
-    assert len(results) == 2
+    # 4 trials from the managed campaigns; non-managed campaign is excluded
+    assert len(results) == 4
 
-    # Trial 1: qualified and trusted
+    # Trial 1: earliest proposed_at, qualified and trusted
     trial_1, receipt_1, reasons_1 = results[0]
     assert str(trial_1["trial_id"]) == str(fix.trial_id)
     assert str(trial_1["campaign_id"]) == str(fix.campaign_id)
@@ -841,8 +909,20 @@ def test_managed_trials_returns_only_managed_campaign_trials(native_jobs) -> Non
     assert receipt_1.verdict == "qualified"
     assert reasons_1 == []
 
-    # Trial 2: unsettled, receipt is None, reasons has missing_managed_receipt, but trial is returned
-    trial_2, receipt_2, reasons_2 = results[1]
-    assert str(trial_2["trial_id"]) == str(unsettled_trial_id)
-    assert receipt_2 is None
-    assert reasons_2 == ["missing_managed_receipt"]
+    # Trials with tied proposed_at are strictly ordered by trial_id:
+    # trial_3_id (1111...) < trial_4_id (2222...) < trial_2_id (3333...)
+    # This also proves cross-campaign ordering: trial_3_id is from managed_campaign_2_id.
+    assert str(results[1][0]["trial_id"]) == str(trial_3_id)
+    assert str(results[1][0]["campaign_id"]) == str(managed_campaign_2_id)
+    assert results[1][1] is None
+    assert results[1][2] == ["missing_managed_receipt"]
+
+    assert str(results[2][0]["trial_id"]) == str(trial_4_id)
+    assert str(results[2][0]["campaign_id"]) == str(fix.campaign_id)
+    assert results[2][1] is None
+    assert results[2][2] == ["missing_managed_receipt"]
+
+    assert str(results[3][0]["trial_id"]) == str(trial_2_id)
+    assert str(results[3][0]["campaign_id"]) == str(fix.campaign_id)
+    assert results[3][1] is None
+    assert results[3][2] == ["missing_managed_receipt"]

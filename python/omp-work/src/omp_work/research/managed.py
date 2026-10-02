@@ -119,7 +119,7 @@ def is_managed_campaign(
     descriptor = _component_descriptor(cur, UUID(str(workspace_id)), policy_sha)
     if descriptor is None:
         return False
-    return descriptor.get("name") == MANAGED_POLICY or descriptor.get("version") == MANAGED_POLICY
+    return descriptor.get("name") == MANAGED_POLICY
 
 
 def _worker_holds_capability(
