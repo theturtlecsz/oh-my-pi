@@ -1,0 +1,169 @@
+commit SHA under test: 415750bd10612cf7ae6bcec86e4ee817b480e841
+bun version: 1.4.2
+
+for i in $(seq 1 20); do
+  echo "run $i $(date -u +%FT%TZ) loadavg=$(cut -d' ' -f1-3 /proc/loadavg) cores=$(nproc) other_test_lanes=$(pgrep -fc 'scripts/ci-test-ts.ts')"
+  OMP_TEST_CONCURRENCY=7 bun test test/launch/broker-client-own-shutdown.test.ts 2>&1 | tail -n 6
+  echo "exit=${pipestatus[1]}"
+done
+
+run 1 2026-10-02T05:50:18Z loadavg=16.05 5.93 3.57 cores=22 other_test_lanes=4
+(pass) broker client own shutdown > records one broker spawn and resolves when ping follows shutdown [78.02ms]
+
+ 2 pass
+ 0 fail
+ 8 expect() calls
+Ran 2 tests across 1 file. [680.00ms]
+exit=0
+run 2 2026-10-02T05:50:18Z loadavg=16.05 5.93 3.57 cores=22 other_test_lanes=4
+(pass) broker client own shutdown > records one broker spawn and resolves when ping follows shutdown [76.63ms]
+
+ 2 pass
+ 0 fail
+ 8 expect() calls
+Ran 2 tests across 1 file. [664.00ms]
+exit=0
+run 3 2026-10-02T05:50:19Z loadavg=16.28 6.15 3.66 cores=22 other_test_lanes=4
+(pass) broker client own shutdown > records one broker spawn and resolves when ping follows shutdown [81.42ms]
+
+ 2 pass
+ 0 fail
+ 8 expect() calls
+Ran 2 tests across 1 file. [665.00ms]
+exit=0
+run 4 2026-10-02T05:50:20Z loadavg=16.28 6.15 3.66 cores=22 other_test_lanes=4
+(pass) broker client own shutdown > records one broker spawn and resolves when ping follows shutdown [75.52ms]
+
+ 2 pass
+ 0 fail
+ 8 expect() calls
+Ran 2 tests across 1 file. [666.00ms]
+exit=0
+run 5 2026-10-02T05:50:21Z loadavg=16.28 6.15 3.66 cores=22 other_test_lanes=4
+(pass) broker client own shutdown > records one broker spawn and resolves when ping follows shutdown [76.39ms]
+
+ 2 pass
+ 0 fail
+ 8 expect() calls
+Ran 2 tests across 1 file. [659.00ms]
+exit=0
+run 6 2026-10-02T05:50:21Z loadavg=16.28 6.15 3.66 cores=22 other_test_lanes=4
+(pass) broker client own shutdown > records one broker spawn and resolves when ping follows shutdown [77.01ms]
+
+ 2 pass
+ 0 fail
+ 8 expect() calls
+Ran 2 tests across 1 file. [653.00ms]
+exit=0
+run 7 2026-10-02T05:50:22Z loadavg=16.28 6.15 3.66 cores=22 other_test_lanes=4
+(pass) broker client own shutdown > records one broker spawn and resolves when ping follows shutdown [75.00ms]
+
+ 2 pass
+ 0 fail
+ 8 expect() calls
+Ran 2 tests across 1 file. [655.00ms]
+exit=0
+run 8 2026-10-02T05:50:23Z loadavg=16.28 6.15 3.66 cores=22 other_test_lanes=4
+(pass) broker client own shutdown > records one broker spawn and resolves when ping follows shutdown [81.88ms]
+
+ 2 pass
+ 0 fail
+ 8 expect() calls
+Ran 2 tests across 1 file. [646.00ms]
+exit=0
+run 9 2026-10-02T05:50:23Z loadavg=16.28 6.15 3.66 cores=22 other_test_lanes=4
+(pass) broker client own shutdown > records one broker spawn and resolves when ping follows shutdown [74.36ms]
+
+ 2 pass
+ 0 fail
+ 8 expect() calls
+Ran 2 tests across 1 file. [654.00ms]
+exit=0
+run 10 2026-10-02T05:50:24Z loadavg=16.28 6.15 3.66 cores=22 other_test_lanes=4
+(pass) broker client own shutdown > records one broker spawn and resolves when ping follows shutdown [74.76ms]
+
+ 2 pass
+ 0 fail
+ 8 expect() calls
+Ran 2 tests across 1 file. [654.00ms]
+exit=0
+run 11 2026-10-02T05:50:25Z loadavg=16.10 6.28 3.71 cores=22 other_test_lanes=4
+(pass) broker client own shutdown > records one broker spawn and resolves when ping follows shutdown [75.53ms]
+
+ 2 pass
+ 0 fail
+ 8 expect() calls
+Ran 2 tests across 1 file. [678.00ms]
+exit=0
+run 12 2026-10-02T05:50:25Z loadavg=16.10 6.28 3.71 cores=22 other_test_lanes=4
+(pass) broker client own shutdown > records one broker spawn and resolves when ping follows shutdown [74.94ms]
+
+ 2 pass
+ 0 fail
+ 8 expect() calls
+Ran 2 tests across 1 file. [650.00ms]
+exit=0
+run 13 2026-10-02T05:50:26Z loadavg=16.10 6.28 3.71 cores=22 other_test_lanes=4
+(pass) broker client own shutdown > records one broker spawn and resolves when ping follows shutdown [75.62ms]
+
+ 2 pass
+ 0 fail
+ 8 expect() calls
+Ran 2 tests across 1 file. [652.00ms]
+exit=0
+run 14 2026-10-02T05:50:27Z loadavg=16.10 6.28 3.71 cores=22 other_test_lanes=4
+(pass) broker client own shutdown > records one broker spawn and resolves when ping follows shutdown [76.02ms]
+
+ 2 pass
+ 0 fail
+ 8 expect() calls
+Ran 2 tests across 1 file. [665.00ms]
+exit=0
+run 15 2026-10-02T05:50:27Z loadavg=16.10 6.28 3.71 cores=22 other_test_lanes=4
+(pass) broker client own shutdown > records one broker spawn and resolves when ping follows shutdown [74.70ms]
+
+ 2 pass
+ 0 fail
+ 8 expect() calls
+Ran 2 tests across 1 file. [644.00ms]
+exit=0
+run 16 2026-10-02T05:50:28Z loadavg=16.10 6.28 3.71 cores=22 other_test_lanes=4
+(pass) broker client own shutdown > records one broker spawn and resolves when ping follows shutdown [75.42ms]
+
+ 2 pass
+ 0 fail
+ 8 expect() calls
+Ran 2 tests across 1 file. [646.00ms]
+exit=0
+run 17 2026-10-02T05:50:29Z loadavg=16.10 6.28 3.71 cores=22 other_test_lanes=4
+(pass) broker client own shutdown > records one broker spawn and resolves when ping follows shutdown [74.64ms]
+
+ 2 pass
+ 0 fail
+ 8 expect() calls
+Ran 2 tests across 1 file. [636.00ms]
+exit=0
+run 18 2026-10-02T05:50:29Z loadavg=16.49 6.53 3.81 cores=22 other_test_lanes=4
+(pass) broker client own shutdown > records one broker spawn and resolves when ping follows shutdown [79.88ms]
+
+ 2 pass
+ 0 fail
+ 8 expect() calls
+Ran 2 tests across 1 file. [668.00ms]
+exit=0
+run 19 2026-10-02T05:50:30Z loadavg=16.49 6.53 3.81 cores=22 other_test_lanes=4
+(pass) broker client own shutdown > records one broker spawn and resolves when ping follows shutdown [74.67ms]
+
+ 2 pass
+ 0 fail
+ 8 expect() calls
+Ran 2 tests across 1 file. [656.00ms]
+exit=0
+run 20 2026-10-02T05:50:31Z loadavg=16.49 6.53 3.81 cores=22 other_test_lanes=4
+(pass) broker client own shutdown > records one broker spawn and resolves when ping follows shutdown [74.79ms]
+
+ 2 pass
+ 0 fail
+ 8 expect() calls
+Ran 2 tests across 1 file. [659.00ms]
+exit=0
