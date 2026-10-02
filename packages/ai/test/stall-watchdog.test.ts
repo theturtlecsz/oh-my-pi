@@ -40,12 +40,12 @@ function parseWatchdogLine(stderr: string): WatchdogLogInfo | null {
 	};
 }
 
-async function runChildBun(args: string[]): Promise<ChildRunResult> {
+async function runChildBun(args: string[], cwd?: string): Promise<ChildRunResult> {
 	const t0 = performance.now();
 	const proc = Bun.spawn(args, {
-		// Run from the package root so the package `bunfig.toml` preload is
+		// Default to the package root so the package `bunfig.toml` preload is
 		// inherited by the child — that preload is what activates the watchdog.
-		cwd: path.resolve(import.meta.dir, ".."),
+		cwd: cwd ?? path.resolve(import.meta.dir, ".."),
 		stdout: "pipe",
 		stderr: "pipe",
 		env: {
@@ -280,4 +280,42 @@ it("never settles", async () => {
 		expect(result.durationMs).toBeGreaterThanOrEqual(1500);
 		expect(result.durationMs).toBeLessThanOrEqual(6000);
 	});
+
+	it("kills a blocked worker under --parallel=2 and still passes ok.test.ts", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-ai-stall-parallel-"));
+		try {
+			await fs.writeFile(
+				path.join(dir, "stuck.test.ts"),
+				`import { test } from "bun:test";
+
+test("stuck", () => {
+	Bun.sleepSync(120_000);
+});
+`,
+			);
+			await fs.writeFile(
+				path.join(dir, "ok.test.ts"),
+				`import { test } from "bun:test";
+
+test("ok", () => {});
+`,
+			);
+
+			const preload = path.resolve(import.meta.dir, "helpers/stall-watchdog.ts");
+			const result = await runChildBun(["bun", "test", "--parallel=2", "--preload", preload, "--timeout=2000"], dir);
+			const combined = stripAnsi(`${result.stdout}${result.stderr}`);
+
+			expect(result.exitCode).toBe(1);
+			expect(result.signalCode).toBeNull();
+			expect(result.durationMs).toBeLessThan(15000);
+			expect(combined).toContain("1 pass");
+			expect(combined).not.toContain("✗ ok.test.ts");
+			const info = parseWatchdogLine(result.stderr);
+			expect(info).not.toBeNull();
+			expect(info!.timeoutMs).toBe(2000);
+			expect(combined).toContain("worker crashed: SIGKILL");
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	}, 30_000);
 });
