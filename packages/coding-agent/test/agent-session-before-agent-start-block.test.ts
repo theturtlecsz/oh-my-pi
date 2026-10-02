@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
-import { createMockModel, type MockResponseSource } from "@oh-my-pi/pi-ai/providers/mock";
+import { createMockModel, type MockModel, type MockResponseSource } from "@oh-my-pi/pi-ai/providers/mock";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
@@ -84,7 +84,7 @@ describe("AgentSession before_agent_start block", () => {
 	function createSession(
 		responses: MockResponseSource,
 		emitBeforeAgentStart: ExtensionRunner["emitBeforeAgentStart"],
-	): { session: AgentSession; mock: ReturnType<typeof createMockModel>; manager: SessionManager } {
+	): { session: AgentSession; mock: MockModel; manager: SessionManager } {
 		const mock = createMockModel({ responses });
 		const manager = SessionManager.inMemory();
 		const agent = new Agent({
