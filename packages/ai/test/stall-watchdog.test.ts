@@ -43,6 +43,9 @@ function parseWatchdogLine(stderr: string): WatchdogLogInfo | null {
 async function runChildBun(args: string[]): Promise<ChildRunResult> {
 	const t0 = performance.now();
 	const proc = Bun.spawn(args, {
+		// Run from the package root so the package `bunfig.toml` preload is
+		// inherited by the child — that preload is what activates the watchdog.
+		cwd: path.resolve(import.meta.dir, ".."),
 		stdout: "pipe",
 		stderr: "pipe",
 		env: {
@@ -77,7 +80,6 @@ async function runChildBun(args: string[]): Promise<ChildRunResult> {
 
 describe("stall-watchdog (OMP-512-s02)", () => {
 	let tempDir: string;
-	const preloadPath = path.resolve(import.meta.dir, "./helpers/stall-watchdog.ts");
 
 	beforeAll(async () => {
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-ai-stall-watchdog-"));
@@ -105,7 +107,7 @@ test("block at test start", () => {
 `,
 		);
 
-		const result = await runChildBun(["bun", "test", `--preload=${preloadPath}`, "--timeout=2000", fixtureFile]);
+		const result = await runChildBun(["bun", "test", "--timeout=2000", fixtureFile]);
 
 		expect(result.exitCode !== 0 || result.signalCode !== null).toBe(true);
 		const info = parseWatchdogLine(result.stderr);
@@ -136,7 +138,7 @@ test("block after async sleep", async () => {
 `,
 		);
 
-		const result = await runChildBun(["bun", "test", `--preload=${preloadPath}`, "--timeout=2000", fixtureFile]);
+		const result = await runChildBun(["bun", "test", "--timeout=2000", fixtureFile]);
 
 		expect(result.exitCode !== 0 || result.signalCode !== null).toBe(true);
 		const info = parseWatchdogLine(result.stderr);
@@ -169,7 +171,7 @@ test("block after fake timers", () => {
 		);
 
 		const spawnTimeOrigin = performance.timeOrigin + performance.now();
-		const result = await runChildBun(["bun", "test", `--preload=${preloadPath}`, "--timeout=2000", fixtureFile]);
+		const result = await runChildBun(["bun", "test", "--timeout=2000", fixtureFile]);
 
 		expect(result.exitCode !== 0 || result.signalCode !== null).toBe(true);
 		const info = parseWatchdogLine(result.stderr);
@@ -196,7 +198,7 @@ Bun.sleepSync(120_000);
 `,
 		);
 
-		const result = await runChildBun(["bun", "test", `--preload=${preloadPath}`, "--timeout=2000", fixtureFile]);
+		const result = await runChildBun(["bun", "test", "--timeout=2000", fixtureFile]);
 
 		expect(result.exitCode !== 0 || result.signalCode !== null).toBe(true);
 		const info = parseWatchdogLine(result.stderr);
@@ -222,7 +224,7 @@ it("sleepSync inside async test", async () => {
 `,
 		);
 
-		const result = await runChildBun(["bun", "test", `--preload=${preloadPath}`, "--timeout=2000", fixtureFile]);
+		const result = await runChildBun(["bun", "test", "--timeout=2000", fixtureFile]);
 		const combined = `${result.stdout}${result.stderr}`;
 
 		expect(combined).not.toContain("[stall-watchdog]");
@@ -245,7 +247,7 @@ it("async sleep within its own timeout", async () => {
 `,
 		);
 
-		const result = await runChildBun(["bun", "test", `--preload=${preloadPath}`, "--timeout=2000", fixtureFile]);
+		const result = await runChildBun(["bun", "test", "--timeout=2000", fixtureFile]);
 		const combined = `${result.stdout}${result.stderr}`;
 
 		expect(combined).not.toContain("[stall-watchdog]");
@@ -268,7 +270,7 @@ it("never settles", async () => {
 `,
 		);
 
-		const result = await runChildBun(["bun", "test", `--preload=${preloadPath}`, "--timeout=20000", fixtureFile]);
+		const result = await runChildBun(["bun", "test", "--timeout=20000", fixtureFile]);
 		const combined = `${result.stdout}${result.stderr}`;
 
 		expect(combined).not.toContain("[stall-watchdog]");
