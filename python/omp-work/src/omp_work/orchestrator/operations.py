@@ -328,6 +328,22 @@ _MAX_GRANT_PHASE_PASSES = 3
 def run_grant(ctx: StageContext) -> Outcome:
     """Begin or resume one execution grant, then drive the active item's phase."""
     gid = service._ids(ctx.mission_id, "grant")
+    pin_key = f"grant-issue:{ctx.mission_id}"
+
+    def _attach_pin(outcome: Outcome) -> Outcome:
+        if outcome.outcome == "succeeded":
+            pin = ctx.intents.open(pin_key)
+            if pin is not None:
+                target = pin.get("target")
+                if isinstance(target, str):
+                    try:
+                        target = json.loads(target)
+                    except Exception:
+                        target = None
+                if isinstance(target, Mapping) and "issued_at" in target:
+                    outcome.data["issued_at"] = target["issued_at"]
+        return outcome
+
     judged = judge_manifest(ctx.config)
     if judged is None:
         return Outcome(
@@ -372,7 +388,19 @@ def run_grant(ctx: StageContext) -> Outcome:
                 outcome="failed",
                 data={"stage": "grant", "code": "judge_manifest_drift"},
             )
-        return _grant_phase(ctx, gid)
+        return _attach_pin(_grant_phase(ctx, gid))
+
+    open_pin = ctx.intents.open(pin_key)
+    target = open_pin.get("target") if isinstance(open_pin, Mapping) else None
+    if isinstance(target, str):
+        try:
+            target = json.loads(target)
+        except Exception:
+            target = None
+    issued_at = target.get("issued_at") if isinstance(target, Mapping) else None
+    if issued_at is None:
+        issued_at = datetime.now(UTC).isoformat()
+        ctx.intents.record_intent(pin_key, "begin_execution", {"issued_at": issued_at})
 
     rq = _request_mapping(ctx.request)
     intake_data = (ctx.prior.get("intake") or {}).get("data") or {}
@@ -387,7 +415,6 @@ def run_grant(ctx: StageContext) -> Outcome:
         description = str(getattr(work, "description"))
     actor_id = ctx.principal.actor_id
     focus = ctx.service.read(ctx.principal, ctx.workspace_id, "focus", str(actor_id))
-    issued_at = datetime.now(UTC).isoformat()
     project_id = item.get("project_id")
     payload: dict[str, Any] = {
         "grant_id": str(gid),
@@ -426,7 +453,7 @@ def run_grant(ctx: StageContext) -> Outcome:
                 data={"stage": "grant", "code": "grant_conflict"},
             )
         raise
-    return _grant_phase(ctx, gid)
+    return _attach_pin(_grant_phase(ctx, gid))
 
 
 def _grant_phase(ctx: StageContext, gid: UUID) -> Outcome:
