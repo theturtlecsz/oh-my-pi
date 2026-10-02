@@ -89,6 +89,7 @@ The script prints a one-line JSON report and exits 0 (on bad arguments it prints
 ## Reviewing and applying a pack update
 
 1. Write an `UpdateReview` to `reviews/<candidate commit>.json` relative to the ECC root.
+   Set `schemaVersion` to `1`.
    Use `baseCommit` from the report and `candidate.commit` from `candidateCommit`.
    Read the candidate tree and description from its checkout:
 
