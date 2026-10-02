@@ -126,15 +126,19 @@ def test_fixed_dataclass_and_defaults(gateway):
     Fixed = gateway.Fixed
     FIXED = gateway.FIXED
 
+    owner_home = Path("/home") / "thetu"
     assert FIXED.log == Path("/var/log/omp-owner-action.log")
-    assert FIXED.flood == Path("/home/thetu/flood")
-    assert FIXED.clone == Path("/home/thetu/flood-repos/oh-my-pi")
+    assert FIXED.flood == owner_home / "flood"
+    assert FIXED.clone == owner_home / "flood-repos" / "oh-my-pi"
     assert FIXED.python == Path("/usr/bin/python3")
     assert FIXED.bash == Path("/usr/bin/bash")
     assert FIXED.ssh_keygen == Path("/usr/bin/ssh-keygen")
-    assert FIXED.signing_key == Path("/home/thetu/.config/omp/owner-signing/omp-owner-signing")
+    assert (
+        FIXED.signing_key
+        == owner_home / ".config" / "omp" / "owner-signing" / "omp-owner-signing"
+    )
     assert FIXED.env["USER"] == "thetu"
-    assert FIXED.env["HOME"] == "/home/thetu"
+    assert FIXED.env["HOME"] == str(owner_home)
 
     # Fixed must be frozen
     with pytest.raises(FrozenInstanceError):
