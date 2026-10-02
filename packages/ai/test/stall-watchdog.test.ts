@@ -208,4 +208,74 @@ Bun.sleepSync(120_000);
 		expect(elapsedAfterMark).toBeGreaterThanOrEqual(3000);
 		expect(elapsedAfterMark).toBeLessThanOrEqual(5000);
 	});
+
+	it("passes a 1000 ms Bun.sleepSync inside an async test under --timeout=2000", async () => {
+		const fixtureFile = path.join(tempDir, "sleep-sync-async.test.ts");
+
+		await fs.writeFile(
+			fixtureFile,
+			`import { it } from "bun:test";
+
+it("sleepSync inside async test", async () => {
+	Bun.sleepSync(1000);
+});
+`,
+		);
+
+		const result = await runChildBun(["bun", "test", `--preload=${preloadPath}`, "--timeout=2000", fixtureFile]);
+		const combined = `${result.stdout}${result.stderr}`;
+
+		expect(combined).not.toContain("[stall-watchdog]");
+		expect(result.exitCode).toBe(0);
+		expect(result.signalCode).toBeNull();
+		expect(combined).toContain("1 pass");
+		expect(combined).toContain("0 fail");
+	});
+
+	it("passes await Bun.sleep(3000) in it(..., 6000) under --timeout=2000", async () => {
+		const fixtureFile = path.join(tempDir, "async-sleep-own-timeout.test.ts");
+
+		await fs.writeFile(
+			fixtureFile,
+			`import { it } from "bun:test";
+
+it("async sleep within its own timeout", async () => {
+	await Bun.sleep(3000);
+}, 6000);
+`,
+		);
+
+		const result = await runChildBun(["bun", "test", `--preload=${preloadPath}`, "--timeout=2000", fixtureFile]);
+		const combined = `${result.stdout}${result.stderr}`;
+
+		expect(combined).not.toContain("[stall-watchdog]");
+		expect(result.exitCode).toBe(0);
+		expect(result.signalCode).toBeNull();
+		expect(combined).toContain("1 pass");
+		expect(combined).toContain("0 fail");
+	});
+
+	it("reports Bun's timeout for a never-settling it(..., 1500) under --timeout=20000", async () => {
+		const fixtureFile = path.join(tempDir, "never-settles.test.ts");
+
+		await fs.writeFile(
+			fixtureFile,
+			`import { it } from "bun:test";
+
+it("never settles", async () => {
+	await new Promise(() => {});
+}, 1500);
+`,
+		);
+
+		const result = await runChildBun(["bun", "test", `--preload=${preloadPath}`, "--timeout=20000", fixtureFile]);
+		const combined = `${result.stdout}${result.stderr}`;
+
+		expect(combined).not.toContain("[stall-watchdog]");
+		expect(result.exitCode).toBeGreaterThan(0);
+		expect(result.signalCode).toBeNull();
+		expect(combined).toContain("this test timed out after 1500ms");
+		expect(result.durationMs).toBeGreaterThanOrEqual(1500);
+		expect(result.durationMs).toBeLessThanOrEqual(6000);
+	});
 });
