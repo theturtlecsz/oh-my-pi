@@ -1,0 +1,429 @@
+diff --git a/packages/coding-agent/src/dap/client.ts b/packages/coding-agent/src/dap/client.ts
+index 15db8fbae3..5b7fe2aea9 100644
+--- a/packages/coding-agent/src/dap/client.ts
++++ b/packages/coding-agent/src/dap/client.ts
+@@ -1,7 +1,7 @@
+ import * as fs from "node:fs/promises";
+ import { isEnoent, logger, ptree } from "@oh-my-pi/pi-utils";
+ import { NON_INTERACTIVE_ENV } from "../exec/non-interactive-env";
+-import { MessageFramer, MessageFramingError } from "../jsonrpc/message-framing";
++import { MessageFramer } from "../jsonrpc/message-framing";
+ import { ToolAbortError } from "../tools/tool-errors";
+ import type {
+ 	DapCapabilities,
+@@ -594,7 +594,6 @@ export class DapClient {
+ 		const framer = new MessageFramer(this.#messageBuffer);
+ 
+ 		let closeError: Error | undefined;
+-		let framingFailed = false;
+ 		try {
+ 			while (true) {
+ 				const { done, value } = await reader.read();
+@@ -634,7 +633,6 @@ export class DapClient {
+ 				}
+ 			}
+ 		} catch (error) {
+-			framingFailed = error instanceof MessageFramingError;
+ 			closeError = new Error(`DAP connection closed: ${toErrorMessage(error)}`);
+ 		} finally {
+ 			// Persist any unparsed remainder so a restarted reader resumes mid-message.
+@@ -648,14 +646,6 @@ export class DapClient {
+ 		// in-flight request and event waiter so callers see an immediate error
+ 		// instead of waiting out their own timeout.
+ 		this.#failConnection(closeError ?? new Error(`DAP connection closed: ${this.adapter.name} transport ended`));
+-		if (framingFailed) {
+-			await this.dispose().catch(error => {
+-				logger.warn("Failed to dispose DAP adapter after invalid framing", {
+-					adapter: this.adapter.name,
+-					error: toErrorMessage(error),
+-				});
+-			});
+-		}
+ 	}
+ 
+ 	#handleResponse(message: DapResponseMessage): void {
+diff --git a/packages/coding-agent/src/jsonrpc/message-framing.ts b/packages/coding-agent/src/jsonrpc/message-framing.ts
+index f206c350e4..a69c6dfab3 100644
+--- a/packages/coding-agent/src/jsonrpc/message-framing.ts
++++ b/packages/coding-agent/src/jsonrpc/message-framing.ts
+@@ -10,18 +10,30 @@
+ // Reused for all full (non-streaming) decodes; each decode() resets state, so a
+ // single instance is safe and avoids per-message TextDecoder allocation.
+ const MESSAGE_DECODER = new TextDecoder("utf-8");
+-const HEADER_TERMINATOR = [13, 10, 13, 10];
+ 
+-// Headers carry a length and optional content type; bodies can contain entire
+-// source files, workspace diagnostics, or base64 debugger memory responses.
+-const MAX_HEADER_BYTES = 16 * 1024;
+-const MAX_CONTENT_BYTES = 256 * 1024 * 1024;
+-
+-export class MessageFramingError extends Error {
+-	constructor(message: string) {
+-		super(message);
+-		this.name = "MessageFramingError";
++/**
++ * Locate the `\r\n\r\n` header terminator across the pending chunk list.
++ * Returns the absolute byte index of the first `\r`, or -1 when not present.
++ * Equivalent to scanning the contiguous concatenation of the chunks.
++ */
++function findHeaderEndInChunks(chunks: Buffer[]): number {
++	let global = 0;
++	let b0 = -1;
++	let b1 = -1;
++	let b2 = -1;
++	for (const chunk of chunks) {
++		for (let i = 0; i < chunk.length; i++) {
++			const b3 = chunk[i];
++			if (b0 === 13 && b1 === 10 && b2 === 13 && b3 === 10) {
++				return global - 3;
++			}
++			b0 = b1;
++			b1 = b2;
++			b2 = b3;
++			global++;
++		}
+ 	}
++	return -1;
+ }
+ 
+ /** Copy the byte range [from, to) out of the pending chunk list into one Buffer. */
+@@ -43,6 +55,21 @@ function copyChunkRange(chunks: Buffer[], from: number, to: number): Buffer {
+ 	return out;
+ }
+ 
++/** Drop the first `count` bytes from the pending chunk list in place. */
++function dropChunkFront(chunks: Buffer[], count: number): void {
++	let removed = 0;
++	while (chunks.length > 0) {
++		const head = chunks[0];
++		if (removed + head.length <= count) {
++			removed += head.length;
++			chunks.shift();
++		} else {
++			chunks[0] = head.subarray(count - removed);
++			break;
++		}
++	}
++}
++
+ /**
+  * Incremental Content-Length frame decoder for a JSON message byte stream.
+  *
+@@ -56,23 +83,17 @@ function copyChunkRange(chunks: Buffer[], from: number, to: number): Buffer {
+ export class MessageFramer {
+ 	readonly #pendingChunks: Buffer[] = [];
+ 	#pendingLen = 0;
+-	#scanChunk = 0;
+-	#scanOffset = 0;
+-	#scanned = 0;
+-	#matched = 0;
+-	#messageStart = 0;
+-	#contentLength: number | undefined;
+-	#failure: MessageFramingError | undefined;
+ 
+ 	/** Seed the buffer with any unparsed remainder left by a previous reader. */
+ 	constructor(seed: Buffer) {
+-		this.push(seed);
++		if (seed.length > 0) {
++			this.#pendingChunks.push(seed);
++			this.#pendingLen = seed.length;
++		}
+ 	}
+ 
+ 	/** Append a freshly read chunk to the pending buffer. */
+ 	push(chunk: Buffer): void {
+-		if (this.#failure) throw this.#failure;
+-		if (chunk.length === 0) return;
+ 		this.#pendingChunks.push(chunk);
+ 		this.#pendingLen += chunk.length;
+ 	}
+@@ -85,81 +106,32 @@ export class MessageFramer {
+ 	 * stalling on the same junk header forever.
+ 	 */
+ 	*drain(onResync: (headerText: string) => void): Generator<string> {
+-		if (this.#failure) throw this.#failure;
+ 		while (true) {
+-			if (this.#contentLength === undefined) {
+-				const headerEnd = this.#findHeaderEnd();
+-				if (headerEnd === -1) break;
+-				const headerText = MESSAGE_DECODER.decode(copyChunkRange(this.#pendingChunks, 0, headerEnd));
+-				const lengths = [...headerText.matchAll(/^Content-Length:[ \t]*([^\r\n]*)$/gim)];
+-				if (lengths.length === 0) {
+-					this.#dropFront(headerEnd + 4);
+-					onResync(headerText);
+-					continue;
+-				}
+-				const rawLength = lengths[0][1].trim();
+-				if (lengths.length !== 1 || !/^\d+$/.test(rawLength)) {
+-					this.#fail("Invalid or duplicate JSON-RPC Content-Length");
+-				}
+-				const contentLength = Number(rawLength);
+-				if (!Number.isSafeInteger(contentLength) || contentLength > MAX_CONTENT_BYTES) {
+-					this.#fail(`JSON-RPC Content-Length exceeds ${MAX_CONTENT_BYTES}-byte limit`);
+-				}
+-				this.#contentLength = contentLength;
+-				this.#messageStart = headerEnd + 4;
++			const headerEnd = findHeaderEndInChunks(this.#pendingChunks);
++			if (headerEnd === -1) break;
++
++			const headerText = MESSAGE_DECODER.decode(copyChunkRange(this.#pendingChunks, 0, headerEnd));
++			const contentLengthMatch = headerText.match(/Content-Length: (\d+)/i);
++			if (!contentLengthMatch) {
++				onResync(headerText);
++				dropChunkFront(this.#pendingChunks, headerEnd + 4);
++				this.#pendingLen -= headerEnd + 4;
++				continue;
+ 			}
+ 
+-			const messageEnd = this.#messageStart + this.#contentLength;
++			const contentLength = Number.parseInt(contentLengthMatch[1], 10);
++			const messageStart = headerEnd + 4; // Skip \r\n\r\n
++			const messageEnd = messageStart + contentLength;
+ 			if (this.#pendingLen < messageEnd) break;
+-			const text = MESSAGE_DECODER.decode(copyChunkRange(this.#pendingChunks, this.#messageStart, messageEnd));
+-			this.#dropFront(messageEnd);
+-			yield text;
+-		}
+-	}
+-
+-	#findHeaderEnd(): number {
+-		while (this.#scanChunk < this.#pendingChunks.length) {
+-			const chunk = this.#pendingChunks[this.#scanChunk];
+-			while (this.#scanOffset < chunk.length) {
+-				const byte = chunk[this.#scanOffset++];
+-				this.#scanned++;
+-				this.#matched = byte === HEADER_TERMINATOR[this.#matched] ? this.#matched + 1 : byte === 13 ? 1 : 0;
+-				if (this.#matched === 4) return this.#scanned - 4;
+-				if (this.#scanned >= MAX_HEADER_BYTES) {
+-					this.#fail(`JSON-RPC header exceeds ${MAX_HEADER_BYTES}-byte limit`);
+-				}
+-			}
+-			this.#scanChunk++;
+-			this.#scanOffset = 0;
+-		}
+-		return -1;
+-	}
+ 
+-	#dropFront(count: number): void {
+-		let consumed = 0;
+-		let remaining = count;
+-		while (consumed < this.#pendingChunks.length && this.#pendingChunks[consumed].length <= remaining) {
+-			remaining -= this.#pendingChunks[consumed++].length;
++			const messageText = MESSAGE_DECODER.decode(copyChunkRange(this.#pendingChunks, messageStart, messageEnd));
++			dropChunkFront(this.#pendingChunks, messageEnd);
++			this.#pendingLen -= messageEnd;
++			yield messageText;
+ 		}
+-		this.#pendingChunks.splice(0, consumed);
+-		if (remaining > 0) this.#pendingChunks[0] = this.#pendingChunks[0].subarray(remaining);
+-		this.#pendingLen -= count;
+-		this.#scanChunk = 0;
+-		this.#scanOffset = 0;
+-		this.#scanned = 0;
+-		this.#matched = 0;
+-		this.#messageStart = 0;
+-		this.#contentLength = undefined;
+-	}
+-
+-	#fail(message: string): never {
+-		this.#pendingChunks.length = 0;
+-		this.#pendingLen = 0;
+-		this.#failure = new MessageFramingError(message);
+-		throw this.#failure;
+ 	}
+ 
+-	/** Includes the current header so another reader can resume mid-body. */
++	/** The unparsed remainder, to persist when the reader stops. */
+ 	remainder(): Buffer {
+ 		return this.#pendingChunks.length === 0
+ 			? Buffer.alloc(0)
+diff --git a/packages/coding-agent/src/lsp/mux/daemon.ts b/packages/coding-agent/src/lsp/mux/daemon.ts
+index 75d9c1beda..130c7bec7d 100644
+--- a/packages/coding-agent/src/lsp/mux/daemon.ts
++++ b/packages/coding-agent/src/lsp/mux/daemon.ts
+@@ -78,27 +78,21 @@ function requestOnSocket(
+ 		reject(new Error(`LSP mux ${request.method} timed out`));
+ 	}, timeoutMs);
+ 	const onData = (chunk: Buffer) => {
+-		try {
+-			framer.push(chunk);
+-			for (const text of framer.drain(() => {})) {
+-				let message: LspJsonRpcResponse;
+-				try {
+-					message = JSON.parse(text);
+-				} catch (error) {
+-					cleanup();
+-					reject(error instanceof Error ? error : new Error(String(error)));
+-					return;
+-				}
+-				if (message.id !== request.id) continue;
++		framer.push(chunk);
++		for (const text of framer.drain(() => {})) {
++			let message: LspJsonRpcResponse;
++			try {
++				message = JSON.parse(text);
++			} catch (error) {
+ 				cleanup();
+-				if (message.error) reject(new Error(`LSP mux ${request.method} failed: ${message.error.message}`));
+-				else resolve({ response: message, leftover: framer.remainder() });
++				reject(error instanceof Error ? error : new Error(String(error)));
+ 				return;
+ 			}
+-		} catch (error) {
++			if (message.id !== request.id) continue;
+ 			cleanup();
+-			socket.destroy();
+-			reject(error instanceof Error ? error : new Error(String(error)));
++			if (message.error) reject(new Error(`LSP mux ${request.method} failed: ${message.error.message}`));
++			else resolve({ response: message, leftover: framer.remainder() });
++			return;
+ 		}
+ 	};
+ 	const onClose = () => {
+diff --git a/packages/coding-agent/src/lsp/mux/server.ts b/packages/coding-agent/src/lsp/mux/server.ts
+index 67637a27f9..b82b9fff26 100644
+--- a/packages/coding-agent/src/lsp/mux/server.ts
++++ b/packages/coding-agent/src/lsp/mux/server.ts
+@@ -277,24 +277,19 @@ export class LspMuxServer {
+ 		this.#sessions.add(session);
+ 		this.#disarmMuxIdle();
+ 		socket.on("data", chunk => {
+-			try {
+-				session.framer.push(Buffer.from(chunk));
+-				for (const text of session.framer.drain(header => {
+-					logger.warn("LSP mux client framing resync", { header: header.slice(0, 200) });
+-				})) {
+-					try {
+-						const parsed: unknown = JSON.parse(text);
+-						if (!isRecord(parsed) || parsed.jsonrpc !== "2.0") throw new Error("invalid JSON-RPC message");
+-						void this.#fromSession(session, parsed as unknown as RpcMessage).catch(error => {
+-							logger.warn("LSP mux client message handling failed", { error: String(error) });
+-						});
+-					} catch (error) {
+-						logger.warn("LSP mux client sent malformed JSON", { error: String(error) });
+-					}
++			session.framer.push(Buffer.from(chunk));
++			for (const text of session.framer.drain(header => {
++				logger.warn("LSP mux client framing resync", { header: header.slice(0, 200) });
++			})) {
++				try {
++					const parsed: unknown = JSON.parse(text);
++					if (!isRecord(parsed) || parsed.jsonrpc !== "2.0") throw new Error("invalid JSON-RPC message");
++					void this.#fromSession(session, parsed as unknown as RpcMessage).catch(error => {
++						logger.warn("LSP mux client message handling failed", { error: String(error) });
++					});
++				} catch (error) {
++					logger.warn("LSP mux client sent malformed JSON", { error: String(error) });
+ 				}
+-			} catch (error) {
+-				logger.warn("LSP mux client framing failed", { error: String(error) });
+-				socket.destroy();
+ 			}
+ 		});
+ 		socket.on("error", error => logger.warn("LSP mux session socket error", { error: error.message }));
+@@ -477,7 +472,6 @@ export class LspMuxServer {
+ 			}
+ 		} catch (error) {
+ 			logger.warn("LSP mux server reader failed", { server: server.key, error: String(error) });
+-			this.#killServer(server);
+ 		} finally {
+ 			reader.releaseLock();
+ 		}
+diff --git a/packages/coding-agent/test/message-framing.test.ts b/packages/coding-agent/test/message-framing.test.ts
+deleted file mode 100644
+index 4a8a8d38f0..0000000000
+--- a/packages/coding-agent/test/message-framing.test.ts
++++ /dev/null
+@@ -1,92 +0,0 @@
+-import { describe, expect, it } from "bun:test";
+-import { MessageFramer } from "../src/jsonrpc/message-framing";
+-
+-function frame(text: string): Buffer {
+-	return Buffer.from(`Content-Length: ${Buffer.byteLength(text)}\r\n\r\n${text}`);
+-}
+-
+-describe("MessageFramer", () => {
+-	it("recognizes a header terminator split into single-byte reads", () => {
+-		const framer = new MessageFramer(Buffer.alloc(0));
+-		const bytes = Buffer.from(
+-			"Content-Type: application/vscode-jsonrpc; charset=utf-8\r\ncontent-length:\t2\r\n\r\n{}",
+-		);
+-		const messages: string[] = [];
+-		for (const byte of bytes) {
+-			framer.push(Buffer.from([byte]));
+-			messages.push(...framer.drain(() => {}));
+-		}
+-		expect(messages).toEqual(["{}"]);
+-	});
+-
+-	it("accepts a header at the size limit and rejects one byte beyond it", () => {
+-		const suffix = "\r\nContent-Length: 2\r\n\r\n";
+-		const header = "X-Trace: ".padEnd(16 * 1024 - suffix.length, "x") + suffix;
+-		const accepted = new MessageFramer(Buffer.from(`${header}{}`));
+-		expect([...accepted.drain(() => {})]).toEqual(["{}"]);
+-		const rejected = new MessageFramer(Buffer.from(`X${header}{}`));
+-		expect(() => [...rejected.drain(() => {})]).toThrow(/header.*limit/i);
+-	});
+-	it("preserves UTF-8 and coalesced messages at every byte boundary", () => {
+-		const texts = ['{"text":"🌍你好"}', '{"id":2}'];
+-		const input = Buffer.concat(texts.map(frame));
+-		for (let split = 0; split <= input.length; split++) {
+-			const framer = new MessageFramer(input.subarray(0, split));
+-			const output = [...framer.drain(() => {})];
+-			framer.push(input.subarray(split));
+-			output.push(...framer.drain(() => {}));
+-			expect(output).toEqual(texts);
+-			expect(framer.remainder()).toEqual(Buffer.alloc(0));
+-		}
+-	});
+-
+-	it("resumes from an incomplete body after a reader restart", () => {
+-		const text = '{"text":"αβγ"}';
+-		const input = frame(text);
+-		const framer = new MessageFramer(input.subarray(0, input.length - 3));
+-		expect([...framer.drain(() => {})]).toEqual([]);
+-		const resumed = new MessageFramer(framer.remainder());
+-		resumed.push(input.subarray(input.length - 3));
+-		expect([...resumed.drain(() => {})]).toEqual([text]);
+-	});
+-
+-	it("resynchronizes after bounded stdout noise", () => {
+-		const framer = new MessageFramer(Buffer.concat([Buffer.from("wrapper log\r\n\r\n"), frame("{}")]));
+-		const headers: string[] = [];
+-		expect([...framer.drain(header => headers.push(header))]).toEqual(["{}"]);
+-		expect(headers).toEqual(["wrapper log"]);
+-	});
+-
+-	it("rejects oversized incomplete headers and releases their bytes", () => {
+-		const framer = new MessageFramer(Buffer.alloc(0));
+-		framer.push(Buffer.alloc(16 * 1024, 97));
+-		expect(() => [...framer.drain(() => {})]).toThrow(/header.*limit/i);
+-		expect(framer.remainder()).toEqual(Buffer.alloc(0));
+-		expect(() => framer.push(frame("{}"))).toThrow(/header.*limit/i);
+-	});
+-
+-	for (const length of ["268435457", "-1", "1.5"]) {
+-		it(`rejects invalid or excessive Content-Length ${length} before receiving a body`, () => {
+-			const framer = new MessageFramer(Buffer.from(`Content-Length: ${length}\r\n\r\n`));
+-			expect(() => [...framer.drain(() => {})]).toThrow(/Content-Length/);
+-			expect(framer.remainder()).toEqual(Buffer.alloc(0));
+-		});
+-	}
+-
+-	it("rejects ambiguous duplicate lengths", () => {
+-		const framer = new MessageFramer(Buffer.from("Content-Length: 2\r\nContent-Length: 3\r\n\r\n{}x"));
+-		expect(() => [...framer.drain(() => {})]).toThrow(/Content-Length/);
+-	});
+-
+-	it("decodes large valid messages incrementally without confusing body delimiters for headers", () => {
+-		const text = JSON.stringify({ text: "🌍\r\n\r\n".repeat(512 * 1024) });
+-		const input = frame(text);
+-		const framer = new MessageFramer(Buffer.alloc(0));
+-		const output: string[] = [];
+-		for (let offset = 0; offset < input.length; offset += 4096) {
+-			framer.push(input.subarray(offset, offset + 4096));
+-			output.push(...framer.drain(() => {}));
+-		}
+-		expect(output).toEqual([text]);
+-	});
+-});

@@ -1,0 +1,16 @@
+{
+  "task_id": "b-05",
+  "category": "resume",
+  "title": "A rotated Cursor conversation replays the last user message and loses finished tool work",
+  "source_commit": "665a652de4e45ec96f80e7ae28d43baebdd95868",
+  "runner": "bun",
+  "test_target": "packages/ai/test/cursor-conversation-rotate.test.ts",
+  "source_paths": [
+    "packages/ai/src/providers/cursor.ts"
+  ],
+  "instruction": "When a Cursor conversation id is rotated after a failed turn, the retry starts the turn again from the last user message. Every tool call and result after that message is dropped from what the model sees, so it redoes work it already finished. A retry on the fresh id should resume from the same completed history. A cached mid-turn checkpoint under the new id must not be reused.",
+  "acceptance_criteria": [
+    "After a rotation the retry sends the identical rebuilt history and does not replay the last user message.",
+    "A checkpoint cached under the fresh id is not used."
+  ]
+}

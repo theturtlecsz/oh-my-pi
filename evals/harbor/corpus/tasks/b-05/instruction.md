@@ -1,0 +1,1 @@
+When a Cursor conversation id is rotated after a failed turn, the retry starts the turn again from the last user message. Every tool call and result after that message is dropped from what the model sees, so it redoes work it already finished. A retry on the fresh id should resume from the same completed history. A cached mid-turn checkpoint under the new id must not be reused.

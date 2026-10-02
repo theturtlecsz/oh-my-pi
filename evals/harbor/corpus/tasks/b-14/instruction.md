@@ -1,0 +1,1 @@
+Parsing slightly broken XML now loses data. When an element such as an unclosed br sits inside a paragraph, the closing tag of the paragraph no longer ends the paragraph, and the rest of the document is swallowed into the wrong element. The reader used to recover from this. Restore that recovery without making it loop.

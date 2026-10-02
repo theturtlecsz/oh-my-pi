@@ -1,0 +1,23 @@
+{
+  "project": {
+    "project_id": "00000000-0000-7000-8000-0000000000b1",
+    "name": "The Bookends",
+    "kind": "surface"
+  },
+  "items": [
+    {
+      "key": "OMP-1",
+      "work_id": "00000000-0000-7000-8000-000000000001",
+      "revision_id": "00000000-0000-7000-8000-000000000010",
+      "revision_number": 1,
+      "title": "The designate message cannot be signed straight from the command output",
+      "description": "The owner flow prints a designation message that I must sign and give back to the designate step. When I sign exactly what the command printed, designate says the signature is not valid. Make what the command prints directly signable.",
+      "scope": "initial/scope",
+      "acceptance_criteria": [
+        "The bytes written to stdout are the designation message that designate verifies.",
+        "A signature over the printed output is accepted by designate."
+      ],
+      "state": "IN_PROGRESS"
+    }
+  ]
+}

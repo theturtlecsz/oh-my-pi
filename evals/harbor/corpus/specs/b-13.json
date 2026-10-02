@@ -1,0 +1,17 @@
+{
+  "task_id": "b-13",
+  "category": "seeded_defect",
+  "title": "Windows-authored bracket math blocks are no longer recognised",
+  "source_commit": "e85ce0813e6ca22d015cd58c49a86cb9e6b5badc",
+  "runner": "bun",
+  "test_target": "packages/utils/test/math-delimiters.test.ts",
+  "source_paths": [
+    "packages/utils/src/math-delimiters.ts"
+  ],
+  "instruction": "Notes that were saved with Windows line endings lose their display math. A block whose delimiter lines are alone on their line renders as plain text when the lines end in carriage return plus line feed. This worked before and only fails for one of the two block forms. Find the cause and restore it.",
+  "acceptance_criteria": [
+    "Both own-line display math forms are recognised when their lines end in CRLF.",
+    "The raw text and the body of the matched block are unchanged."
+  ],
+  "defect_patch": "evals/harbor/corpus/specs/b-13.defect.patch"
+}

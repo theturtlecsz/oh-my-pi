@@ -1,0 +1,16 @@
+{
+  "task_id": "b-04",
+  "category": "security_concurrency",
+  "title": "Any directory that fakes a git pointer is treated as a trusted project",
+  "source_commit": "823dc8e3831a977ad276e64d37927ae554e05f5a",
+  "runner": "bun",
+  "test_target": "packages/coding-agent/test/config/project-trust.test.ts",
+  "source_paths": [
+    "packages/coding-agent/src/config/project-trust.ts"
+  ],
+  "instruction": "Project trust follows linked git worktrees: a worktree of a trusted repository counts as trusted. A directory I made by hand, with a .git file that only points at a trusted repository or at a worktree admin directory of it, is also treated as trusted, so it can run project config and extensions without a prompt. Only genuine linked worktrees may inherit trust. Also, a trusted-projects file with a wrong format marker should not be read as a trust list.",
+  "acceptance_criteria": [
+    "A directory with a spoofed gitdir pointer, or one that borrows another worktree's admin directory, is not trusted.",
+    "A trusted-projects file whose format marker is not the supported number is ignored."
+  ]
+}

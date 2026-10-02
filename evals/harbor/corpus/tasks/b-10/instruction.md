@@ -1,0 +1,1 @@
+With Cursor models, a turn that ends early after tools ran is reported as a plain failure. Other providers get an automatic continuation in the same situation. Cursor should be treated the same way when its stream ends early.

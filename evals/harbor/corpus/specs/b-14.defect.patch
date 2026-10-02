@@ -1,0 +1,17 @@
+diff --git a/packages/utils/src/xml.ts b/packages/utils/src/xml.ts
+index 0e23bd100b..2f103569c4 100644
+--- a/packages/utils/src/xml.ts
++++ b/packages/utils/src/xml.ts
+@@ -165,9 +165,9 @@ class XmlReader {
+ 					break;
+ 				}
+ 				if (this.#xml.startsWith("</", this.#position)) {
+-					// End tag for an ancestor (an unclosed `<br>` inside `<p>`, or plain mismatched
+-					// markup): close this element implicitly and leave the tag to its owner.
+-					break;
++					// End tag that does not match this element: skip it and keep reading.
++					this.#skipThrough(">");
++					continue;
+ 				}
+ 				if (this.#xml.startsWith("<![CDATA[", this.#position)) {
+ 					const end = this.#xml.indexOf("]]>", this.#position + 9);
