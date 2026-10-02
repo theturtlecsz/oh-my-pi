@@ -15,7 +15,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 import psycopg
@@ -108,6 +108,37 @@ def _summary_names_resource(summary: str, resource_id: str) -> bool:
     except json.JSONDecodeError:
         return False
     return isinstance(parsed, dict) and parsed.get("resource_id") == resource_id
+
+
+def media_discovery_project_ids(
+    cur: psycopg.Cursor[Any], workspace_id: UUID
+) -> frozenset[UUID]:
+    """The unarchived project with key 'media-discovery', plus every target of
+
+    an active omp_work.project_relations row of kind initiative_project whose
+    source is that project; no keyed project gives an empty set.
+    """
+    cur.execute(
+        "SELECT p.project_id"
+        " FROM omp_work.projects p"
+        " WHERE p.workspace_id = %s AND p.key = 'media-discovery' AND NOT p.archived"
+        " UNION"
+        " SELECT pr.target_project_id AS project_id"
+        " FROM omp_work.project_relations pr"
+        " JOIN omp_work.projects p"
+        "   ON p.workspace_id = pr.workspace_id AND p.project_id = pr.source_project_id"
+        " WHERE pr.workspace_id = %s"
+        "   AND pr.kind = 'initiative_project'"
+        "   AND pr.active"
+        "   AND p.key = 'media-discovery'"
+        "   AND NOT p.archived",
+        (workspace_id, workspace_id),
+    )
+    rows = cur.fetchall()
+    return frozenset(
+        UUID(str(row["project_id"] if isinstance(row, dict) else row[0]))
+        for row in rows
+    )
 
 
 class ProjectAuthorityRefused(WorkStoreError):

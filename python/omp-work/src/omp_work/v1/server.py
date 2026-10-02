@@ -266,8 +266,8 @@ def create_app(
         )
 
     @app.get("/v1/workspaces/{workspace_id}/tree")
-    def tree(request: Request, workspace_id: UUID) -> JSONResponse:
-        return read_route(request, workspace_id, "tree", "")
+    def tree(request: Request, workspace_id: UUID, world: str = "") -> JSONResponse:
+        return read_route(request, workspace_id, "tree", world)
 
     @app.get("/v1/workspaces/{workspace_id}/focus/{owner_id}")
     def focus(request: Request, workspace_id: UUID, owner_id: UUID) -> JSONResponse:
