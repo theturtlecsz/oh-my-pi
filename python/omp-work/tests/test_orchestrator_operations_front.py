@@ -11,6 +11,9 @@ Defends front pipeline contracts:
 - crash_after_command("begin_execution") leaves one active grant and one begin_execution command row.
 - a grant already begun on the item leaves no mission grant row.
 - a foreign grant at the mission grant id claiming another item fails the grant step with code grant_foreign, leaves the grant's state and grant_version unchanged, and writes exactly one execution_grants row.
+- replay of paused grant fails the grant step with execution_grant_inactive and leaves the grant paused with one begin_execution row.
+- replay of expired grant fails the grant step with execution_grant_inactive and leaves grant_version unchanged.
+- replay with changed verifier mode fails the grant step with judge_manifest_drift and leaves one grant row and one begin_execution row.
 """
 
 from __future__ import annotations
@@ -51,6 +54,7 @@ from orchestrator_e2e_support import (
     open_e2e_world,
     open_worker,
     seed_published_budget,
+    set_verifier_mode,
     tick_until,
 )
 from test_workflow_service import OWNER
@@ -1162,4 +1166,171 @@ def test_foreign_grant_at_mission_id_fails_grant_foreign(
     assert rows[0]["grant_version"] == 1
     assert rows[0]["state"] == "active"
     assert len(_begin_rows(world)) == 1
+
+
+def test_replay_paused_grant_fails_execution_grant_inactive(
+    service, tmp_path: Path, monkeypatch
+) -> None:
+    """A crash followed by set_execution_state paused fails replay with execution_grant_inactive."""
+    world, worker, _work_id = _open_front(
+        service, tmp_path / "grant_paused", monkeypatch, extra_capability=None
+    )
+
+    def plan_ran(view: dict) -> bool:
+        return any(
+            step.get("stage") == "plan" and step.get("kind") == "outcome"
+            for step in view["steps"]
+        )
+
+    tick_until(worker, world, plan_ran, limit=20)
+    crash_after_command(monkeypatch, "begin_execution")
+    with pytest.raises(SimulatedCrash):
+        worker.tick()
+    _expire_lease(world)
+
+    gid = _grant_id(world)
+    judged = judge_manifest(world.config)
+    assert judged is not None
+    judge_sha, _manifest = judged
+    world.store.execute(
+        CommandEnvelope.model_validate(
+            {
+                "api_version": "work.omp.dev/v1",
+                "workspace_id": str(world.workspace_id),
+                "operation_id": str(uuid4()),
+                "request_id": str(uuid4()),
+                "correlation_id": str(uuid4()),
+                "command": {
+                    "type": "set_execution_state",
+                    "payload": {
+                        "grant_id": str(gid),
+                        "expected_grant_version": 1,
+                        "target_state": "paused",
+                        "judge_sha256": judge_sha,
+                    },
+                },
+            }
+        ),
+        actor_id=OWNER,
+        actor_kind="automation",
+        required_scope="work.execute",
+    )
+
+    worker.tick()
+
+    handler = OrchestratorHandler(world.config)
+    handler.mission_id = world.mission_id
+    grant_step = next(
+        step
+        for step in handler.steps()
+        if step.get("stage") == "grant" and step.get("kind") == "outcome"
+    )
+    assert grant_step["outcome"] == "failed"
+    assert grant_step["data"]["code"] == "execution_grant_inactive"
+
+    rows = _grant_rows(world)
+    assert len(rows) == 1
+    assert rows[0]["grant_id"] == gid
+    assert rows[0]["state"] == "paused"
+    assert len(_begin_rows(world)) == 1
+
+
+def test_replay_expired_grant_fails_execution_grant_inactive(
+    service, tmp_path: Path, monkeypatch
+) -> None:
+    """A crash followed by SQL expiry of the grant fails replay with execution_grant_inactive."""
+    world, worker, _work_id = _open_front(
+        service, tmp_path / "grant_expired", monkeypatch, extra_capability=None
+    )
+
+    def plan_ran(view: dict) -> bool:
+        return any(
+            step.get("stage") == "plan" and step.get("kind") == "outcome"
+            for step in view["steps"]
+        )
+
+    tick_until(worker, world, plan_ran, limit=20)
+    crash_after_command(monkeypatch, "begin_execution")
+    with pytest.raises(SimulatedCrash):
+        worker.tick()
+    _expire_lease(world)
+
+    gid = _grant_id(world)
+    with psycopg.connect(
+        **world.config.ops.connection_kwargs("postgres"), autocommit=True
+    ) as conn:
+        conn.execute(
+            "ALTER TABLE omp_work.execution_grants DISABLE TRIGGER enforce_execution_grant_transition_trigger"
+        )
+        try:
+            conn.execute(
+                "UPDATE omp_work.execution_grants SET expires_at = clock_timestamp() - interval '1 second' "
+                "WHERE workspace_id = %s AND grant_id = %s",
+                (world.workspace_id, gid),
+            )
+        finally:
+            conn.execute(
+                "ALTER TABLE omp_work.execution_grants ENABLE TRIGGER enforce_execution_grant_transition_trigger"
+            )
+
+    worker.tick()
+
+    handler = OrchestratorHandler(world.config)
+    handler.mission_id = world.mission_id
+    grant_step = next(
+        step
+        for step in handler.steps()
+        if step.get("stage") == "grant" and step.get("kind") == "outcome"
+    )
+    assert grant_step["outcome"] == "failed"
+    assert grant_step["data"]["code"] == "execution_grant_inactive"
+
+    rows = _grant_rows(world)
+    assert len(rows) == 1
+    assert rows[0]["grant_id"] == gid
+    assert rows[0]["grant_version"] == 1
+    assert rows[0]["state"] == "active"
+    assert len(_begin_rows(world)) == 1
+
+
+def test_replay_judge_manifest_drift_fails(
+    service, tmp_path: Path, monkeypatch
+) -> None:
+    """A crash followed by verifier mode change and new worker fails with judge_manifest_drift."""
+    world, worker, _work_id = _open_front(
+        service, tmp_path / "grant_drift", monkeypatch, extra_capability=None
+    )
+
+    def plan_ran(view: dict) -> bool:
+        return any(
+            step.get("stage") == "plan" and step.get("kind") == "outcome"
+            for step in view["steps"]
+        )
+
+    tick_until(worker, world, plan_ran, limit=20)
+    crash_after_command(monkeypatch, "begin_execution")
+    with pytest.raises(SimulatedCrash):
+        worker.tick()
+    _expire_lease(world)
+
+    gid = _grant_id(world)
+    set_verifier_mode(world, "fail")
+    worker = open_worker(world)
+    worker.tick()
+
+    handler = OrchestratorHandler(world.config)
+    handler.mission_id = world.mission_id
+    grant_step = next(
+        step
+        for step in handler.steps()
+        if step.get("stage") == "grant" and step.get("kind") == "outcome"
+    )
+    assert grant_step["outcome"] == "failed"
+    assert grant_step["data"]["code"] == "judge_manifest_drift"
+
+    rows = _grant_rows(world)
+    assert len(rows) == 1
+    assert rows[0]["grant_id"] == gid
+    assert len(_begin_rows(world)) == 1
+
 
