@@ -10,20 +10,33 @@ Defends front pipeline contracts:
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
 import json
 import os
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import psycopg
 import pytest
-from omp_work.orchestrator import service
-from omp_work.orchestrator.operations import run_confirm, run_intake, run_plan
+import omp_work
+from omp_work import control_actions
+from omp_work.operations import database, fingerprints
+from omp_work.orchestrator import candidate_git, operations, service, verifier, worker_sandbox
+from omp_work.orchestrator.operations import (
+    judge_manifest,
+    run_confirm,
+    run_intake,
+    run_plan,
+)
 from omp_work.orchestrator.service import (
+    OrchestratorConfig,
     OrchestratorHandler,
     load_request,
     submit,
 )
+from omp_work.v1.canonical import sha256
+from omp_work.v1.models import ExecutionJudgeManifest
 from orchestrator_e2e_support import (
     SimulatedCrash,
     answer_intake,
@@ -644,4 +657,73 @@ def test_plan_missing_approved_scope_fails() -> None:
     outcome = run_plan(DummyContext())  # type: ignore[arg-type]
     assert outcome.outcome == "failed"
     assert outcome.data.get("code") == "mission_not_admitted"
+
+
+def test_judge_manifest_tcb_contract(tmp_path: Path) -> None:
+    """Judge manifest matches sealed TCB formulas, validates against ExecutionJudgeManifest, and isolates verifier_argv."""
+    config = OrchestratorConfig(
+        workspace_id=uuid4(),
+        automation_capability_path=tmp_path / "automation.json",
+        qualification_path=tmp_path / "qualification.json",
+        lock_map_path=tmp_path / "lock_map.json",
+        verifier_key_path=tmp_path / "verifier.key",
+        allowed_signers=tmp_path / "allowed_signers",
+        control_repo=tmp_path / "control_repo",
+        worktrees_dir=tmp_path / "worktrees",
+        live_checkout=tmp_path / "live_checkout",
+        verifier_argv=("python", "-m", "omp_work.orchestrator.verifier", "--strict"),
+    )
+
+    def file_bytes_sha256(module: object) -> str:
+        mod_file = getattr(module, "__file__", None)
+        assert mod_file is not None
+        p = Path(mod_file)
+        if p.suffix in (".pyc", ".pyo"):
+            p = p.with_suffix(".py")
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+
+    expected_auditor = sha256(
+        {
+            "verifier_argv": list(config.verifier_argv),
+            "verifier_sha256": file_bytes_sha256(verifier),
+        }
+    )
+    expected = {
+        "auditor_agent_sha256": expected_auditor,
+        "host_sha256": file_bytes_sha256(service),
+        "adapter_sha256": file_bytes_sha256(operations),
+        "freeze_sha256": file_bytes_sha256(candidate_git),
+        "runner_sha256": file_bytes_sha256(worker_sandbox),
+        "executor_sha256": file_bytes_sha256(control_actions),
+        "contract_sha256": omp_work.contract_sha256(),
+        "service_fingerprint": fingerprints.service_runtime_fingerprint(),
+        "service_code_fingerprint": fingerprints.code_fingerprint(),
+        "service_migration_sha256": database.migration_set_sha256(),
+    }
+
+    result = judge_manifest(config)
+    assert result is not None
+    manifest_sha, manifest = result
+    assert result == (sha256(expected), expected)
+    validated = ExecutionJudgeManifest(**manifest)
+    assert validated.auditor_agent_sha256 == expected["auditor_agent_sha256"]
+
+    # A different verifier_argv changes auditor_agent_sha256 and no other field
+    different_config = dataclasses.replace(
+        config,
+        verifier_argv=("python", "-m", "omp_work.orchestrator.verifier", "--other"),
+    )
+    different_result = judge_manifest(different_config)
+    assert different_result is not None
+    diff_sha, diff_manifest = different_result
+    assert diff_manifest["auditor_agent_sha256"] != manifest["auditor_agent_sha256"]
+    for key in manifest:
+        if key == "auditor_agent_sha256":
+            assert diff_manifest[key] != manifest[key]
+        else:
+            assert diff_manifest[key] == manifest[key]
+
+    # verifier_argv () -> None
+    empty_config = dataclasses.replace(config, verifier_argv=())
+    assert judge_manifest(empty_config) is None
 
