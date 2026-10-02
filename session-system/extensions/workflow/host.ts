@@ -3848,7 +3848,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 							return okText((await backend.waitingLines()).join("\n"));
 						}
 						case "tree": {
-							return okText((await backend.projectTreeLines()).join("\n"));
+							return okText((await backend.projectTreeLines(params.project ?? projectFilter ?? undefined)).join("\n"));
 						}
 						case "list_work": {
 							if (!params.project) return deny("project required");
