@@ -14,7 +14,7 @@
 // Exit codes: 0 clean, 1 conflicts, 2 usage/unresolvable target (with a fetch hint).
 
 import { type InventoryRow, type InventoryScope, parseInventoryTsv } from "./upstream-inventory.ts";
-import { parseMergeTreeConflicts } from "./verify-upstream-handoff.ts";
+import { normalizeNoRenameConflicts, parseMergeTreeConflicts } from "./verify-upstream-handoff.ts";
 
 export type ConflictScope = InventoryScope | "uninventoried";
 
@@ -142,7 +142,24 @@ async function main(): Promise<void> {
 		failUsage(`git merge-tree failed: ${mergeTree.stderr.trim()}`, upstreamRepo, args.target);
 	}
 
-	const conflicts = classifyConflicts(parseMergeTreeConflicts(mergeTree.stdout), rows);
+	// Some git versions still detect renames under `merge-tree -X no-renames`; the
+	// raw diffs put the reported paths back on --no-renames identity.
+	const forkRaw = await git(["diff", "--raw", "--no-renames", "--abbrev=40", `${baseline.target}..${args.head}`]);
+	if (forkRaw.exitCode !== 0) failUsage(`git diff failed: ${forkRaw.stderr.trim()}`, upstreamRepo, args.target);
+	const targetRaw = await git(["diff", "--raw", "--no-renames", "--abbrev=40", `${baseline.target}..${args.target}`]);
+	if (targetRaw.exitCode !== 0) failUsage(`git diff failed: ${targetRaw.stderr.trim()}`, upstreamRepo, args.target);
+	const renameRaw = await git(["diff", "--raw", "-M", "--abbrev=40", `${baseline.target}..${args.target}`]);
+	if (renameRaw.exitCode !== 0) failUsage(`git diff failed: ${renameRaw.stderr.trim()}`, upstreamRepo, args.target);
+
+	const conflicts = classifyConflicts(
+		normalizeNoRenameConflicts(
+			parseMergeTreeConflicts(mergeTree.stdout),
+			forkRaw.stdout,
+			targetRaw.stdout,
+			renameRaw.stdout,
+		),
+		rows,
+	);
 	const target12 = args.target.slice(0, 12);
 	if (conflicts.length) {
 		for (const c of conflicts) console.log(`BROKEN ${c.path} [${c.scope}] ${c.behavior}`);
