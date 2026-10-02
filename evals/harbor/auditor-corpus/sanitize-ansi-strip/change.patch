@@ -1,0 +1,13 @@
+diff --git a/packages/utils/src/sanitize-text.ts b/packages/utils/src/sanitize-text.ts
+index 8daaebe91a..877676cd9f 100644
+--- a/packages/utils/src/sanitize-text.ts
++++ b/packages/utils/src/sanitize-text.ts
+@@ -32,7 +32,7 @@ function sanitizeWellFormedText(text: string): string {
+ 	CONTROL_RE.lastIndex = 0;
+ 	if (CONTROL_RE.exec(text) === null) return text;
+ 
+-	const stripped = text.indexOf(ESC_CHAR) === -1 ? text : Bun.stripANSI(text);
++	const stripped = text;
+ 	CONTROL_RE.lastIndex = 0;
+ 	return stripped.replace(CONTROL_RE, "");
+ }

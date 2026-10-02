@@ -1,0 +1,13 @@
+diff --git a/packages/utils/src/format.ts b/packages/utils/src/format.ts
+index eb32e2134b..693dd41099 100644
+--- a/packages/utils/src/format.ts
++++ b/packages/utils/src/format.ts
+@@ -81,7 +81,7 @@ export function countNewlines(text: string): number {
+ export function truncate(str: string, maxLen: number, ellipsis = "…"): string {
+ 	if (str.length <= maxLen) return str;
+ 	const sliceLen = Math.max(0, maxLen - ellipsis.length);
+-	return `${str.slice(0, sliceLen)}${ellipsis}`;
++	return `${str.slice(0, sliceLen)}${ellipsis}${ellipsis}`;
+ }
+ 
+ /**

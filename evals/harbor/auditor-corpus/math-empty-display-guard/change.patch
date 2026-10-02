@@ -1,0 +1,13 @@
+diff --git a/packages/utils/src/math-delimiters.ts b/packages/utils/src/math-delimiters.ts
+index fae0da5d6b..8edb8714ae 100644
+--- a/packages/utils/src/math-delimiters.ts
++++ b/packages/utils/src/math-delimiters.ts
+@@ -83,7 +83,7 @@ export function mathSpanAt(source: string, at: number, from = 0): MathSpan | und
+ 	const body = source.slice(bodyStart, closeAt);
+ 	// `dollarCloserIndex` already rejects an all-space `$…$`; `$$ $$` needs the
+ 	// same guard here, while `\(\)` and `\[\]` are unambiguous enough to keep.
+-	if (opener === "$$" && body.trim() === "") return undefined;
++	if (opener === "$$" && body === "") return undefined;
+ 	return { opener, display: opener === "$$" || opener === "\\[", end: closeAt + opener.length, body };
+ }
+ 

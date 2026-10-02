@@ -1,0 +1,13 @@
+diff --git a/packages/utils/src/incoming-json.ts b/packages/utils/src/incoming-json.ts
+index 8376b06245..46cc4a98d8 100644
+--- a/packages/utils/src/incoming-json.ts
++++ b/packages/utils/src/incoming-json.ts
+@@ -706,7 +706,7 @@ export class IncomingString implements AsyncIterable<string> {
+ 
+ 	/** Await the next stable decoded chunk, or `undefined` after the closing quote. */
+ 	nextChunk(): Promise<string | undefined> {
+-		return this.#serial.run(() => this.#nextChunk());
++		return this.#nextChunk();
+ 	}
+ 
+ 	/**

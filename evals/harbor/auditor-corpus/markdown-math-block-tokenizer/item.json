@@ -1,0 +1,17 @@
+{
+  "item_id": "markdown-math-block-tokenizer",
+  "category": "missing_test",
+  "task": "The TUI math block extension must tokenize an unclosed display block as literal text.",
+  "acceptance_criteria": [
+    "an unterminated '$$' block stays verbatim, not tokenized as math"
+  ],
+  "defects": [
+    {
+      "path": "packages/tui/src/components/markdown.ts",
+      "line_start": 614,
+      "line_end": null,
+      "severity": "LOW"
+    }
+  ],
+  "exposing_test": null
+}

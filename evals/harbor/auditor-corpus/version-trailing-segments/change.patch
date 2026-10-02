@@ -1,0 +1,13 @@
+diff --git a/packages/utils/src/version.ts b/packages/utils/src/version.ts
+index 15088117ea..e897aecca1 100644
+--- a/packages/utils/src/version.ts
++++ b/packages/utils/src/version.ts
+@@ -49,7 +49,7 @@ function parseVersion(version: string): ParsedVersion {
+ 
+ /** Compare dot-separated numeric segments; missing/malformed segments count as 0. */
+ function compareNumericParts(a: string[], b: string[]): number {
+-	const length = Math.max(a.length, b.length);
++	const length = a.length;
+ 	for (let i = 0; i < length; i++) {
+ 		// Missing or malformed segments compare as 0.
+ 		const sa = a[i];
