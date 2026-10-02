@@ -14,6 +14,9 @@ Defends front pipeline contracts:
 - replay of paused grant fails the grant step with execution_grant_inactive and leaves the grant paused with one begin_execution row.
 - replay of expired grant fails the grant step with execution_grant_inactive and leaves grant_version unchanged.
 - replay with changed verifier mode fails the grant step with judge_manifest_drift and leaves one grant row and one begin_execution row.
+- edited_draft drives the grant's item past criteria_pending: criteria_revision_id is set and that revision's acceptance criteria equal the request's.
+- crash_after_command("seal_execution_criteria") followed by a reclaimed lease leaves criteria_revision_id unchanged and one seal row with conflict_count 0.
+- empty work.acceptance_criteria fails the grant step with criteria_missing and leaves the item in criteria_pending.
 """
 
 from __future__ import annotations
@@ -804,6 +807,61 @@ def _begin_rows(world) -> list[dict]:
         return list(cur.fetchall())
 
 
+def _seal_rows(world) -> list[dict]:
+    with psycopg.connect(
+        **world.config.ops.connection_kwargs("postgres"), row_factory=dict_row
+    ) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT operation_id::text AS operation_id, conflict_count
+            FROM omp_control.idempotent_commands
+            WHERE workspace_id = %s AND command_type = 'seal_execution_criteria'
+            """,
+            (world.workspace_id,),
+        )
+        return list(cur.fetchall())
+
+
+def _grant_item_rows(world, gid: str) -> list[dict]:
+    with psycopg.connect(
+        **world.config.ops.connection_kwargs("postgres"), row_factory=dict_row
+    ) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT work_id::text AS work_id, phase,
+                   claimed_revision_id::text AS claimed_revision_id,
+                   criteria_revision_id::text AS criteria_revision_id
+            FROM omp_work.execution_grant_items
+            WHERE workspace_id = %s AND grant_id = %s
+            ORDER BY position
+            """,
+            (world.workspace_id, gid),
+        )
+        return list(cur.fetchall())
+
+
+def _revision_criteria(world, revision_id: str) -> list[str]:
+    with psycopg.connect(
+        **world.config.ops.connection_kwargs("postgres"), row_factory=dict_row
+    ) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT criterion FROM omp_work.acceptance_criteria "
+            "WHERE revision_id = %s ORDER BY position",
+            (revision_id,),
+        )
+        return [str(row["criterion"]) for row in cur.fetchall()]
+
+
+def _grant_step_outcome(world) -> dict:
+    handler = OrchestratorHandler(world.config)
+    handler.mission_id = world.mission_id
+    return next(
+        step
+        for step in handler.steps()
+        if step.get("stage") == "grant" and step.get("kind") == "outcome"
+    )
+
+
 def _json_obj(value):
     if isinstance(value, str):
         return json.loads(value)
@@ -1332,5 +1390,121 @@ def test_replay_judge_manifest_drift_fails(
     assert len(rows) == 1
     assert rows[0]["grant_id"] == gid
     assert len(_begin_rows(world)) == 1
+
+
+def test_edited_draft_grant_seals_criteria_revision(
+    service, tmp_path: Path, monkeypatch
+) -> None:
+    """Edited draft: the grant's item leaves criteria_pending with the request criteria sealed."""
+    world, worker, _work_id = _open_front(
+        service, tmp_path / "grant_criteria", monkeypatch, extra_capability="egress"
+    )
+
+    def paused_confirm(view: dict) -> bool:
+        return any(
+            step.get("kind") == "pause" and step.get("rule_id") == "d23-owner-confirm"
+            for step in view["steps"]
+        )
+
+    tick_until(worker, world, paused_confirm, limit=20)
+    intake_data = _intake_data(world)
+    world.intake_decision_id = UUID(str(intake_data["decision_id"]))
+    world.mission_revision = int(intake_data["mission_revision"])
+    answer_intake(world, "edited_draft")
+
+    def grant_ran(view: dict) -> bool:
+        return any(
+            step.get("stage") == "grant" and step.get("kind") == "outcome"
+            for step in view["steps"]
+        )
+
+    tick_until(worker, world, grant_ran, limit=40)
+
+    gid = _grant_id(world)
+    items = _grant_item_rows(world, gid)
+    assert len(items) == 1
+    item = items[0]
+    assert item["phase"] != "criteria_pending"
+    assert item["criteria_revision_id"] is not None
+    assert item["criteria_revision_id"] == item["claimed_revision_id"]
+    assert _revision_criteria(world, item["criteria_revision_id"]) == list(
+        world.request.work.acceptance_criteria
+    )
+
+
+def test_crash_after_seal_execution_criteria_replays(
+    service, tmp_path: Path, monkeypatch
+) -> None:
+    """Crash after seal_execution_criteria: replay leaves criteria_revision_id and one seal row."""
+    world, worker, _work_id = _open_front(
+        service, tmp_path / "grant_seal_crash", monkeypatch, extra_capability=None
+    )
+
+    def plan_ran(view: dict) -> bool:
+        return any(
+            step.get("stage") == "plan" and step.get("kind") == "outcome"
+            for step in view["steps"]
+        )
+
+    tick_until(worker, world, plan_ran, limit=20)
+    crash_after_command(monkeypatch, "seal_execution_criteria")
+    with pytest.raises(SimulatedCrash):
+        worker.tick()
+
+    gid = _grant_id(world)
+    sealed = _grant_item_rows(world, gid)[0]
+    assert sealed["criteria_revision_id"] is not None
+    sealed_revision = sealed["criteria_revision_id"]
+
+    _expire_lease(world)
+    worker.tick()
+
+    replayed = _grant_item_rows(world, gid)[0]
+    assert replayed["criteria_revision_id"] == sealed_revision
+    assert replayed["phase"] == "planning"
+
+    seals = _seal_rows(world)
+    assert len(seals) == 1
+    assert seals[0]["conflict_count"] == 0
+
+
+def test_empty_work_criteria_fails_criteria_missing(
+    service, tmp_path: Path, monkeypatch
+) -> None:
+    """Empty work.acceptance_criteria fails the grant step with criteria_missing, phase unchanged."""
+    world = open_e2e_world(
+        service,
+        tmp_path / "grant_no_criteria",
+        monkeypatch,
+        verifier_mode="pass",
+        worker_mode="ok",
+        extra_capability=None,
+        operations=("omp_work.orchestrator.operations:register",),
+    )
+    empty_work = world.request.work.model_copy(update={"acceptance_criteria": ()})
+    world.request = dataclasses.replace(world.request, work=empty_work)
+
+    submitted = submit(world.config, world.request)
+    work_id = UUID(str(submitted["work_id"]))
+    _seed_item_budget(world, service, work_id)
+    worker = open_worker(world)
+
+    def grant_ran(view: dict) -> bool:
+        return any(
+            step.get("stage") == "grant" and step.get("kind") == "outcome"
+            for step in view["steps"]
+        )
+
+    tick_until(worker, world, grant_ran, limit=40)
+
+    outcome = _grant_step_outcome(world)
+    assert outcome["outcome"] == "failed"
+    assert outcome["data"]["code"] == "criteria_missing"
+
+    gid = _grant_id(world)
+    items = _grant_item_rows(world, gid)
+    assert len(items) == 1
+    assert items[0]["phase"] == "criteria_pending"
+    assert items[0]["criteria_revision_id"] is None
 
 

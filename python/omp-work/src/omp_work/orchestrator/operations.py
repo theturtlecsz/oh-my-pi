@@ -307,8 +307,11 @@ def grant_owned(ctx: StageContext, view: Mapping[str, Any]) -> bool:
     )
 
 
+_MAX_GRANT_PHASE_PASSES = 3
+
+
 def run_grant(ctx: StageContext) -> Outcome:
-    """Begin one execution grant, or report the grant this mission already has."""
+    """Begin or resume one execution grant, then drive the active item's phase."""
     gid = service._ids(ctx.mission_id, "grant")
     judged = judge_manifest(ctx.config)
     if judged is None:
@@ -354,15 +357,7 @@ def run_grant(ctx: StageContext) -> Outcome:
                 outcome="failed",
                 data={"stage": "grant", "code": "judge_manifest_drift"},
             )
-        return Outcome(
-            outcome="succeeded",
-            data={
-                "stage": "grant",
-                "grant_id": str(grant["grant_id"]),
-                "grant_version": grant["grant_version"],
-                "state": grant["state"],
-            },
-        )
+        return _grant_phase(ctx, gid)
 
     rq = _request_mapping(ctx.request)
     intake_data = (ctx.prior.get("intake") or {}).get("data") or {}
@@ -416,14 +411,96 @@ def run_grant(ctx: StageContext) -> Outcome:
                 data={"stage": "grant", "code": "grant_conflict"},
             )
         raise
+    return _grant_phase(ctx, gid)
+
+
+def _grant_phase(ctx: StageContext, gid: UUID) -> Outcome:
+    """Drive the owned grant's active item through at most three re-read passes.
+
+    Every pass re-reads the execution view and re-runs ``grant_owned``, so no
+    version or revision from an earlier pass or a command's return is reused.
+    ``criteria_pending`` seals the request's acceptance criteria; ``executing``
+    is the grant stage's success. Any other phase, or a phase that repeats,
+    fails with ``grant_phase_<phase>``.
+    """
+    previous_phase: str | None = None
+    for _ in range(_MAX_GRANT_PHASE_PASSES):
+        view = ctx.service.read(ctx.principal, ctx.workspace_id, "execution", str(gid))
+        if not grant_owned(ctx, view):
+            return Outcome(
+                outcome="failed",
+                data={"stage": "grant", "code": "grant_foreign"},
+            )
+        grant = view["grant"]
+        item = view.get("active_item")
+        if not isinstance(item, Mapping):
+            return Outcome(
+                outcome="failed",
+                data={"stage": "grant", "code": "grant_phase_missing"},
+            )
+        phase = str(item.get("phase"))
+        if phase == previous_phase:
+            return Outcome(
+                outcome="failed",
+                data={"stage": "grant", "code": f"grant_phase_{phase}", "phase": phase},
+            )
+        if phase == "executing":
+            return Outcome(
+                outcome="succeeded",
+                data={
+                    "stage": "grant",
+                    "grant_id": str(grant["grant_id"]),
+                    "grant_version": grant["grant_version"],
+                    "phase": phase,
+                },
+            )
+        if phase == "criteria_pending":
+            work = _request_mapping(ctx.request)["work"]
+            if isinstance(work, Mapping):
+                raw_criteria = work["acceptance_criteria"]
+                description = str(work["description"])
+            else:
+                raw_criteria = work.acceptance_criteria
+                description = str(work.description)
+            criteria = tuple(str(criterion) for criterion in raw_criteria)
+            if not criteria:
+                return Outcome(
+                    outcome="failed",
+                    data={
+                        "stage": "grant",
+                        "code": "criteria_missing",
+                        "phase": phase,
+                    },
+                )
+            try:
+                ctx.command(
+                    "seal_execution_criteria",
+                    {
+                        "grant_id": str(gid),
+                        "expected_grant_version": grant["grant_version"],
+                        "work_id": str(ctx.work_id),
+                        "expected_revision_id": str(item["claimed_revision_id"]),
+                        "criteria": list(criteria),
+                        "description_sha256": text_sha256(description),
+                        "judge_sha256": grant["judge_sha256"],
+                    },
+                )
+            except WorkError as err:
+                if err.code == "idempotency_conflict":
+                    return Outcome(
+                        outcome="failed",
+                        data={"stage": "grant", "code": "grant_conflict"},
+                    )
+                raise
+            previous_phase = phase
+            continue
+        return Outcome(
+            outcome="failed",
+            data={"stage": "grant", "code": f"grant_phase_{phase}", "phase": phase},
+        )
     return Outcome(
-        outcome="succeeded",
-        data={
-            "stage": "grant",
-            "grant_id": str(gid),
-            "judge_sha256": judge_sha,
-            "issued_at": issued_at,
-        },
+        outcome="failed",
+        data={"stage": "grant", "code": "grant_phase_unsettled"},
     )
 
 
