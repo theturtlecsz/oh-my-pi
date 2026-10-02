@@ -68,6 +68,24 @@ edits whose `find` block must match exactly once. Build refuses on any drift: a
 changed upstream file, a `find` block that no longer matches once, or a resulting
 hash that differs from the pinned value.
 
+## Checking upstream for pack changes
+
+The check is manual; no schedule runs it. It reads local files and writes nothing.
+
+```bash
+git clone --filter=blob:none https://github.com/affaan-m/ECC.git /tmp/ecc-candidate
+git -C /tmp/ecc-candidate checkout --detach <ref>
+bun session-system/ecc/adapter/upstream-check.ts --candidate-root /tmp/ecc-candidate --commit "$(git -C /tmp/ecc-candidate rev-parse HEAD)"
+```
+
+The script prints a one-line JSON report and exits 0 (on bad arguments it prints `{"error": ...}` and exits 1):
+
+- `baseCommit`: manifest `upstream.commit`; `candidateCommit`: the `--commit` value.
+- `files`: one row per consumed file (primary file of each installable packed asset, plus declared helper files of `skill-namespaced` assets): `assetId`, `path`, `status` (`unchanged`/`changed`/`missing`), `fromSha256` (mirror bytes), `toSha256` (candidate bytes, null when missing).
+- `newFiles`: candidate files in a consumed skill directory that are neither SKILL.md nor a declared dependency. The packs do not consume them.
+- `overlayConflicts`: overlay-backed asset ids whose primary file is not `unchanged`. Overlay JSON is not read.
+- `changed`: true when any row is not `unchanged` or `newFiles` is not empty.
+
 ## Building
 
 ```bash
