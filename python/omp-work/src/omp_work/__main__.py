@@ -37,6 +37,7 @@ from .v1.service import WorkError
 from .credential_watch import DEFAULT_ROOTS, watch_credentials
 from .budget_headroom import compute_headroom
 from .always_running import check_stall
+from . import client_ingress
 from . import owner_key
 from . import parallel_streams as ps
 
@@ -306,7 +307,7 @@ def main(argv: list[str] | None = None) -> int | None:
     subcommands = parser.add_subparsers(
         dest="command",
         required=True,
-        metavar="{schema,hash,approve,validate,ops,serve,headroom,stall-check,parallel-admit,budget-alerts,projects,stop,alarms,jobs,owner-key,orchestrator,drain}",
+        metavar="{schema,hash,approve,validate,ops,serve,headroom,stall-check,parallel-admit,budget-alerts,projects,stop,alarms,jobs,owner-key,ingress,orchestrator,drain}",
     )
 
     schema = subcommands.add_parser("schema")
@@ -432,6 +433,7 @@ def main(argv: list[str] | None = None) -> int | None:
     subscriptions_parser.add_argument("--bearer-file", type=Path)
 
     owner_key.add_parser(subcommands)
+    client_ingress.add_parser(subcommands)
 
     jobs_parser = subcommands.add_parser("jobs")
     jobs_sub = jobs_parser.add_subparsers(dest="jobs_command", required=True)
@@ -588,6 +590,8 @@ def main(argv: list[str] | None = None) -> int | None:
         return run_projects(args)
     if args.command == "owner-key":
         return owner_key.run(args)
+    if args.command == "ingress":
+        return client_ingress.run(args)
     if args.command == "jobs":
         from .jobs.process import check, register_component, run_worker
 
