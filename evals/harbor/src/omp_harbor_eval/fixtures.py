@@ -59,9 +59,16 @@ class IndependentTest:
 class Terminal:
     """``accepted`` is the scenario JSON key ``in``."""
 
-    def __init__(self, pointer: str, accepted: tuple[Any, ...]) -> None:
+    def __init__(
+        self,
+        pointer: str = "",
+        accepted: tuple[Any, ...] = (),
+        *,
+        agent_end: bool = False,
+    ) -> None:
         self.pointer = pointer
         self.accepted = accepted
+        self.agent_end = agent_end
 
     @property
     def in_(self) -> tuple[Any, ...]:
@@ -206,13 +213,26 @@ def _load_rule(raw: object, index: int) -> dict[str, Any]:
     return json.loads(json.dumps(document))
 
 
+def parse_terminal(raw: object, label: str = "scenario.terminal") -> Terminal:
+    document = _mapping(raw, label)
+    if "agent_end" in document:
+        _exact_keys(document, {"agent_end"}, label)
+        if document["agent_end"] is not True:
+            raise ValueError(f"{label}.agent_end must be true")
+        return Terminal(agent_end=True)
+    _exact_keys(document, _TERMINAL_KEYS, label)
+    accepted = document["in"]
+    if not isinstance(accepted, list) or accepted == []:
+        raise ValueError(f"{label}.in must be a non-empty list")
+    return Terminal(
+        pointer=_json_pointer(document["pointer"], f"{label}.pointer"),
+        accepted=tuple(accepted),
+    )
+
+
 def _load_scenario(document: dict[str, Any], filename: str) -> Scenario:
     _exact_keys_optional(document, _SCENARIO_KEYS, {"command", "terminal", "model_script", "ui_script"}, "scenario")
-    terminal = _mapping(document["terminal"], "scenario.terminal")
-    _exact_keys(terminal, _TERMINAL_KEYS, "scenario.terminal")
-    accepted = terminal["in"]
-    if not isinstance(accepted, list) or accepted == []:
-        raise ValueError("scenario.terminal.in must be a non-empty list")
+    terminal = parse_terminal(document["terminal"], "scenario.terminal")
     model_script = document["model_script"]
     ui_script = document["ui_script"]
     if not isinstance(model_script, list) or not isinstance(ui_script, list):
@@ -235,7 +255,7 @@ def _load_scenario(document: dict[str, Any], filename: str) -> Scenario:
         timeout_s = raw_timeout
     return Scenario(
         command=_string(document["command"], "scenario.command"),
-        terminal=Terminal(pointer=_json_pointer(terminal["pointer"], "scenario.terminal.pointer"), accepted=tuple(accepted)),
+        terminal=terminal,
         model_script=tuple(model_script),
         ui_script=tuple(ui_script),
         kill_at=kill_at,

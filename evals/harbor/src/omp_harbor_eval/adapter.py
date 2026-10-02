@@ -956,10 +956,48 @@ class RpcAdapter:
             return "harness_error", "restart session id differs from the original", self._last
         return self._wait_for_terminal()
 
+    def _wait_for_agent_end(self) -> tuple[str, str, dict[str, Any] | None]:
+        while True:
+            early = self._pre_turn_failure()
+            if early is not None:
+                return early
+            if self._blocked.is_set():
+                return "blocked", self._block_reason, self._last
+            if self._killed.is_set() and not self._restarted:
+                return self._restart_and_wait()
+            if self._agent_finished.is_set():
+                try:
+                    document = self.probe.read()
+                except ProbeError:
+                    document = self._last
+                else:
+                    self._last = document
+                return "completed", "terminal", document
+            if self._kill_after_enqueue:
+                try:
+                    document = self.probe.read()
+                except ProbeError:
+                    document = None
+                if self._enqueue_ready(document):
+                    self._fire_kill()
+                if self._killed.is_set() and not self._restarted:
+                    return self._restart_and_wait()
+            assert self._deadline is not None
+            remaining = self._deadline - time.monotonic()
+            if remaining <= 0:
+                reason = f"timed out after {self._timeout_s}s waiting for the agent to end"
+                if self.scenario.model_script and not self._turn_seen():
+                    reason = f"{reason}; no agent turn started"
+                    self._stall = "no_agent_turn"
+                return "timeout", reason, self._last
+            self._agent_finished.wait(min(_POLL_INTERVAL_S, remaining))
+
     def _wait_for_terminal(self) -> tuple[str, str, dict[str, Any] | None]:
         if self._deadline is None:
             self._timeout_s = self.scenario.timeout_s if self.scenario.timeout_s is not None else _DEFAULT_TIMEOUT_S
             self._deadline = time.monotonic() + self._timeout_s
+        if self.scenario.terminal.agent_end:
+            return self._wait_for_agent_end()
         pointer = self.scenario.terminal.pointer
         accepted = self.scenario.terminal.accepted
         last_probe_error: str | None = None
