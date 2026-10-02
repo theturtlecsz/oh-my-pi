@@ -14,6 +14,7 @@ class StrictModel(BaseModel):
 
 
 hex64 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+single_line_str = Annotated[str, Field(pattern=r"^[^\r\n]+$", max_length=2000)]
 
 
 class WorkAlias(StrictModel):
@@ -2621,6 +2622,7 @@ class Approval(StrictModel):
         "OMP-415",
         "OMP-416",
         "OMP-430",
+        "OMP-520",
     ]
     attestation: hex64 | None = None
 
@@ -2830,4 +2832,73 @@ OWNER_APPROVAL_COMMAND_TYPES = frozenset(
     {"attest_intake_admission", "publish_bounded_intake"}
 )
 OWNER_APPROVAL_REFUSED_EVENT = "owner_approval_refused"
+
+
+class AuditFindingLocation(StrictModel):
+    path: single_line_str
+    line_start: int = Field(ge=1)
+    line_end: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def validate_lines(self) -> AuditFindingLocation:
+        if self.line_end is not None and self.line_end < self.line_start:
+            raise ValueError("line_end must be greater than or equal to line_start")
+        return self
+
+
+class AuditFinding(StrictModel):
+    severity: str = Field(pattern=r"^[A-Z][A-Z0-9]*$", max_length=2000)
+    criterion_id: single_line_str
+    location: AuditFindingLocation
+    evidence: single_line_str
+    impact: single_line_str
+    minimal_fix: single_line_str
+
+
+class AuditCriterionCheck(StrictModel):
+    criterion_id: single_line_str
+    status: Literal["met", "not_met", "unverifiable"]
+    evidence: single_line_str
+
+
+class EvidenceReference(StrictModel):
+    kind: Literal["command", "file", "receipt", "artifact"]
+    ref: single_line_str
+    result: single_line_str | None = None
+    sha256: hex64 | None = None
+
+
+class EvidenceManifest(StrictModel):
+    references: tuple[EvidenceReference, ...] = ()
+
+
+class AuditResult(StrictModel):
+    schema_version: Literal[1] = 1
+    verdict: Literal["PASS", "NEEDS_FIX", "BLOCKED"]
+    findings: tuple[AuditFinding, ...] = ()
+    criteria: tuple[AuditCriterionCheck, ...] = ()
+    evidence: EvidenceManifest
+    out_of_scope: tuple[single_line_str, ...] = ()
+    remaining_questions: tuple[single_line_str, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_audit_result(self) -> AuditResult:
+        seen_criterion_ids: set[str] = set()
+        for check in self.criteria:
+            if check.criterion_id in seen_criterion_ids:
+                raise ValueError(f"duplicate criterion_id: {check.criterion_id}")
+            seen_criterion_ids.add(check.criterion_id)
+
+        if self.verdict == "PASS":
+            if len(self.criteria) < 1:
+                raise ValueError("PASS requires at least 1 criterion")
+            if any(check.status != "met" for check in self.criteria):
+                raise ValueError("PASS requires all criteria to be met")
+            if len(self.evidence.references) < 1:
+                raise ValueError("PASS requires at least 1 evidence reference")
+        elif self.verdict == "NEEDS_FIX":
+            if len(self.findings) < 1:
+                raise ValueError("NEEDS_FIX requires at least 1 finding")
+
+        return self
 
