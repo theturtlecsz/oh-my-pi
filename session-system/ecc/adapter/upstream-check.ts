@@ -11,7 +11,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { ECC_ROOT, installablePackedAssets, loadManifest, type ManifestAsset } from "./catalog";
+import { ECC_ROOT, installablePackedAssets, loadManifest, type ManifestAsset, primaryUpstreamPath } from "./catalog";
 import { sha256Hex } from "./hash";
 
 export type UpstreamCheckFileStatus = "unchanged" | "changed" | "missing";
@@ -44,12 +44,6 @@ interface ConsumedFileItem {
 	path: string;
 	isPrimary: boolean;
 	hasOverlay: boolean;
-}
-
-function getPrimaryPath(asset: ManifestAsset): string {
-	return asset.adaptation.kind === "skill-namespaced"
-		? path.posix.join(asset.upstream.path, "SKILL.md")
-		: asset.upstream.path;
 }
 
 async function readBytesIfExists(filePath: string): Promise<Uint8Array | null> {
@@ -120,7 +114,7 @@ export async function checkUpstream(options: UpstreamCheckOptions): Promise<Upst
 	const consumedItems: ConsumedFileItem[] = [];
 	for (const asset of assets) {
 		const hasOverlay = Boolean(asset.adaptation.overlay);
-		const primaryPath = getPrimaryPath(asset);
+		const primaryPath = primaryUpstreamPath(asset);
 		consumedItems.push({
 			assetId: asset.id,
 			path: primaryPath,
