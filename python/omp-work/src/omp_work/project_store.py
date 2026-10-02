@@ -110,6 +110,30 @@ def _summary_names_resource(summary: str, resource_id: str) -> bool:
     return isinstance(parsed, dict) and parsed.get("resource_id") == resource_id
 
 
+def _canonical_summary(payload: dict[str, object]) -> str:
+    """Canonical JSON, so history summaries are compared as data, not text."""
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _move_summary(
+    key: str,
+    from_project_id: UUID | None,
+    from_name: str | None,
+    to_project_id: UUID,
+    to_name: str | None,
+) -> str:
+    """A move summary naming the key and both projects (the old side may be none)."""
+    return _canonical_summary(
+        {
+            "key": key,
+            "from_project_id": None if from_project_id is None else str(from_project_id),
+            "from_project_name": from_name,
+            "to_project_id": str(to_project_id),
+            "to_project_name": to_name,
+        }
+    )
+
+
 def media_discovery_project_ids(
     cur: psycopg.Cursor[Any], workspace_id: UUID
 ) -> frozenset[UUID]:
@@ -153,6 +177,13 @@ class ProjectNotFound(WorkStoreError):
 
     def __init__(self, identity: str) -> None:
         super().__init__("project_not_found", (f"no project {identity}",))
+
+
+class WorkItemNotFound(WorkStoreError):
+    """No work item carries the requested primary alias key."""
+
+    def __init__(self, key: str) -> None:
+        super().__init__("work_item_not_found", (f"no work item with key {key}",))
 
 
 class AmbiguousProjectKey(WorkStoreError):
@@ -235,6 +266,209 @@ class ProjectStoreMixin:
                 "workspace_id": str(workspace_id),
                 "projects": [row_json(row) for row in cur.fetchall()],
             }
+
+    def project_sides(
+        self, workspace_id: UUID, actor_id: UUID
+    ) -> dict[str, object]:
+        """Each unarchived project with its owner CLI side and open item count.
+
+        A project is ``media-discovery`` when it is the keyed media-discovery
+        world or an active initiative_project target of it; otherwise ``omp``.
+        ``open_items`` counts the project's work_items whose state is not a
+        terminal DONE/CANCELED, matching the intake gate's definition of open.
+        """
+        with self._transaction(workspace_id, actor_id) as cur:
+            media_ids = media_discovery_project_ids(cur, workspace_id)
+            cur.execute(
+                f"SELECT {_LIST_FIELDS} FROM omp_work.projects"  # nosec B608 - static column list
+                " WHERE workspace_id=%s AND NOT archived ORDER BY name, key",
+                (workspace_id,),
+            )
+            rows = [row_json(row) or {} for row in cur.fetchall()]
+            project_ids = [UUID(str(row["project_id"])) for row in rows]
+            counts: dict[UUID, int] = {}
+            if project_ids:
+                cur.execute(
+                    "SELECT project_id, count(*) AS open_items"
+                    " FROM omp_work.work_items"
+                    " WHERE workspace_id=%s AND project_id = ANY(%s)"
+                    " AND state NOT IN ('DONE', 'CANCELED')"
+                    " GROUP BY project_id",
+                    (workspace_id, project_ids),
+                )
+                counts = {
+                    UUID(str(row["project_id"])): int(row["open_items"])
+                    for row in cur.fetchall()
+                }
+            return {
+                "workspace_id": str(workspace_id),
+                "projects": [
+                    {
+                        "project_id": row["project_id"],
+                        "name": row["name"],
+                        "key": row["key"],
+                        "side": (
+                            "media-discovery"
+                            if UUID(str(row["project_id"])) in media_ids
+                            else "omp"
+                        ),
+                        "open_items": counts.get(
+                            UUID(str(row["project_id"])), 0
+                        ),
+                    }
+                    for row in rows
+                ],
+            }
+
+    def link_world(
+        self, workspace_id: UUID, actor_id: UUID, project_id: UUID | str
+    ) -> dict[str, object]:
+        """Link a project to the keyed media-discovery world as an active relation.
+
+        Inserts an active ``initiative_project`` relation whose source is the
+        keyed media-discovery project and target is ``project_id``. Repeating the
+        link writes nothing. Linking the world to itself is refused, and a
+        missing project raises ProjectNotFound. Records ``world_member_added``
+        history on the world.
+        """
+        target_id = _as_uuid(project_id)
+        with self._transaction(workspace_id, actor_id) as cur:
+            cur.execute(
+                "SELECT project_id FROM omp_work.projects"
+                " WHERE workspace_id=%s AND key='media-discovery' AND NOT archived",
+                (workspace_id,),
+            )
+            rows = cur.fetchall()
+            if not rows:
+                raise ProjectNotFound("with key media-discovery")
+            if len(rows) > 1:
+                raise AmbiguousProjectKey("media-discovery")
+            world_id = UUID(str(rows[0]["project_id"]))
+            if target_id == world_id:
+                raise WorkStoreError("invalid_request", ("world cannot link itself",))
+            self._require_project(cur, workspace_id, target_id)
+            cur.execute(
+                "INSERT INTO omp_work.project_relations"
+                "(relation_id, workspace_id, source_project_id, target_project_id, kind, active)"
+                " VALUES (%s, %s, %s, %s, 'initiative_project', true)"
+                " ON CONFLICT (workspace_id, source_project_id, target_project_id, kind)"
+                " WHERE active DO NOTHING"
+                " RETURNING relation_id",
+                (uuid4(), workspace_id, world_id, target_id),
+            )
+            linked = cur.fetchone() is not None
+            if linked:
+                self._write_history(
+                    cur,
+                    workspace_id,
+                    world_id,
+                    "world_member_added",
+                    _canonical_summary(
+                        {
+                            "world_project_id": str(world_id),
+                            "member_project_id": str(target_id),
+                        }
+                    ),
+                )
+            return {
+                "world_project_id": str(world_id),
+                "project_id": str(target_id),
+                "linked": linked,
+            }
+
+    def move_item(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        key: str,
+        project_id: UUID | str,
+    ) -> dict[str, object]:
+        """Move a work item to a project, keeping its identity and history.
+
+        The item is resolved by its primary alias. Moving to its current project
+        writes nothing and returns ``unchanged``. Otherwise the item's
+        project_id is set and row_version incremented, and the old project (if
+        any) gets an ``item_moved_out`` history row while the new one gets
+        ``item_moved_in``; both summaries name the key and both projects.
+        """
+        target_id = _as_uuid(project_id)
+        with self._transaction(workspace_id, actor_id) as cur:
+            cur.execute(
+                "SELECT i.work_id, i.project_id FROM omp_work.work_items i"
+                " JOIN omp_work.work_aliases a ON a.work_id=i.work_id"
+                " AND a.primary_alias"
+                " WHERE i.workspace_id=%s AND a.key=%s",
+                (workspace_id, key),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise WorkItemNotFound(key)
+            work_id = UUID(str(row["work_id"]))
+            from_project_id = (
+                None if row["project_id"] is None else UUID(str(row["project_id"]))
+            )
+            if from_project_id == target_id:
+                return {"key": key, "unchanged": True}
+            self._require_project(cur, workspace_id, target_id)
+            cur.execute(
+                "UPDATE omp_work.work_items SET project_id=%s,"
+                " row_version=row_version+1"
+                " WHERE workspace_id=%s AND work_id=%s"
+                " RETURNING row_version",
+                (target_id, workspace_id, work_id),
+            )
+            updated = cur.fetchone()
+            if updated is None:
+                raise WorkItemNotFound(key)
+            from_name = self._project_name(cur, workspace_id, from_project_id)
+            to_name = self._project_name(cur, workspace_id, target_id)
+            summary = _move_summary(
+                key, from_project_id, from_name, target_id, to_name
+            )
+            if from_project_id is not None:
+                self._write_history(
+                    cur,
+                    workspace_id,
+                    from_project_id,
+                    "item_moved_out",
+                    summary,
+                )
+            self._write_history(
+                cur,
+                workspace_id,
+                target_id,
+                "item_moved_in",
+                summary,
+            )
+            side = (
+                "media-discovery"
+                if target_id in media_discovery_project_ids(cur, workspace_id)
+                else "omp"
+            )
+            return {
+                "key": key,
+                "from_project_id": (
+                    None if from_project_id is None else str(from_project_id)
+                ),
+                "to_project_id": str(target_id),
+                "side": side,
+            }
+
+    def _project_name(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        project_id: UUID | None,
+    ) -> str | None:
+        if project_id is None:
+            return None
+        cur.execute(
+            "SELECT name FROM omp_work.projects"
+            " WHERE workspace_id=%s AND project_id=%s",
+            (workspace_id, project_id),
+        )
+        row = cur.fetchone()
+        return None if row is None else str(row["name"])
 
     def update_profile(
         self,

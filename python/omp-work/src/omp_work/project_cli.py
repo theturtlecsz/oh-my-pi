@@ -1,4 +1,4 @@
-"""OMP-418: owner-run projects CLI (seed, show, check)."""
+"""OMP-418/527: owner-run projects CLI (seed, show, check, sides, link-world, move-item)."""
 
 from __future__ import annotations
 
@@ -8,9 +8,11 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from .project_store import ProjectNotFound
+from .project_store import ProjectNotFound, WorkItemNotFound, WorkStoreError
 
 _WILDCARD_CHARS = ("*", "?", "[")
+
+_MEDIA_DISCOVERY = "media-discovery"
 
 
 def validate_project_seed(data: Any) -> tuple[bool, str]:
@@ -158,6 +160,65 @@ cmd_show = show
 cmd_check = check
 
 
+def sides(
+    store: Any,
+    workspace_id: UUID,
+    actor_id: UUID,
+) -> int:
+    payload = store.project_sides(workspace_id, actor_id)
+    print(json.dumps(payload))
+    return 0
+
+
+def link_world(
+    store: Any,
+    workspace_id: UUID,
+    actor_id: UUID,
+    world: str,
+    project_id: UUID,
+) -> int:
+    if world != _MEDIA_DISCOVERY:
+        print(f"projects link-world: unknown world: {world}", file=sys.stderr)
+        return 2
+    try:
+        payload = store.link_world(workspace_id, actor_id, project_id)
+    except ProjectNotFound as exc:
+        print(f"projects link-world: project not found: {exc}", file=sys.stderr)
+        return 1
+    except WorkStoreError as exc:
+        print(f"projects link-world: refused: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(payload))
+    return 0
+
+
+def move_item(
+    store: Any,
+    workspace_id: UUID,
+    actor_id: UUID,
+    key: str,
+    project_id: UUID,
+) -> int:
+    try:
+        payload = store.move_item(workspace_id, actor_id, key, project_id)
+    except (ProjectNotFound, WorkItemNotFound) as exc:
+        print(f"projects move-item: not found: {exc}", file=sys.stderr)
+        return 1
+    except WorkStoreError as exc:
+        print(f"projects move-item: refused: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(payload))
+    return 0
+
+
+sides_command = sides
+link_world_command = link_world
+move_item_command = move_item
+cmd_sides = sides
+cmd_link_world = link_world
+cmd_move_item = move_item
+
+
 def run_projects(args: Any, store: Any = None) -> int:
     if store is None:
         from .operations.config import OperationsConfig
@@ -172,4 +233,10 @@ def run_projects(args: Any, store: Any = None) -> int:
         return show(store, args.workspace, args.actor, args.key)
     if command == "check":
         return check(store, args.workspace, args.actor)
+    if command == "sides":
+        return sides(store, args.workspace, args.actor)
+    if command == "link-world":
+        return link_world(store, args.workspace, args.actor, args.world, args.project)
+    if command == "move-item":
+        return move_item(store, args.workspace, args.actor, args.key, args.project)
     return 2

@@ -352,6 +352,13 @@ def main(argv: list[str] | None = None) -> int | None:
     show_parser = projects_sub.add_parser("show", parents=[project_scope])
     show_parser.add_argument("--key", required=True)
     projects_sub.add_parser("check", parents=[project_scope])
+    projects_sub.add_parser("sides", parents=[project_scope])
+    link_world_parser = projects_sub.add_parser("link-world", parents=[project_scope])
+    link_world_parser.add_argument("--world", required=True, choices=["media-discovery"])
+    link_world_parser.add_argument("--project", required=True, type=UUID)
+    move_item_parser = projects_sub.add_parser("move-item", parents=[project_scope])
+    move_item_parser.add_argument("--key", required=True)
+    move_item_parser.add_argument("--project", required=True, type=UUID)
 
     stop = subcommands.add_parser("stop")
     stop_commands = stop.add_subparsers(dest="stop_command", required=True)
