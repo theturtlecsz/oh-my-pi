@@ -30,6 +30,7 @@ from omp_work.jobs.admission import enqueue_job
 from omp_work.jobs.budget import check_item_budget
 from omp_work.jobs.store import NativeJobStore
 from omp_work.jobs.worker import Frozen, Settlement
+from omp_work.operations.capabilities import DEFAULT_BASE_URL
 from omp_work.operations.config import OperationsConfig
 from omp_work.operations.database import _jobs_migration_state, check_migrations
 from omp_work.orchestrator import qualification
@@ -123,6 +124,9 @@ class OrchestratorConfig:
     max_workers: int = 1
     lease_seconds: int = 60
     wait_seconds: int = 30
+    workservice_url: str = DEFAULT_BASE_URL
+    verifier_argv: tuple[str, ...] = ()
+    merge_credential_path: Path | None = None
     operations: tuple[str, ...] = ()
     ops: OperationsConfig = field(default_factory=OperationsConfig.defaults)
 
@@ -242,6 +246,11 @@ def load_config(path: Path | None = None, ops: OperationsConfig | None = None) -
         max_workers=int(data.get("max_workers", 1)),
         lease_seconds=int(data.get("lease_seconds", 60)),
         wait_seconds=int(data.get("wait_seconds", 30)),
+        workservice_url=str(data.get("workservice_url") or DEFAULT_BASE_URL),
+        verifier_argv=tuple(str(item) for item in (data.get("verifier_argv") or ())),
+        merge_credential_path=(
+            None if not data.get("merge_credential_path") else Path(data["merge_credential_path"])
+        ),
         operations=tuple(str(item) for item in operations),
         ops=base,
     )
@@ -515,12 +524,41 @@ class StageContext:
         if stopped:
             raise Frozen
 
-    def command(self, type: str, payload: Mapping[str, Any]) -> dict[str, Any]:  # noqa: A002  # pylint: disable=redefined-builtin - command type is the public name
-        """Run one work command. Envelope ids are stable across a re-run of this step."""
+    def lease_expires_at(self) -> datetime | None:
+        """This worker's lease expiry, or None when the row is dead or reassigned."""
+        with self._handler.store.transaction(self.workspace_id, self.principal.actor_id) as cur:
+            cur.execute(
+                """
+                SELECT worker_id, fence, status, lease_expires_at,
+                       lease_expires_at > clock_timestamp() AS live
+                FROM omp_jobs.jobs
+                WHERE workspace_id=%s AND job_id=%s AND source='native'
+                """,
+                (self.workspace_id, str(self.lease.job_id)),
+            )
+            row = cur.fetchone()
+        if row is None or not row["live"] or row["status"] not in ("admitted", "in_flight"):
+            return None
+        if str(row["worker_id"]) != self.lease.worker_id or int(row["fence"]) != self.lease.fence:
+            return None
+        return row["lease_expires_at"]
+
+    def command(  # noqa: A002  # pylint: disable=redefined-builtin - command type is the public name
+        self, type: str, payload: Mapping[str, Any], *, key: str | None = None
+    ) -> dict[str, Any]:
+        """Run one work command. Envelope ids are stable across a re-run of this step.
+
+        ``key`` replaces the per-type ordinal in the envelope ids, so two
+        different command payloads under the same key are an
+        ``idempotency_conflict`` instead of an independent write.
+        """
         self._stop()
-        ordinal = self._ordinals.get(type, 0)
-        self._ordinals[type] = ordinal + 1
-        base = f"omp-417:{self.mission_id}:{self.step_index}:{type}:{ordinal}"
+        if key is None:
+            ordinal = self._ordinals.get(type, 0)
+            self._ordinals[type] = ordinal + 1
+            base = f"omp-417:{self.mission_id}:{self.step_index}:{type}:{ordinal}"
+        else:
+            base = f"omp-417:{self.mission_id}:{self.step_index}:{type}:{key}"
         try:
             return _execute(
                 self.config,
@@ -532,9 +570,61 @@ class StageContext:
                 correlation_id=uuid5(NAMESPACE_URL, base + ":correlation"),
             )
         except WorkError as error:
+            if error.code == "idempotency_conflict":
+                raise
             if _ignored(error):
                 return {"replayed": True, "code": error.code}
             raise
+
+    def hold_for(
+        self,
+        rule_id: str,
+        step_index: int,
+        stage: str,
+        commit: str | None,
+        target_ref: str | None,
+    ) -> HoldDecision | None:
+        """The tier-3 hold whose decision id is the pause step's id.
+
+        The facts mirror the ones the stage decision reads for this step, so
+        ``decision_for`` recomputes the same ``decision_id`` the pause records
+        and the hold writes one decision, not two.
+        """
+        if self.mission_id is None or self.project_id is None:
+            return None
+        try:
+            payload = decision_for(
+                Facts(
+                    mission_id=str(self.mission_id),
+                    project_id=self.project_id,
+                    step_index=step_index,
+                    stage=stage,
+                    mission_status="running",
+                    outcome="none",
+                    qualified=True,
+                    candidate_commit=commit,
+                    target_ref=target_ref,
+                ),
+                rule_id,
+            )
+        except ValueError:
+            return None
+        return HoldDecision(
+            decision_id=payload.decision_id,
+            question=payload.question,
+            why_it_matters=payload.why_it_matters,
+            risk_of_delay=payload.risk_of_delay,
+            evidence_refs=payload.evidence_refs,
+            resume_state=payload.resume_state or stage,
+        )
+
+    def answered_decision(self, rule_id: str) -> str | None:
+        """This mission's answered decision recorded for ``rule_id``, newest first."""
+        return self._handler.answered_decision(rule_id)
+
+    def _target_ref(self) -> str | None:
+        target = self.request.get("target_ref") if isinstance(self.request, dict) else None
+        return str(target) if target else None
 
     def act(
         self,
@@ -545,7 +635,15 @@ class StageContext:
         rule_id: str,
         decision_id: str | None = None,
     ) -> ActResult:
-        """Run one control-plane action, or only its executor when the intent is still open."""
+        """Run one control-plane action. The intent is recorded only after authorization.
+
+        A finished operation runs nothing. An open intent that follows
+        ``action_allowed`` runs the executor only. An intent with no preceding
+        ``action_allowed`` does not skip ``perform``. A decision is presented
+        before ``perform``. Once that authorization is used and the presentation
+        still matches a fresh ``classify()`` digest, the wrapped executor runs
+        again; any other used authorization is refused.
+        """
         self._stop()
         parsed = parse_submission(operation)
         operation_id = str(
@@ -555,25 +653,39 @@ class StageContext:
             )
         )
         if not self.lease_ok():
-            self._handler.record(
-                self.step_index,
-                {
-                    "kind": "action_refused",
-                    "rule_id": rule_id,
-                    "idempotency_key": operation_id,
-                    "operation_id": operation_id,
-                    "code": "lease_lost",
-                },
-            )
+            self._record_action(rule_id, operation_id, "action_refused", "lease_lost")
             return ActResult(status="refused", operation_id=operation_id, code="lease_lost")
-        if self.intents.open(operation_id) is not None:
+        if self._finished(operation_id):
+            return ActResult(status="done", operation_id=operation_id)
+        digest = classify(parsed, resolved).target_sha256
+        if decision_id is None:
+            decision_id = self.answered_decision(rule_id)
+        if self._open_after_allowed(operation_id):
             executor(parsed, resolved)
             self.intents.mark_done(operation_id, operation_id)
-            return ActResult(status="done", operation_id=operation_id)
-        self.intents.record_intent(operation_id, parsed.kind, {"resource_id": parsed.resource_id})
-        if decision_id is None:
-            decision_id = self._handler.answered_decision(rule_id)
-        hold = self._handler.hold_for(rule_id)
+            return ActResult(status="done", operation_id=operation_id, decision_id=decision_id)
+        if decision_id is not None and self._authorization_used(decision_id):
+            if self._presented_step(operation_id, decision_id, digest):
+                self._run_effect(rule_id, operation_id, decision_id, parsed, resolved, executor)
+                return ActResult(status="done", operation_id=operation_id, decision_id=decision_id)
+            self._record_action(
+                rule_id, operation_id, "action_refused", "authorization_mismatch", decision_id=decision_id
+            )
+            return ActResult(
+                status="refused",
+                operation_id=operation_id,
+                code="authorization_mismatch",
+                decision_id=decision_id,
+            )
+        if decision_id is not None and not self._any_presentation(operation_id):
+            self._record_authorization(rule_id, operation_id, decision_id, digest)
+
+        def wrapped(op: Any, target: ResolvedTarget) -> None:
+            self._run_effect(rule_id, operation_id, decision_id, op, target, executor)
+
+        hold = self.hold_for(rule_id, self.step_index, self.stage, resolved.commit, self._target_ref())
+        if decision_id is None and hold is not None and self._handler.find_decision(str(hold.decision_id)) is not None:
+            return ActResult(status="held", operation_id=operation_id, decision_id=str(hold.decision_id))
         try:
             outcome = perform(
                 self.projects,
@@ -583,24 +695,28 @@ class StageContext:
                 self.mission_id,
                 dict(operation),
                 lambda _operation: resolved,
-                executor,
+                wrapped,
                 datetime.now(timezone.utc),
                 None if decision_id is None else UUID(decision_id),
                 hold=hold,
             )
         except (ProjectAuthorityRefused, ProjectNotFound) as error:
             code = getattr(error, "code", "refused")
-            self._record_action(rule_id, operation_id, "action_refused", code)
-            return ActResult(status="refused", operation_id=operation_id, code=str(code))
+            self._record_action(rule_id, operation_id, "action_refused", code, decision_id=decision_id)
+            return ActResult(status="refused", operation_id=operation_id, code=str(code), decision_id=decision_id)
         if outcome.status == "done":
-            self._record_action(rule_id, operation_id, "action_allowed", None)
-            self.intents.mark_done(operation_id, operation_id)
             return ActResult(
                 status="done",
                 operation_id=operation_id,
                 decision_id=None if outcome.decision_id is None else str(outcome.decision_id),
             )
-        self._record_action(rule_id, operation_id, "action_refused", outcome.code)
+        if outcome.status == "held":
+            return ActResult(
+                status="held",
+                operation_id=operation_id,
+                decision_id=None if outcome.decision_id is None else str(outcome.decision_id),
+            )
+        self._record_action(rule_id, operation_id, "action_refused", outcome.code, decision_id=decision_id)
         return ActResult(
             status=outcome.status,
             operation_id=operation_id,
@@ -608,7 +724,107 @@ class StageContext:
             decision_id=None if outcome.decision_id is None else str(outcome.decision_id),
         )
 
-    def _record_action(self, rule_id: str, operation_id: str, kind: str, code: str | None) -> None:
+    def _run_effect(
+        self,
+        rule_id: str,
+        operation_id: str,
+        decision_id: str | None,
+        operation: Any,
+        resolved: ResolvedTarget,
+        executor: Callable[[Any, ResolvedTarget], object],
+    ) -> None:
+        """``action_allowed``, then the intent, then the executor, then ``external_done``."""
+        kind = getattr(operation, "kind", None) or operation.get("kind")
+        resource_id = getattr(operation, "resource_id", None)
+        if resource_id is None and isinstance(operation, Mapping):
+            resource_id = operation.get("resource_id")
+        self._record_action(rule_id, operation_id, "action_allowed", None, decision_id=decision_id)
+        self.intents.record_intent(operation_id, str(kind), {"resource_id": resource_id})
+        executor(operation, resolved)
+        self.intents.mark_done(operation_id, operation_id)
+
+    def _open_after_allowed(self, operation_id: str) -> bool:
+        """Whether the open intent was recorded after this operation's ``action_allowed``."""
+        if self.intents.open(operation_id) is None or not self._allowed(operation_id):
+            return False
+        steps = self._handler.steps()
+        intent_at: int | None = None
+        for index, step in enumerate(steps):
+            if step.get("external_ref") != operation_id and step.get("operation_id") != operation_id:
+                continue
+            if step.get("kind") == "external_done":
+                intent_at = None
+            elif step.get("kind") == "external_intent":
+                intent_at = index
+        if intent_at is None:
+            return False
+        return any(
+            step.get("kind") == "action_allowed" and step.get("operation_id") == operation_id
+            for step in steps[:intent_at]
+        )
+
+    def _presented_step(self, operation_id: str, decision_id: str, digest: str) -> bool:
+        """Whether this operation presented this decision at this digest."""
+        return any(
+            step.get("kind") == "authorization_presented"
+            and step.get("operation_id") == operation_id
+            and str(step.get("decision_id")) == str(decision_id)
+            and str(step.get("digest")) == digest
+            for step in self._handler.steps()
+        )
+
+    def _any_presentation(self, operation_id: str) -> bool:
+        return any(
+            step.get("kind") == "authorization_presented" and step.get("operation_id") == operation_id
+            for step in self._handler.steps()
+        )
+
+    def _authorization_used(self, decision_id: str) -> bool:
+        """Whether this decision already has an allowed project action record."""
+        with self.projects._transaction(self.workspace_id, self.principal.actor_id) as cur:
+            cur.execute(
+                "SELECT 1 FROM omp_work.project_action_records"
+                " WHERE workspace_id=%s AND decision_id=%s AND outcome='allowed' LIMIT 1",
+                (self.workspace_id, UUID(decision_id)),
+            )
+            return cur.fetchone() is not None
+
+    def _allowed(self, operation_id: str) -> bool:
+        """Whether this operation already has a recorded ``action_allowed``."""
+        return any(
+            step.get("kind") == "action_allowed" and step.get("operation_id") == operation_id
+            for step in self._handler.steps()
+        )
+
+    def _finished(self, operation_id: str) -> bool:
+        """Whether this operation already reached ``external_done``."""
+        return any(
+            step.get("kind") == "external_done" and step.get("operation_id") == operation_id
+            for step in self._handler.steps()
+        )
+
+    def _record_authorization(self, rule_id: str, operation_id: str, decision_id: str, digest: str) -> None:
+        self._handler.record(
+            self.step_index,
+            {
+                "kind": "authorization_presented",
+                "rule_id": rule_id,
+                "idempotency_key": operation_id,
+                "operation_id": operation_id,
+                "decision_id": decision_id,
+                "digest": digest,
+            },
+        )
+
+    def _record_action(
+        self,
+        rule_id: str,
+        operation_id: str,
+        kind: str,
+        code: str | None,
+        *,
+        decision_id: str | None = None,
+    ) -> None:
         body: dict[str, Any] = {
             "kind": kind,
             "rule_id": rule_id,
@@ -617,6 +833,8 @@ class StageContext:
         }
         if code is not None:
             body["code"] = code
+        if decision_id is not None:
+            body["decision_id"] = decision_id
         self._handler.record(self.step_index, body)
 
 
@@ -702,36 +920,14 @@ class OrchestratorHandler:
             if step.get("rule_id") != rule_id or not step.get("decision_id"):
                 continue
             decision_id = str(step["decision_id"])
-            with self.store.transaction(self.config.workspace_id, self.principal.actor_id) as cur:
-                record = find_decision(cur, self.config.workspace_id, decision_id)
+            record = self.find_decision(decision_id)
             if record is not None and record.get("status") == "answered":
                 return decision_id
         return None
 
-    def hold_for(self, rule_id: str) -> HoldDecision | None:
-        if self.mission_id is None or self.project_id is None:
-            return None
-        try:
-            facts = Facts(
-                mission_id=str(self.mission_id),
-                project_id=self.project_id,
-                step_index=0,
-                stage="intake",
-                mission_status="running",
-                outcome="none",
-                qualified=True,
-            )
-            payload = decision_for(facts, rule_id)
-        except ValueError:
-            return None
-        return HoldDecision(
-            decision_id=payload.decision_id,
-            question=payload.question,
-            why_it_matters=payload.why_it_matters,
-            risk_of_delay=payload.risk_of_delay,
-            evidence_refs=payload.evidence_refs,
-            resume_state=payload.resume_state or "intake",
-        )
+    def find_decision(self, decision_id: str) -> dict[str, Any] | None:
+        with self.store.transaction(self.config.workspace_id, self.principal.actor_id) as cur:
+            return find_decision(cur, self.config.workspace_id, decision_id)
 
     def _bind(self, mission_id: UUID) -> None:
         self.mission_id = mission_id
@@ -781,23 +977,56 @@ class OrchestratorHandler:
                 bound=None,
                 decision=None,
             )
+        produced: Outcome | None = None
         if recorded is None and chosen.kind == "dispatch":
             if chosen.kind not in UNRECORDED_KINDS:
                 self._record_decision(step_index, chosen, None)
             outcome = self._operate(job, step_index, stage, facts)
             self.record(step_index, _outcome_body(self.mission_id, step_index, stage, outcome))
+            produced = outcome
             facts = self._facts(self.steps(), step_index, stage, outcome)
             chosen = decide(facts, self._bounds(stage))
         elif recorded is not None:
-            facts = self._facts(steps, step_index, stage, _outcome_from(recorded))
+            produced = _outcome_from(recorded)
+            facts = self._facts(steps, step_index, stage, produced)
             chosen = decide(facts, self._bounds(stage))
         if chosen.kind == "frozen":
             raise Frozen
         if chosen.kind in UNRECORDED_KINDS:
             return
-        outcome = _outcome_from(recorded) if recorded is not None else None
+        # The confirm stage's pause is the intake decision's own pause: the stage
+        # operation already filed the decision, so the step records that id and a
+        # wait job, and neither writes a decision nor moves the status.
+        if chosen.kind == "pause" and chosen.rule_id == "d23-owner-confirm":
+            supplied = _outcome_decision_id(produced)
+            if supplied is not None:
+                self._record_confirm_pause(step_index, supplied, stage)
+                self._enqueue(
+                    _wait_job(self.mission_id, UUID(supplied), 0),
+                    UUID(str(job["work_id"])),
+                )
+                return
+        outcome = produced
         self._record_decision(step_index, chosen, outcome)
         self._apply(job, step_index, chosen, outcome)
+
+    def _record_confirm_pause(self, step_index: int, decision_id: str, stage: str) -> None:
+        """Record the confirm pause that adopted the intake stage's own decision."""
+        if self.mission_id is None:
+            raise AssertionError("mission_id is None")
+        self.record(
+            step_index,
+            {
+                "kind": "pause",
+                "rule_id": "d23-owner-confirm",
+                "idempotency_key": f"pause:{self.mission_id}:{step_index}:d23-owner-confirm",
+                "stage": stage,
+                "next_stage": stage,
+                "bound": None,
+                "decision_id": decision_id,
+                "wait_job": _wait_job(self.mission_id, UUID(decision_id), 0),
+            },
+        )
 
     def _operate(self, job: dict[str, Any], step_index: int, stage: str, facts: Facts) -> Outcome:
         if self._request is None or self.project_id is None:
@@ -957,6 +1186,20 @@ class OrchestratorHandler:
             None,
         )
         rule_id = None if pause is None else str(pause.get("rule_id"))
+        if rule_id == "d23-owner-confirm":
+            # The answer is the intake decision's: confirm/edited_draft approve the
+            # mission and re-run the confirm stage, which then advances to plan; a
+            # note redrafts and waits on the new decision; reject already abandoned.
+            if answer in {"confirm", "edited_draft", "note"}:
+                if answer != "note":
+                    self._set_status("running", "decision", decision_id=decision_id)
+                if self.mission_id is None:
+                    raise AssertionError("mission_id is None")
+                self._enqueue(
+                    _stage_job(self.mission_id, int(pause["step_index"]) + 1),
+                    UUID(str(job["work_id"])),
+                )
+            return
         if answer == "resume" or (answer == "approve" and rule_id != "terminal-needs-basis"):
             self._set_status("running", "decision", decision_id=decision_id)
             if pause is not None and pause.get("next_stage"):
@@ -1074,6 +1317,10 @@ class OrchestratorHandler:
     def _record_owner_decision(self, chosen: Step) -> None:
         if chosen.decision is None:
             raise AssertionError("decision is None")
+        # A tier-3 hold already wrote the same decision through ``perform``; the
+        # pause reuses it instead of writing a second one under the same id.
+        if self.find_decision(str(chosen.decision.decision_id)) is not None:
+            return
         payload = chosen.decision.model_dump(mode="json")
         self._command(
             "create_decision",
@@ -1310,6 +1557,14 @@ def _outcome_from(step: Mapping[str, Any] | None) -> Outcome | None:
     )
 
 
+def _outcome_decision_id(outcome: Outcome | None) -> str | None:
+    """The decision an outcome names for the owner to answer, if any."""
+    if outcome is None:
+        return None
+    value = outcome.data.get("decision_id")
+    return str(value) if value else None
+
+
 def _count(steps: list[dict[str, Any]], kind: str, stage: str | None) -> int:
     total = 0
     for step in steps:
@@ -1422,9 +1677,13 @@ def _ids(mission_id: UUID, name: str) -> UUID:
 
 
 def submit(config: OrchestratorConfig, request: MissionRequest) -> dict[str, Any]:
-    """Create the work item and either record a qualification decision or enqueue step 0."""
+    """Create the work item and either record a qualification decision or enqueue step 0.
+
+    Without an ``owner.json`` beside the automation capability there is no owner
+    to approve the mission, so nothing is pre-approved: intake drafts the
+    mission and the confirm stage waits for the owner's answer.
+    """
     _require_jobs(config.ops)
-    owner = _owner_principal(config)
     automation = _principal(config.automation_capability_path)
     created = _run_command(
         config,
@@ -1468,7 +1727,7 @@ def submit(config: OrchestratorConfig, request: MissionRequest) -> dict[str, Any
             "decision_id": decision_id,
             "job_id": None,
         }
-    _prepare_mission(config, request, owner, automation)
+    _prepare_mission(config, request, automation)
     job_id = _stage_job(request.mission_id, 0)
     if work_id is None:
         raise AssertionError("work_id is None")
@@ -1521,9 +1780,12 @@ def _existing_work_id(config: OrchestratorConfig, mission_id: UUID) -> UUID | No
 def _prepare_mission(
     config: OrchestratorConfig,
     request: MissionRequest,
-    owner: Principal,
     automation: Principal,
 ) -> None:
+    owner_path = config.automation_capability_path.parent / "owner.json"
+    if not owner_path.is_file():
+        return
+    owner = _principal(owner_path)
     draft = _draft(request)
     _run_command(
         config,
