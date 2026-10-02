@@ -10,6 +10,7 @@ share=$xdg_data/omp/work-ledger
 pgdata=$state/postgres
 pgport=${OMP_WORK_POSTGRES_PORT:-54321}
 httpport=${OMP_WORK_HTTP_PORT:-54322}
+ingressport=${OMP_WORK_INGRESS_PORT:-54323}
 service_python=$root/python/omp-work/.venv/bin/python
 unit_dir=$HOME/.config/systemd/user
 unit_dir_explicit=0
@@ -19,6 +20,7 @@ while [ "$#" -gt 0 ]; do
     --postgres-data) pgdata=${2:?--postgres-data needs a path}; shift 2 ;;
     --postgres-port) pgport=${2:?--postgres-port needs a port}; shift 2 ;;
     --http-port) httpport=${2:?--http-port needs a port}; shift 2 ;;
+    --ingress-port) ingressport=${2:?--ingress-port needs a port}; shift 2 ;;
     --python) service_python=${2:?--python needs an installed executable}; shift 2 ;;
     --unit-dir) unit_dir=${2:?--unit-dir needs an output directory}; unit_dir_explicit=1; shift 2 ;;
     --render-only) render_only=1; shift ;;
@@ -32,18 +34,18 @@ fi
 case "$pgdata" in /*) ;; *) echo '--postgres-data must be absolute' >&2; exit 2 ;; esac
 case "$service_python" in /*) ;; *) echo '--python must be absolute' >&2; exit 2 ;; esac
 case "$unit_dir" in /*) ;; *) echo '--unit-dir must be absolute' >&2; exit 2 ;; esac
-case "$pgport:$httpport" in *[!0-9:]*) echo 'ports must be numeric' >&2; exit 2 ;; esac
+case "$pgport:$httpport:$ingressport" in *[!0-9:]*) echo 'ports must be numeric' >&2; exit 2 ;; esac
 if [ "$render_only" -eq 0 ]; then
   for path in "$config" "$pgdata" "$state" "$share/wal"; do install -d -m 700 "$path"; done
   for bin in initdb postgres pg_ctl; do command -v "$bin" >/dev/null || { echo "missing native PostgreSQL binary: $bin" >&2; exit 1; }
   done
   [ "$(postgres --version | grep -oE '[0-9]+' | head -1)" = "18" ] || { echo 'native PostgreSQL 18 required' >&2; exit 1; }
 fi
-python3 - "$service_python" "$unit_dir" "$config" "$state" "$share" "$pgdata" "$pgport" "$httpport" "$xdg_config" "$xdg_state" "$xdg_data" "$render_only" <<'PY'
+python3 - "$service_python" "$unit_dir" "$config" "$state" "$share" "$pgdata" "$pgport" "$httpport" "$ingressport" "$xdg_config" "$xdg_state" "$xdg_data" "$render_only" <<'PY'
 from pathlib import Path
 import stat
 import sys
-service_python, unit_dir, config, state, share, pgdata, pgport, httpport, xdg_config, xdg_state, xdg_data, render_only = sys.argv[1:]
+service_python, unit_dir, config, state, share, pgdata, pgport, httpport, ingressport, xdg_config, xdg_state, xdg_data, render_only = sys.argv[1:]
 if any("\n" in value or "\r" in value for value in sys.argv[1:]):
     raise SystemExit("unit paths must not contain line breaks")
 out = Path(unit_dir)
@@ -104,6 +106,20 @@ Type=simple
 {environment}
 ExecStart={python_command} -I -B -m omp_work jobs worker --config {quoted(config + '/jobs-worker.json')}
 Restart=always
+
+[Install]
+WantedBy=default.target
+''',
+    "omp-work-client-ingress.service": f'''[Unit]
+Description=OMP Work Ledger Client Ingress (loopback)
+Requires=omp-work-service.service
+After=omp-work-service.service
+
+[Service]
+Type=simple
+{environment}
+ExecStart={python_command} -I -B -m omp_work ingress serve --config {quoted(config + '/client-ingress.json')} --port {ingressport} --upstream http://127.0.0.1:{httpport}
+Restart=on-failure
 
 [Install]
 WantedBy=default.target

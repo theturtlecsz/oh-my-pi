@@ -19,6 +19,7 @@ table in step with that unit map.
 | `omp-work-postgres.service` | systemd user unit (`infra/work-ledger/install.sh`) | `control_plane` |
 | `omp-work-service.service` | systemd user unit (`infra/work-ledger/install.sh`) | `control_plane` |
 | `omp-work-jobs-worker.service` | systemd user unit (`infra/work-ledger/install.sh`) | `control_plane` |
+| `omp-work-client-ingress.service` | systemd user unit (`infra/work-ledger/install.sh`) | `control_plane` |
 | `omp-work-backup.service` | `omp-work-backup.timer` (daily) | `control_plane_op` |
 | `omp-work-wal.service` | `omp-work-wal.timer` (every 5 minutes) | `control_plane_op` |
 | `omp-work-restore-drill.service` | `omp-work-restore-drill.timer` (monthly) | `control_plane_op` |
