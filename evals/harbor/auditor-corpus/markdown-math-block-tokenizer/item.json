@@ -8,7 +8,7 @@
   "defects": [
     {
       "path": "packages/tui/src/components/markdown.ts",
-      "line_start": 614,
+      "line_start": 610,
       "line_end": null,
       "severity": "LOW"
     }

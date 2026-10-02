@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
+import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -32,7 +34,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from omp_work.v1.models import AuditResult
+from omp_work.v1.models import AuditFinding, AuditResult
 
 from .corpus_build import apply, run_tests, worktree
 
@@ -49,7 +51,7 @@ AUDITOR_CATEGORIES: tuple[str, ...] = (
 _CATEGORIES_SET = frozenset(AUDITOR_CATEGORIES)
 
 _ITEM_KEYS = frozenset(
-    {"item_id", "category", "task", "acceptance_criteria", "defects", "exposing_test"}
+    {"item_id", "category", "task", "acceptance_criteria", "defects"}
 )
 _DEFECT_KEYS = frozenset({"path", "line_start", "line_end", "severity"})
 _TEST_KEYS = frozenset({"runner", "target"})
@@ -74,11 +76,13 @@ def post_image_lines(patch_text: str) -> dict[str, set[int]]:
     files: dict[str, set[int]] = {}
     current: str | None = None
     new_line = 0
+    in_hunk = False
     for raw in patch_text.splitlines():
         if raw.startswith("diff --git "):
             current = None
+            in_hunk = False
             continue
-        if raw.startswith("+++ "):
+        if not in_hunk and raw.startswith("+++ "):
             target = raw[4:].strip().split("\t")[0].strip()
             if target == "/dev/null" or target == "":
                 current = None
@@ -91,8 +95,9 @@ def post_image_lines(patch_text: str) -> dict[str, set[int]]:
         match = _HUNK_RE.match(raw)
         if match is not None:
             new_line = int(match.group(1))
+            in_hunk = True
             continue
-        if current is None or raw.startswith("--- "):
+        if current is None or not in_hunk:
             continue
         if raw.startswith("+"):
             files[current].add(new_line)
@@ -166,7 +171,7 @@ def load_item(item_dir: str | Path) -> dict[str, Any]:
         if not isinstance(raw["severity"], str) or not raw["severity"].strip():
             raise CorpusError(f"defects[{index}].severity must be a non-empty string")
 
-    exposing = document["exposing_test"]
+    exposing = document.get("exposing_test")
     if exposing is not None:
         if not isinstance(exposing, dict):
             raise CorpusError("exposing_test must be an object or null")
@@ -214,9 +219,6 @@ def _check_patch(item: dict[str, Any], repo: str | Path) -> list[str]:
         return ["change.patch is empty"]
 
     changed = post_image_lines(patch_text)
-    if not changed:
-        reasons.append("change.patch has no added or changed lines")
-
     if item["category"] == "false_positive_bait":
         if item["defects"]:
             reasons.append("false_positive_bait must carry no labeled defects")
@@ -236,7 +238,12 @@ def _check_patch(item: dict[str, Any], repo: str | Path) -> list[str]:
 
     with worktree(repo) as tree:
         try:
-            apply(tree, patch_text)
+            checked = subprocess.run(
+                ["git", "-C", str(tree), "apply", "--check", "-"],
+                input=patch_text, capture_output=True, text=True, check=False,
+            )
+            if checked.returncode != 0:
+                raise CorpusError(checked.stderr.strip())
         except Exception as exc:  # noqa: BLE001 - surface the git apply failure as a reason
             reasons.append(f"change.patch does not apply to HEAD: {exc}")
             return reasons
@@ -245,7 +252,7 @@ def _check_patch(item: dict[str, Any], repo: str | Path) -> list[str]:
 
 
 def _check_exposing(item: dict[str, Any], repo: str | Path) -> list[str]:
-    exposing = item["exposing_test"]
+    exposing = item.get("exposing_test")
     if exposing is None:
         return []
     patch_path = item["directory"] / "change.patch"
@@ -323,7 +330,7 @@ def _parse_audit_result(value: object) -> AuditResult | None:
         return None
 
 
-def _finding_range(finding: Any) -> tuple[int, int]:
+def _finding_range(finding: AuditFinding) -> tuple[int, int]:
     location = finding.location
     start = location.line_start
     end = location.line_end if location.line_end is not None else start
@@ -346,12 +353,19 @@ def score(corpus_dir: str | Path, results_path: str | Path) -> dict[str, Any]:
     parsed: dict[str, tuple[AuditResult | None, float | None]] = {}
     for record in records:
         item_id = record["item_id"]
+        if item_id not in items_by_id:
+            raise CorpusError(f"unknown result item_id: {item_id}")
+        if item_id in seen:
+            raise CorpusError(f"duplicate result item_id: {item_id}")
         seen.add(item_id)
         audit = _parse_audit_result(record.get("audit_result"))
         if audit is None:
             invalid_results += 1
         cost = record.get("cost_usd")
-        if cost is not None and not isinstance(cost, (int, float)):
+        if cost is not None and (
+            isinstance(cost, bool) or not isinstance(cost, (int, float))
+            or not math.isfinite(cost) or cost < 0
+        ):
             cost = None
         parsed[item_id] = (audit, None if cost is None else float(cost))
 
@@ -386,12 +400,7 @@ def score(corpus_dir: str | Path, results_path: str | Path) -> dict[str, Any]:
 
         defects = item["defects"]
         findings = list(audit.findings) if audit is not None else []
-        # A PASS verdict on a defect item is a miss: drop its findings.
-        if audit is not None and audit.verdict == "PASS":
-            findings = []
-
         matched_finding_indexes: set[int] = set()
-        caught_here = 0
         for defect in defects:
             total_defects += 1
             severity_totals[defect["severity"]] = severity_totals.get(defect["severity"], 0) + 1
@@ -407,8 +416,7 @@ def score(corpus_dir: str | Path, results_path: str | Path) -> dict[str, Any]:
                 if _overlaps(_finding_range(finding), target):
                     hit = True
                     matched_finding_indexes.add(index)
-            if hit:
-                caught_here += 1
+            if hit and audit is not None and audit.verdict != "PASS":
                 total_caught += 1
                 severity_caught[defect["severity"]] = severity_caught.get(defect["severity"], 0) + 1
                 category_caught[category] = category_caught.get(category, 0) + 1

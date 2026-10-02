@@ -1,9 +1,9 @@
 {
   "item_id": "xml-expansion-stack-guard",
   "category": "security",
-  "task": "XMLParser must stop expanding a recursive entity reference instead of recursing forever.",
+  "task": "XMLParser must keep a recursive entity reference unexpanded instead of reaching the expansion limit.",
   "acceptance_criteria": [
-    "a self-referential ENTITY does not loop forever and stays unexpanded"
+    "A self-referential ENTITY stays unexpanded without an expansion-limit error."
   ],
   "defects": [
     {

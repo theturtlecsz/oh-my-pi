@@ -7,7 +7,7 @@ index 0e23bd100b..617c9e536f 100644
  			if (standard !== undefined) return standard;
  			const replacement = this.#entities.get(name);
 -			if (replacement === undefined || stack?.has(name)) return whole;
-+			if (replacement === undefined || stack === undefined || !stack.has(name)) return whole;
++			if (replacement === undefined) return whole;
  			this.#expansions++;
  			if (this.#expansions > this.#settings.maxTotalExpansions) throw new Error("Entity expansion limit exceeded");
  			const nextStack = new Set(stack);
