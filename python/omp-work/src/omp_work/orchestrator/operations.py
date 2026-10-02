@@ -1383,26 +1383,29 @@ def run_audit(ctx: StageContext) -> Outcome:
         if manifest_data.get("task_sha256"):
             task_sha256 = str(manifest_data["task_sha256"])
 
-    # 2. Dead in-flight launch: cancel, mark_done "cancelled".
-    if attempt.get("state") == "auditor_in_flight" and attempt.get("in_flight_launch_id"):
-        in_flight_id_str = str(attempt["in_flight_launch_id"])
-        auditor_launches = view.get("auditor_launches") or ()
-        launch_row = next(
-            (l for l in auditor_launches if str(l.get("launch_id")) == in_flight_id_str),
-            None,
-        )
-        launch_n = (
-            int(launch_row["launch_number"])
-            if launch_row and launch_row.get("launch_number") is not None
-            else int(attempt.get("launch_count", 1))
-        )
-        cancel_res = ctx.command(
+    def cancel_launch(launch_id: str, intent_key: str, ref: str) -> Mapping[str, Any]:
+        ctx.command(
             "cancel_auditor_launch",
-            {"attempt_id": str(attempt_id), "launch_id": in_flight_id_str},
-            key=f"cancel_auditor_launch:{in_flight_id_str}",
+            {"attempt_id": str(attempt_id), "launch_id": launch_id},
+            key=f"cancel_auditor_launch:{launch_id}",
         )
-        ctx.intents.mark_done(f"verifier:{attempt_id}:{launch_n}", "cancelled")
-        attempt = cancel_res.get("attempt") or attempt
+        if ctx.intents.open(intent_key):
+            ctx.intents.mark_done(intent_key, ref)
+        fresh_view = ctx.service.read(
+            ctx.principal, ctx.workspace_id, "workflow", _work_key(ctx)
+        )
+        return next(
+            a for a in fresh_view["close_attempts"]
+            if str(a["attempt_id"]) == str(attempt_id)
+        )
+
+    # Cancel the launch that the earlier stage run left in flight.
+    if attempt.get("state") == "auditor_in_flight" and attempt.get("in_flight_launch_id"):
+        attempt = cancel_launch(
+            str(attempt["in_flight_launch_id"]),
+            f"verifier:{attempt_id}:{attempt['launch_count']}",
+            "cancelled",
+        )
 
     if not task_sha256:
         fresh_view = ctx.service.read(
@@ -1423,7 +1426,8 @@ def run_audit(ctx: StageContext) -> Outcome:
         if launch_count >= MAX_AUDITOR_LAUNCHES:
             return Outcome(
                 outcome="failed",
-                blocker="unrecoverable-blocker",
+                verdict="fail",
+                blocker="auditor_launches_exhausted",
                 data={
                     "stage": "audit",
                     "code": "max_auditor_launches_exceeded",
@@ -1507,19 +1511,17 @@ def run_audit(ctx: StageContext) -> Outcome:
                 ro_binds=[ctx.config.verifier_key_path],
             )
         except worker_sandbox.WorkerSandboxRefused as err:
-            cancel_res = ctx.command(
-                "cancel_auditor_launch",
-                {"attempt_id": str(attempt_id), "launch_id": str(launch_id)},
-                key=f"cancel_auditor_launch:{launch_id}",
-            )
-            ctx.intents.mark_done(intent_key, "crashed")
-            attempt = cancel_res.get("attempt") or attempt
-            if int(attempt.get("launch_count", 0)) < MAX_AUDITOR_LAUNCHES:
-                continue
+            cancel_launch(launch_id, intent_key, "crashed")
             return Outcome(
-                outcome="failed",
-                blocker="unrecoverable-blocker",
+                outcome="crashed",
                 data={"stage": "audit", "code": err.code},
+            )
+
+        if code is None:
+            cancel_launch(launch_id, intent_key, "crashed")
+            return Outcome(
+                outcome="crashed",
+                data={"stage": "audit", "code": "lease_dead"},
             )
 
         verdict_path = omp_dir / "verdict.json"
@@ -1532,26 +1534,10 @@ def run_audit(ctx: StageContext) -> Outcome:
             except Exception:
                 verdict_data = None
 
-        # 4. Exit!=0, no verdict: cancel, mark_done "crashed"; relaunch while launch_count < MAX_AUDITOR_LAUNCHES, then blocker.
-        if (code is None or code != 0) and verdict_data is None:
-            cancel_res = ctx.command(
-                "cancel_auditor_launch",
-                {"attempt_id": str(attempt_id), "launch_id": str(launch_id)},
-                key=f"cancel_auditor_launch:{launch_id}",
-            )
-            ctx.intents.mark_done(intent_key, "crashed")
-            attempt = cancel_res.get("attempt") or attempt
-            if int(attempt.get("launch_count", 0)) < MAX_AUDITOR_LAUNCHES:
-                continue
-            return Outcome(
-                outcome="failed",
-                blocker="unrecoverable-blocker",
-                data={
-                    "stage": "audit",
-                    "code": "max_auditor_launches_exceeded",
-                    "launch_count": int(attempt.get("launch_count", 0)),
-                },
-            )
+        # Retry a verifier crash only when no verdict file exists.
+        if code != 0 and not verdict_path.is_file():
+            attempt = cancel_launch(launch_id, intent_key, "crashed")
+            continue
 
         # 5. accept_candidate: False -> cancel; True -> settle_auditor_launch; mark_done.
         verifier_key = ctx.config.verifier_key_path.read_bytes()
