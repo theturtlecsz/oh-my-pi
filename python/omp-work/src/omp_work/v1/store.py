@@ -22,6 +22,10 @@ from omp_work.operations.fingerprints import (
     transform_sha256,
 )
 
+from .audit_result import (
+    parse_typed_audit_payload,
+    render_audit_result,
+)
 from .canonical import (
     canonical_json,
     close_attempt_identity_sha256,
@@ -42,6 +46,7 @@ from .models import (
     MAX_ACCEPTED_REPORTS,
     MAX_AUDITOR_LAUNCHES,
     AuditManifest,
+    AuditResult,
     AuditorLaunch,
     BoundedIntakeDraft,
     Candidate,
@@ -2914,13 +2919,23 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
                 "launch": _row_json(launch),
                 "event": event,
             }
+        typed_result = None
         if payload.transport_failed:
             report, failure_code = None, "transport_failed"
         else:
-            report, verdict_or_code = normalize_auditor_report(
-                payload.transport_payload
-            )
-            failure_code = verdict_or_code if report is None else ""
+            typed = parse_typed_audit_payload(payload.transport_payload)
+            if typed == "audit_result_invalid":
+                report, failure_code = None, "audit_result_invalid"
+            elif isinstance(typed, AuditResult):
+                typed_result = typed
+                report = render_audit_result(typed)
+                verdict_or_code = typed.verdict
+                failure_code = ""
+            else:
+                report, verdict_or_code = normalize_auditor_report(
+                    payload.transport_payload
+                )
+                failure_code = verdict_or_code if report is None else ""
         if report is None:
             exhausted = (
                 int(attempt["launch_count"]) - int(attempt["cancelled_launch_count"])
@@ -3060,6 +3075,8 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
             "manifest_id": str(manifest["manifest_id"]),
             "launch_id": str(payload.launch_id),
         }
+        if typed_result:
+            receipt_payload["audit_result"] = typed_result.model_dump(mode="json")
         if attempt.get("criteria_sha256"):
             receipt_payload["criteria_sha256"] = attempt["criteria_sha256"]
         cur.execute(
