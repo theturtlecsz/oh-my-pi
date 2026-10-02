@@ -174,6 +174,48 @@ def _payload(value) -> dict:
     raise AssertionError(f"receipt payload is {type(value).__name__}")
 
 
+def _audit_ctx(world, work_id, *, request=None, prior=None) -> StageContext:
+    """Build an audit StageContext from the current steps with optional overrides."""
+    handler = OrchestratorHandler(world.config)
+    handler.mission_id = world.mission_id
+    handler.project_id = world.request.project_id
+    handler._request = world.request.document()
+    steps = handler.steps()
+    facts_prior = dict(_prior(steps)) if prior is None else prior
+    return StageContext(
+        handler,
+        step_index=len(steps),
+        stage="audit",
+        attempt=0,
+        repair_round=0,
+        request=handler._request if request is None else request,
+        prior=facts_prior,
+        lease=LeaseClaim(
+            job_id=f"orch:{world.mission_id}:audit",
+            worker_id="test-worker",
+            fence=1,
+        ),
+        work_id=work_id,
+    )
+
+
+def _tick_to_push(world, worker) -> None:
+    def pushed(_view: dict) -> bool:
+        return any(step.get("outcome") == "succeeded" for step in _outcomes(world, "push"))
+
+    tick_until(worker, world, pushed, limit=40)
+
+
+def _forbid_commands(called: list[str], name: str):
+    """Return a command stub that records the call then fails the test."""
+
+    def command(type: str, payload, **kwargs):
+        called.append(type)
+        raise AssertionError(f"command {type} should not run when {name}")
+
+    return command
+
+
 def test_audit_stage_pass_settles_and_verifies_body(
     service, tmp_path: Path, monkeypatch
 ) -> None:
@@ -386,6 +428,17 @@ def test_audit_stage_rejected_modes_nothing_settled(
     assert item["state"] in ("BACKLOG", "OPEN", "IN_PROGRESS", "ACCEPTED")
     assert item["state"] not in ("DONE", "CANCELED", "CANCELLED")
 
+    attempt_id = attempts[0]["attempt_id"]
+    steps = _steps(world)
+    rejected = [
+        step
+        for step in steps
+        if step.get("kind") == "external_done"
+        and step.get("external_ref") == f"verifier:{attempt_id}:1"
+        and step.get("ref") == "rejected"
+    ]
+    assert len(rejected) == 1
+
 
 def test_audit_stage_mismatched_signed_verdict_needs_fix_fails(
     service, tmp_path: Path, monkeypatch
@@ -433,7 +486,7 @@ def test_audit_stage_mismatched_signed_verdict_needs_fix_fails(
 def test_audit_stage_missing_evaluate_command_fails(
     service, tmp_path: Path, monkeypatch
 ) -> None:
-    """Missing evaluate command in prior data fails with evaluate_incomplete without running commands."""
+    """Missing evaluate command in prior data fails with command_missing without running commands."""
     world, worker, work_id = _open(
         service, tmp_path / "eval-no-cmd", monkeypatch, verifier_mode="pass"
     )
@@ -481,7 +534,7 @@ def test_audit_stage_missing_evaluate_command_fails(
 
     outcome = operations.run_audit(ctx)
     assert outcome.outcome == "failed"
-    assert outcome.data.get("code") == "evaluate_incomplete"
+    assert outcome.data.get("code") == "command_missing"
     assert commands_called == []
 
 
@@ -548,3 +601,154 @@ def test_audit_stage_missing_grant_issued_at_fails(
     assert outcome.outcome == "failed"
     assert outcome.data.get("code") == "grant_issued_at_missing"
     assert "begin_close_attempt" not in commands_called
+
+
+def _drop_execution_grant(key: str):
+    """Build a read wrapper that removes ``key`` from the execution grant row."""
+
+    def mutate(kind: str, view: dict) -> dict:
+        if kind == "execution":
+            view = dict(view)
+            grant = dict(view.get("grant") or {})
+            grant.pop(key, None)
+            view["grant"] = grant
+        return view
+
+    return mutate
+
+
+def _drop_execution_binding(key: str, work_id: UUID):
+    """Build a read wrapper that removes ``key`` from this work's grant item."""
+
+    def mutate(kind: str, view: dict) -> dict:
+        if kind == "execution":
+            view = dict(view)
+            items = [dict(it) for it in (view.get("items") or ())]
+            for item in items:
+                if str(item.get("work_id")) == str(work_id):
+                    item.pop(key, None)
+            view["items"] = items
+        return view
+
+    return mutate
+
+
+@pytest.mark.parametrize(
+    ("code", "drop"),
+    [
+        ("grant_id_missing", _drop_execution_grant("grant_id")),
+        ("judge_sha256_missing", _drop_execution_grant("judge_sha256")),
+        ("original_request_sha256_missing", None),
+        ("criteria_sha256_missing", None),
+        ("plan_stamp_sha256_missing", None),
+    ],
+)
+def test_audit_stage_missing_grant_values_fail_named(
+    service, tmp_path: Path, monkeypatch, code: str, drop
+) -> None:
+    """Missing grant id/judge/binding fails with the named <name>_missing code, no command."""
+    world, worker, work_id = _open(
+        service, tmp_path / f"named-{code}", monkeypatch, verifier_mode="pass"
+    )
+    _tick_to_push(world, worker)
+
+    if drop is None:
+        drop = _drop_execution_binding(code.removesuffix("_missing"), work_id)
+
+    ctx = _audit_ctx(world, work_id)
+    real_read = ctx.service.read
+
+    def mock_read(principal, workspace_id, kind, value, **kwargs):
+        return drop(kind, real_read(principal, workspace_id, kind, value, **kwargs))
+
+    monkeypatch.setattr(ctx.service, "read", mock_read)
+
+    commands_called: list[str] = []
+    ctx.command = _forbid_commands(commands_called, code)
+
+    outcome = operations.run_audit(ctx)
+    assert outcome.outcome == "failed"
+    assert outcome.data.get("code") == code
+    assert commands_called == []
+
+
+@pytest.mark.parametrize("missing", ["base_commit", "repository"])
+def test_audit_stage_missing_request_values_fail_named(
+    service, tmp_path: Path, monkeypatch, missing: str
+) -> None:
+    """Missing request base_commit/repository fails with <name>_missing before any command."""
+    world, worker, work_id = _open(
+        service, tmp_path / f"req-{missing}", monkeypatch, verifier_mode="pass"
+    )
+    _tick_to_push(world, worker)
+
+    request = dict(world.request.document())
+    request.pop(missing)
+
+    ctx = _audit_ctx(world, work_id, request=request)
+    commands_called: list[str] = []
+    ctx.command = _forbid_commands(commands_called, missing)
+
+    outcome = operations.run_audit(ctx)
+    assert outcome.outcome == "failed"
+    assert outcome.data.get("code") == f"{missing}_missing"
+    assert commands_called == []
+
+
+def test_audit_stage_missing_freeze_fails_named(
+    service, tmp_path: Path, monkeypatch
+) -> None:
+    """Absent freeze prior and item candidate fails freeze_missing with no command."""
+    world, worker, work_id = _open(
+        service, tmp_path / "no-freeze", monkeypatch, verifier_mode="pass"
+    )
+    _tick_to_push(world, worker)
+
+    handler = OrchestratorHandler(world.config)
+    handler.mission_id = world.mission_id
+    facts_prior = dict(_prior(handler.steps()))
+    facts_prior.pop("freeze", None)
+
+    ctx = _audit_ctx(world, work_id, prior=facts_prior)
+    real_read = ctx.service.read
+
+    def mock_read(principal, workspace_id, kind, value, **kwargs):
+        view = real_read(principal, workspace_id, kind, value, **kwargs)
+        if kind == "workflow":
+            view = dict(view)
+            view["item"] = {}
+        return view
+
+    monkeypatch.setattr(ctx.service, "read", mock_read)
+
+    commands_called: list[str] = []
+    ctx.command = _forbid_commands(commands_called, "freeze missing")
+
+    outcome = operations.run_audit(ctx)
+    assert outcome.outcome == "failed"
+    assert outcome.data.get("code") == "freeze_missing"
+    assert commands_called == []
+
+
+def test_audit_stage_missing_evaluate_stage_fails_named(
+    service, tmp_path: Path, monkeypatch
+) -> None:
+    """Absent evaluate prior fails evaluate_missing with no command."""
+    world, worker, work_id = _open(
+        service, tmp_path / "no-evaluate", monkeypatch, verifier_mode="pass"
+    )
+    _tick_to_push(world, worker)
+
+    handler = OrchestratorHandler(world.config)
+    handler.mission_id = world.mission_id
+    facts_prior = dict(_prior(handler.steps()))
+    facts_prior.pop("evaluate", None)
+
+    ctx = _audit_ctx(world, work_id, prior=facts_prior)
+    commands_called: list[str] = []
+    ctx.command = _forbid_commands(commands_called, "evaluate missing")
+
+    outcome = operations.run_audit(ctx)
+    assert outcome.outcome == "failed"
+    assert outcome.data.get("code") == "evaluate_missing"
+    assert commands_called == []

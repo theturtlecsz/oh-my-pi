@@ -1088,7 +1088,7 @@ def run_audit(ctx: StageContext) -> Outcome:
     ):
         return Outcome(
             outcome="failed",
-            data={"stage": "audit", "code": "freeze_incomplete"},
+            data={"stage": "audit", "code": "freeze_missing"},
         )
 
     commit = str(commit)
@@ -1096,7 +1096,13 @@ def run_audit(ctx: StageContext) -> Outcome:
     candidate_sha = str(candidate_sha)
     revision_id = str(revision_id)
 
-    eval_prior = (ctx.prior.get("evaluate") or {}).get("data") or {}
+    eval_bucket = ctx.prior.get("evaluate")
+    if not isinstance(eval_bucket, Mapping):
+        return Outcome(
+            outcome="failed",
+            data={"stage": "audit", "code": "evaluate_missing"},
+        )
+    eval_prior = eval_bucket.get("data") or {}
     if not isinstance(eval_prior, Mapping):
         eval_prior = {}
     eval_cmd = eval_prior.get("command")
@@ -1107,12 +1113,20 @@ def run_audit(ctx: StageContext) -> Outcome:
         not isinstance(eval_cmd, (list, tuple))
         or not eval_cmd
         or not all(isinstance(x, str) for x in eval_cmd)
-        or not isinstance(eval_code, int)
-        or not eval_finished_at_raw
     ):
         return Outcome(
             outcome="failed",
-            data={"stage": "audit", "code": "evaluate_incomplete"},
+            data={"stage": "audit", "code": "command_missing"},
+        )
+    if not isinstance(eval_code, int):
+        return Outcome(
+            outcome="failed",
+            data={"stage": "audit", "code": "exit_code_missing"},
+        )
+    if not eval_finished_at_raw:
+        return Outcome(
+            outcome="failed",
+            data={"stage": "audit", "code": "finished_at_missing"},
         )
 
     try:
@@ -1124,7 +1138,7 @@ def run_audit(ctx: StageContext) -> Outcome:
     except Exception:
         return Outcome(
             outcome="failed",
-            data={"stage": "audit", "code": "evaluate_incomplete"},
+            data={"stage": "audit", "code": "finished_at_missing"},
         )
 
     # 0. Candidate's attempt audited, accepted_report_count >= 1 -> succeeded, pass; no reserve/cancel/settle.
@@ -1205,6 +1219,12 @@ def run_audit(ctx: StageContext) -> Outcome:
                     outcome="failed",
                     data={"stage": "audit", "code": "execution_grant_inactive"},
                 )
+            grant_id = grant.get("grant_id")
+            if not grant_id:
+                return Outcome(
+                    outcome="failed",
+                    data={"stage": "audit", "code": "grant_id_missing"},
+                )
             judged = judge_manifest(ctx.config)
             if judged is None:
                 return Outcome(
@@ -1212,23 +1232,26 @@ def run_audit(ctx: StageContext) -> Outcome:
                     data={"stage": "audit", "code": "verifier_argv_missing"},
                 )
             judge_sha, _manifest_dict = judged
+            if not grant.get("judge_sha256"):
+                return Outcome(
+                    outcome="failed",
+                    data={"stage": "audit", "code": "judge_sha256_missing"},
+                )
             if grant.get("judge_sha256") != judge_sha:
                 return Outcome(
                     outcome="failed",
                     data={"stage": "audit", "code": "judge_manifest_drift"},
                 )
-            if not all(
-                grant_item.get(k)
-                for k in (
-                    "original_request_sha256",
-                    "criteria_sha256",
-                    "plan_stamp_sha256",
-                )
+            for binding in (
+                "original_request_sha256",
+                "criteria_sha256",
+                "plan_stamp_sha256",
             ):
-                return Outcome(
-                    outcome="failed",
-                    data={"stage": "audit", "code": "grant_bindings_missing"},
-                )
+                if not grant_item.get(binding):
+                    return Outcome(
+                        outcome="failed",
+                        data={"stage": "audit", "code": f"{binding}_missing"},
+                    )
             grant_issued_at_raw = grant.get("issued_at")
             if not grant_issued_at_raw:
                 prov = grant.get("provenance")
@@ -1262,7 +1285,20 @@ def run_audit(ctx: StageContext) -> Outcome:
             else:
                 grant_issued_at = grant_issued_at.astimezone(UTC)
 
-            base_commit = str(request["base_commit"])
+            base_commit_value = request.get("base_commit")
+            if not base_commit_value:
+                return Outcome(
+                    outcome="failed",
+                    data={"stage": "audit", "code": "base_commit_missing"},
+                )
+            repository_value = request.get("repository")
+            if not repository_value:
+                return Outcome(
+                    outcome="failed",
+                    data={"stage": "audit", "code": "repository_missing"},
+                )
+
+            base_commit = str(base_commit_value)
             audited = candidate_git.audit_inputs(
                 ctx.config.control_repo, base_commit, commit
             )
@@ -1276,12 +1312,12 @@ def run_audit(ctx: StageContext) -> Outcome:
                 "owner_session_id": f"orchestrator:{ctx.mission_id}",
                 "owner_session_started_at": grant_issued_at.isoformat(),
                 "owner_session_start_commit": base_commit,
-                "repository": str(request["repository"]),
+                "repository": str(repository_value),
                 "diff_sha256": diff_sha256,
                 "starting_dirty_paths": [],
                 "riders": [],
                 "authorization_kind": "execution",
-                "execution_grant_id": str(grant["grant_id"]),
+                "execution_grant_id": str(grant_id),
                 "candidate_tree_sha": candidate_sha,
                 "original_request_sha256": str(grant_item["original_request_sha256"]),
                 "criteria_sha256": str(grant_item["criteria_sha256"]),
@@ -1533,7 +1569,7 @@ def run_audit(ctx: StageContext) -> Outcome:
                 {"attempt_id": str(attempt_id), "launch_id": str(launch_id)},
                 key=f"cancel_auditor_launch:{launch_id}",
             )
-            ctx.intents.mark_done(intent_key, "cancelled")
+            ctx.intents.mark_done(intent_key, "rejected")
             return Outcome(
                 outcome="failed",
                 verdict="fail",
