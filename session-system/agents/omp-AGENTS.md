@@ -149,6 +149,17 @@ continuation, attempt, and progress caps. Typed `/intake`, `/plan`,
 execution state only through the control plane and passes the same checks,
 tier gate, and locks as the mission (E6).
 
+## Safety walls, not questions (D58, owner ruling 2026-10-02)
+
+1. Automation gets its power at the start, from a mission grant, a budget
+   and a standing policy (D35). After that, nothing stops to ask a person.
+2. Safety comes from hard walls the automation cannot cross: protected main,
+   separate credentials for automation and merge, hard budget ceilings, the
+   stop button, and a restricted Linux user (OMP-402).
+3. Code from an unknown source is not run as trusted code.
+4. A safety change is accepted only if it adds a wall or a limit. A change
+   that adds a prompt or a wait for a person is declined.
+
 ## Task Observer (installed 2026-07-18, owner-approved activation)
 
 At the start of any task-oriented session — any interaction where you will
