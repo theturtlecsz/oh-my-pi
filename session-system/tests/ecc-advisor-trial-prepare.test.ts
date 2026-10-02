@@ -179,6 +179,66 @@ describe("ecc database advisor trial prepare", () => {
 		expect(await Bun.file(treeDir).exists()).toBe(false);
 	});
 
+	test("rejects occupied destination and preserves existing data", async () => {
+		const tempDir = await makeTempDir("ecc-preservation-");
+		const workDir = path.join(tempDir, "work");
+		const outDir = path.join(tempDir, "out");
+		const treeDir = path.join(workDir, "tree");
+
+		await fs.mkdir(treeDir, { recursive: true });
+		const sentinelFile = path.join(treeDir, "uncommitted-work.txt");
+		const sentinelContent = "important uncommitted user data";
+		await Bun.write(sentinelFile, sentinelContent);
+
+		// Calling prepareCase on an occupied tree directory must reject
+		await expect(
+			prepareCase({
+				caseId: "k1",
+				workDir,
+				outDir,
+				casesPath,
+				repoDir: repoRoot,
+			}),
+		).rejects.toThrow(/already exists; explicit cleanup required/i);
+
+		// The existing user data must still be intact
+		expect(await Bun.file(sentinelFile).exists()).toBe(true);
+		expect(await Bun.file(sentinelFile).text()).toBe(sentinelContent);
+
+		// Explicit cleanup removes the directory
+		await cleanupCase({ workDir, repoDir: repoRoot });
+		expect(await Bun.file(sentinelFile).exists()).toBe(false);
+		expect(await Bun.file(treeDir).exists()).toBe(false);
+
+		// Now prepareCase succeeds
+		worktreesToClean.push(treeDir);
+		const prepared = await prepareCase({
+			caseId: "k1",
+			workDir,
+			outDir,
+			casesPath,
+			repoDir: repoRoot,
+		});
+		expect(await Bun.file(prepared.promptPath).exists()).toBe(true);
+		expect(await Bun.file(path.join(treeDir, "package.json")).exists()).toBe(true);
+
+		// Second call to prepareCase without cleanup must reject and preserve existing worktree
+		await expect(
+			prepareCase({
+				caseId: "k2",
+				workDir,
+				outDir,
+				casesPath,
+				repoDir: repoRoot,
+			}),
+		).rejects.toThrow(/already exists; explicit cleanup required/i);
+		expect(await Bun.file(path.join(treeDir, "package.json")).exists()).toBe(true);
+
+		// Explicit cleanup removes the worktree
+		await cleanupCase({ workDir, repoDir: repoRoot });
+		expect(await Bun.file(treeDir).exists()).toBe(false);
+	});
+
 	test("CLI --case --work --out and --cleanup --work", async () => {
 		const tempDir = await makeTempDir("ecc-cli-test-");
 		const workDir = path.join(tempDir, "work");

@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { prompt } from "@oh-my-pi/pi-utils";
+import { isEnoent, prompt } from "@oh-my-pi/pi-utils";
 import { loadWatchdogConfigFile, saveWatchdogConfigFile } from "../../packages/coding-agent/src/advisor/config";
 import { ECC_ROOT } from "../../session-system/ecc/adapter/catalog";
 import { runEccCli } from "../../session-system/ecc/adapter/cli";
@@ -108,13 +108,22 @@ export async function prepareCase(options: PrepareCaseOptions): Promise<{ prompt
 	await fs.mkdir(workDir, { recursive: true });
 	const treeDir = path.join(workDir, "tree");
 
-	try {
-		await gitRepo.worktreeRemove(treeDir, true);
-	} catch {
-		// Ignore if treeDir did not exist
-	}
 	await gitRepo.worktreePrune();
-	await fs.rm(treeDir, { recursive: true, force: true }).catch(() => {});
+
+	let occupied = false;
+	try {
+		await fs.lstat(treeDir);
+		occupied = true;
+	} catch (err) {
+		if (!isEnoent(err)) {
+			throw err;
+		}
+	}
+
+	const worktrees = await gitRepo.worktrees();
+	if (occupied || worktrees.some(w => path.resolve(w.path) === treeDir)) {
+		throw new Error(`Destination directory "${treeDir}" already exists; explicit cleanup required`);
+	}
 
 	await gitRepo.worktreeAdd(treeDir, caseItem.commit, { detach: true, clone: false });
 
