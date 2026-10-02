@@ -146,6 +146,22 @@ uv run --project python/omp-work omp-work ops credentials rotate omp_work_app
 
 Loss of primary is manual fencing: stop the service, preserve its PostgreSQL and WAL directories read-only, restore a verified complete backup into a fresh data directory, run `ops check` and `ops health --mode ready`, then repoint the service. The monthly drill proves the backup content and schema compatibility; it does not alter the primary.
 
+## Drain gate
+
+Run the drain gate before a deploy, before `systemctl --user stop omp-work-service.service`, and before a host shutdown:
+
+```sh
+uv run --project python/omp-work omp-work drain check
+```
+
+It lists the workspace missions still in status `running`. Exit codes:
+
+- `0` — nothing is in flight; safe to proceed.
+- `1` — at least one mission is in flight; the printed JSON line has `drained: false` and the mission records under `in_flight`.
+- `255` — the check itself failed (database unreachable, credentials missing); stderr carries `drain: <error>`.
+
+To drain, wait for each listed mission to finish, or have the owner pause it. Engaging the agent stop does **not** drain: a frozen mission stays `running`, so the gate keeps exiting 1. Run `drain check` again and proceed only once it exits 0. The deploy wiring is in `flood deploy-omp.sh` (owner step OMP-519-s07).
+
 ## Authority and sealed epoch
 
 The Work Ledger is the sole workflow authority (`work.omp.dev/v1`), operating locally on PostgreSQL. The cutover epoch is sealed; live operations run directly against the loopback WorkService. Linear history is preserved offline as static immutable exports, encrypted reports, and provenance mappings. Linear is never a fallback or recovery authority.
