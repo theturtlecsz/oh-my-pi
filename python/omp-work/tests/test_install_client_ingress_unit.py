@@ -220,8 +220,17 @@ def test_client_ingress_has_no_environment_file_and_no_grok(tmp_path: Path) -> N
         assert "grok" not in content.lower(), f"{name} mentions 'grok'"
 
 
-def test_ingress_port_non_numeric_exits_2(tmp_path: Path) -> None:
-    """--ingress-port abc exits with status code 2."""
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        ("--ingress-port", "abc"),
+        ("--ingress-port", "543:23"),
+        ("--http-port", "543:22"),
+        ("--postgres-port", "543:21"),
+    ],
+)
+def test_non_numeric_port_exits_2(tmp_path: Path, option: str, value: str) -> None:
+    """Reject nonnumeric ports before the installer writes unusable units."""
     units = tmp_path / "review-units"
     result = subprocess.run(
         [
@@ -232,11 +241,12 @@ def test_ingress_port_non_numeric_exits_2(tmp_path: Path) -> None:
             "/candidate/python",
             "--unit-dir",
             str(units),
-            "--ingress-port",
-            "abc",
+            option,
+            value,
         ],
         capture_output=True,
         text=True,
     )
     assert result.returncode == 2
     assert "ports must be numeric" in result.stderr
+    assert not units.exists()

@@ -34,7 +34,9 @@ fi
 case "$pgdata" in /*) ;; *) echo '--postgres-data must be absolute' >&2; exit 2 ;; esac
 case "$service_python" in /*) ;; *) echo '--python must be absolute' >&2; exit 2 ;; esac
 case "$unit_dir" in /*) ;; *) echo '--unit-dir must be absolute' >&2; exit 2 ;; esac
-case "$pgport:$httpport:$ingressport" in *[!0-9:]*) echo 'ports must be numeric' >&2; exit 2 ;; esac
+for port in "$pgport" "$httpport" "$ingressport"; do
+  case "$port" in ''|*[!0-9]*) echo 'ports must be numeric' >&2; exit 2 ;; esac
+done
 if [ "$render_only" -eq 0 ]; then
   for path in "$config" "$pgdata" "$state" "$share/wal"; do install -d -m 700 "$path"; done
   for bin in initdb postgres pg_ctl; do command -v "$bin" >/dev/null || { echo "missing native PostgreSQL binary: $bin" >&2; exit 1; }
