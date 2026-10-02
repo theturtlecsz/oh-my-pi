@@ -428,6 +428,13 @@ def main(
                     approve=args.approve,
                     answer_ref=args.answer_ref,
                 )
+            except KeyError as exc:
+                msg = str(exc.args[0]) if exc.args else str(exc)
+                if args.json:
+                    print(json.dumps({"error": msg}))
+                else:
+                    print(msg)
+                return EXIT_RUN_FAILED
             except ValueError as exc:
                 if args.json:
                     print(json.dumps({"error": str(exc)}))
