@@ -193,12 +193,18 @@ def _run_events_command(args: argparse.Namespace) -> int:
             except ValueError as error:
                 print(f"events: {error}", file=sys.stderr)
                 return 2
+            try:
+                bearers = event_push.load_push_bearers(config_dir)
+            except ValueError as error:
+                print(f"events: {error}", file=sys.stderr)
+                return 2
             allowed_hosts = event_push.load_allowed_hosts(config_dir)
             result = event_push.run_push(
                 client,
                 workspace_id=workspace_id,
                 master_key=master_key,
                 allowed_hosts=allowed_hosts,
+                bearers=bearers,
             )
             print(json.dumps(result, sort_keys=True))
             return 0
