@@ -9,6 +9,16 @@ drift mid-incident. This parses every fenced ``sh`` line that invokes the
 with ``--help``, and requires the help text to name each flag on the line. It
 also requires exactly one ``text evidence`` block carrying every evidence field,
 so the drill cannot lose the record it is supposed to leave behind.
+
+It also defends against operational runbook drift:
+- Claiming units outside ``docs/work-ledger-operations.md`` must restart or
+  misidentifying the restart set (``OperationsConfig.connection_kwargs`` reads
+  secrets per connection; per-transaction connections and Postgres advisory locks
+  mean no units must restart for credential pickup).
+- Misidentifying the queued mission window (requires ``approved``, not
+  ``awaiting_confirmation``) or lacking commands to discover queued missions.
+- Inverting failure recovery by overwriting the working password with a rejected
+  credential when rotation rolls back.
 """
 
 from __future__ import annotations
@@ -124,3 +134,51 @@ def test_runbook_has_exactly_one_complete_evidence_block() -> None:
         body = "\n".join(evidence[0])
         for label in EVIDENCE_LABELS:
             assert label in body, f"{runbook}: evidence block omits {label!r}"
+
+
+def test_runbook_restart_set_and_unit_list_accuracy() -> None:
+    for runbook in RUNBOOKS:
+        text = runbook.read_text(encoding="utf-8")
+        assert "connection_kwargs" in text, f"{runbook}: must cite connection_kwargs"
+        assert "read_secret" in text, f"{runbook}: must explain read_secret on each connection"
+        assert "docs/work-ledger-operations.md" in text, (
+            f"{runbook}: must cite docs/work-ledger-operations.md unit list"
+        )
+        assert "no units must restart" in text.lower(), (
+            f"{runbook}: must state that no units must restart to pick up the new password"
+        )
+        assert "omp-work-postgres.service" in text, (
+            f"{runbook}: must account for omp-work-postgres.service remaining up"
+        )
+
+
+def test_runbook_mission_window_and_discovery() -> None:
+    for runbook in RUNBOOKS:
+        text = runbook.read_text(encoding="utf-8")
+        assert "approved" in text, f"{runbook}: must require an approved mission"
+        assert "awaiting_confirmation" in text, (
+            f"{runbook}: must distinguish approved from awaiting_confirmation"
+        )
+        assert "projects show" in text, (
+            f"{runbook}: must provide projects show to discover open missions"
+        )
+        assert "orchestrator status" in text, (
+            f"{runbook}: must use orchestrator status to inspect and confirm pickup"
+        )
+        assert "open_missions" in text, (
+            f"{runbook}: must name the open_missions field of projects show"
+        )
+
+
+def test_runbook_failure_recovery_distinguishes_rollback_from_crash() -> None:
+    for runbook in RUNBOOKS:
+        text = runbook.read_text(encoding="utf-8")
+        assert "credential rotation failed; recovery credential retained" in text, (
+            f"{runbook}: must name the exact rotation failure error"
+        )
+        assert "rm <config>/<role>.next" in text, (
+            f"{runbook}: must delete rejected candidate on transaction rollback"
+        )
+        assert "mv <config>/<role>.next <config>/<role>" in text, (
+            f"{runbook}: must promote candidate only for crash after commit"
+        )
