@@ -541,7 +541,7 @@ export interface WorkflowBackend {
 	/** The `waiting` tool read (owner decision queue). */
 	waitingLines(): Promise<string[]>;
 	/** The `tree` tool read (surface/milestone overview). */
-	projectTreeLines(): Promise<string[]>;
+	projectTreeLines(project?: string): Promise<string[]>;
 	/** One fresh /center orientation read (OMP-25). Throws on tree/focus
 	 *  failure — the host shows one honest error instead of a stale
 	 *  orientation; only the activity section degrades internally. */

@@ -750,8 +750,23 @@ export function createWorkBackend(
 		return new Map(tree.projects.map(p => [p.project_id, p.name]));
 	}
 
-	async function projectIdFor(name: string): Promise<UUID> {
+	/** The default tree hides Media Discovery items (OMP-527). A named project
+	 *  or work item that is absent from it is reachable only through the
+	 *  media-discovery projection, so fall back to that world when it holds
+	 *  the name. An unnamed read stays on the default tree — one request. */
+	async function treeNaming(name: { project?: string; workId?: string }): Promise<WorkspaceTree> {
 		const tree = await client.tree();
+		if (name.project === undefined && name.workId === undefined) return tree;
+		const holds = (candidate: WorkspaceTree): boolean =>
+			(name.workId !== undefined && candidate.items.some(item => item.work_id === name.workId))
+			|| (name.project !== undefined && candidate.projects.some(project => project.name === name.project));
+		if (holds(tree)) return tree;
+		const mediaTree = await client.tree({ world: "media-discovery" });
+		return holds(mediaTree) ? mediaTree : tree;
+	}
+
+	async function projectIdFor(name: string): Promise<UUID> {
+		const tree = await treeNaming({ project: name });
 		const hit = tree.projects.find(p => p.name === name);
 		if (!hit) throw new Error(`Work Ledger has no project named "${name}" — create it first`);
 		return hit.project_id;
@@ -980,11 +995,11 @@ export function createWorkBackend(
 		},
 
 		async projectScopeExists(project: string): Promise<boolean> {
-			return (await client.tree()).projects.some(p => p.name === project);
+			return (await treeNaming({ project })).projects.some(p => p.name === project);
 		},
 
 		async mapData(nowKey?: string, projectFilter?: string): Promise<{ surfaces: MapSurface[]; capped: boolean }> {
-			const tree = await client.tree();
+			const tree = await treeNaming({ project: projectFilter });
 			const names = projectNames(tree);
 			const byProject = new Map<string, WorkItemView[]>();
 			for (const item of tree.items) {
@@ -1093,7 +1108,7 @@ export function createWorkBackend(
 		async currentNow(): Promise<NowRef | null> {
 			const slot = await client.focus(config.ownerId);
 			if (!slot.work_id) return null;
-			const tree = await client.tree();
+			const tree = await treeNaming({ workId: slot.work_id });
 			const item = tree.items.find(i => i.work_id === slot.work_id);
 			if (!item) return null;
 			const ref = toRef(item, projectNames(tree));
@@ -1103,7 +1118,7 @@ export function createWorkBackend(
 		},
 
 		async goalTree(now: NowRef): Promise<GoalTree | null> {
-			const tree = await client.tree();
+			const tree = await treeNaming({ workId: now.id });
 			const names = projectNames(tree);
 			const me = tree.items.find(i => i.work_id === now.id);
 			const project = me?.project_id ? tree.projects.find(p => p.project_id === me.project_id) : undefined;
@@ -1265,8 +1280,8 @@ export function createWorkBackend(
 				});
 		},
 
-		async projectTreeLines(): Promise<string[]> {
-			const tree = await client.tree();
+		async projectTreeLines(project?: string): Promise<string[]> {
+			const tree = await treeNaming({ project });
 			return tree.projects.map(p => {
 				const items = tree.items.filter(i => i.project_id === p.project_id && !i.archived);
 				const open = items.filter(i => i.state !== "DONE" && i.state !== "CANCELED").length;
