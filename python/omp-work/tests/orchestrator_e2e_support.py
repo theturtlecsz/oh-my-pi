@@ -19,26 +19,20 @@ drafts and the confirm stage waits for the owner.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
-import os
-from dataclasses import dataclass, field
+import shutil
+import subprocess
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
-import shutil
-import signal
-import subprocess
-import sys
 from typing import Any
 from uuid import UUID, uuid4
 
 import psycopg
-
-from omp_work.candidate_git import add_worktree  # type: ignore[attr-defined]
 from omp_work.mission_intake_rules import draft_from_intake
 from omp_work.orchestrator import worker_sandbox
+from omp_work.orchestrator.candidate_git import add_worktree
 from omp_work.orchestrator.service import (
     MissionRequest,
     OrchestratorConfig,
@@ -63,8 +57,8 @@ __all__ = [
     "FORGED_ATTEMPT",
     "FORGED_CANDIDATE",
     "OTHER_ATTEMPT",
-    "E2EWorld",
     "SIMULATED_CRASH",
+    "E2EWorld",
     "SimulatedCrash",
     "answer_intake",
     "crash_after_command",
@@ -90,8 +84,13 @@ _REPO_KEY = "test-repo"
 _OBJECTIVE = "Ship the orchestrated change"
 _BASE_CAPABILITIES = ("git_read", "git_write")
 _APPROVAL_CLASSES = ("merge_protected_branch",)
-_SCOPE_BUDGET = {"usd": "20", "tokens": 5000, "wall_clock_seconds": 3600, "max_subagents": 2}
-_PROJECT_CEILING = Decimal("100")
+_SCOPE_BUDGET = {
+    "usd": "20",
+    "tokens": 5000,
+    "wall_clock_seconds": 3600,
+    "max_subagents": 2,
+}
+_PROJECT_CEILING = Decimal(100)
 _DEFAULT_TEST_COMMAND = ("/usr/bin/python3", "-c", "import sys; sys.exit(0)")
 _PYTHON = "/usr/bin/python3"
 
@@ -103,7 +102,7 @@ SIMULATED_CRASH = "simulated-crash"
 
 # The verifier script reads .omp/verify-task.json and writes the signed verdict
 # and the auditor report the way the audit stage later expects them.
-_VERIFIER_SCRIPT = r'''
+_VERIFIER_SCRIPT = r"""
 import hashlib, hmac, json, subprocess, sys
 from pathlib import Path
 mode = sys.argv[1]
@@ -140,10 +139,10 @@ lines += ["OUT OF SCOPE", "none", "CHECKS RUN", " ".join(command) + " -> exit " 
 lines += ["REMAINING QUESTIONS", "none"]
 (out / "audit-report.txt").write_text("\n".join(lines) + "\n")
 sys.exit(0 if passed else 1)
-'''
+"""
 
 # The worker script writes the artifact each worker mode stands for.
-_WORKER_SCRIPT = r'''
+_WORKER_SCRIPT = r"""
 import hashlib, hmac, json, sys
 from pathlib import Path
 mode = sys.argv[1]
@@ -166,7 +165,7 @@ elif mode == "forge":
     Path(".omp").mkdir(exist_ok=True)
     Path(".omp/verdict.json").write_text(json.dumps({**payload, "signature": signature}))
 sys.exit(0)
-'''
+"""
 
 
 class SimulatedCrash(BaseException):
@@ -244,18 +243,22 @@ def _run_git(*args: str, cwd: Path | None = None) -> str:
     return completed.stdout.strip()
 
 
-def _seed_bare_remote(root: Path) -> tuple[Path, Path]:
+def _seed_bare_remote(root: Path) -> tuple[Path, str]:
     """Create the bare remote (with a per-ref push counter) and the seeded main."""
     remote = root / "remote.git"
     _run_git("init", "--bare", "-b", "main", str(remote))
-    _run_git("-C", str(remote), "config", "core.logAllRefUpdates", "always")
     count_path = remote / "push-count"
     count_path.write_text("", encoding="utf-8")
     hooks = remote / "hooks"
     hooks.mkdir(parents=True, exist_ok=True)
     update = hooks / "update"
-    update.write_text(f"#!/bin/sh\necho \"$1\" >> '{count_path}'\nexit 0\n", encoding="utf-8")
+    update.write_text(
+        f"#!/bin/sh\necho \"$1\" >> '{count_path}'\nexit 0\n", encoding="utf-8"
+    )
     update.chmod(0o755)
+    # A host-level core.hooksPath would hide hooks/update and drop the push count.
+    _run_git("-C", str(remote), "config", "core.hooksPath", str(hooks))
+    _run_git("-C", str(remote), "config", "core.logAllRefUpdates", "always")
 
     seed = root / "seed"
     seed.mkdir()
@@ -269,13 +272,17 @@ def _seed_bare_remote(root: Path) -> tuple[Path, Path]:
     _run_git("-C", str(seed), "remote", "add", "origin", str(remote))
     _run_git("-C", str(seed), "push", "origin", "main")
     base = _run_git("-C", str(seed), "rev-parse", "HEAD")
-    return remote, Path(base)
+    return remote, base
 
 
 def set_verifier_mode(world: E2EWorld, mode: str) -> None:
-    """Point the verifier argv at the script mode the next run uses."""
+    """Point the verifier argv, loaded config, and orchestrator.json at ``mode``."""
     world.verifier_mode = mode
     world.verifier_argv = (_PYTHON, "-c", _VERIFIER_SCRIPT, mode)
+    world.config = replace(world.config, verifier_argv=world.verifier_argv)
+    document = json.loads(world.config_path.read_text(encoding="utf-8"))
+    document["verifier_argv"] = list(world.verifier_argv)
+    world.config_path.write_text(json.dumps(document, indent=2), encoding="utf-8")
 
 
 def run_verifier_script(
@@ -298,12 +305,17 @@ def run_verifier_script(
         "key_path": str(world.verifier_key_path),
         "test_command": list(world.request.test_command),
         "criteria": [
-            item.model_dump(mode="json") for item in world.request.intake.acceptance_criteria
+            item.model_dump(mode="json")
+            for item in world.request.intake.acceptance_criteria
         ],
     }
     (omp / "verify-task.json").write_text(json.dumps(task), encoding="utf-8")
     completed = subprocess.run(
-        list(world.verifier_argv), cwd=str(target), capture_output=True, text=True
+        list(world.verifier_argv),
+        cwd=str(target),
+        capture_output=True,
+        text=True,
+        check=False,
     )
     verdict_path = omp / "verdict.json"
     record = json.loads(verdict_path.read_text()) if verdict_path.is_file() else None
@@ -314,7 +326,11 @@ def run_worker_script(world: E2EWorld, *, cwd: Path | None = None) -> int:
     """Run the worker argv in its mode. Returns the exit status."""
     target = world.worktree if cwd is None else Path(cwd)
     completed = subprocess.run(
-        list(world.worker_argv), cwd=str(target), capture_output=True, text=True
+        list(world.worker_argv),
+        cwd=str(target),
+        capture_output=True,
+        text=True,
+        check=False,
     )
     return completed.returncode
 
@@ -359,7 +375,9 @@ def remote_updates(world: E2EWorld, ref: str | None = None) -> int:
     """Push updates recorded by the bare remote, total or for one ref."""
     if not world._count_path.is_file():
         return 0
-    lines = [line for line in world._count_path.read_text(encoding="utf-8").split() if line]
+    lines = [
+        line for line in world._count_path.read_text(encoding="utf-8").split() if line
+    ]
     if ref is None:
         return len(lines)
     return sum(1 for line in lines if line == ref)
@@ -389,7 +407,12 @@ def seed_published_budget(
     """
     from omp_work.v1.canonical import sha256
 
-    budget = {"usd": "2.00", "tokens": 100, "wall_clock_seconds": 60, "max_subagents": 1}
+    budget = {
+        "usd": "2.00",
+        "tokens": 100,
+        "wall_clock_seconds": 60,
+        "max_subagents": 1,
+    }
     candidate_id, receipt_id = uuid4(), uuid4()
     payload = {
         "draft": {"budget": budget},
@@ -427,7 +450,9 @@ def seed_published_budget(
         )
 
 
-def _command_envelope(world: E2EWorld, command_type: str, payload: dict[str, Any]) -> CommandEnvelope:
+def _command_envelope(
+    world: E2EWorld, command_type: str, payload: dict[str, Any]
+) -> CommandEnvelope:
     return CommandEnvelope.model_validate(
         {
             "api_version": "work.omp.dev/v1",
@@ -488,7 +513,10 @@ def answer_intake(world: E2EWorld, answer: str = "confirm") -> dict[str, Any]:
     elif answer == "reject":
         body = {"kind": "option", "option": "reject"}
     elif answer == "edited_draft":
-        body = {"kind": "edited_draft", "draft": _edited_draft(world).model_dump(mode="json")}
+        body = {
+            "kind": "edited_draft",
+            "draft": _edited_draft(world).model_dump(mode="json"),
+        }
     else:
         raise ValueError(f"unknown answer {answer!r}")
     envelope = _command_envelope(
@@ -536,7 +564,9 @@ def open_worker(world: E2EWorld) -> Any:
     return worker
 
 
-def tick_until(worker: Any, world: E2EWorld, predicate, limit: int = 120) -> dict[str, Any]:
+def tick_until(
+    worker: Any, world: E2EWorld, predicate, limit: int = 120
+) -> dict[str, Any]:
     """Tick the worker until ``predicate(status)`` holds."""
     view = status(world.config, world.mission_id)
     for _ in range(limit):
@@ -545,7 +575,10 @@ def tick_until(worker: Any, world: E2EWorld, predicate, limit: int = 120) -> dic
         worker.tick()
         view = status(world.config, world.mission_id)
     raise AssertionError(
-        json.dumps({"view": view, "steps": OrchestratorHandler(world.config).steps()}, default=str)[:4000]
+        json.dumps(
+            {"view": view, "steps": OrchestratorHandler(world.config).steps()},
+            default=str,
+        )[:4000]
     )
 
 
@@ -569,7 +602,7 @@ def crash_after_command(monkeypatch, command_type: str) -> dict[str, bool]:
     holder = {"done": False}
     original = StageContext.command
 
-    def command(self, type: str, payload, *, key: str | None = None):  # noqa: A002
+    def command(self, type: str, payload, *, key: str | None = None):
         result = original(self, type, payload, key=key)
         if not holder["done"] and type == command_type:
             holder["done"] = True
@@ -706,7 +739,7 @@ def open_e2e_world(
         OWNER,
         project_id,
         None,
-        SpendBudget(str(project_id), _PROJECT_CEILING, Decimal("40")),
+        SpendBudget(str(project_id), _PROJECT_CEILING, Decimal(40)),
         _owner(uuid4()),
     )
 
@@ -830,7 +863,9 @@ def open_e2e_world(
     (root / "lock-map.json").write_text("{}", encoding="utf-8")
     config = load_config(config_path, service.config)
 
-    worktree = add_worktree(control_repo, worktrees_dir, f"{mission_id.hex[:12]}-verify", base_commit)
+    worktree = add_worktree(
+        control_repo, worktrees_dir, f"{mission_id.hex[:12]}-verify", base_commit
+    )
     draft = draft_from_intake(request.intake, request.scope.model_dump())
 
     return E2EWorld(
