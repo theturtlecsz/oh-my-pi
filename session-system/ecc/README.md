@@ -14,6 +14,11 @@ invariant below is verifiable offline with `bun test`.
 | `manifest.json`            | Upstream pin, the two packs, every asset record (target, adaptation kind, disposition, dependencies), reserved native command names, and disposition rules. |
 | `adapter/`                 | The deterministic transform, overlay engine, install plan, and install/update/remove lifecycle.                                          |
 | `adapter/emit-lock.ts`     | Build step: rebuilds `adapted.lock.json` from the mirror.                                                                                |
+| `adapter/upstream-check.ts` | Compares a candidate checkout with `mirror/` and prints one JSON report. Each file row has `status`. An overlay conflict clears when the candidate primary bytes equal the `mirror/` bytes. |
+| `adapter/repin.ts`         | Applies an accepted review. It copies the changed mirror files and writes `reviews/<candidate commit>.json`. It does not copy `newFiles`. |
+| `adapter/review.ts`        | Validates an `UpdateReview` and refuses unknown keys. A review change row has no `status` field.                                         |
+| `adapter/pin.ts`           | Builds the lock: `manifestSha256` and the review pin. `emit-lock.ts --check` runs that check.                                            |
+| `reviews/`                 | Accepted reviews as `<candidate commit>.json`, written by `repin.ts` and pinned by the lock `review` field. Absent until the first re-pin. |
 | `adapted.lock.json`        | Committed record of each asset's upstream sha256, adapted sha256, and owned files.                                                       |
 | `overlays/`                | Reviewed `find`/`replace` edits applied after the metadata transform, pinned to both the upstream and adapted sha256.                    |
 | `advisor/`                 | The static read-only policy prepended to the database advisor's instructions.                                                            |
@@ -55,22 +60,13 @@ exists at the pinned revision; `ecc-eval-harness` is `supported-without-changes`
 and preserves upstream's candidate-execution refusal text, so the refusal stays
 intact until an independently qualified integration supersedes it.
 
-## Overlays and re-pinning
+## Overlays
 
 Overlays are reviewed JSON edits applied after the metadata transform. Each pins
 the upstream sha256, the resulting adapted sha256, and a list of `find`/`replace`
 edits whose `find` block must match exactly once. Build refuses on any drift: a
 changed upstream file, a `find` block that no longer matches once, or a resulting
 hash that differs from the pinned value.
-
-Re-pin ritual when upstream changes:
-
-1. Replace the affected `mirror/` file and update its `upstream.sha256` pin in
-   `manifest.json`.
-2. Review the overlay edits; update `upstreamSha256` if the source moved.
-3. Run the build; it reports the computed adapted sha256 when it rejects a stale pin.
-4. Pin the reported adapted sha256 and re-run the build to confirm it passes.
-5. Commit the mirror, manifest, overlay, and rebuilt `adapted.lock.json` together.
 
 ## Building
 
@@ -89,9 +85,10 @@ the complete file set before writing anything.
 - **install** — writes only destinations that are absent. A destination that
   exists and is not owned by this installation aborts the whole install, so a
   user file is never overwritten.
-- **update** — re-plans against the current mirror and rewrites files this
-  install owns. An owned file whose bytes no longer match the lock was modified
-  after install, so update refuses instead of clobbering the local edit.
+- **update** — `cli.ts update` plans every installable asset of both packs
+  against the current mirror and writes those destinations. An owned file
+  whose bytes no longer match the lock was modified after install, so update
+  refuses instead of clobbering the local edit.
 - **remove** — deletes only lock-owned files whose bytes still match the recorded
   sha256, prunes directories it emptied, and deletes the lock. A modified owned
   file is refused.
@@ -100,13 +97,14 @@ Ownership is recorded per project in `<projectRoot>/.omp/ecc/adapted.lock.json`,
 so two projects never share an ownership record. Every step is idempotent:
 re-installing writes nothing new, and removing an absent installation is a no-op.
 
-Rollback is `remove`: it deletes the owned artifacts for the installed packs and
-leaves every other file in the project untouched.
+Rollback restores the ECC root to its pre-update bytes and runs `update` again.
+That returns the project tree and `<projectRoot>/.omp/ecc/adapted.lock.json` to
+the bytes from the first install, and a second update reports unchanged.
 
 ## Verification
 
 ```bash
-bun test session-system/tests/ecc-adaptation.test.ts session-system/tests/ecc-install.test.ts
+bun test session-system/tests/ecc-adaptation.test.ts session-system/tests/ecc-install.test.ts session-system/tests/ecc-upstream-check.test.ts session-system/tests/ecc-repin.test.ts session-system/tests/ecc-manifest-pin.test.ts session-system/tests/ecc-rollback.test.ts
 ```
 
 The adaptation test verifies source and transformed hashes, manifest and
@@ -114,4 +112,14 @@ disposition invariants, reference closure (including a failure on a missing
 reference), overlay drift refusal, the preserved candidate-execution refusal, and
 that an adapted rule, skill, and advisor are discovered natively. The install
 test verifies deterministic install/update/remove, unowned-overwrite refusal,
-per-project ownership, and that nothing activates accidentally.
+per-project ownership, and that nothing activates accidentally. The upstream-check
+test verifies an identical copy, a changed primary file, a missing helper, an
+added skill file, an overlay conflict that clears when the candidate primary
+bytes equal the mirror bytes, and one JSON object from the CLI. The repin test
+verifies that an accepted review re-pins the mirror, the manifest, the review
+file, and the lock, and that a refusal leaves the ECC root unchanged. The
+manifest-pin test verifies the committed `manifestSha256`, review-pin refusal,
+`UpdateReview` rejection of unknown keys, and `emit-lock.ts --check` exit codes.
+The rollback test verifies that restoring the pre-update ECC root and running
+update returns the project tree and its lock to the first install, and that a
+second update reports unchanged.
