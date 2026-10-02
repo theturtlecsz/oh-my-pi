@@ -29,6 +29,7 @@ const BROKER_SPAWN_OPTIONS = resolveDaemonSpawnOptions({
 });
 
 interface PendingRequest {
+	socket: net.Socket;
 	operation: DaemonOperation;
 	resolve: (result: DaemonRpcResult) => void;
 	reject: (error: Error) => void;
@@ -151,7 +152,6 @@ class SocketDaemonClient implements DaemonBrokerClient {
 	readonly #completionSubscriptionId = crypto.randomUUID();
 	#socket: net.Socket | undefined;
 	#connectPromise: Promise<void> | undefined;
-	#buffer = "";
 	#closed = false;
 	#completionReconnectTimer: NodeJS.Timeout | undefined;
 	#shutdownAcked = false;
@@ -200,7 +200,7 @@ class SocketDaemonClient implements DaemonBrokerClient {
 			pending.removeAbort?.();
 			reject(new Error(`Daemon ${operation.op} request timed out`));
 		}, requestTimeoutMs(operation));
-		const pending: PendingRequest = { operation, resolve, reject, timer };
+		const pending: PendingRequest = { socket, operation, resolve, reject, timer };
 		if (signal) {
 			const abort = (): void => {
 				if (!this.#pending.delete(id)) return;
@@ -354,77 +354,82 @@ class SocketDaemonClient implements DaemonBrokerClient {
 
 	#bindSocket(socket: net.Socket): void {
 		this.#socket = socket;
-		this.#buffer = "";
+		let buffer = "";
 		socket.setEncoding("utf8");
-		socket.on("data", chunk => this.#onData(chunk));
+		socket.on("data", chunk => {
+			buffer += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+			for (;;) {
+				const newline = buffer.indexOf("\n");
+				if (newline < 0) return;
+				const line = buffer.slice(0, newline);
+				buffer = buffer.slice(newline + 1);
+				if (line.length === 0) continue;
+				this.#handleLine(socket, line);
+			}
+		});
 		socket.on("error", () => {
 			// The close handler rejects pending requests with one stable error.
 		});
 		socket.on("close", () => {
-			if (this.#socket === socket) this.#socket = undefined;
-			this.#rejectPending(new Error("Daemon broker connection closed"));
-			this.#scheduleCompletionReconnect();
+			const wasCurrent = this.#socket === socket;
+			if (wasCurrent) this.#socket = undefined;
+			this.#rejectPending(new Error("Daemon broker connection closed"), socket);
+			if (wasCurrent) this.#scheduleCompletionReconnect();
 		});
 	}
 
-	#onData(chunk: string | Buffer): void {
-		this.#buffer += typeof chunk === "string" ? chunk : chunk.toString("utf8");
-		for (;;) {
-			const newline = this.#buffer.indexOf("\n");
-			if (newline < 0) return;
-			const line = this.#buffer.slice(0, newline);
-			this.#buffer = this.#buffer.slice(newline + 1);
-			if (line.length === 0) continue;
-			let decoded: unknown;
-			try {
-				decoded = JSON.parse(line);
-			} catch (error) {
-				this.#rejectPending(error instanceof Error ? error : new Error(String(error)));
-				continue;
+	#handleLine(socket: net.Socket, line: string): void {
+		let decoded: unknown;
+		try {
+			decoded = JSON.parse(line);
+		} catch (error) {
+			this.#rejectPending(error instanceof Error ? error : new Error(String(error)), socket);
+			return;
+		}
+		let message: DaemonWireMessage;
+		try {
+			message = parseDaemonWireMessage(decoded);
+		} catch (error) {
+			const parseError = error instanceof Error ? error : new Error(String(error));
+			if (
+				typeof decoded === "object" &&
+				decoded !== null &&
+				"event" in decoded &&
+				decoded.event === "daemon-completed"
+			) {
+				logger.warn("Ignoring malformed daemon completion", { error: parseError.message });
+				return;
 			}
-			let message: DaemonWireMessage;
-			try {
-				message = parseDaemonWireMessage(decoded);
-			} catch (error) {
-				const parseError = error instanceof Error ? error : new Error(String(error));
-				if (
-					typeof decoded === "object" &&
-					decoded !== null &&
-					"event" in decoded &&
-					decoded.event === "daemon-completed"
-				) {
-					logger.warn("Ignoring malformed daemon completion", { error: parseError.message });
-					continue;
-				}
-				this.#rejectPending(parseError);
-				continue;
+			this.#rejectPending(parseError, socket);
+			return;
+		}
+		if ("event" in message) {
+			void this.#deliverCompletion(message);
+			return;
+		}
+		const response = message;
+		const pending = this.#pending.get(response.id);
+		if (!pending) return;
+		this.#pending.delete(response.id);
+		clearTimeout(pending.timer);
+		pending.removeAbort?.();
+		if (!response.ok) {
+			pending.reject(new DaemonBrokerRejectedError(response.error));
+			return;
+		}
+		if (pending.operation.op === "shutdown") {
+			this.#shutdownAcked = true;
+			if (this.#completionReconnectTimer !== undefined) {
+				clearTimeout(this.#completionReconnectTimer);
+				this.#completionReconnectTimer = undefined;
 			}
-			if ("event" in message) {
-				void this.#deliverCompletion(message);
-				continue;
-			}
-			const response = message;
-			const pending = this.#pending.get(response.id);
-			if (!pending) continue;
-			this.#pending.delete(response.id);
-			clearTimeout(pending.timer);
-			pending.removeAbort?.();
-			if (!response.ok) {
-				pending.reject(new DaemonBrokerRejectedError(response.error));
-				continue;
-			}
-			if (pending.operation.op === "shutdown") {
-				this.#shutdownAcked = true;
-				if (this.#completionReconnectTimer !== undefined) {
-					clearTimeout(this.#completionReconnectTimer);
-					this.#completionReconnectTimer = undefined;
-				}
-			}
-			try {
-				pending.resolve(parseDaemonRpcResult(pending.operation, response.result));
-			} catch (error) {
-				pending.reject(error instanceof Error ? error : new Error(String(error)));
-			}
+			if (this.#socket === socket) this.#socket = undefined;
+			socket.end();
+		}
+		try {
+			pending.resolve(parseDaemonRpcResult(pending.operation, response.result));
+		} catch (error) {
+			pending.reject(error instanceof Error ? error : new Error(String(error)));
 		}
 	}
 
@@ -475,13 +480,14 @@ class SocketDaemonClient implements DaemonBrokerClient {
 		);
 	}
 
-	#rejectPending(error: Error): void {
-		for (const pending of this.#pending.values()) {
+	#rejectPending(error: Error, socket?: net.Socket): void {
+		for (const [id, pending] of this.#pending) {
+			if (socket !== undefined && pending.socket !== socket) continue;
+			this.#pending.delete(id);
 			clearTimeout(pending.timer);
 			pending.removeAbort?.();
 			pending.reject(error);
 		}
-		this.#pending.clear();
 	}
 }
 
