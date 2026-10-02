@@ -1,12 +1,13 @@
 """Stage operations for the front orchestrator pipeline (OMP-417-s07-s04).
 
-Provides deterministic intake, confirm, and plan stage operations.
+Provides deterministic intake, confirm, plan, and grant stage operations.
 No constants or SQL statements are defined in this module.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import UTC, datetime
 import hashlib
 from pathlib import Path
 import sys
@@ -24,7 +25,7 @@ from omp_work.orchestrator.service import (
     StageContext,
     register_stage_operation,
 )
-from omp_work.v1.canonical import sha256
+from omp_work.v1.canonical import sha256, text_sha256
 from omp_work.v1.models import MissionDraft
 from omp_work.v1.service import WorkError
 
@@ -32,6 +33,7 @@ __all__ = [
     "judge_manifest",
     "register",
     "run_confirm",
+    "run_grant",
     "run_intake",
     "run_plan",
 ]
@@ -42,6 +44,7 @@ def register() -> None:
     register_stage_operation("intake", run_intake)
     register_stage_operation("confirm", run_confirm)
     register_stage_operation("plan", run_plan)
+    register_stage_operation("grant", run_grant)
 
 
 def run_intake(ctx: StageContext) -> Outcome:
@@ -264,6 +267,120 @@ def run_plan(ctx: StageContext) -> Outcome:
         )
 
     return Outcome(outcome="succeeded", data={"stage": "plan"})
+
+
+def _request_mapping(request: object) -> Mapping[str, Any]:
+    if isinstance(request, Mapping):
+        return request
+    raise WorkError("invalid_request", diagnostics=("request is not a mapping",))
+
+
+def _owner_input_id(ctx: StageContext, intake_data: Mapping[str, Any]) -> str:
+    decision_id = intake_data.get("decision_id")
+    if decision_id is not None:
+        return str(decision_id)
+    project = ctx.projects.read_project(
+        UUID(str(ctx.workspace_id)),
+        UUID(str(ctx.principal.actor_id)),
+        UUID(str(ctx.project_id)),
+    )
+    mandate = project.get("standing_mandate") or {}
+    if not isinstance(mandate, Mapping):
+        raise WorkError("invalid_request", diagnostics=("standing mandate missing",))
+    return str(mandate["mandate_id"])
+
+
+def run_grant(ctx: StageContext) -> Outcome:
+    """Begin one execution grant, or report the grant this mission already has."""
+    gid = service._ids(ctx.mission_id, "grant")
+    judged = judge_manifest(ctx.config)
+    if judged is None:
+        return Outcome(
+            outcome="failed",
+            data={"stage": "grant", "code": "verifier_argv_missing"},
+        )
+    judge_sha, manifest = judged
+    try:
+        view = ctx.service.read(
+            ctx.principal, ctx.workspace_id, "execution", str(gid)
+        )
+    except WorkError as err:
+        if err.code not in {"invalid_request", "not_found"}:
+            raise
+        view = None
+    if view is not None:
+        grant = view["grant"]
+        return Outcome(
+            outcome="succeeded",
+            data={
+                "stage": "grant",
+                "grant_id": str(grant["grant_id"]),
+                "grant_version": grant["grant_version"],
+                "state": grant["state"],
+            },
+        )
+
+    rq = _request_mapping(ctx.request)
+    intake_data = (ctx.prior.get("intake") or {}).get("data") or {}
+    if not isinstance(intake_data, Mapping):
+        intake_data = {}
+    key = str(intake_data["work_key"])
+    item = ctx.service.read(ctx.principal, ctx.workspace_id, "item", key)
+    work = rq["work"]
+    if isinstance(work, Mapping):
+        description = str(work["description"])
+    else:
+        description = str(getattr(work, "description"))
+    actor_id = ctx.principal.actor_id
+    focus = ctx.service.read(ctx.principal, ctx.workspace_id, "focus", str(actor_id))
+    issued_at = datetime.now(UTC).isoformat()
+    project_id = item.get("project_id")
+    payload: dict[str, Any] = {
+        "grant_id": str(gid),
+        "provenance": {
+            "owner_input_id": _owner_input_id(ctx, intake_data),
+            "owner_session_id": f"orchestrator:{ctx.mission_id}",
+            "normalized_command": f"/execute {key}",
+            "workspace_id": str(ctx.workspace_id),
+            "repository": rq["repository"],
+            "nonce": str(service._ids(ctx.mission_id, "nonce")),
+            "issued_at": issued_at,
+        },
+        "remote_ref": rq["candidate_ref"],
+        "mode": "single",
+        "items": [
+            {
+                "work_id": str(item["work_id"]),
+                "revision_id": str(item["revision"]["revision_id"]),
+                "position": 0,
+                "original_request": description,
+                "original_request_sha256": text_sha256(description),
+                "initial_git_baseline": rq["base_commit"],
+                "project_id": None if project_id is None else str(project_id),
+            }
+        ],
+        "expected_focus_version": int(focus["version"]),
+        "judge_sha256": judge_sha,
+        "judge_manifest": manifest,
+    }
+    try:
+        ctx.command("begin_execution", payload)
+    except WorkError as err:
+        if err.code == "idempotency_conflict":
+            return Outcome(
+                outcome="failed",
+                data={"stage": "grant", "code": "grant_conflict"},
+            )
+        raise
+    return Outcome(
+        outcome="succeeded",
+        data={
+            "stage": "grant",
+            "grant_id": str(gid),
+            "judge_sha256": judge_sha,
+            "issued_at": issued_at,
+        },
+    )
 
 
 def _file_sha256(mod: object) -> str:
