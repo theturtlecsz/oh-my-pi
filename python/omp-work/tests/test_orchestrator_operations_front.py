@@ -9,6 +9,7 @@ Defends front pipeline contracts:
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from uuid import UUID
@@ -19,6 +20,7 @@ from omp_work.orchestrator import service
 from omp_work.orchestrator.operations import run_confirm, run_intake
 from omp_work.orchestrator.service import (
     OrchestratorHandler,
+    load_request,
     submit,
 )
 from orchestrator_e2e_support import (
@@ -280,54 +282,206 @@ def test_crash_after_draft_mission_intake(service, tmp_path: Path, monkeypatch) 
         assert str(rows[0][1]["decision_id"]) == str(decision_id)
 
 
-def test_intake_clarify_and_held_return_blockers() -> None:
-    """Intake outcomes 'clarify' and 'held' return blockers 'intake_clarify' and 'intake_held'."""
+def test_intake_clarify_returns_blocker(
+    service, tmp_path: Path, monkeypatch
+) -> None:
+    """Contradictory constraints route draft intake to clarify and return blocker intake_clarify."""
+    world = open_e2e_world(
+        service,
+        tmp_path / "clarify",
+        monkeypatch,
+        verifier_mode="pass",
+        worker_mode="ok",
+        extra_capability=None,
+        operations=("omp_work.orchestrator.operations:register",),
+    )
+    req_path = tmp_path / "clarify" / "request.json"
+    doc = json.loads(req_path.read_text(encoding="utf-8"))
+    doc["intake"]["constraints"] = [
+        {
+            "id": "c1",
+            "statement": "feature enabled",
+            "source_span_ids": [],
+            "key": "feature",
+            "value": {"kind": "known", "value": True},
+            "polarity": "positive",
+        },
+        {
+            "id": "c2",
+            "statement": "feature disabled",
+            "source_span_ids": [],
+            "key": "feature",
+            "value": {"kind": "known", "value": True},
+            "polarity": "negative",
+        },
+    ]
+    req_path.write_text(json.dumps(doc), encoding="utf-8")
+    world.request = load_request(req_path)
 
-    class DummyIntents:
-        def open(self, key):
-            return None
+    submitted = submit(world.config, world.request)
+    work_id = UUID(str(submitted["work_id"]))
+    _seed_item_budget(world, service, work_id)
 
-        def record_intent(self, key, action, target):
-            pass
-
-    class DummyContext:
-        def __init__(self, outcome: str):
-            self.mission_id = UUID("11111111-1111-1111-1111-111111111111")
-            self.step_index = 0
-            self.intents = DummyIntents()
-            self.request = {"intake": {}, "scope": {}, "instruction": None}
-            self.principal = None
-            self.workspace_id = None
-            self.service = type("DummyService", (), {"read": lambda *args: {}})()
-            self._outcome = outcome
-
-        def command(self, cmd_type, payload):
-            return {"outcome": self._outcome}
-
-    outcome_clarify = run_intake(DummyContext("clarify"))
-    assert outcome_clarify.outcome == "failed"
-    assert outcome_clarify.blocker == "intake_clarify"
-
-    outcome_held = run_intake(DummyContext("held"))
-    assert outcome_held.outcome == "failed"
-    assert outcome_held.blocker == "intake_held"
+    job = {
+        "work_id": str(work_id),
+        "job_id": f"orch:{world.mission_id}:0",
+        "worker_id": "test-worker",
+        "fence": 1,
+    }
+    handler = OrchestratorHandler(world.config)
+    handler.mission_id = world.mission_id
+    handler.project_id = world.request.project_id
+    handler._request = world.request.document()
+    handler._job_id = str(job["job_id"])
+    steps = handler.steps()
+    facts = handler._facts(steps, 0, "intake", None)
+    outcome = handler._operate(job, 0, "intake", facts)
+    assert outcome.outcome == "failed"
+    assert outcome.blocker == "intake_clarify"
 
 
-def test_confirm_abandoned_status_fails() -> None:
-    """Confirm returns failed when mission status is abandoned."""
+def test_intake_held_returns_blocker(
+    service, tmp_path: Path, monkeypatch
+) -> None:
+    """Missing budget policy routes draft intake to held and returns blocker intake_held."""
+    world = open_e2e_world(
+        service,
+        tmp_path / "held",
+        monkeypatch,
+        verifier_mode="pass",
+        worker_mode="ok",
+        extra_capability=None,
+        operations=("omp_work.orchestrator.operations:register",),
+    )
+    req_path = tmp_path / "held" / "request.json"
+    doc = json.loads(req_path.read_text(encoding="utf-8"))
+    doc["scope"]["budget_policy"] = None
+    req_path.write_text(json.dumps(doc), encoding="utf-8")
+    world.request = load_request(req_path)
 
-    class DummyContext:
-        def __init__(self):
-            self.mission_id = UUID("11111111-1111-1111-1111-111111111111")
-            self.workspace_id = UUID("22222222-2222-2222-2222-222222222222")
-            self.principal = None
-            self.prior = {}
-            self.service = type(
-                "DummyService",
-                (),
-                {"read": lambda *args: {"status": "abandoned"}},
-            )()
+    submitted = submit(world.config, world.request)
+    work_id = UUID(str(submitted["work_id"]))
+    _seed_item_budget(world, service, work_id)
 
-    outcome = run_confirm(DummyContext())
+    job = {
+        "work_id": str(work_id),
+        "job_id": f"orch:{world.mission_id}:0",
+        "worker_id": "test-worker",
+        "fence": 1,
+    }
+    handler = OrchestratorHandler(world.config)
+    handler.mission_id = world.mission_id
+    handler.project_id = world.request.project_id
+    handler._request = world.request.document()
+    handler._job_id = str(job["job_id"])
+    steps = handler.steps()
+    facts = handler._facts(steps, 0, "intake", None)
+    outcome = handler._operate(job, 0, "intake", facts)
+    assert outcome.outcome == "failed"
+    assert outcome.blocker == "intake_held"
+
+
+def test_confirm_abandoned_status_fails(
+    service, tmp_path: Path, monkeypatch
+) -> None:
+    """Confirm returns failed when mission status is abandoned in store."""
+    world = open_e2e_world(
+        service,
+        tmp_path / "abandoned_confirm",
+        monkeypatch,
+        verifier_mode="pass",
+        worker_mode="ok",
+        extra_capability="egress",
+        operations=("omp_work.orchestrator.operations:register",),
+    )
+    submitted = submit(world.config, world.request)
+    work_id = UUID(str(submitted["work_id"]))
+    _seed_item_budget(world, service, work_id)
+    worker = open_worker(world)
+
+    def paused_confirm(view: dict) -> bool:
+        return any(
+            s.get("kind") == "pause" and s.get("rule_id") == "d23-owner-confirm"
+            for s in view["steps"]
+        )
+
+    tick_until(worker, world, paused_confirm, limit=20)
+    handler = OrchestratorHandler(world.config)
+    handler.mission_id = world.mission_id
+    handler.project_id = world.request.project_id
+    handler._request = world.request.document()
+    steps = handler.steps()
+
+    intake_outcome = next(
+        s for s in steps if s.get("stage") == "intake" and s.get("kind") == "outcome"
+    )
+    world.intake_decision_id = UUID(str(intake_outcome["data"]["decision_id"]))
+    world.mission_revision = int(intake_outcome["data"]["mission_revision"])
+
+    answer_intake(world, "reject")
+    steps = handler.steps()
+
+    job = {
+        "work_id": str(work_id),
+        "job_id": f"orch:{world.mission_id}:1",
+        "worker_id": "test-worker",
+        "fence": 1,
+    }
+    handler._job_id = str(job["job_id"])
+    facts = handler._facts(steps, 1, "confirm", None)
+    outcome = handler._operate(job, 1, "confirm", facts)
     assert outcome.outcome == "failed"
     assert outcome.data.get("reason") == "abandoned"
+    assert outcome.data.get("status") == "abandoned"
+
+
+def test_missing_request_values_fail_with_named_codes(
+    service, tmp_path: Path, monkeypatch
+) -> None:
+    """Missing request fields fail intake with named codes."""
+    world = open_e2e_world(
+        service,
+        tmp_path / "missing_vals",
+        monkeypatch,
+        verifier_mode="pass",
+        worker_mode="ok",
+        extra_capability=None,
+        operations=("omp_work.orchestrator.operations:register",),
+    )
+    submitted = submit(world.config, world.request)
+    work_id = UUID(str(submitted["work_id"]))
+    _seed_item_budget(world, service, work_id)
+
+    job = {
+        "work_id": str(work_id),
+        "job_id": f"orch:{world.mission_id}:0",
+        "worker_id": "test-worker",
+        "fence": 1,
+    }
+    handler = OrchestratorHandler(world.config)
+    handler.mission_id = world.mission_id
+    handler.project_id = world.request.project_id
+    handler._job_id = str(job["job_id"])
+    base_doc = world.request.document()
+    steps = handler.steps()
+
+    # Missing scope
+    handler._request = dict(base_doc)
+    handler._request["scope"] = None
+    outcome = handler._operate(job, 0, "intake", handler._facts(steps, 0, "intake", None))
+    assert outcome.outcome == "failed"
+    assert outcome.data.get("code") == "scope_missing"
+
+    # Missing intake
+    handler._request = dict(base_doc)
+    handler._request["intake"] = None
+    outcome = handler._operate(job, 0, "intake", handler._facts(steps, 0, "intake", None))
+    assert outcome.outcome == "failed"
+    assert outcome.data.get("code") == "intake_missing"
+
+    # Missing instruction
+    handler._request = dict(base_doc)
+    handler._request["instruction"] = None
+    outcome = handler._operate(job, 0, "intake", handler._facts(steps, 0, "intake", None))
+    assert outcome.outcome == "failed"
+    assert outcome.data.get("code") == "instruction_missing"

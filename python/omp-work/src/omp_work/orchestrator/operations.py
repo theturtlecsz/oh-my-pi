@@ -42,9 +42,12 @@ def run_intake(ctx: StageContext) -> Outcome:
             mission_doc = ctx.service.read(
                 ctx.principal, ctx.workspace_id, "mission", str(ctx.mission_id)
             )
-            base = mission_doc.get("revision")
-        except WorkError:
-            base = None
+            base = mission_doc.get("revision") if isinstance(mission_doc, dict) else None
+        except WorkError as err:
+            if err.code == "invalid_request":
+                base = None
+            else:
+                raise
         ctx.intents.record_intent(key, "draft_mission_intake", {"base_revision": base})
 
     rq = ctx.request
@@ -64,11 +67,18 @@ def run_intake(ctx: StageContext) -> Outcome:
     if hasattr(instruction, "model_dump"):
         instruction = instruction.model_dump(mode="json")
 
+    if intake is None:
+        return Outcome(outcome="failed", data={"stage": "intake", "code": "intake_missing"})
+    if scope is None:
+        return Outcome(outcome="failed", data={"stage": "intake", "code": "scope_missing"})
+    if instruction is None:
+        return Outcome(outcome="failed", data={"stage": "intake", "code": "instruction_missing"})
+
     payload: dict[str, Any] = {
         "mission_id": str(ctx.mission_id),
         "base_revision": base,
         "intake": intake,
-        "scope": scope if scope is not None else {},
+        "scope": scope,
         "instruction": instruction,
     }
 
@@ -79,13 +89,16 @@ def run_intake(ctx: StageContext) -> Outcome:
         mission_doc = result.get("mission") or {}
         mission_revision = mission_doc.get("revision")
         if mission_revision is None:
-            try:
-                m = ctx.service.read(
-                    ctx.principal, ctx.workspace_id, "mission", str(ctx.mission_id)
-                )
-                mission_revision = m.get("revision")
-            except WorkError:
-                mission_revision = None
+            m = ctx.service.read(
+                ctx.principal, ctx.workspace_id, "mission", str(ctx.mission_id)
+            )
+            mission_revision = m.get("revision") if isinstance(m, dict) else None
+
+        if mission_revision is None:
+            return Outcome(
+                outcome="failed",
+                data={"stage": "intake", "code": "mission_revision_missing"},
+            )
 
         work_op_id = str(service._ids(ctx.mission_id, "work"))
         work_op = ctx.service.read(
@@ -113,8 +126,12 @@ def run_intake(ctx: StageContext) -> Outcome:
 
     return Outcome(
         outcome="failed",
-        blocker=f"intake_{outcome}",
-        data={"stage": "intake", "outcome": outcome, "result": result},
+        data={
+            "stage": "intake",
+            "code": "unknown_intake_outcome",
+            "outcome": outcome,
+            "result": result,
+        },
     )
 
 
@@ -132,10 +149,15 @@ def run_confirm(ctx: StageContext) -> Outcome:
         intake_prior = ctx.prior.get("intake") or {}
         intake_data = intake_prior.get("data") or {}
         decision_id = intake_data.get("decision_id")
-        data: dict[str, Any] = {"stage": "confirm", "status": status}
-        if decision_id is not None:
-            data["decision_id"] = str(decision_id)
-        return Outcome(outcome="waiting", data=data)
+        if decision_id is None:
+            return Outcome(
+                outcome="failed",
+                data={"stage": "confirm", "code": "decision_id_missing", "status": status},
+            )
+        return Outcome(
+            outcome="waiting",
+            data={"stage": "confirm", "status": status, "decision_id": str(decision_id)},
+        )
 
     if status == "abandoned":
         return Outcome(
