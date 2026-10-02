@@ -23,6 +23,7 @@
     "decisions/0018-mission-events.md",
     "decisions/0019-client-contract.md",
     "decisions/0020-relayed-stop-release-and-client-oversight.md",
+    "decisions/0021-typed-audit-result.md",
     "examples.json",
     "manifest.json",
     "research-artifact-hash.json",

@@ -21,6 +21,7 @@ from . import (
     validate_bundle,
 )
 from .operations import cli as operations_cli
+from .operations import drain as drain_ops
 from .operations import stop as stop_ops
 from .operations.config import OperationsConfig
 from .operations.database import collect_health
@@ -284,6 +285,16 @@ def _run_stop_command(args: argparse.Namespace) -> int:
         client.close()
 
 
+def _run_drain_command(args: argparse.Namespace) -> int:
+    try:
+        missions = drain_ops.in_flight(OperationsConfig.defaults())
+    except Exception as error:  # noqa: BLE001 - any drain failure is reported as 255
+        print(f"drain: {error}", file=sys.stderr)
+        return 255
+    print(json.dumps({"drained": not missions, "in_flight": missions}))
+    return 0 if not missions else 1
+
+
 def main(argv: list[str] | None = None) -> int | None:
     raw = list(sys.argv[1:] if argv is None else argv)
     if raw and raw[0] == "orchestrator":
@@ -295,7 +306,7 @@ def main(argv: list[str] | None = None) -> int | None:
     subcommands = parser.add_subparsers(
         dest="command",
         required=True,
-        metavar="{schema,hash,approve,validate,ops,serve,headroom,stall-check,parallel-admit,budget-alerts,projects,stop,alarms,jobs,owner-key,orchestrator}",
+        metavar="{schema,hash,approve,validate,ops,serve,headroom,stall-check,parallel-admit,budget-alerts,projects,stop,alarms,jobs,owner-key,orchestrator,drain}",
     )
 
     schema = subcommands.add_parser("schema")
@@ -416,6 +427,10 @@ def main(argv: list[str] | None = None) -> int | None:
     reg_parser = jobs_sub.add_parser("register-component")
     reg_parser.add_argument("--config", required=True, type=Path)
 
+    drain = subcommands.add_parser("drain")
+    drain_sub = drain.add_subparsers(dest="drain_command", required=True)
+    drain_sub.add_parser("check")
+
     args = parser.parse_args(argv)
     if args.command == "alarms":
         if args.client_config is None:
@@ -423,6 +438,8 @@ def main(argv: list[str] | None = None) -> int | None:
         return _run_alarms_command(args)
     if args.command == "events":
         return _run_events_command(args)
+    if args.command == "drain":
+        return _run_drain_command(args)
     if args.command == "stop":
         return _run_stop_command(args)
     if args.command == "serve":

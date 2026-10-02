@@ -219,5 +219,7 @@
         }
       ]
     }
-  ]
+  ],
+  "manifestSha256": "eb8ac9663487c8c76b5484b16b916c2eba441aa8fd20636578ca0e1a9424a928",
+  "review": null
 }

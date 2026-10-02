@@ -2715,7 +2715,8 @@
             "OMP-426",
             "OMP-415",
             "OMP-416",
-            "OMP-430"
+            "OMP-430",
+            "OMP-520"
           ],
           "title": "Issue",
           "type": "string"
@@ -3916,6 +3917,39 @@
       "title": "AttestIntakeAdmissionPayload",
       "type": "object"
     },
+    "AuditCriterionCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "criterion_id": {
+          "maxLength": 2000,
+          "pattern": "^[^\\r\\n]+$",
+          "title": "Criterion Id",
+          "type": "string"
+        },
+        "evidence": {
+          "maxLength": 2000,
+          "pattern": "^[^\\r\\n]+$",
+          "title": "Evidence",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "met",
+            "not_met",
+            "unverifiable"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "criterion_id",
+        "status",
+        "evidence"
+      ],
+      "title": "AuditCriterionCheck",
+      "type": "object"
+    },
     "AuditEvent": {
       "additionalProperties": false,
       "properties": {
@@ -4068,6 +4102,126 @@
       "title": "AuditEvent",
       "type": "object"
     },
+    "AuditFinding": {
+      "$defs": {
+        "AuditFindingLocation": {
+          "additionalProperties": false,
+          "properties": {
+            "line_end": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Line End"
+            },
+            "line_start": {
+              "minimum": 1,
+              "title": "Line Start",
+              "type": "integer"
+            },
+            "path": {
+              "maxLength": 2000,
+              "pattern": "^[^\\r\\n]+$",
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "line_start"
+          ],
+          "title": "AuditFindingLocation",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "criterion_id": {
+          "maxLength": 2000,
+          "pattern": "^[^\\r\\n]+$",
+          "title": "Criterion Id",
+          "type": "string"
+        },
+        "evidence": {
+          "maxLength": 2000,
+          "pattern": "^[^\\r\\n]+$",
+          "title": "Evidence",
+          "type": "string"
+        },
+        "impact": {
+          "maxLength": 2000,
+          "pattern": "^[^\\r\\n]+$",
+          "title": "Impact",
+          "type": "string"
+        },
+        "location": {
+          "$ref": "#/$defs/AuditFindingLocation"
+        },
+        "minimal_fix": {
+          "maxLength": 2000,
+          "pattern": "^[^\\r\\n]+$",
+          "title": "Minimal Fix",
+          "type": "string"
+        },
+        "severity": {
+          "maxLength": 2000,
+          "pattern": "^[A-Z][A-Z0-9]*$",
+          "title": "Severity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "severity",
+        "criterion_id",
+        "location",
+        "evidence",
+        "impact",
+        "minimal_fix"
+      ],
+      "title": "AuditFinding",
+      "type": "object"
+    },
+    "AuditFindingLocation": {
+      "additionalProperties": false,
+      "properties": {
+        "line_end": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Line End"
+        },
+        "line_start": {
+          "minimum": 1,
+          "title": "Line Start",
+          "type": "integer"
+        },
+        "path": {
+          "maxLength": 2000,
+          "pattern": "^[^\\r\\n]+$",
+          "title": "Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "line_start"
+      ],
+      "title": "AuditFindingLocation",
+      "type": "object"
+    },
     "AuditManifest": {
       "additionalProperties": false,
       "properties": {
@@ -4159,6 +4313,258 @@
         "created_at"
       ],
       "title": "AuditManifest",
+      "type": "object"
+    },
+    "AuditResult": {
+      "$defs": {
+        "AuditCriterionCheck": {
+          "additionalProperties": false,
+          "properties": {
+            "criterion_id": {
+              "maxLength": 2000,
+              "pattern": "^[^\\r\\n]+$",
+              "title": "Criterion Id",
+              "type": "string"
+            },
+            "evidence": {
+              "maxLength": 2000,
+              "pattern": "^[^\\r\\n]+$",
+              "title": "Evidence",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "met",
+                "not_met",
+                "unverifiable"
+              ],
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "criterion_id",
+            "status",
+            "evidence"
+          ],
+          "title": "AuditCriterionCheck",
+          "type": "object"
+        },
+        "AuditFinding": {
+          "additionalProperties": false,
+          "properties": {
+            "criterion_id": {
+              "maxLength": 2000,
+              "pattern": "^[^\\r\\n]+$",
+              "title": "Criterion Id",
+              "type": "string"
+            },
+            "evidence": {
+              "maxLength": 2000,
+              "pattern": "^[^\\r\\n]+$",
+              "title": "Evidence",
+              "type": "string"
+            },
+            "impact": {
+              "maxLength": 2000,
+              "pattern": "^[^\\r\\n]+$",
+              "title": "Impact",
+              "type": "string"
+            },
+            "location": {
+              "$ref": "#/$defs/AuditFindingLocation"
+            },
+            "minimal_fix": {
+              "maxLength": 2000,
+              "pattern": "^[^\\r\\n]+$",
+              "title": "Minimal Fix",
+              "type": "string"
+            },
+            "severity": {
+              "maxLength": 2000,
+              "pattern": "^[A-Z][A-Z0-9]*$",
+              "title": "Severity",
+              "type": "string"
+            }
+          },
+          "required": [
+            "severity",
+            "criterion_id",
+            "location",
+            "evidence",
+            "impact",
+            "minimal_fix"
+          ],
+          "title": "AuditFinding",
+          "type": "object"
+        },
+        "AuditFindingLocation": {
+          "additionalProperties": false,
+          "properties": {
+            "line_end": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Line End"
+            },
+            "line_start": {
+              "minimum": 1,
+              "title": "Line Start",
+              "type": "integer"
+            },
+            "path": {
+              "maxLength": 2000,
+              "pattern": "^[^\\r\\n]+$",
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "line_start"
+          ],
+          "title": "AuditFindingLocation",
+          "type": "object"
+        },
+        "EvidenceManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "references": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/EvidenceReference"
+              },
+              "title": "References",
+              "type": "array"
+            }
+          },
+          "title": "EvidenceManifest",
+          "type": "object"
+        },
+        "EvidenceReference": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "command",
+                "file",
+                "receipt",
+                "artifact"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "ref": {
+              "maxLength": 2000,
+              "pattern": "^[^\\r\\n]+$",
+              "title": "Ref",
+              "type": "string"
+            },
+            "result": {
+              "anyOf": [
+                {
+                  "maxLength": 2000,
+                  "pattern": "^[^\\r\\n]+$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Result"
+            },
+            "sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Sha256"
+            }
+          },
+          "required": [
+            "kind",
+            "ref"
+          ],
+          "title": "EvidenceReference",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "criteria": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/AuditCriterionCheck"
+          },
+          "title": "Criteria",
+          "type": "array"
+        },
+        "evidence": {
+          "$ref": "#/$defs/EvidenceManifest"
+        },
+        "findings": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/AuditFinding"
+          },
+          "title": "Findings",
+          "type": "array"
+        },
+        "out_of_scope": {
+          "default": [],
+          "items": {
+            "maxLength": 2000,
+            "pattern": "^[^\\r\\n]+$",
+            "type": "string"
+          },
+          "title": "Out Of Scope",
+          "type": "array"
+        },
+        "remaining_questions": {
+          "default": [],
+          "items": {
+            "maxLength": 2000,
+            "pattern": "^[^\\r\\n]+$",
+            "type": "string"
+          },
+          "title": "Remaining Questions",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "verdict": {
+          "enum": [
+            "PASS",
+            "NEEDS_FIX",
+            "BLOCKED"
+          ],
+          "title": "Verdict",
+          "type": "string"
+        }
+      },
+      "required": [
+        "verdict",
+        "evidence"
+      ],
+      "title": "AuditResult",
       "type": "object"
     },
     "AuditorLaunch": {
@@ -21275,6 +21681,77 @@
       "title": "EngageStopCommand",
       "type": "object"
     },
+    "EvidenceManifest": {
+      "$defs": {
+        "EvidenceReference": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "command",
+                "file",
+                "receipt",
+                "artifact"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "ref": {
+              "maxLength": 2000,
+              "pattern": "^[^\\r\\n]+$",
+              "title": "Ref",
+              "type": "string"
+            },
+            "result": {
+              "anyOf": [
+                {
+                  "maxLength": 2000,
+                  "pattern": "^[^\\r\\n]+$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Result"
+            },
+            "sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Sha256"
+            }
+          },
+          "required": [
+            "kind",
+            "ref"
+          ],
+          "title": "EvidenceReference",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "references": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EvidenceReference"
+          },
+          "title": "References",
+          "type": "array"
+        }
+      },
+      "title": "EvidenceManifest",
+      "type": "object"
+    },
     "EvidenceReceipt": {
       "$defs": {
         "EvidenceKind": {
@@ -21443,6 +21920,60 @@
         "issued_at"
       ],
       "title": "EvidenceReceipt",
+      "type": "object"
+    },
+    "EvidenceReference": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "command",
+            "file",
+            "receipt",
+            "artifact"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "ref": {
+          "maxLength": 2000,
+          "pattern": "^[^\\r\\n]+$",
+          "title": "Ref",
+          "type": "string"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "pattern": "^[^\\r\\n]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Result"
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sha256"
+        }
+      },
+      "required": [
+        "kind",
+        "ref"
+      ],
+      "title": "EvidenceReference",
       "type": "object"
     },
     "ExecutionGrantItemClaim": {
