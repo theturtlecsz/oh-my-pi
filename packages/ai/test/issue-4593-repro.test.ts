@@ -1,4 +1,5 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
+import * as BedrockProvider from "@oh-my-pi/pi-ai/providers/amazon-bedrock";
 import { setBedrockProviderModule, streamBedrock } from "@oh-my-pi/pi-ai/providers/register-builtins";
 import type { AssistantMessage, Context, Model } from "@oh-my-pi/pi-ai/types";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
@@ -58,6 +59,7 @@ function createAssistantMessage(): AssistantMessage {
 const baseContext: Context = { messages: [] };
 
 describe("idle watchdog local-work deferral (issue #4593)", () => {
+	afterEach(() => setBedrockProviderModule(BedrockProvider)); // Restores the real transport for later files.
 	it("still aborts a silent stream once local work has finished", async () => {
 		const workDone = Promise.withResolvers<void>();
 		let busy = true;

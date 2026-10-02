@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as AIError from "@oh-my-pi/pi-ai/error";
+import * as BedrockProvider from "@oh-my-pi/pi-ai/providers/amazon-bedrock";
 import { setBedrockProviderModule, streamBedrock } from "@oh-my-pi/pi-ai/providers/register-builtins";
 import type { AssistantMessage, Context, Model } from "@oh-my-pi/pi-ai/types";
 import type { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
@@ -58,6 +59,7 @@ function createAssistantMessage(
 const baseContext: Context = { messages: [] };
 
 describe("register-builtins lazy streams", () => {
+	afterEach(() => setBedrockProviderModule(BedrockProvider)); // Restores the real transport for later files.
 	it("resolves the outer stream result from source.result() when no terminal event is iterated", async () => {
 		const finalMessage = createAssistantMessage("stop");
 		const partialMessage = createAssistantMessage("stop");
