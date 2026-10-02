@@ -6,7 +6,7 @@ caller's workdir, mounted read-write at ``/work``. Named files are read-only
 binds. The worker environment is only ``PATH``, ``LANG``, ``TERM``, and
 ``TZ``. GPU, instrument, and remote backends are refused before any process
 starts. A recorded manifest is the backend name, kernel, machine, and the
-sha256 of each executable the request names under ``/usr/bin`` or ``/bin``.
+sha256 of the requested executable and each tool named in ``requires``.
 """
 
 from __future__ import annotations
@@ -162,7 +162,60 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _executable_sha256(name: str) -> str | None:
+def _resolve_jail_executable(
+    launch: str, workdir: Path, env: Mapping[str, str]
+) -> Path | None:
+    """Resolve an executable as the jail does at exec time.
+
+    In the worker jail, ``/work`` is ``workdir`` (the current working directory),
+    ``/usr``, ``/bin``, etc. are host mounts, and ``PATH`` defaults to
+    ``/usr/bin:/bin`` unless overridden in ``env``.
+    """
+    if launch == "":
+        return None
+    if "/" in launch:
+        if launch.startswith("/"):
+            norm = os.path.normpath(launch)
+            if norm == "/work":
+                host_path = workdir
+            elif norm.startswith("/work/"):
+                rel = norm[len("/work/"):].lstrip("/")
+                host_path = workdir / rel
+            else:
+                host_path = Path(norm)
+        else:
+            host_path = (workdir / launch).resolve()
+        if host_path.is_file() and os.access(host_path, os.X_OK):
+            return host_path
+        return None
+
+    path_env = env.get("PATH", "/usr/bin:/bin")
+    for raw_entry in path_env.split(":"):
+        norm_entry = os.path.normpath(raw_entry) if raw_entry else ""
+        if norm_entry in ("", "."):
+            candidate = workdir / launch
+        elif norm_entry == "/work":
+            candidate = workdir / launch
+        elif norm_entry.startswith("/work/"):
+            rel = norm_entry[len("/work/"):].lstrip("/")
+            candidate = workdir / rel / launch
+        elif not norm_entry.startswith("/"):
+            candidate = workdir / norm_entry / launch
+        else:
+            candidate = Path(norm_entry) / launch
+
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+
+    return None
+
+
+def _check_executable_sha256(name: str) -> str | None:
+    if "/" in name:
+        path = Path(name)
+        if path.is_file() and os.access(path, os.X_OK):
+            return _file_sha256(path)
+        return None
     path = _resolve_tool(name)
     if path is None:
         return None
@@ -170,17 +223,19 @@ def _executable_sha256(name: str) -> str | None:
 
 
 def _manifest_executables(request: RunRequest) -> dict[str, str]:
-    names: list[str] = []
-    if request.argv:
-        names.append(Path(request.argv[0]).name)
-    names.extend(request.requires)
     found: dict[str, str] = {}
-    for name in names:
-        if name in found or "/" in name:
+    workdir = Path(request.workdir).resolve()
+    if request.argv:
+        launch = request.argv[0]
+        jail_path = _resolve_jail_executable(launch, workdir, request.env)
+        if jail_path is not None:
+            found[launch] = _file_sha256(jail_path)
+    for name in request.requires:
+        if name in found:
             continue
-        digest = _executable_sha256(name)
-        if digest is not None:
-            found[name] = digest
+        tool_path = _resolve_tool(name)
+        if tool_path is not None:
+            found[name] = _file_sha256(tool_path)
     return found
 
 
@@ -213,7 +268,7 @@ def check_environment(manifest: Mapping[str, object]) -> list[str]:
         diffs.append("executables")
         return diffs
     for name in sorted(str(item) for item in recorded):
-        if recorded.get(name) != _executable_sha256(name):
+        if recorded.get(name) != _check_executable_sha256(name):
             diffs.append(f"executables:{name}")
     return diffs
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import signal
@@ -20,6 +21,7 @@ from omp_work.jobs.runner import (
     BackendIncompatible,
     LocalJailBackend,
     RunRequest,
+    _environment_manifest,
     check_environment,
     resolve_backend,
 )
@@ -218,6 +220,64 @@ def test_check_environment_names_differences() -> None:
         "executables": {"true": "0" * 64},
     }
     assert check_environment(executable) == ["executables:true"]
+
+
+def test_manifest_resolves_actual_jail_executable(tmp_path: Path) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    custom = work / "true"
+    custom.write_text("#!/bin/sh\necho custom-true\n", encoding="utf-8")
+    custom.chmod(0o755)
+    digest_v1 = hashlib.sha256(custom.read_bytes()).hexdigest()
+
+    # Absolute work path
+    req_abs = RunRequest(["/work/true"], work)
+    m_abs = _environment_manifest(req_abs)
+    assert m_abs["executables"]["/work/true"] == digest_v1
+    assert check_environment(m_abs) == ["executables:/work/true"]
+
+    # PATH override
+    req_path = RunRequest(["true"], work, env={"PATH": "/work"})
+    m_path = _environment_manifest(req_path)
+    assert m_path["executables"]["true"] == digest_v1
+    assert check_environment(m_path) == ["executables:true"]
+
+    # PATH override where tool does not exist in overridden PATH
+    m_missing = _environment_manifest(RunRequest(["true"], work, env={"PATH": "/does/not/exist"}))
+    assert "true" not in m_missing["executables"]
+
+    # Changing the trial executable changes the manifest
+    custom.write_text("#!/bin/sh\necho custom-true-v2\n", encoding="utf-8")
+    digest_v2 = hashlib.sha256(custom.read_bytes()).hexdigest()
+    assert digest_v2 != digest_v1
+
+    m_abs_v2 = _environment_manifest(req_abs)
+    assert m_abs_v2["executables"]["/work/true"] == digest_v2
+    assert sha256(m_abs_v2) != sha256(m_abs)
+
+    m_path_v2 = _environment_manifest(req_path)
+    assert m_path_v2["executables"]["true"] == digest_v2
+    assert sha256(m_path_v2) != sha256(m_path)
+
+
+@_needs_jail
+def test_jail_runs_work_executable_and_path_override(tmp_path: Path) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    script = work / "tool"
+    script.write_text("#!/bin/sh\necho work-tool-ok\nexit 0\n", encoding="utf-8")
+    script.chmod(0o755)
+    backend = LocalJailBackend()
+
+    res_abs = backend.run(RunRequest(["/work/tool"], work, timeout=10))
+    assert res_abs.status == "completed"
+    assert b"work-tool-ok" in res_abs.output
+    assert "/work/tool" in res_abs.manifest["executables"]
+
+    res_path = backend.run(RunRequest(["tool"], work, env={"PATH": "/work"}, timeout=10))
+    assert res_path.status == "completed"
+    assert b"work-tool-ok" in res_path.output
+    assert "tool" in res_path.manifest["executables"]
 
 
 @_needs_jail
