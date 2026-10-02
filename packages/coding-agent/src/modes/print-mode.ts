@@ -10,7 +10,12 @@ import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { $flag, logger, postmortem, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { MCPManager } from "../mcp/manager";
 import { resolveMCPTimeoutMs } from "../mcp/timeout";
-import { type AgentSession, type AgentSessionEvent, SHUTDOWN_CONSOLIDATE_BUDGET_MS } from "../session/agent-session";
+import {
+	type AgentSession,
+	type AgentSessionEvent,
+	PromptBlockedError,
+	SHUTDOWN_CONSOLIDATE_BUDGET_MS,
+} from "../session/agent-session";
 import { CREDENTIAL_DISABLED_NOTICE_SOURCE } from "../session/credential-disabled-notice";
 import { isSilentAbort } from "../session/messages";
 import { flushTelemetryExport } from "../telemetry-export";
@@ -269,19 +274,35 @@ async function runPrintModeCore(
 		wroteTextWorkingIndicator = true;
 	};
 
+	// A `before_agent_start` handler can refuse the turn: `session.prompt`
+	// rejects with PromptBlockedError and nothing was dispatched or persisted.
+	// Report the reason and stop sending — a later message would be blocked by
+	// the same handler, and there is no assistant turn to print.
+	let promptBlocked = false;
+	const sendPrompt = async (label: string, send: () => Promise<unknown>): Promise<void> => {
+		try {
+			await logger.time(label, send);
+		} catch (error) {
+			if (!(error instanceof PromptBlockedError)) throw error;
+			writeStderrLine(`Error: ${singleLine(error.message)}`);
+			promptBlocked = true;
+		}
+	};
+
 	// Send initial message with attachments
 	if (!strictMCPFailure && initialMessage !== undefined) {
 		writeTextWorkingIndicator();
 		if (mode === "text") session.setTextOutputCommitted(false);
-		await logger.time("print:prompt:initial", () => session.prompt(initialMessage, { images: initialImages }));
+		await sendPrompt("print:prompt:initial", () => session.prompt(initialMessage, { images: initialImages }));
 	}
 
 	// Send remaining messages
 	if (!strictMCPFailure) {
 		for (const message of messages) {
+			if (promptBlocked) break;
 			writeTextWorkingIndicator();
 			if (mode === "text") session.setTextOutputCommitted(false);
-			await logger.time("print:prompt:next", () => session.prompt(message));
+			await sendPrompt("print:prompt:next", () => session.prompt(message));
 		}
 	}
 
@@ -301,13 +322,15 @@ async function runPrintModeCore(
 	// mode: `--mode json` used to report success for the same turn-fatal error
 	// text mode exits 1 on (issue #11498). Silent aborts (plan-mode compaction
 	// transitions) and aborts initiated by signal teardown stay non-fatal here;
-	// postmortem owns the signal-specific exit code (130/143/129).
+	// postmortem owns the signal-specific exit code (130/143/129). A blocked
+	// prompt already reported its reason, so it is terminal in every mode too.
 	const terminalFailure =
-		!strictMCPFailure &&
-		assistantMsg !== undefined &&
-		(assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") &&
-		!isSilentAbort(assistantMsg) &&
-		!signalTeardownActive();
+		promptBlocked ||
+		(!strictMCPFailure &&
+			assistantMsg !== undefined &&
+			(assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") &&
+			!isSilentAbort(assistantMsg) &&
+			!signalTeardownActive());
 
 	// In text mode, output the final response. A terminal failure prints only
 	// the error line below; JSON mode already emitted the assistant message and
@@ -370,7 +393,8 @@ async function runPrintModeCore(
 
 	// Text mode reports the terminal failure on stderr exactly as before: same
 	// line, same ordering after dispose, without terminating the process here.
-	if (mode === "text" && terminalFailure && assistantMsg) {
+	// A blocked prompt already reported its own reason above.
+	if (mode === "text" && terminalFailure && !promptBlocked && assistantMsg) {
 		const errorLine = sanitizeText(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
 		if (!process.stderr.write(`${errorLine}\n`)) {
 			const { promise, resolve } = Promise.withResolvers<void>();
