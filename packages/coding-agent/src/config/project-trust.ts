@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+import type { VcsGitRepoInfo } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import {
 	getAgentDir,
@@ -35,7 +36,7 @@ export function readTrustedProjectPaths(agentDir: string = getAgentDir()): strin
 		return [];
 	}
 	const parsed = tryParseJson(content);
-	if (!isRecord(parsed) || !Array.isArray(parsed.paths)) {
+	if (!isRecord(parsed) || parsed.version !== 1 || !Array.isArray(parsed.paths)) {
 		logger.warn("Trusted projects file is malformed");
 		return [];
 	}
@@ -63,6 +64,45 @@ function gitInfoOrNull(dir: string) {
 	}
 }
 
+function isGenuineLinkedWorktree(info: VcsGitRepoInfo): boolean {
+	if (info.gitDir === info.commonDir) return false;
+
+	try {
+		const stat = fs.statSync(info.gitEntryPath);
+		if (!stat.isFile()) return false;
+	} catch {
+		return false;
+	}
+
+	try {
+		const commondirContent = fs.readFileSync(path.join(info.gitDir, "commondir"), "utf-8").trim();
+		if (!commondirContent) return false;
+		const resolvedCommon = normalizePathForComparison(path.resolve(info.gitDir, commondirContent));
+		if (resolvedCommon !== normalizePathForComparison(info.commonDir)) return false;
+	} catch {
+		return false;
+	}
+
+	try {
+		const gitdirContent = fs.readFileSync(path.join(info.gitDir, "gitdir"), "utf-8").trim();
+		if (!gitdirContent) return false;
+		const resolvedGitdir = normalizePathForComparison(path.resolve(info.gitDir, gitdirContent));
+		const normalizedEntry = normalizePathForComparison(info.gitEntryPath);
+		const normalizedRepoRoot = normalizePathForComparison(info.repoRoot);
+		if (
+			resolvedGitdir !== normalizedEntry &&
+			resolvedGitdir !== path.join(normalizedRepoRoot, ".git") &&
+			resolvedGitdir !== normalizedRepoRoot
+		) {
+			return false;
+		}
+	} catch {
+		return false;
+	}
+
+	return true;
+}
+
 /**
  * Whether `cwd` is trusted: equal to or nested under a listed path, or a linked
  * git worktree whose main checkout (the parent of its shared `commonDir`) is
@@ -77,7 +117,7 @@ export function isProjectPathTrusted(cwd: string, agentDir: string = getAgentDir
 	if (trusted.some(root => isUnderNormalizedRoot(root, normalizedCwd))) return true;
 
 	const info = gitInfoOrNull(cwd);
-	if (!info) return false;
+	if (!info || !isGenuineLinkedWorktree(info)) return false;
 	const mainCheckout = normalizePathForComparison(path.dirname(info.commonDir));
 	return trusted.some(root => isUnderNormalizedRoot(root, mainCheckout));
 }

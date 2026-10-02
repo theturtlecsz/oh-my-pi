@@ -75,6 +75,35 @@ describe("project trust list", () => {
 		expect(isProjectPathTrusted(unlistedWorktree, agentDir)).toBe(false);
 	});
 
+	it("rejects arbitrary directories that spoof a gitdir pointer without genuine linked-worktree registration", async () => {
+		const root = makeRoot("omp-trust-spoof-");
+		const agentDir = path.join(root, "agent");
+		const listed = path.join(root, "listed");
+		await initRepo(listed);
+		const listedWorktree = path.join(root, "worktrees", "listed");
+		await $`git worktree add ${listedWorktree} -b wt-listed`.cwd(listed).quiet();
+		writeTrusted(agentDir, [listed]);
+
+		// An unlisted directory containing .git with gitdir: /listed-checkout/.git
+		const rogueMain = path.join(root, "rogue-main");
+		fs.mkdirSync(path.join(rogueMain, "sub"), { recursive: true });
+		fs.writeFileSync(path.join(rogueMain, ".git"), `gitdir: ${path.join(listed, ".git")}\n`, "utf-8");
+
+		// An unlisted directory borrowing an existing worktree's admin dir
+		const rogueWt = path.join(root, "rogue-wt");
+		fs.mkdirSync(path.join(rogueWt, "sub"), { recursive: true });
+		fs.writeFileSync(
+			path.join(rogueWt, ".git"),
+			`gitdir: ${path.join(listed, ".git", "worktrees", "wt-listed")}\n`,
+			"utf-8",
+		);
+
+		expect(isProjectPathTrusted(rogueMain, agentDir)).toBe(false);
+		expect(isProjectPathTrusted(path.join(rogueMain, "sub"), agentDir)).toBe(false);
+		expect(isProjectPathTrusted(rogueWt, agentDir)).toBe(false);
+		expect(isProjectPathTrusted(path.join(rogueWt, "sub"), agentDir)).toBe(false);
+	});
+
 	it("fails closed on a missing, malformed, or relative-only list", () => {
 		const root = makeRoot("omp-trust-bad-");
 		const agentDir = path.join(root, "agent");
@@ -90,6 +119,17 @@ describe("project trust list", () => {
 		fs.writeFileSync(trustedProjectsPath(agentDir), "{ not json", "utf-8");
 		expect(readTrustedProjectPaths(agentDir)).toEqual([]);
 		expect(isProjectPathTrusted(project, agentDir)).toBe(false);
+
+		// Invalid or missing version field.
+		for (const invalidVersion of [undefined, 2, "1", null, 0]) {
+			fs.writeFileSync(
+				trustedProjectsPath(agentDir),
+				JSON.stringify({ version: invalidVersion, paths: [project] }),
+				"utf-8",
+			);
+			expect(readTrustedProjectPaths(agentDir)).toEqual([]);
+			expect(isProjectPathTrusted(project, agentDir)).toBe(false);
+		}
 
 		// Wrong shape: `paths` absent.
 		fs.writeFileSync(trustedProjectsPath(agentDir), JSON.stringify({ version: 1 }), "utf-8");
