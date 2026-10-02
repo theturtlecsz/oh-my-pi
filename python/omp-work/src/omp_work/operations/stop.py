@@ -220,20 +220,43 @@ KILLMODE_OVERRIDE_CONTENT = "[Service]\nKillMode=control-group\n"
 _GUARD_DROP_IN_NAMES = {GUARD_DROP_IN_NAME, KILLMODE_OVERRIDE_DROP_IN_NAME}
 
 
+def _join_systemd_continuations(content: str) -> list[str]:
+    """Join physical lines the way systemd's config parser does.
+
+    A line that ends with an odd number of backslashes is continued: the final
+    backslash becomes a space, and the next physical line is appended. A
+    comment line (optional whitespace, then ``#`` or ``;``) is skipped and does
+    not end an open continuation. A continuation still open at EOF is kept.
+    """
+    logical: list[str] = []
+    continuation: str | None = None
+    for raw in content.splitlines():
+        if raw.lstrip(" \t").startswith(("#", ";")):
+            continue
+        line = raw if continuation is None else continuation + raw
+        trailing = len(line) - len(line.rstrip("\\"))
+        if trailing % 2 == 1:
+            continuation = line[:-1] + " "
+            continue
+        logical.append(line)
+        continuation = None
+    if continuation is not None:
+        logical.append(continuation)
+    return logical
+
+
 def _parse_service_kill_mode_assignments(path: Path) -> list[str]:
     """Return all KillMode assignment values in [Service] sections in path.
 
     An empty string represents a reset (KillMode=). Lines outside [Service],
-    comments, and other directives are ignored.
+    comments, and other directives are ignored. Continued lines are joined
+    before parsing. Read errors propagate to the caller.
     """
-    try:
-        content = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return []
+    content = path.read_text(encoding="utf-8", errors="replace")
 
     in_service = False
     assignments: list[str] = []
-    for line in content.splitlines():
+    for line in _join_systemd_continuations(content):
         line = line.strip()
         if not line or line.startswith(("#", ";")):
             continue
@@ -257,6 +280,7 @@ def _inspect_unit_kill_mode(
     Returns (effective_kill_mode, effective_source_file).
     If a drop-in sorting after zz-omp-agent-stop-killmode.conf sets KillMode in
     [Service], raises ValueError naming the unit and the drop-in file.
+    A read error from the unit file or a drop-in propagates.
     """
     effective_kill_mode: str | None = None
     effective_source: Path | None = None
@@ -328,14 +352,17 @@ def install_guards(
     TimeoutStopSec=20
 
     For each unit, checks the effective KillMode across DIR/<U> and
-    DIR/<U>.d/*.conf. If KillMode is 'process' or 'none', writes
-    DIR/<U>.d/zz-omp-agent-stop-killmode.conf with:
+    DIR/<U>.d/*.conf. Continued lines are joined first (a trailing odd
+    backslash becomes a space; comment lines are skipped). The guard's own
+    drop-ins are skipped. If the effective KillMode is 'process' or 'none',
+    writes DIR/<U>.d/zz-omp-agent-stop-killmode.conf with:
     [Service]
     KillMode=control-group
 
-    and prints an override message to stdout. Raises ValueError before writing
-    any files if any drop-in sorting after zz-omp-agent-stop-killmode.conf sets
-    KillMode.
+    and prints an override message to stdout. Every requested unit is read
+    before any write. A read error propagates and nothing is written. Raises
+    ValueError before writing any files if any drop-in sorting after
+    zz-omp-agent-stop-killmode.conf sets KillMode.
 
     And writes DIR/omp-agent-stop.service with:
     [Unit]

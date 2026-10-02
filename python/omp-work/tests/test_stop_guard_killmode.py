@@ -233,6 +233,177 @@ def test_second_run_same_files_same_report(
     assert zz_path.read_text(encoding="utf-8") == KILLMODE_OVERRIDE_CONTENT
 
 
+def test_continued_killmode_process_before_blank_line_overridden(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    unit = "worker.service"
+    (tmp_path / unit).write_text("[Service]\nKillMode=process\\\n\n", encoding="utf-8")
+
+    written = install_guards([unit], systemd_dir=tmp_path, interval=5)
+    captured = capsys.readouterr()
+
+    drop_in_dir = tmp_path / f"{unit}.d"
+    zz_path = drop_in_dir / KILLMODE_OVERRIDE_DROP_IN_NAME
+    assert zz_path.is_file()
+    assert zz_path.read_text(encoding="utf-8") == KILLMODE_OVERRIDE_CONTENT
+    assert written == [
+        drop_in_dir / GUARD_DROP_IN_NAME,
+        zz_path,
+        tmp_path / "omp-agent-stop.service",
+    ]
+    expected_line = (
+        f"stop: {unit}: overriding KillMode=process from {unit} "
+        "with KillMode=control-group\n"
+    )
+    assert expected_line in captured.out
+
+
+def test_continued_killmode_value_on_next_line_overridden(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    unit = "worker.service"
+    (tmp_path / unit).write_text("[Service]\nKillMode=\\\nprocess\n", encoding="utf-8")
+
+    install_guards([unit], systemd_dir=tmp_path, interval=5)
+    captured = capsys.readouterr()
+
+    zz_path = tmp_path / f"{unit}.d" / KILLMODE_OVERRIDE_DROP_IN_NAME
+    assert zz_path.read_text(encoding="utf-8") == KILLMODE_OVERRIDE_CONTENT
+    expected_line = (
+        f"stop: {unit}: overriding KillMode=process from {unit} "
+        "with KillMode=control-group\n"
+    )
+    assert expected_line in captured.out
+
+
+def test_continuation_skips_comment_lines(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    unit = "worker.service"
+    (tmp_path / unit).write_text(
+        "[Service]\nKillMode=\\\n# not part of the value\n; nor this\nprocess\n",
+        encoding="utf-8",
+    )
+
+    install_guards([unit], systemd_dir=tmp_path, interval=5)
+    captured = capsys.readouterr()
+
+    zz_path = tmp_path / f"{unit}.d" / KILLMODE_OVERRIDE_DROP_IN_NAME
+    assert zz_path.read_text(encoding="utf-8") == KILLMODE_OVERRIDE_CONTENT
+    assert f"overriding KillMode=process from {unit} " in captured.out
+
+
+def test_continuation_backslash_becomes_space(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    unit = "worker.service"
+    (tmp_path / unit).write_text("[Service]\nKillMode=pro\\\ncess\n", encoding="utf-8")
+
+    install_guards([unit], systemd_dir=tmp_path, interval=5)
+    captured = capsys.readouterr()
+
+    assert not (tmp_path / f"{unit}.d" / KILLMODE_OVERRIDE_DROP_IN_NAME).exists()
+    assert "overriding KillMode" not in captured.out
+
+
+def test_preflight_continued_late_killmode_rejects_and_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    u1 = "valid.service"
+    (tmp_path / u1).write_text("[Service]\nKillMode=mixed\n", encoding="utf-8")
+
+    u2 = "late.service"
+    d2 = tmp_path / f"{u2}.d"
+    d2.mkdir(parents=True, exist_ok=True)
+    (d2 / "zzz-late.conf").write_text(
+        "[Service]\nKillMode\\\n=process\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        install_guards([u1, u2], systemd_dir=tmp_path)
+
+    err_msg = str(excinfo.value)
+    assert u2 in err_msg
+    assert "zzz-late.conf" in err_msg
+    assert not (tmp_path / f"{u1}.d").exists()
+    assert not (d2 / GUARD_DROP_IN_NAME).exists()
+    assert not (d2 / KILLMODE_OVERRIDE_DROP_IN_NAME).exists()
+    assert not (tmp_path / "omp-agent-stop.service").exists()
+
+
+def test_unreadable_unit_propagates_before_write(tmp_path: Path) -> None:
+    unit = "worker.service"
+    unit_file = tmp_path / unit
+    unit_file.write_text("[Service]\nKillMode=process\n", encoding="utf-8")
+    unit_file.chmod(0)
+    try:
+        with pytest.raises(OSError) as excinfo:
+            install_guards([unit], systemd_dir=tmp_path)
+        assert unit in str(excinfo.value)
+        assert not (tmp_path / f"{unit}.d").exists()
+        assert not (tmp_path / "omp-agent-stop.service").exists()
+    finally:
+        unit_file.chmod(0o644)
+
+
+def test_unreadable_late_drop_in_propagates_before_write(tmp_path: Path) -> None:
+    u1 = "valid.service"
+    (tmp_path / u1).write_text("[Service]\nKillMode=process\n", encoding="utf-8")
+
+    u2 = "late.service"
+    d2 = tmp_path / f"{u2}.d"
+    d2.mkdir(parents=True, exist_ok=True)
+    late = d2 / "zzz-late.conf"
+    late.write_text("[Service]\nKillMode=process\n", encoding="utf-8")
+    late.chmod(0)
+    try:
+        with pytest.raises(OSError) as excinfo:
+            install_guards([u1, u2], systemd_dir=tmp_path)
+        assert u2 in str(excinfo.value)
+        assert "zzz-late.conf" in str(excinfo.value)
+        assert not (tmp_path / f"{u1}.d").exists()
+        assert not (d2 / GUARD_DROP_IN_NAME).exists()
+        assert not (d2 / KILLMODE_OVERRIDE_DROP_IN_NAME).exists()
+        assert not (tmp_path / "omp-agent-stop.service").exists()
+    finally:
+        late.chmod(0o644)
+
+
+def test_cli_unreadable_late_drop_in_returns_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    u1 = "valid.service"
+    (tmp_path / u1).write_text("[Service]\nKillMode=process\n", encoding="utf-8")
+
+    u2 = "late.service"
+    d2 = tmp_path / f"{u2}.d"
+    d2.mkdir(parents=True, exist_ok=True)
+    late = d2 / "zzz-late.conf"
+    late.write_text("[Service]\nKillMode=process\n", encoding="utf-8")
+    late.chmod(0)
+    try:
+        code = main([
+            "stop",
+            "install-guards",
+            "--unit",
+            u1,
+            "--unit",
+            u2,
+            "--systemd-dir",
+            str(tmp_path),
+        ])
+        assert code == 2
+        captured = capsys.readouterr()
+        assert u2 in captured.err
+        assert "zzz-late.conf" in captured.err
+        assert not (tmp_path / f"{u1}.d").exists()
+        assert not (d2 / GUARD_DROP_IN_NAME).exists()
+        assert not (tmp_path / "omp-agent-stop.service").exists()
+    finally:
+        late.chmod(0o644)
+
+
 def test_killmode_in_non_service_section_ignored(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
