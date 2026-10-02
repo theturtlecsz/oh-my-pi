@@ -214,6 +214,91 @@ def watch(
         time.sleep(interval)
 
 
+GUARD_DROP_IN_NAME = "50-omp-agent-stop.conf"
+KILLMODE_OVERRIDE_DROP_IN_NAME = "zz-omp-agent-stop-killmode.conf"
+KILLMODE_OVERRIDE_CONTENT = "[Service]\nKillMode=control-group\n"
+_GUARD_DROP_IN_NAMES = {GUARD_DROP_IN_NAME, KILLMODE_OVERRIDE_DROP_IN_NAME}
+
+
+def _parse_service_kill_mode_assignments(path: Path) -> list[str]:
+    """Return all KillMode assignment values in [Service] sections in path.
+
+    An empty string represents a reset (KillMode=). Lines outside [Service],
+    comments, and other directives are ignored.
+    """
+    try:
+        content = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+
+    in_service = False
+    assignments: list[str] = []
+    for line in content.splitlines():
+        line = line.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section_name = line[1:-1].strip()
+            in_service = section_name == "Service"
+            continue
+        if in_service and "=" in line:
+            key, _, val = line.partition("=")
+            if key.strip() == "KillMode":
+                assignments.append(val.strip().strip("\"'"))
+    return assignments
+
+
+def _inspect_unit_kill_mode(
+    unit: str,
+    target_dir: Path,
+) -> tuple[str | None, Path | None]:
+    """Inspect unit file and drop-ins for unit in target_dir to find effective KillMode.
+
+    Returns (effective_kill_mode, effective_source_file).
+    If a drop-in sorting after zz-omp-agent-stop-killmode.conf sets KillMode in
+    [Service], raises ValueError naming the unit and the drop-in file.
+    """
+    effective_kill_mode: str | None = None
+    effective_source: Path | None = None
+
+    unit_file = target_dir / unit
+    if unit_file.is_file():
+        for val in _parse_service_kill_mode_assignments(unit_file):
+            if not val:
+                effective_kill_mode = None
+                effective_source = None
+            else:
+                effective_kill_mode = val
+                effective_source = unit_file
+
+    drop_in_dir = target_dir / f"{unit}.d"
+    if drop_in_dir.is_dir():
+        drop_ins = sorted(
+            [p for p in drop_in_dir.glob("*.conf") if p.is_file()],
+            key=lambda p: p.name,
+        )
+        for conf_file in drop_ins:
+            if conf_file.name in _GUARD_DROP_IN_NAMES:
+                continue
+            if conf_file.name > KILLMODE_OVERRIDE_DROP_IN_NAME:
+                assignments = _parse_service_kill_mode_assignments(conf_file)
+                if assignments:
+                    raise ValueError(
+                        f"{unit}: drop-in {conf_file.name} sorts after "
+                        f"{KILLMODE_OVERRIDE_DROP_IN_NAME} and sets KillMode"
+                    )
+            else:
+                for val in _parse_service_kill_mode_assignments(conf_file):
+                    if not val:
+                        effective_kill_mode = None
+                        effective_source = None
+                    else:
+                        effective_kill_mode = val
+                        effective_source = conf_file
+
+    return effective_kill_mode, effective_source
+
+
 def default_systemd_dir() -> Path:
     base = os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config")
     return Path(base) / "systemd" / "user"
@@ -242,6 +327,16 @@ def install_guards(
     ExecCondition=<sys.executable> -m omp_work stop check
     TimeoutStopSec=20
 
+    For each unit, checks the effective KillMode across DIR/<U> and
+    DIR/<U>.d/*.conf. If KillMode is 'process' or 'none', writes
+    DIR/<U>.d/zz-omp-agent-stop-killmode.conf with:
+    [Service]
+    KillMode=control-group
+
+    and prints an override message to stdout. Raises ValueError before writing
+    any files if any drop-in sorting after zz-omp-agent-stop-killmode.conf sets
+    KillMode.
+
     And writes DIR/omp-agent-stop.service with:
     [Unit]
     Description=OMP agent stop watcher
@@ -259,9 +354,16 @@ def install_guards(
     """
     _validate_target_units(units)
     target_dir = Path(systemd_dir) if systemd_dir is not None else default_systemd_dir()
-    target_dir.mkdir(parents=True, exist_ok=True)
-
     unique_units = list(dict.fromkeys(units))
+
+    unit_overrides: dict[str, tuple[str, Path]] = {}
+    for unit in unique_units:
+        mode, source = _inspect_unit_kill_mode(unit, target_dir)
+        if mode in {"process", "none"}:
+            assert source is not None
+            unit_overrides[unit] = (mode, source)
+
+    target_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
 
     drop_in_content = (
@@ -272,9 +374,18 @@ def install_guards(
     for unit in unique_units:
         drop_in_dir = target_dir / f"{unit}.d"
         drop_in_dir.mkdir(parents=True, exist_ok=True)
-        conf_path = drop_in_dir / "50-omp-agent-stop.conf"
+        conf_path = drop_in_dir / GUARD_DROP_IN_NAME
         conf_path.write_text(drop_in_content, encoding="utf-8")
         written.append(conf_path)
+
+        if unit in unit_overrides:
+            mode, source = unit_overrides[unit]
+            override_path = drop_in_dir / KILLMODE_OVERRIDE_DROP_IN_NAME
+            override_path.write_text(KILLMODE_OVERRIDE_CONTENT, encoding="utf-8")
+            written.append(override_path)
+            print(
+                f"stop: {unit}: overriding KillMode={mode} from {source.name} with KillMode=control-group"
+            )
 
     unit_args = " ".join(f"--unit {u}" for u in unique_units)
     interval_str = (
