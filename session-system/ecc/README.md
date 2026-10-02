@@ -86,6 +86,91 @@ The script prints a one-line JSON report and exits 0 (on bad arguments it prints
 - `overlayConflicts`: overlay-backed asset ids whose primary file is not `unchanged`. Overlay JSON is not read.
 - `changed`: true when any row is not `unchanged` or `newFiles` is not empty.
 
+## Reviewing and applying a pack update
+
+1. Write an `UpdateReview` to `reviews/<candidate commit>.json` relative to the ECC root.
+   Use `baseCommit` from the report and `candidate.commit` from `candidateCommit`.
+   Read the candidate tree and description from its checkout:
+
+   ```bash
+   git -C /tmp/ecc-candidate rev-parse 'HEAD^{tree}'
+   git -C /tmp/ecc-candidate describe --tags
+   ```
+
+   Use the version tag without its `v` prefix for `candidate.version`.
+   Copy only report rows with `status: "changed"` into `changes`.
+   Keep only `assetId`, `path`, `fromSha256`, and `toSha256` in each change row.
+   Do not include `status`.
+   Copy the report's `newFiles` list into `newFiles`.
+   Supply the reviewer, an ISO date-time for `reviewedAt`, the decision `"accept"`, and review notes.
+
+   This JSON example shows the required fields. Replace the example values with the candidate data and report values.
+
+   ```json
+   {
+     "schemaVersion": 1,
+     "baseCommit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+     "candidate": {
+       "commit": "1111111111111111111111111111111111111111",
+       "tree": "2222222222222222222222222222222222222222",
+       "version": "2.3.0",
+       "describe": "v2.3.0"
+     },
+     "changes": [
+       {
+         "assetId": "ecc-search-first",
+         "path": "skills/search-first/SKILL.md",
+         "fromSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+         "toSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+       }
+     ],
+     "newFiles": [],
+     "reviewer": "Chris",
+     "reviewedAt": "2026-10-02T12:00:00Z",
+     "decision": "accept",
+     "notes": "The changed skill retains the required behavior."
+   }
+   ```
+
+2. Apply the review from the repository root:
+
+   ```bash
+   bun session-system/ecc/adapter/repin.ts --candidate-root /tmp/ecc-candidate --review session-system/ecc/reviews/<candidate commit>.json
+   ```
+
+   The command returns a JSON `error`, exits 1, and writes nothing for these conditions:
+
+   - The review is invalid, including unknown keys.
+   - The candidate has no changes (`nothing to re-pin`).
+   - The report contains a `missing` row or an overlay conflict.
+   - The decision is not `"accept"`.
+   - The `baseCommit` differs from the manifest's pinned `upstream.commit`.
+   - The review's `changes` or `newFiles` differs from the report. List order does not affect the comparison.
+
+   On success, the command copies every `changed` row, including helper files, into `mirror/`. It does not copy `newFiles`.
+   It sets the manifest's `upstream` commit, tree, version, and describe fields from the review.
+   It sets `upstream.commit` on every installable asset and `upstream.sha256` on each changed primary file's asset.
+   It copies the review into `reviews/` and rebuilds the lock with the review pin.
+
+3. Check the lock:
+
+   ```bash
+   bun session-system/ecc/adapter/emit-lock.ts --check
+   ```
+
+   The pinned manifest hash is `manifestSha256` in `adapted.lock.json`.
+   This check compares that hash with the `manifest.json` bytes and compares the lock and manifest `upstream.commit` values.
+   When a review pin exists, it checks the review's hash, validity, accepted decision, and candidate commit against the lock.
+   It does not check `mirror/` bytes.
+
+4. Run the ECC tests to check the mirror and adapter behavior:
+
+   ```bash
+   bun test session-system/tests/ecc-*.test.ts
+   ```
+
+5. Commit `mirror/`, `manifest.json`, `adapted.lock.json`, the review, and any changed `overlays/<id>.json` together.
+
 ## Building
 
 ```bash
