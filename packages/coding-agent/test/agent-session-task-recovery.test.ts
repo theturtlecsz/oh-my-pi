@@ -117,7 +117,12 @@ describe("native task recovery session integration", () => {
 			hostname: "127.0.0.1",
 			port: 0,
 			async fetch(request) {
-				const input = (await request.json()) as WireRequest;
+				let input: WireRequest;
+				try {
+					input = (await request.json()) as WireRequest;
+				} catch {
+					return new Response(null, { status: 400 });
+				}
 				calls.push(input);
 				let holdBody = false;
 				const results = input.messages.filter(message => message.role === "tool");
@@ -368,6 +373,7 @@ describe("native task recovery session integration", () => {
 			return { snapshot, journal, restored: session };
 		};
 		return {
+			serverUrl: server.url,
 			replay,
 			root,
 			session,
@@ -4179,4 +4185,14 @@ describe("native task recovery session integration", () => {
 		},
 		30000,
 	);
+
+	it("fixture server answers an empty request body with 400 and records no call", async () => {
+		const f = await fixture(false, false);
+		const response = await fetch(new URL("v1/chat/completions", f.serverUrl), {
+			method: "POST",
+			body: "",
+		});
+		expect(response.status).toBe(400);
+		expect(f.calls).toHaveLength(0);
+	});
 });
