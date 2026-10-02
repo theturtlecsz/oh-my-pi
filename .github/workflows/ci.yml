@@ -822,6 +822,22 @@ jobs:
       timeout-minutes: 25
       steps:
          - uses: actions/checkout@v4
+         # ecc-advisor-trial-prepare checks out each commit in
+         # docs/report/ecc-database-advisor-trial/cases.json, diffs that
+         # commit against its parent, and requires the commit to be an
+         # ancestor of HEAD. Default fetch-depth 1 does not have those
+         # objects. A depth-2 fetch of each commit stores the commit and its
+         # parent but leaves them disconnected from HEAD, so merge-base still
+         # fails. Unshallow the checkout commit, same as the guardrail step
+         # (OMP-504-s01-s01) and the installed qualification step
+         # (OMP-506-s01-s01). No `|| true`: a fetch error fails the step.
+         - name: Fetch advisor trial case history
+           shell: bash
+           run: |
+              set -euo pipefail
+              if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+                git fetch --no-tags --unshallow origin "$GITHUB_SHA"
+              fi
          - uses: ./.github/actions/bun-install
          - uses: ./.github/actions/native-artifacts
            with:
