@@ -7,20 +7,29 @@ No constants or SQL statements are defined in this module.
 from __future__ import annotations
 
 from collections.abc import Mapping
+import hashlib
+from pathlib import Path
+import sys
 from typing import Any
 from uuid import UUID
 
+import omp_work
+from omp_work import control_actions
 from omp_work.mission_intake_rules import scope_draft
-from omp_work.orchestrator import service
+from omp_work.operations import database, fingerprints
+from omp_work.orchestrator import candidate_git, service, verifier, worker_sandbox
 from omp_work.orchestrator.service import (
+    OrchestratorConfig,
     Outcome,
     StageContext,
     register_stage_operation,
 )
+from omp_work.v1.canonical import sha256
 from omp_work.v1.models import MissionDraft
 from omp_work.v1.service import WorkError
 
 __all__ = [
+    "judge_manifest",
     "register",
     "run_confirm",
     "run_intake",
@@ -255,4 +264,39 @@ def run_plan(ctx: StageContext) -> Outcome:
         )
 
     return Outcome(outcome="succeeded", data={"stage": "plan"})
+
+
+def _file_sha256(mod: object) -> str:
+    path = getattr(mod, "__file__", None)
+    if not path:
+        raise ValueError(f"module {mod} has no __file__")
+    file_path = Path(path)
+    if file_path.suffix in (".pyc", ".pyo"):
+        file_path = file_path.with_suffix(".py")
+    return hashlib.sha256(file_path.read_bytes()).hexdigest()
+
+
+def judge_manifest(config: OrchestratorConfig) -> tuple[str, dict] | None:
+    """Build and seal the execution judge manifest for an orchestrator config."""
+    if not config.verifier_argv:
+        return None
+
+    manifest = {
+        "auditor_agent_sha256": sha256(
+            {
+                "verifier_argv": list(config.verifier_argv),
+                "verifier_sha256": _file_sha256(verifier),
+            }
+        ),
+        "host_sha256": _file_sha256(service),
+        "adapter_sha256": _file_sha256(sys.modules[__name__]),
+        "freeze_sha256": _file_sha256(candidate_git),
+        "runner_sha256": _file_sha256(worker_sandbox),
+        "executor_sha256": _file_sha256(control_actions),
+        "contract_sha256": omp_work.contract_sha256(),
+        "service_fingerprint": fingerprints.service_runtime_fingerprint(),
+        "service_code_fingerprint": fingerprints.code_fingerprint(),
+        "service_migration_sha256": database.migration_set_sha256(),
+    }
+    return sha256(manifest), manifest
 
