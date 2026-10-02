@@ -838,11 +838,27 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 			refresher: { enabled: false, intervalMs: 0, skewMs: 0, nextSweepInMs: Number.MAX_SAFE_INTEGER },
 			credentials: [entry],
 		};
-		vi.spyOn(brokerClient, "fetchSnapshot").mockImplementation(async () => ({
-			status: 200,
-			generation: incoming.generation,
-			snapshot: incoming,
-		}));
+		vi.spyOn(brokerClient, "fetchSnapshot").mockImplementation(async opts => {
+			if (opts?.waitMs !== undefined) {
+				if (opts.signal?.aborted) {
+					throw opts.signal.reason;
+				}
+				const { promise, reject } = Promise.withResolvers<FetchSnapshotResult>();
+				opts.signal?.addEventListener(
+					"abort",
+					() => {
+						reject(opts.signal?.reason);
+					},
+					{ once: true },
+				);
+				return promise;
+			}
+			return {
+				status: 200,
+				generation: incoming.generation,
+				snapshot: incoming,
+			};
+		});
 		vi.spyOn(brokerClient, "upsertCredentialBlock").mockRejectedValue(new Error("broker write unavailable"));
 		const remoteStore = new RemoteAuthCredentialStore({
 			client: brokerClient,
