@@ -124,6 +124,7 @@ import {
 	resolveCliModel,
 } from "../config/model-resolver";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
+import { isProjectPathTrusted } from "../config/project-trust";
 import { buildServiceTierByFamily, isServiceTierForFamily, serviceTierSettingToTier } from "../config/service-tier";
 import { combine, type SettingsScope } from "../config/registry";
 import type { Settings } from "../config/settings";
@@ -10777,7 +10778,7 @@ export class AgentSession implements SettingsScope {
 			cwd: this.sessionManager.getCwd(),
 			sessionManager: this.sessionManager,
 			modelRegistry: this.#modelRegistry,
-			isProjectTrusted: () => true,
+			isProjectTrusted: () => isProjectPathTrusted(this.sessionManager.getCwd()),
 			// Used only when the session has no extension runner. `createAgentSession` always builds
 			// one (carrying the real identity), so only hand-constructed sessions land here.
 			agent: TOP_LEVEL_AGENT,
