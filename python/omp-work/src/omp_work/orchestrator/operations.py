@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 import hashlib
 import json
 from pathlib import Path
-import subprocess
+import subprocess  # nosec B404 - only subprocess.TimeoutExpired is caught; no process is spawned here
 import sys
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
