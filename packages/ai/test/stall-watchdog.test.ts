@@ -43,6 +43,9 @@ function parseWatchdogLine(stderr: string): WatchdogLogInfo | null {
 async function runChildBun(args: string[]): Promise<ChildRunResult> {
 	const t0 = performance.now();
 	const proc = Bun.spawn(args, {
+		// Run from the package root so the package `bunfig.toml` preload is
+		// inherited by the child — that preload is what activates the watchdog.
+		cwd: path.resolve(import.meta.dir, ".."),
 		stdout: "pipe",
 		stderr: "pipe",
 		env: {
@@ -77,7 +80,6 @@ async function runChildBun(args: string[]): Promise<ChildRunResult> {
 
 describe("stall-watchdog (OMP-512-s02)", () => {
 	let tempDir: string;
-	const preloadPath = path.resolve(import.meta.dir, "./helpers/stall-watchdog.ts");
 
 	beforeAll(async () => {
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-ai-stall-watchdog-"));
@@ -105,7 +107,7 @@ test("block at test start", () => {
 `,
 		);
 
-		const result = await runChildBun(["bun", "test", `--preload=${preloadPath}`, "--timeout=2000", fixtureFile]);
+		const result = await runChildBun(["bun", "test", "--timeout=2000", fixtureFile]);
 
 		expect(result.exitCode !== 0 || result.signalCode !== null).toBe(true);
 		const info = parseWatchdogLine(result.stderr);
@@ -136,7 +138,7 @@ test("block after async sleep", async () => {
 `,
 		);
 
-		const result = await runChildBun(["bun", "test", `--preload=${preloadPath}`, "--timeout=2000", fixtureFile]);
+		const result = await runChildBun(["bun", "test", "--timeout=2000", fixtureFile]);
 
 		expect(result.exitCode !== 0 || result.signalCode !== null).toBe(true);
 		const info = parseWatchdogLine(result.stderr);
@@ -169,7 +171,7 @@ test("block after fake timers", () => {
 		);
 
 		const spawnTimeOrigin = performance.timeOrigin + performance.now();
-		const result = await runChildBun(["bun", "test", `--preload=${preloadPath}`, "--timeout=2000", fixtureFile]);
+		const result = await runChildBun(["bun", "test", "--timeout=2000", fixtureFile]);
 
 		expect(result.exitCode !== 0 || result.signalCode !== null).toBe(true);
 		const info = parseWatchdogLine(result.stderr);
@@ -196,7 +198,7 @@ Bun.sleepSync(120_000);
 `,
 		);
 
-		const result = await runChildBun(["bun", "test", `--preload=${preloadPath}`, "--timeout=2000", fixtureFile]);
+		const result = await runChildBun(["bun", "test", "--timeout=2000", fixtureFile]);
 
 		expect(result.exitCode !== 0 || result.signalCode !== null).toBe(true);
 		const info = parseWatchdogLine(result.stderr);
@@ -207,5 +209,75 @@ Bun.sleepSync(120_000);
 		const elapsedAfterMark = result.exitTimeOrigin - markRaw;
 		expect(elapsedAfterMark).toBeGreaterThanOrEqual(3000);
 		expect(elapsedAfterMark).toBeLessThanOrEqual(5000);
+	});
+
+	it("passes a 1000 ms Bun.sleepSync inside an async test under --timeout=2000", async () => {
+		const fixtureFile = path.join(tempDir, "sleep-sync-async.test.ts");
+
+		await fs.writeFile(
+			fixtureFile,
+			`import { it } from "bun:test";
+
+it("sleepSync inside async test", async () => {
+	Bun.sleepSync(1000);
+});
+`,
+		);
+
+		const result = await runChildBun(["bun", "test", "--timeout=2000", fixtureFile]);
+		const combined = `${result.stdout}${result.stderr}`;
+
+		expect(combined).not.toContain("[stall-watchdog]");
+		expect(result.exitCode).toBe(0);
+		expect(result.signalCode).toBeNull();
+		expect(combined).toContain("1 pass");
+		expect(combined).toContain("0 fail");
+	});
+
+	it("passes await Bun.sleep(3000) in it(..., 6000) under --timeout=2000", async () => {
+		const fixtureFile = path.join(tempDir, "async-sleep-own-timeout.test.ts");
+
+		await fs.writeFile(
+			fixtureFile,
+			`import { it } from "bun:test";
+
+it("async sleep within its own timeout", async () => {
+	await Bun.sleep(3000);
+}, 6000);
+`,
+		);
+
+		const result = await runChildBun(["bun", "test", "--timeout=2000", fixtureFile]);
+		const combined = `${result.stdout}${result.stderr}`;
+
+		expect(combined).not.toContain("[stall-watchdog]");
+		expect(result.exitCode).toBe(0);
+		expect(result.signalCode).toBeNull();
+		expect(combined).toContain("1 pass");
+		expect(combined).toContain("0 fail");
+	});
+
+	it("reports Bun's timeout for a never-settling it(..., 1500) under --timeout=20000", async () => {
+		const fixtureFile = path.join(tempDir, "never-settles.test.ts");
+
+		await fs.writeFile(
+			fixtureFile,
+			`import { it } from "bun:test";
+
+it("never settles", async () => {
+	await new Promise(() => {});
+}, 1500);
+`,
+		);
+
+		const result = await runChildBun(["bun", "test", "--timeout=20000", fixtureFile]);
+		const combined = `${result.stdout}${result.stderr}`;
+
+		expect(combined).not.toContain("[stall-watchdog]");
+		expect(result.exitCode).toBeGreaterThan(0);
+		expect(result.signalCode).toBeNull();
+		expect(combined).toContain("this test timed out after 1500ms");
+		expect(result.durationMs).toBeGreaterThanOrEqual(1500);
+		expect(result.durationMs).toBeLessThanOrEqual(6000);
 	});
 });
