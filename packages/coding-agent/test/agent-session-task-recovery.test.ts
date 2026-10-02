@@ -2097,6 +2097,7 @@ describe("native task recovery session integration", () => {
 
 	for (const fault of ["ready-append", "ready-flush", "claim-append", "claim-flush"] as const) {
 		it(`read ${fault} failure cannot enter response or parent result hooks`, async () => {
+			const faulted = Promise.withResolvers<void>();
 			let failed = false;
 			let responseEffects = 0;
 			let parentEffects = 0;
@@ -2119,6 +2120,7 @@ describe("native task recovery session integration", () => {
 					function (this: SessionManager, type, data) {
 						if (type === marker) {
 							failed = true;
+							faulted.resolve();
 							throw new Error("Read append failed");
 						}
 						return append.call(this, type, data);
@@ -2134,6 +2136,7 @@ describe("native task recovery session integration", () => {
 						)
 					) {
 						failed = true;
+						faulted.resolve();
 						throw new Error("Read flush failed");
 					}
 					return flush.call(this);
@@ -2153,10 +2156,20 @@ describe("native task recovery session integration", () => {
 			});
 			f.releaseChild.resolve();
 			f.releaseParent.resolve();
-			await untilAborted(
-				AbortSignal.timeout(10000),
-				f.run!.catch(() => {}),
+			const settled = f.run!.then(
+				() => "resolved",
+				(e: unknown) => e,
 			);
+			await Promise.race([
+				faulted.promise,
+				settled.then(outcome => {
+					if (!failed)
+						throw new Error(
+							`read ${fault} fault never fired: run settled as ${String(outcome)} after ${f.calls.length} calls`,
+						);
+				}),
+			]);
+			await settled;
 			expect(failed).toBe(true);
 			expect(responseEffects).toBe(0);
 			expect(parentEffects).toBe(0);
