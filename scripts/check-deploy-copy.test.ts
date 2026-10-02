@@ -3,11 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { $ } from "bun";
-import {
-	checkDeployCopy,
-	classifyCopy,
-	UnknownRevisionError,
-} from "./check-deploy-copy.ts";
+import { checkDeployCopy, classifyCopy, UnknownRevisionError } from "./check-deploy-copy.ts";
 
 const SCRIPT = path.join(import.meta.dir, "check-deploy-copy.ts");
 
@@ -57,10 +53,7 @@ async function makeRepo(): Promise<string> {
 	return dir;
 }
 
-async function cli(
-	dir: string,
-	args: string[],
-): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+async function cli(dir: string, args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
 	const proc = await $`bun ${SCRIPT} --target target ${dir} ${args}`.quiet().nothrow();
 	return { exitCode: proc.exitCode, stdout: proc.text(), stderr: proc.stderr.toString() };
 }
@@ -159,9 +152,7 @@ describe("checkDeployCopy", () => {
 		const plain = await fs.mkdtemp(path.join(os.tmpdir(), "omp-deploy-copy-plain-"));
 		dirs.push(plain);
 
-		await expect(checkDeployCopy({ copies: [plain], target: "target" })).rejects.toBeInstanceOf(
-			UnknownRevisionError,
-		);
+		await expect(checkDeployCopy({ copies: [plain], target: "target" })).rejects.toBeInstanceOf(UnknownRevisionError);
 		const unknown = await cli(plain, []);
 		expect(unknown.exitCode).toBe(2);
 
