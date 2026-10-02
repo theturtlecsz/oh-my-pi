@@ -341,17 +341,36 @@ def _evaluate(
 def _output_files(
     candidate_dir: Path, outputs: tuple[str, ...]
 ) -> dict[str, Path] | None:
-    """Absolute candidate path of every declared output, each a regular file."""
+    """Candidate path of every declared output, each a regular file in the jail.
+
+    ``lstat`` alone follows a symlinked parent, so a candidate could point a
+    declared name at a host file and have the evaluator read it. Every ancestor
+    must be a real directory that resolves inside ``candidate_dir``; a symlinked
+    ancestor is refused rather than followed.
+    """
+    root = candidate_dir.resolve()
     files: dict[str, Path] = {}
     for relative in outputs:
-        path = candidate_dir / relative
+        ancestor = root
+        for part in Path(relative).parts[:-1]:
+            ancestor = ancestor / part
+            try:
+                info = ancestor.lstat()
+            except OSError:
+                return None
+            if not stat.S_ISDIR(info.st_mode):
+                return None
+            resolved = ancestor.resolve()
+            if resolved != root and root not in resolved.parents:
+                return None
+        path = root / relative
         try:
             info = path.lstat()
         except OSError:
             return None
         if not stat.S_ISREG(info.st_mode):
             return None
-        files[relative] = path.resolve()
+        files[relative] = path
     return files
 
 
@@ -394,9 +413,13 @@ def _read_score(
     for name, value in metrics.items():
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return None
-        if not math.isfinite(value):
+        try:
+            numeric = float(value)
+        except OverflowError:
             return None
-        clean[str(name)] = float(value)
+        if not math.isfinite(numeric):
+            return None
+        clean[str(name)] = numeric
     return valid, clean
 
 
@@ -544,7 +567,9 @@ class ManagedTrialHandler:
             scratch_dir=self.scratch_dir,
         )
         self.last_evaluation = evaluation
-        if evaluation.canceled:
+        # Cancel is honored at any step: a cancel that arrives after the last
+        # backend run still records no receipt and no observation.
+        if evaluation.canceled or worker.cancel_requested.is_set():
             return self._failed()
 
         verdict = str(evaluation.verdict)

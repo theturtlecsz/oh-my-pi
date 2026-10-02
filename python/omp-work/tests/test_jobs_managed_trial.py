@@ -25,15 +25,19 @@ import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 from uuid import UUID, uuid4
 
 import psycopg
 import pytest
+
+import omp_work.jobs.managed_trial as managed_trial_module
 from omp_work.jobs.admission import claim_job
 from omp_work.jobs.cancel import cancel_job
 from omp_work.jobs.lease import reconcile_jobs
 from omp_work.jobs.managed_trial import (
     CAPABILITY,
+    Evaluation,
     ManagedTrialHandler,
     ManagedTrialRefused,
     dispatch_managed_trial,
@@ -115,6 +119,12 @@ _CANDIDATE_NO_OUTPUT = r"""
 print("METRIC x=0")
 """
 
+_CANDIDATE_SYMLINK_ESCAPE = r"""
+import pathlib
+
+pathlib.Path("escape").symlink_to("/etc")
+"""
+
 _EVALUATOR = r"""
 import json
 import pathlib
@@ -148,6 +158,15 @@ import pathlib
 
 pathlib.Path("score.json").write_text(
     json.dumps({"valid": True, "metrics": {"score": 1.0}}), encoding="utf-8"
+)
+"""
+
+_EVALUATOR_HUGE_SCORE = r"""
+import json
+import pathlib
+
+pathlib.Path("score.json").write_text(
+    json.dumps({"valid": True, "metrics": {"score": 10**400}}), encoding="utf-8"
 )
 """
 
@@ -290,7 +309,10 @@ def _automation_client(native_jobs, bearer: Path) -> WorkClient:
 
 
 def _protocol(
-    *, evaluator_command: tuple[str, ...], confirmation_sha256: str | None
+    *,
+    evaluator_command: tuple[str, ...],
+    confirmation_sha256: str | None,
+    outputs: tuple[str, ...] = ("out/result.json",),
 ) -> EvaluationProtocol:
     return EvaluationProtocol.model_validate(
         {
@@ -300,7 +322,7 @@ def _protocol(
             "tolerance": {},
             "candidate_command": ["python3", "candidate.py"],
             "evaluator_command": list(evaluator_command),
-            "outputs": ["out/result.json"],
+            "outputs": list(outputs),
             "requires": ["python3"],
             "confirmation_sha256": confirmation_sha256,
             "timeout_seconds": 60,
@@ -318,6 +340,7 @@ def _make_fixture(
     confirmation: bytes | None = CONFIRMATION,
     mission_kind: str = "research.run",
     requested_capabilities: tuple[str, ...] = (MANAGED_CAPABILITY,),
+    outputs: tuple[str, ...] = ("out/result.json",),
     link: bool = True,
 ) -> SimpleNamespace:
     """One authorized managed campaign whose inputs live in a content directory."""
@@ -352,6 +375,7 @@ def _make_fixture(
         confirmation_sha256=(
             None if confirmation is None else bytes_sha256(confirmation).hexdigest()
         ),
+        outputs=outputs,
     )
     protocol_bytes = protocol.protocol_bytes()
     protocol_sha256 = bytes_sha256(protocol_bytes).hexdigest()
@@ -935,3 +959,134 @@ def test_unauthorized_mission_is_refused(
         (managed_job_id(fix.trial_id),),
     )
     assert job is None
+
+
+def test_candidate_output_reaching_outside_its_dir_is_candidate_failed(
+    native_jobs, tmp_path: Path
+) -> None:
+    """A declared output that resolves outside the candidate dir never reaches the evaluator."""
+    fix = _make_fixture(
+        native_jobs,
+        tmp_path,
+        candidate_source=_CANDIDATE_SYMLINK_ESCAPE,
+        outputs=("escape/passwd",),
+    )
+    bearer = _automation_bearer(native_jobs, native_jobs.service.capabilities)
+    store = _store(native_jobs)
+    handler = _handler(fix, _automation_client(native_jobs, bearer))
+
+    job_id = _dispatch(fix, store)
+    worker = _worker(fix, store, handler)
+
+    assert worker.tick() == job_id
+    assert handler.last_evaluation is not None
+    assert handler.last_evaluation.verdict == "candidate_failed"
+    assert handler.last_evaluation.failure_reason == "candidate_output_missing"
+
+    job = _select(
+        fix,
+        "SELECT status, settlement FROM omp_jobs.jobs WHERE job_id=%s",
+        (job_id,),
+    )
+    assert job["status"] == "failed"
+    assert job["settlement"]["receipts"][0]["evidence"]["trust"] == "untrusted"
+
+
+def test_huge_score_is_evaluator_failed_not_crashed(
+    native_jobs, tmp_path: Path
+) -> None:
+    """A score integer too large for a float fails the job instead of raising."""
+    fix = _make_fixture(native_jobs, tmp_path, evaluator_source=_EVALUATOR_HUGE_SCORE)
+    bearer = _automation_bearer(native_jobs, native_jobs.service.capabilities)
+    store = _store(native_jobs)
+    handler = _handler(fix, _automation_client(native_jobs, bearer))
+
+    job_id = _dispatch(fix, store)
+    worker = _worker(fix, store, handler)
+
+    assert worker.tick() == job_id
+    assert handler.last_evaluation is not None
+    assert handler.last_evaluation.verdict == "evaluator_failed"
+    assert handler.last_evaluation.failure_reason == "evaluator_failed"
+
+    job = _select(
+        fix,
+        "SELECT status, settlement FROM omp_jobs.jobs WHERE job_id=%s",
+        (job_id,),
+    )
+    assert job["status"] == "failed"
+    observation = _observation(fix, job_id)
+    assert observation is not None
+    assert observation["payload"]["verdict"] == "evaluator_failed"
+
+
+def test_cancel_after_last_run_records_nothing(tmp_path: Path) -> None:
+    """A cancel observed after the evaluation still registers no receipt and no observation."""
+    workspace_id = uuid4()
+    actor_id = uuid4()
+    trial_id = uuid4()
+    campaign_id = uuid4()
+    candidate_digest = "a" * 64
+    evaluator_sha256 = "b" * 64
+    evaluator_artifact = "c" * 64
+    protocol_sha256 = "d" * 64
+    trial = {
+        "trial_id": trial_id,
+        "campaign_id": campaign_id,
+        "evaluator_sha256": evaluator_sha256,
+        "candidate_digest": candidate_digest,
+        "spec": {"evaluation_protocol_sha256": protocol_sha256},
+    }
+    effects: list[str] = []
+
+    class _Worker:
+        store = object()
+
+        def __init__(self) -> None:
+            self.workspace_id = workspace_id
+            self.actor_id = actor_id
+            self.cancel_requested = threading.Event()
+
+    worker = _Worker()
+
+    def _evaluate(*args, **kwargs) -> Evaluation:
+        # The backend run just finished when the owner's cancel lands.
+        worker.cancel_requested.set()
+        return Evaluation(
+            verdict="qualified",
+            metrics={"score": 1.0},
+            output_sha256="e" * 64,
+            candidate_manifest="f" * 64,
+            evaluator_manifest="0" * 64,
+        )
+
+    handler = ManagedTrialHandler(content_dir=tmp_path, execute=None)
+    handler.observe = lambda *args, **kwargs: None
+    handler._trial_row = lambda *args, **kwargs: trial
+    handler._component_descriptor = lambda *args, **kwargs: {
+        "kind": "evaluator",
+        "artifact_sha256": evaluator_artifact,
+    }
+    handler._read_content = lambda digest: b"input"
+    handler._register_receipt = lambda **kwargs: effects.append("receipt")
+    handler._record_observation = lambda **kwargs: effects.append("observation")
+
+    with (
+        mock.patch.object(
+            managed_trial_module,
+            "load_protocol",
+            return_value=SimpleNamespace(confirmation_sha256=None),
+        ),
+        mock.patch.object(
+            managed_trial_module, "evaluate_candidate", side_effect=_evaluate
+        ),
+    ):
+        settlement = handler.run(worker, {"job_id": "managed-trial:demo"})
+
+    assert worker.cancel_requested.is_set()
+    assert effects == []
+    assert settlement.outcome == "failed"
+    assert settlement.receipts == []
+    assert handler.last_evaluation is not None
+    assert handler.last_evaluation.canceled is False
+
