@@ -27,6 +27,7 @@
 
 ### Fixed
 
+- Fixed a daemon request sent right after a broker shutdown failing with 'Daemon broker connection closed'.
 - Startup summary no longer stalls on huge entries.
 - HTML transcript exports show raw HTML in messages as text instead of rendering it (scripts and event handlers no longer run in the viewer).
 - The browser relay now requires a token on its CDP endpoints (`/cdp`, `/json/version`, `/json`); omp reads it from `~/.omp/browser-relay/cdp-token` automatically.
