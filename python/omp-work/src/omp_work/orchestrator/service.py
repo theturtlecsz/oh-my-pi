@@ -529,14 +529,15 @@ class StageContext:
         with self._handler.store.transaction(self.workspace_id, self.principal.actor_id) as cur:
             cur.execute(
                 """
-                SELECT worker_id, fence, status, lease_expires_at
+                SELECT worker_id, fence, status, lease_expires_at,
+                       lease_expires_at > clock_timestamp() AS live
                 FROM omp_jobs.jobs
                 WHERE workspace_id=%s AND job_id=%s AND source='native'
                 """,
                 (self.workspace_id, str(self.lease.job_id)),
             )
             row = cur.fetchone()
-        if row is None or row["status"] not in ("admitted", "in_flight"):
+        if row is None or not row["live"] or row["status"] not in ("admitted", "in_flight"):
             return None
         if str(row["worker_id"]) != self.lease.worker_id or int(row["fence"]) != self.lease.fence:
             return None
@@ -569,6 +570,8 @@ class StageContext:
                 correlation_id=uuid5(NAMESPACE_URL, base + ":correlation"),
             )
         except WorkError as error:
+            if error.code == "idempotency_conflict":
+                raise
             if _ignored(error):
                 return {"replayed": True, "code": error.code}
             raise
@@ -632,13 +635,14 @@ class StageContext:
         rule_id: str,
         decision_id: str | None = None,
     ) -> ActResult:
-        """Run one control-plane action, or only its executor when the intent is still open.
+        """Run one control-plane action. The intent is recorded only after authorization.
 
-        The intent is recorded only once ``perform`` has authorized the action,
-        so an unreachable intent never precedes a refusal. An operation that
-        presents a signed decision records that presentation first; a replay
-        finds the presentation and the used authorization instead of
-        re-presenting, and runs only the executor.
+        A finished operation runs nothing. An open intent that follows
+        ``action_allowed`` runs the executor only. An intent with no preceding
+        ``action_allowed`` does not skip ``perform``. A decision is presented
+        before ``perform``. Once that authorization is used and the presentation
+        still matches a fresh ``classify()`` digest, the wrapped executor runs
+        again; any other used authorization is refused.
         """
         self._stop()
         parsed = parse_submission(operation)
@@ -653,31 +657,34 @@ class StageContext:
             return ActResult(status="refused", operation_id=operation_id, code="lease_lost")
         if self._finished(operation_id):
             return ActResult(status="done", operation_id=operation_id)
-        if self._allowed(operation_id):
-            executor(parsed, resolved)
-            self.intents.mark_done(operation_id, operation_id)
-            return ActResult(status="done", operation_id=operation_id)
         digest = classify(parsed, resolved).target_sha256
         if decision_id is None:
             decision_id = self.answered_decision(rule_id)
-        if decision_id is not None and self._presented(operation_id, decision_id, digest):
-            self._record_action(rule_id, operation_id, "action_allowed", None, decision_id=decision_id)
-            self.intents.record_intent(operation_id, parsed.kind, {"resource_id": parsed.resource_id})
+        if self._open_after_allowed(operation_id):
             executor(parsed, resolved)
             self.intents.mark_done(operation_id, operation_id)
             return ActResult(status="done", operation_id=operation_id, decision_id=decision_id)
-        if decision_id is not None:
+        if decision_id is not None and self._authorization_used(decision_id):
+            if self._presented_step(operation_id, decision_id, digest):
+                self._run_effect(rule_id, operation_id, decision_id, parsed, resolved, executor)
+                return ActResult(status="done", operation_id=operation_id, decision_id=decision_id)
+            self._record_action(
+                rule_id, operation_id, "action_refused", "authorization_mismatch", decision_id=decision_id
+            )
+            return ActResult(
+                status="refused",
+                operation_id=operation_id,
+                code="authorization_mismatch",
+                decision_id=decision_id,
+            )
+        if decision_id is not None and not self._any_presentation(operation_id):
             self._record_authorization(rule_id, operation_id, decision_id, digest)
 
         def wrapped(op: Any, target: ResolvedTarget) -> None:
-            self._record_action(rule_id, operation_id, "action_allowed", None, decision_id=decision_id)
-            self.intents.record_intent(operation_id, parsed.kind, {"resource_id": parsed.resource_id})
-            executor(op, target)
-            self.intents.mark_done(operation_id, operation_id)
+            self._run_effect(rule_id, operation_id, decision_id, op, target, executor)
 
         hold = self.hold_for(rule_id, self.step_index, self.stage, resolved.commit, self._target_ref())
         if decision_id is None and hold is not None and self._handler.find_decision(str(hold.decision_id)) is not None:
-            self._record_action(rule_id, operation_id, "action_refused", "held")
             return ActResult(status="held", operation_id=operation_id, decision_id=str(hold.decision_id))
         try:
             outcome = perform(
@@ -703,6 +710,12 @@ class StageContext:
                 operation_id=operation_id,
                 decision_id=None if outcome.decision_id is None else str(outcome.decision_id),
             )
+        if outcome.status == "held":
+            return ActResult(
+                status="held",
+                operation_id=operation_id,
+                decision_id=None if outcome.decision_id is None else str(outcome.decision_id),
+            )
         self._record_action(rule_id, operation_id, "action_refused", outcome.code, decision_id=decision_id)
         return ActResult(
             status=outcome.status,
@@ -711,18 +724,63 @@ class StageContext:
             decision_id=None if outcome.decision_id is None else str(outcome.decision_id),
         )
 
-    def _presented(self, operation_id: str, decision_id: str, digest: str) -> bool:
-        """Whether this operation presented this decision and the authorization is used."""
-        for step in reversed(self._handler.steps()):
-            if (
-                step.get("kind") == "authorization_presented"
-                and step.get("operation_id") == operation_id
-                and str(step.get("decision_id")) == str(decision_id)
-                and str(step.get("digest")) == digest
-            ):
-                break
-        else:
+    def _run_effect(
+        self,
+        rule_id: str,
+        operation_id: str,
+        decision_id: str | None,
+        operation: Any,
+        resolved: ResolvedTarget,
+        executor: Callable[[Any, ResolvedTarget], object],
+    ) -> None:
+        """``action_allowed``, then the intent, then the executor, then ``external_done``."""
+        kind = getattr(operation, "kind", None) or operation.get("kind")
+        resource_id = getattr(operation, "resource_id", None)
+        if resource_id is None and isinstance(operation, Mapping):
+            resource_id = operation.get("resource_id")
+        self._record_action(rule_id, operation_id, "action_allowed", None, decision_id=decision_id)
+        self.intents.record_intent(operation_id, str(kind), {"resource_id": resource_id})
+        executor(operation, resolved)
+        self.intents.mark_done(operation_id, operation_id)
+
+    def _open_after_allowed(self, operation_id: str) -> bool:
+        """Whether the open intent was recorded after this operation's ``action_allowed``."""
+        if self.intents.open(operation_id) is None or not self._allowed(operation_id):
             return False
+        steps = self._handler.steps()
+        intent_at: int | None = None
+        for index, step in enumerate(steps):
+            if step.get("external_ref") != operation_id and step.get("operation_id") != operation_id:
+                continue
+            if step.get("kind") == "external_done":
+                intent_at = None
+            elif step.get("kind") == "external_intent":
+                intent_at = index
+        if intent_at is None:
+            return False
+        return any(
+            step.get("kind") == "action_allowed" and step.get("operation_id") == operation_id
+            for step in steps[:intent_at]
+        )
+
+    def _presented_step(self, operation_id: str, decision_id: str, digest: str) -> bool:
+        """Whether this operation presented this decision at this digest."""
+        return any(
+            step.get("kind") == "authorization_presented"
+            and step.get("operation_id") == operation_id
+            and str(step.get("decision_id")) == str(decision_id)
+            and str(step.get("digest")) == digest
+            for step in self._handler.steps()
+        )
+
+    def _any_presentation(self, operation_id: str) -> bool:
+        return any(
+            step.get("kind") == "authorization_presented" and step.get("operation_id") == operation_id
+            for step in self._handler.steps()
+        )
+
+    def _authorization_used(self, decision_id: str) -> bool:
+        """Whether this decision already has an allowed project action record."""
         with self.projects._transaction(self.workspace_id, self.principal.actor_id) as cur:
             cur.execute(
                 "SELECT 1 FROM omp_work.project_action_records"
