@@ -4,6 +4,7 @@
 
 ### Added
 
+- `before_agent_start` handlers can return `block`/`reason` to refuse a prompt before any provider call.
 - Added an opt-in Jev classifier for auto thinking effort.
 - Added an opt-in Jev unexpected-stop classifier with a configurable threshold.
 - Added an opt-in Jev judge for hypothesis tournaments with a `{A, B, tie}` choice, kept alongside the chat judge as a second family for bias checks.
@@ -27,6 +28,7 @@
 
 ### Fixed
 
+- `omp -p` reports a blocked prompt on stderr and exits 1.
 - Fixed a daemon request sent right after a broker shutdown failing with 'Daemon broker connection closed'.
 - Startup summary no longer stalls on huge entries.
 - HTML transcript exports show raw HTML in messages as text instead of rendering it (scripts and event handlers no longer run in the viewer).
