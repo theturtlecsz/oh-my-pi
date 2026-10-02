@@ -10,6 +10,7 @@ Defends front pipeline contracts:
 - extra_capability=None grant row records the active mandate id as owner_input_id.
 - crash_after_command("begin_execution") leaves one active grant and one begin_execution command row.
 - a grant already begun on the item leaves no mission grant row.
+- a foreign grant at the mission grant id claiming another item fails the grant step with code grant_foreign, leaves the grant's state and grant_version unchanged, and writes exactly one execution_grants row.
 """
 
 from __future__ import annotations
@@ -313,6 +314,9 @@ def test_plain_confirm_extra_kept_plan_failed_mission_not_admitted(
         for link in mission_view.get("links", ())
     )
     assert mission_view["status"] == "running"
+
+    # The mission was never admitted, so the grant stage never ran.
+    assert _grant_rows(world) == []
 
 
 def test_no_extra_capability_no_decision_approved(
@@ -771,7 +775,7 @@ def _grant_rows(world) -> list[dict]:
     ) as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT grant_id::text AS grant_id, state, judge_manifest, provenance
+            SELECT grant_id::text AS grant_id, state, grant_version, judge_manifest, provenance
             FROM omp_work.execution_grants
             WHERE workspace_id = %s
             ORDER BY created_at
@@ -1011,4 +1015,151 @@ def test_prior_grant_on_item_writes_no_mission_grant(
     assert [row["grant_id"] for row in rows] == [str(other_id)]
     assert gid not in {row["grant_id"] for row in rows}
     assert rows[0]["state"] == "active"
+
+
+def begin(world, grant_id, work_id, revision_id, project_id):
+    """Send one begin_execution claim the way the grant stage builds it."""
+    judged = judge_manifest(world.config)
+    assert judged is not None
+    judge_sha, manifest = judged
+    with psycopg.connect(
+        **world.config.ops.connection_kwargs("postgres"), row_factory=dict_row
+    ) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT r.description AS description, a.key AS key FROM omp_work.work_revisions r "
+            "JOIN omp_work.work_aliases a ON a.work_id = r.work_id WHERE r.revision_id = %s",
+            (revision_id,),
+        )
+        claim_row = cur.fetchone()
+        description = str(claim_row["description"])
+        key = str(claim_row["key"])
+        cur.execute(
+            "SELECT version FROM omp_work.focus_slots WHERE workspace_id = %s AND owner_id = %s",
+            (world.workspace_id, OWNER),
+        )
+        focus = cur.fetchone()
+        focus_version = int(focus["version"]) if focus else 0
+    envelope = CommandEnvelope.model_validate(
+        {
+            "api_version": "work.omp.dev/v1",
+            "workspace_id": str(world.workspace_id),
+            "operation_id": str(uuid4()),
+            "request_id": str(uuid4()),
+            "correlation_id": str(uuid4()),
+            "command": {
+                "type": "begin_execution",
+                "payload": {
+                    "grant_id": str(grant_id),
+                    "provenance": {
+                        "owner_input_id": str(world.mandate.mandate_id),
+                        "owner_session_id": f"orchestrator:{world.mission_id}",
+                        "normalized_command": f"/execute {key}",
+                        "workspace_id": str(world.workspace_id),
+                        "repository": world.repo_key,
+                        "nonce": str(service._ids(world.mission_id, "nonce")),
+                        "issued_at": datetime.now(UTC).isoformat(),
+                    },
+                    "remote_ref": world.candidate_ref,
+                    "mode": "single",
+                    "items": [
+                        {
+                            "work_id": str(work_id),
+                            "revision_id": str(revision_id),
+                            "position": 0,
+                            "original_request": description,
+                            "original_request_sha256": text_sha256(description),
+                            "initial_git_baseline": world.base_commit,
+                            "project_id": None if project_id is None else str(project_id),
+                        }
+                    ],
+                    "expected_focus_version": focus_version,
+                    "judge_sha256": judge_sha,
+                    "judge_manifest": manifest,
+                },
+            },
+        }
+    )
+    return world.store.execute(
+        envelope,
+        actor_id=OWNER,
+        actor_kind="automation",
+        required_scope="work.execute",
+    )
+
+
+def test_foreign_grant_at_mission_id_fails_grant_foreign(
+    service, tmp_path: Path, monkeypatch
+) -> None:
+    """A grant at the mission grant id claiming another item fails grant_foreign, unchanged."""
+    world = open_e2e_world(
+        service,
+        tmp_path / "grant_foreign",
+        monkeypatch,
+        verifier_mode="pass",
+        worker_mode="ok",
+        extra_capability=None,
+        operations=("omp_work.orchestrator.operations:register",),
+    )
+    submitted = submit(world.config, world.request)
+    work_id = UUID(str(submitted["work_id"]))
+    _seed_item_budget(world, service, work_id)
+
+    _receipt, created = world.store.execute(
+        CommandEnvelope.model_validate(
+            {
+                "api_version": "work.omp.dev/v1",
+                "workspace_id": str(world.workspace_id),
+                "operation_id": str(uuid4()),
+                "request_id": str(uuid4()),
+                "correlation_id": str(uuid4()),
+                "command": {
+                    "type": "create_work_batch",
+                    "payload": {
+                        "items": [
+                            {
+                                "client_ref": "second-item",
+                                "title": "Second item",
+                                "description": "second item description",
+                                "project_id": str(world.project_id),
+                            }
+                        ],
+                        "relations": [],
+                    },
+                },
+            }
+        ),
+        actor_id=OWNER,
+        actor_kind="automation",
+        required_scope="work.mutate",
+    )
+    second = created["items"][0]
+    gid = _grant_id(world)
+    begin(world, gid, second["work_id"], second["revision_id"], str(world.project_id))
+
+    worker = open_worker(world)
+
+    def grant_ran(view: dict) -> bool:
+        return any(
+            step.get("stage") == "grant" and step.get("kind") == "outcome"
+            for step in view["steps"]
+        )
+
+    tick_until(worker, world, grant_ran, limit=40)
+
+    handler = OrchestratorHandler(world.config)
+    handler.mission_id = world.mission_id
+    grant_step = next(
+        step
+        for step in handler.steps()
+        if step.get("stage") == "grant" and step.get("kind") == "outcome"
+    )
+    assert grant_step["outcome"] == "failed"
+    assert grant_step["data"]["code"] == "grant_foreign"
+
+    rows = _grant_rows(world)
+    assert len(rows) == 1
+    assert rows[0]["grant_id"] == gid
+    assert rows[0]["grant_version"] == 1
+    assert rows[0]["state"] == "active"
+    assert len(_begin_rows(world)) == 1
 

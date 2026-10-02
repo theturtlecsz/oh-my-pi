@@ -30,6 +30,7 @@ from omp_work.v1.models import MissionDraft
 from omp_work.v1.service import WorkError
 
 __all__ = [
+    "grant_owned",
     "judge_manifest",
     "register",
     "run_confirm",
@@ -290,6 +291,22 @@ def _owner_input_id(ctx: StageContext, intake_data: Mapping[str, Any]) -> str:
     return str(mandate["mandate_id"])
 
 
+def grant_owned(ctx: StageContext, view: Mapping[str, Any]) -> bool:
+    """A grant view belongs to this mission only when its id is the mission grant
+    id and it claims this stage's work item in this stage's project."""
+    gid = service._ids(ctx.mission_id, "grant")
+    grant = view.get("grant")
+    if not isinstance(grant, Mapping) or str(grant.get("grant_id")) != str(gid):
+        return False
+    items = view.get("items") or ()
+    return any(
+        isinstance(item, Mapping)
+        and str(item.get("work_id")) == str(ctx.work_id)
+        and str(item.get("project_id")) == str(ctx.project_id)
+        for item in items
+    )
+
+
 def run_grant(ctx: StageContext) -> Outcome:
     """Begin one execution grant, or report the grant this mission already has."""
     gid = service._ids(ctx.mission_id, "grant")
@@ -309,6 +326,11 @@ def run_grant(ctx: StageContext) -> Outcome:
             raise
         view = None
     if view is not None:
+        if not grant_owned(ctx, view):
+            return Outcome(
+                outcome="failed",
+                data={"stage": "grant", "code": "grant_foreign"},
+            )
         grant = view["grant"]
         return Outcome(
             outcome="succeeded",
