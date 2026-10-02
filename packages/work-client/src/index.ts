@@ -1441,8 +1441,11 @@ export class WorkClient {
 		) as Promise<ResearchDatasetView>;
 	}
 
-	tree(): Promise<WorkspaceTree> {
-		return this.request("GET", `/v1/workspaces/${this.workspaceId}/tree`) as Promise<WorkspaceTree>;
+	/** Workspace tree read. `world: "media-discovery"` narrows the projection to
+	 *  Media Discovery items; omitting it returns only OMP items. */
+	tree(options?: { world?: "media-discovery" }): Promise<WorkspaceTree> {
+		const query = options?.world ? `?world=${options.world}` : "";
+		return this.request("GET", `/v1/workspaces/${this.workspaceId}/tree${query}`) as Promise<WorkspaceTree>;
 	}
 
 	focus(ownerId: UUID): Promise<FocusSlot> {
