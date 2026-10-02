@@ -156,6 +156,42 @@ export interface AdaptedLock {
 	assets: LockAsset[];
 }
 
+/** One file an update changes, with the adapted hashes before and after. */
+export interface ReviewChange {
+	assetId: string;
+	path: string;
+	fromSha256: string;
+	toSha256: string;
+}
+
+/**
+ * The owner's review of a proposed upstream update. Authored as a JSON file
+ * relative to the ECC root and pinned into the build lock by path+sha256 so a
+ * later verification run re-reads and re-validates the exact reviewed record.
+ */
+export interface UpdateReview {
+	schemaVersion: 1;
+	baseCommit: string;
+	candidate: { commit: string; tree: string; version: string; describe: string };
+	changes: ReviewChange[];
+	newFiles: string[];
+	reviewer: string;
+	/** ISO-8601 date (or date-time) the review was recorded. */
+	reviewedAt: string;
+	decision: "accept" | "reject";
+	notes: string;
+}
+
+/**
+ * The committed build lock beside the mirror: an AdaptedLock plus a pin over
+ * the manifest bytes that produced it and, when an update review is attached,
+ * the review file's path (relative to the ECC root) and content sha256.
+ */
+export interface BuildLock extends AdaptedLock {
+	manifestSha256: string;
+	review: { path: string; sha256: string } | null;
+}
+
 export interface PlannedFile extends LockFile {
 	/** Asset that owns this file — removal only touches owned paths. */
 	assetId: string;
