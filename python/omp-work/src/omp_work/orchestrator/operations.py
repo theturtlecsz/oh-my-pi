@@ -25,7 +25,7 @@ from omp_work.orchestrator.service import (
     StageContext,
     register_stage_operation,
 )
-from omp_work.v1.canonical import sha256, text_sha256
+from omp_work.v1.canonical import canonical_json, sha256, text_sha256
 from omp_work.v1.models import MissionDraft
 from omp_work.v1.service import WorkError
 
@@ -419,9 +419,9 @@ def _grant_phase(ctx: StageContext, gid: UUID) -> Outcome:
 
     Every pass re-reads the execution view and re-runs ``grant_owned``, so no
     version or revision from an earlier pass or a command's return is reused.
-    ``criteria_pending`` seals the request's acceptance criteria; ``executing``
-    is the grant stage's success. Any other phase, or a phase that repeats,
-    fails with ``grant_phase_<phase>``.
+    ``criteria_pending`` seals the request's acceptance criteria; ``planning``
+    stamps the execution plan; ``executing`` is the grant stage's success. Any
+    other phase, or a phase that repeats, fails with ``grant_phase_<phase>``.
     """
     previous_phase: str | None = None
     for _ in range(_MAX_GRANT_PHASE_PASSES):
@@ -452,6 +452,7 @@ def _grant_phase(ctx: StageContext, gid: UUID) -> Outcome:
                     "grant_id": str(grant["grant_id"]),
                     "grant_version": grant["grant_version"],
                     "phase": phase,
+                    "candidate_id": str(service._ids(ctx.mission_id, "plan-candidate")),
                 },
             )
         if phase == "criteria_pending":
@@ -492,6 +493,86 @@ def _grant_phase(ctx: StageContext, gid: UUID) -> Outcome:
                         data={"stage": "grant", "code": "grant_conflict"},
                     )
                 raise
+            previous_phase = phase
+            continue
+        if phase == "planning":
+            rq = _request_mapping(ctx.request)
+            raw_test_cmd = rq.get("test_command") or ()
+            test_command = [str(x) for x in raw_test_cmd]
+            if not test_command:
+                return Outcome(
+                    outcome="failed",
+                    data={
+                        "stage": "grant",
+                        "code": "test_command_missing",
+                        "phase": phase,
+                    },
+                )
+            pid = service._ids(ctx.mission_id, "plan-candidate")
+            intake = rq.get("intake") or {}
+            if hasattr(intake, "model_dump"):
+                intake = intake.model_dump(mode="json")
+            if isinstance(intake, Mapping):
+                goal = intake.get("goal") or {}
+                if hasattr(goal, "model_dump"):
+                    goal = goal.model_dump(mode="json")
+                goal_statement = str(
+                    goal.get("statement")
+                    if isinstance(goal, Mapping)
+                    else getattr(goal, "statement", "")
+                )
+                raw_constraints = intake.get("constraints") or ()
+            else:
+                goal = getattr(intake, "goal", None)
+                goal_statement = str(getattr(goal, "statement", ""))
+                raw_constraints = getattr(intake, "constraints", ())
+
+            approach: list[str] = [goal_statement]
+            for c in raw_constraints:
+                if hasattr(c, "model_dump"):
+                    c = c.model_dump(mode="json")
+                stmt = (
+                    c.get("statement")
+                    if isinstance(c, Mapping)
+                    else getattr(c, "statement", "")
+                )
+                approach.append(str(stmt))
+
+            verification = test_command
+            raw_paths = rq.get("allowed_paths") or ()
+            paths = [str(x) for x in raw_paths]
+            candidate_sha = sha256(
+                {
+                    "base_commit": rq["base_commit"],
+                    "allowed_paths": rq["allowed_paths"],
+                }
+            )
+            plan_body = canonical_json(
+                {
+                    "approach": approach,
+                    "verification": verification,
+                    "paths": paths,
+                }
+            )
+            plan_sha = text_sha256(plan_body)
+            ctx.command(
+                "stamp_execution_plan",
+                {
+                    "grant_id": str(gid),
+                    "expected_grant_version": grant["grant_version"],
+                    "work_id": str(ctx.work_id),
+                    "revision_id": str(item["criteria_revision_id"]),
+                    "candidate_id": str(pid),
+                    "approach": approach,
+                    "verification": verification,
+                    "paths": paths,
+                    "candidate_sha256": candidate_sha,
+                    "plan_body": plan_body,
+                    "plan_sha256": plan_sha,
+                    "plan_file": f"orchestrator:{ctx.mission_id}",
+                    "judge_sha256": grant["judge_sha256"],
+                },
+            )
             previous_phase = phase
             continue
         return Outcome(

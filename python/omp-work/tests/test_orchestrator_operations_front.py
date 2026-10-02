@@ -48,8 +48,8 @@ from omp_work.orchestrator.service import (
     load_request,
     submit,
 )
-from omp_work.v1.canonical import sha256, text_sha256
-from omp_work.v1.models import CommandEnvelope, ExecutionJudgeManifest
+from omp_work.v1.canonical import canonical_json, sha256, text_sha256
+from omp_work.v1.models import CommandEnvelope, ExecutionJudgeManifest, IntakeConstraint
 from orchestrator_e2e_support import (
     SimulatedCrash,
     answer_intake,
@@ -840,6 +840,39 @@ def _grant_item_rows(world, gid: str) -> list[dict]:
         return list(cur.fetchall())
 
 
+def _grant_item_stamp_rows(world, gid: str) -> list[dict]:
+    with psycopg.connect(
+        **world.config.ops.connection_kwargs("postgres"), row_factory=dict_row
+    ) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT work_id::text AS work_id, phase,
+                   plan_stamp, plan_stamp_sha256
+            FROM omp_work.execution_grant_items
+            WHERE workspace_id = %s AND grant_id = %s
+            ORDER BY position
+            """,
+            (world.workspace_id, gid),
+        )
+        return list(cur.fetchall())
+
+
+def _candidate_rows(world, candidate_id: str | UUID) -> list[dict]:
+    with psycopg.connect(
+        **world.config.ops.connection_kwargs("postgres"), row_factory=dict_row
+    ) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT candidate_id::text AS candidate_id,
+                   candidate_sha256, kind
+            FROM omp_work.candidates
+            WHERE workspace_id = %s AND candidate_id = %s
+            """,
+            (world.workspace_id, str(candidate_id)),
+        )
+        return list(cur.fetchall())
+
+
 def _revision_criteria(world, revision_id: str) -> list[str]:
     with psycopg.connect(
         **world.config.ops.connection_kwargs("postgres"), row_factory=dict_row
@@ -896,6 +929,10 @@ def _open_front(service, root: Path, monkeypatch, *, extra_capability):
 
 def _grant_id(world) -> str:
     return str(service._ids(world.mission_id, "grant"))
+
+
+def _plan_candidate_id(world) -> str:
+    return str(service._ids(world.mission_id, "plan-candidate"))
 
 
 def _expire_lease(world) -> None:
@@ -1461,7 +1498,7 @@ def test_crash_after_seal_execution_criteria_replays(
 
     replayed = _grant_item_rows(world, gid)[0]
     assert replayed["criteria_revision_id"] == sealed_revision
-    assert replayed["phase"] == "planning"
+    assert replayed["phase"] == "executing"
 
     seals = _seal_rows(world)
     assert len(seals) == 1
@@ -1506,5 +1543,103 @@ def test_empty_work_criteria_fails_criteria_missing(
     assert len(items) == 1
     assert items[0]["phase"] == "criteria_pending"
     assert items[0]["criteria_revision_id"] is None
+
+
+def test_edited_draft_constraint_stamps_execution_plan(
+    service, tmp_path: Path, monkeypatch
+) -> None:
+    """Edited draft with constraint stamps the execution plan and advances to executing."""
+    world = open_e2e_world(
+        service,
+        tmp_path / "grant_constraint_stamp",
+        monkeypatch,
+        verifier_mode="pass",
+        worker_mode="ok",
+        extra_capability="egress",
+        operations=("omp_work.orchestrator.operations:register",),
+    )
+    constraint = IntakeConstraint.model_validate(
+        {
+            "id": "c-constraint-1",
+            "statement": "latency under 10ms",
+            "source_span_ids": (),
+            "key": "latency",
+            "value": {"kind": "known", "value": "10ms"},
+            "polarity": "positive",
+        }
+    )
+    intake = world.request.intake.model_copy(
+        update={"constraints": (*world.request.intake.constraints, constraint)}
+    )
+    world.request = dataclasses.replace(world.request, intake=intake)
+
+    submitted = submit(world.config, world.request)
+    work_id = UUID(str(submitted["work_id"]))
+    _seed_item_budget(world, service, work_id)
+    worker = open_worker(world)
+
+    def paused_confirm(view: dict) -> bool:
+        return any(
+            step.get("kind") == "pause" and step.get("rule_id") == "d23-owner-confirm"
+            for step in view["steps"]
+        )
+
+    tick_until(worker, world, paused_confirm, limit=20)
+    intake_data = _intake_data(world)
+    world.intake_decision_id = UUID(str(intake_data["decision_id"]))
+    world.mission_revision = int(intake_data["mission_revision"])
+    answer_intake(world, "edited_draft")
+
+    def grant_ran(view: dict) -> bool:
+        return any(
+            step.get("stage") == "grant" and step.get("kind") == "outcome"
+            for step in view["steps"]
+        )
+
+    tick_until(worker, world, grant_ran, limit=40)
+
+    outcome = _grant_step_outcome(world)
+    assert outcome["outcome"] == "succeeded"
+    assert outcome["data"]["phase"] == "executing"
+    pid = _plan_candidate_id(world)
+    assert outcome["data"]["candidate_id"] == pid
+
+    gid = _grant_id(world)
+    item_rows = _grant_item_stamp_rows(world, gid)
+    assert len(item_rows) == 1
+    item = item_rows[0]
+    assert item["phase"] == "executing"
+
+    stamp = _json_obj(item["plan_stamp"])
+    assert stamp is not None
+    assert stamp["approach"] == [
+        world.request.intake.goal.statement,
+        constraint.statement,
+    ]
+    assert stamp["verification"] == list(world.request.test_command)
+    assert stamp["paths"] == list(world.request.allowed_paths)
+
+    expected_plan_body = canonical_json(
+        {
+            "approach": stamp["approach"],
+            "verification": stamp["verification"],
+            "paths": stamp["paths"],
+        }
+    )
+    assert stamp["plan_body"] == expected_plan_body
+    assert stamp["plan_sha256"] == text_sha256(expected_plan_body)
+
+    expected_cand_sha = sha256(
+        {
+            "base_commit": world.request.base_commit,
+            "allowed_paths": list(world.request.allowed_paths),
+        }
+    )
+    candidates = _candidate_rows(world, pid)
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate["candidate_id"] == pid
+    assert candidate["candidate_sha256"] == expected_cand_sha
+
 
 
