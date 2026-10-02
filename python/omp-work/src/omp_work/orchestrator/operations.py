@@ -332,6 +332,28 @@ def run_grant(ctx: StageContext) -> Outcome:
                 data={"stage": "grant", "code": "grant_foreign"},
             )
         grant = view["grant"]
+        expires_at = grant.get("expires_at")
+        if isinstance(expires_at, str):
+            expires_at = datetime.fromisoformat(expires_at)
+        if isinstance(expires_at, datetime):
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=UTC)
+            else:
+                expires_at = expires_at.astimezone(UTC)
+        if (
+            grant.get("state") != "active"
+            or expires_at is None
+            or expires_at <= datetime.now(UTC)
+        ):
+            return Outcome(
+                outcome="failed",
+                data={"stage": "grant", "code": "execution_grant_inactive"},
+            )
+        if grant.get("judge_sha256") != judge_sha:
+            return Outcome(
+                outcome="failed",
+                data={"stage": "grant", "code": "judge_manifest_drift"},
+            )
         return Outcome(
             outcome="succeeded",
             data={
