@@ -17,6 +17,7 @@ import {
 	parseChangelogTsv,
 	parseHunks,
 	parseMatrixTsv,
+	normalizeNoRenameConflicts,
 	parseMergeTreeConflicts,
 	parseRawDiff,
 	parseRecord,
@@ -692,4 +693,40 @@ describe.if(havePinnedCommits)("18.0.6 calibration", () => {
 		expect(result.stderr).toContain("## Unaccounted upstream changes (1)");
 		expect(result.stderr).toContain(`upstream: unaccounted upstream change ${removedPath}`);
 	}, 30000);
+});
+
+describe("normalizeNoRenameConflicts", () => {
+	const A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+	const B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+	const Z = "0000000000000000000000000000000000000000";
+	// --no-renames base..target of an upstream rename is a delete plus an add.
+	const upstreamRenameNoRenames = [
+		`:100644 000000 ${A} ${Z} D\tr.txt`,
+		`:000000 100644 ${Z} ${B} A\tmoved.txt`,
+		"",
+	].join("\n");
+	// `git diff --raw -M` of the same rename.
+	const upstreamRename = `:100644 100644 ${A} ${B} R100\tr.txt\tmoved.txt\n`;
+	const forkModifyR = `:100644 100644 ${A} ${B} M\tr.txt\n`;
+	const paths = (reported: Set<string>, forkRaw: string, targetRaw: string, targetRenameRaw: string) =>
+		[...normalizeNoRenameConflicts(reported, forkRaw, targetRaw, targetRenameRaw)].sort();
+
+	test("a rename reported at the new path is the modify/delete of the fork path", () => {
+		expect(paths(new Set(["moved.txt"]), forkModifyR, upstreamRenameNoRenames, upstreamRename)).toEqual(["r.txt"]);
+	});
+	test("a clean rename merge still conflicts at the fork path", () => {
+		expect(paths(new Set(), forkModifyR, upstreamRenameNoRenames, upstreamRename)).toEqual(["r.txt"]);
+	});
+	test("an add/add at a rename destination stays, and the old path is not added", () => {
+		const forkAddB = `:000000 100644 ${Z} ${B} A\tb.txt\n`;
+		const targetNoRenames = [`:100644 000000 ${A} ${Z} D\ta.txt`, `:000000 100644 ${Z} ${B} A\tb.txt`, ""].join(
+			"\n",
+		);
+		const targetRename = `:100644 100644 ${A} ${B} R100\ta.txt\tb.txt\n`;
+		expect(paths(new Set(["b.txt"]), forkAddB, targetNoRenames, targetRename)).toEqual(["b.txt"]);
+	});
+	test("a modify/modify with no renames stays on the reported path", () => {
+		const modifyX = `:100644 100644 ${A} ${B} M\tx.txt\n`;
+		expect(paths(new Set(["x.txt"]), modifyX, modifyX, modifyX)).toEqual(["x.txt"]);
+	});
 });
