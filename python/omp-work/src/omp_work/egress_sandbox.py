@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import json
 import os
+import signal
+import time
 from contextlib import suppress
 from pathlib import Path
 import shutil
@@ -41,6 +43,7 @@ from omp_work.egress_policy import (
     _norm_host,
     _parse_destination,
 )
+from omp_work.egress_sandbox_helper import _die_with_parent
 
 __all__ = [
     "RelayGateway",
@@ -52,6 +55,7 @@ __all__ = [
 
 _DNS_PORT = 53
 _PROXY_PORT = 3128
+_OUTPUT_LIMIT = 1 << 20
 
 _WORKER_ENV_ALLOWED = frozenset({"PATH", "LANG", "TERM", "TZ"})
 
@@ -337,6 +341,72 @@ def _pump(left: socket.socket, right: socket.socket) -> None:
         right.close()
 
 
+def _capture_output(stream: object, output: bytearray) -> None:
+    """Copy ``stream`` into ``output`` up to 1 MiB. Further bytes are discarded."""
+    read = getattr(stream, "read")
+    try:
+        while True:
+            chunk = read(65536)
+            if not chunk:
+                break
+            room = _OUTPUT_LIMIT - len(output)
+            if room > 0:
+                output.extend(chunk[:room])
+    finally:
+        close = getattr(stream, "close", None)
+        if close is not None:
+            with suppress(OSError):
+                close()
+
+
+def _kill_session(proc: subprocess.Popen[bytes]) -> None:
+    """SIGKILL the sandbox session. ``start_new_session`` makes ``pid`` the group."""
+    pid = proc.pid
+    if not pid:
+        return
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        with suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGKILL)
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        with suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGKILL)
+        proc.wait(timeout=5)
+
+
+def _wait_sandboxed(
+    proc: subprocess.Popen[bytes],
+    timeout: float | int | None,
+    cancel: threading.Event | None,
+) -> tuple[int, bool]:
+    """Wait for ``proc``. Cancel and timeout both SIGKILL the session.
+
+    Cancel returns ``(-9, True)``. A timeout raises ``subprocess.TimeoutExpired``
+    after the session is killed. A normal exit returns ``(code, False)``.
+    """
+    deadline = None if timeout is None else time.monotonic() + float(timeout)
+    while True:
+        if cancel is not None and cancel.is_set():
+            _kill_session(proc)
+            return -9, True
+        slice_s = 0.05
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _kill_session(proc)
+                raise subprocess.TimeoutExpired(getattr(proc, "args", ()), timeout if timeout is not None else 0)
+            slice_s = min(slice_s, remaining)
+        try:
+            return proc.wait(timeout=slice_s), False
+        except subprocess.TimeoutExpired:
+            continue
+
+
 def _run_sandbox_body(
     argv: Sequence[str],
     identity: Identity,
@@ -351,6 +421,8 @@ def _run_sandbox_body(
     root: str | None = None,
     ro_binds: Sequence[str | Path] = (),
     worktree: str | Path | None = None,
+    cancel: threading.Event | None = None,
+    output: bytearray | None = None,
 ) -> int:
     """Shared sandbox body. ``root`` names the worker profile in config.json."""
     resolved: dict[str, str] = {}
@@ -473,6 +545,8 @@ def _run_sandbox_body(
     proxy_sock_path: Path | None = None
     mask_sockets_root = gateway is not None or workservice is not None
     returncode = -1
+    canceled = False
+    drain: threading.Thread | None = None
 
     try:
         if gateway is not None:
@@ -511,6 +585,7 @@ def _run_sandbox_body(
             "--net",
             "--mount",
             "--fork",
+            "--kill-child",
             sys.executable,
             "-m",
             "omp_work.egress_sandbox_helper",
@@ -520,12 +595,21 @@ def _run_sandbox_body(
         proc = subprocess.Popen(  # nosec B603 - argv list, no shell
             helper_cmd,
             env=os.environ.copy(),
+            start_new_session=True,
+            preexec_fn=_die_with_parent,
+            stdout=subprocess.PIPE if output is not None else None,
+            stderr=subprocess.STDOUT if output is not None else None,
         )
+        if output is not None and proc.stdout is not None:
+            drain = threading.Thread(
+                target=_capture_output,
+                args=(proc.stdout, output),
+                daemon=True,
+            )
+            drain.start()
         try:
-            returncode = proc.wait(timeout=timeout)
+            returncode, canceled = _wait_sandboxed(proc, timeout, cancel)
         except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
             raise
     except SandboxUnavailable:
         raise
@@ -534,6 +618,8 @@ def _run_sandbox_body(
     except Exception as e:
         raise SandboxUnavailable(f"Failed to execute sandbox helper: {e}") from e
     finally:
+        if drain is not None:
+            drain.join(timeout=2)
         stop_event.set()
         listener_thread.join(timeout=1.0)
         try:
@@ -556,6 +642,8 @@ def _run_sandbox_body(
             setup_succeeded = setup_ok.exists()
             shutil.rmtree(sandbox_dir, ignore_errors=True)
 
+    if canceled:
+        return -9
     if not setup_succeeded:
         raise SandboxUnavailable(f"Sandbox setup failed inside helper (exit code {returncode})")
 
@@ -576,6 +664,8 @@ def run_sandboxed(
     root: str | None = None,
     ro_binds: Sequence[str | Path] = (),
     worktree: str | Path | None = None,
+    cancel: threading.Event | None = None,
+    output: bytearray | None = None,
 ) -> int:
     """Run argv inside an isolated egress sandbox.
 
@@ -584,6 +674,12 @@ def run_sandboxed(
     lookup, probe, or socket. ``root`` selects the jail profile (``research``
     is launched only by :func:`run_research_stage`; ``worker`` is the worktree
     jail). Returns the worker's exit status.
+
+    The outer process is a new session and dies with its parent. Both unshare
+    calls use ``--kill-child``. ``cancel``, when set, SIGKILLs that session and
+    returns -9. A timeout SIGKILLs the same session and raises
+    ``subprocess.TimeoutExpired``. ``output``, when given, receives at most
+    1 MiB of combined worker output.
     """
     if identity.stage == "research":
         raise ResearchStageRefused("research_stage_launcher")
@@ -601,6 +697,8 @@ def run_sandboxed(
         root=root,
         ro_binds=ro_binds,
         worktree=worktree,
+        cancel=cancel,
+        output=output,
     )
 
 
