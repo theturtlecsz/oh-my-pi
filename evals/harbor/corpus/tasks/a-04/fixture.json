@@ -1,0 +1,21 @@
+{
+  "id": "a-04",
+  "scored_experiment": "repair",
+  "seed_patch": "seed.patch",
+  "solution_patch": "solution.patch",
+  "independent_tests": [
+    {
+      "runner": "bun",
+      "target": "packages/coding-agent/test/launch/broker-client-post-shutdown-close.test.ts",
+      "files": [
+        "independent/broker-client-post-shutdown-close.test.ts"
+      ]
+    }
+  ],
+  "scenario": "scenario.json",
+  "rules": [
+    {
+      "type": "independent_tests_pass"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+diff --git b/scripts/ci-test-ts.ts a/scripts/ci-test-ts.ts
+index 79f393dfca..6b6cf00583 100755
+--- b/scripts/ci-test-ts.ts
++++ a/scripts/ci-test-ts.ts
+@@ -209,7 +209,7 @@ export function coreLimitedCommand(command: string[]): string[] {
+ 	if (process.platform === "win32") {
+ 		return command;
+ 	}
+-	return ["/bin/sh", "-c", 'ulimit --core 0 && exec "$@"', "sh", ...command];
++	return ["/bin/sh", "-c", 'ulimit -c 0 && exec "$@"', "sh", ...command];
+ }
+ 
+ function workspaceTestCommand(pkg: string, parallel: number, options: { extraArgs?: string[] } = {}): TestCommand {

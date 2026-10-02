@@ -1,0 +1,21 @@
+{
+  "id": "a-09",
+  "scored_experiment": "repair",
+  "seed_patch": "seed.patch",
+  "solution_patch": "solution.patch",
+  "independent_tests": [
+    {
+      "runner": "bun",
+      "target": "packages/coding-agent/test/advisor/supervision-gate-deferred-tally.test.ts",
+      "files": [
+        "independent/supervision-gate-deferred-tally.test.ts"
+      ]
+    }
+  ],
+  "scenario": "scenario.json",
+  "rules": [
+    {
+      "type": "independent_tests_pass"
+    }
+  ]
+}

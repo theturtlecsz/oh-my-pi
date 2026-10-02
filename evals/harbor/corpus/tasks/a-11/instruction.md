@@ -1,0 +1,1 @@
+A regression landed in our CI TS test runner. Spawned chunks are no longer running with core dumps disabled, so a crashing chunk can fill the disk again. Restore the wrapper so every spawned test chunk runs with its core-dump limit disabled, keeps its PID for the watchdog, and still reports the chunk's own exit code.

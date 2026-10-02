@@ -1,0 +1,59 @@
+diff --git a/packages/work-client/src/index.ts b/packages/work-client/src/index.ts
+index ff829e7c2c..d3fdca7051 100644
+--- a/packages/work-client/src/index.ts
++++ b/packages/work-client/src/index.ts
+@@ -1441,11 +1441,8 @@ export class WorkClient {
+ 		) as Promise<ResearchDatasetView>;
+ 	}
+ 
+-	/** Workspace tree read. `world: "media-discovery"` narrows the projection to
+-	 *  Media Discovery items; omitting it returns only OMP items. */
+-	tree(options?: { world?: "media-discovery" }): Promise<WorkspaceTree> {
+-		const query = options?.world ? `?world=${options.world}` : "";
+-		return this.request("GET", `/v1/workspaces/${this.workspaceId}/tree${query}`) as Promise<WorkspaceTree>;
++	tree(): Promise<WorkspaceTree> {
++		return this.request("GET", `/v1/workspaces/${this.workspaceId}/tree`) as Promise<WorkspaceTree>;
+ 	}
+ 
+ 	focus(ownerId: UUID): Promise<FocusSlot> {
+diff --git a/packages/work-client/test/tree-world.test.ts b/packages/work-client/test/tree-world.test.ts
+deleted file mode 100644
+index 06d5ac17b9..0000000000
+--- a/packages/work-client/test/tree-world.test.ts
++++ /dev/null
+@@ -1,35 +0,0 @@
+-import { expect, test } from "bun:test";
+-import { WorkClient } from "../src/index";
+-
+-const WORKSPACE_ID = "00000000-0000-0000-0000-000000000001";
+-
+-const EMPTY_TREE = {
+-	workspace_id: WORKSPACE_ID,
+-	items: [],
+-	relations: [],
+-	projects: [],
+-};
+-
+-function recordingClient(urls: string[]): WorkClient {
+-	return new WorkClient(
+-		"http://127.0.0.1:54322",
+-		WORKSPACE_ID,
+-		() => "token",
+-		async (input, init) => {
+-			urls.push(new Request(String(input), init).url);
+-			return Response.json(EMPTY_TREE);
+-		},
+-	);
+-}
+-
+-test("tree() requests the path with no query string", async () => {
+-	const urls: string[] = [];
+-	await recordingClient(urls).tree();
+-	expect(urls).toEqual([`http://127.0.0.1:54322/v1/workspaces/${WORKSPACE_ID}/tree`]);
+-});
+-
+-test('tree({ world: "media-discovery" }) requests ?world=media-discovery', async () => {
+-	const urls: string[] = [];
+-	await recordingClient(urls).tree({ world: "media-discovery" });
+-	expect(urls).toEqual([`http://127.0.0.1:54322/v1/workspaces/${WORKSPACE_ID}/tree?world=media-discovery`]);
+-});

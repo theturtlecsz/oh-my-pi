@@ -1,0 +1,102 @@
+{
+  "tasks": [
+    {
+      "task_id": "a-01",
+      "category": "localized_bug",
+      "fixture": "../tasks/a-01",
+      "source_commit": "13a24df0f101d7665fece6e3407aaaefe9ed6d54",
+      "rationale": "real fix: case prepare refuses an occupied destination instead of overwriting it"
+    },
+    {
+      "task_id": "a-02",
+      "category": "multi_file_feature",
+      "fixture": "../tasks/a-02",
+      "source_commit": "229b8baa1e0c66692134cde59945b4642dd9d2bb",
+      "rationale": "real feature: build lock pins manifest bytes and owner review, with a verify mode"
+    },
+    {
+      "task_id": "a-03",
+      "category": "localized_bug",
+      "fixture": "../tasks/a-03",
+      "source_commit": "d7904bc44bd03e36888fd3fcad0ef0c8c0f37583",
+      "rationale": "real fix: stopped prompts are refused at before_agent_start"
+    },
+    {
+      "task_id": "a-04",
+      "category": "difficult_debugging",
+      "fixture": "../tasks/a-04",
+      "source_commit": "0cdbb0a7e666aad98fba7ec53292c897dd98473b",
+      "rationale": "real fix: per-socket close no longer rejects a request on the replacement connection"
+    },
+    {
+      "task_id": "a-05",
+      "category": "multi_file_feature",
+      "fixture": "../tasks/a-05",
+      "source_commit": "d6ee2a1b6a20ca4874d963a516ade393632c3204",
+      "rationale": "real feature: managed results import as unverified runs across storage, state, and TUI"
+    },
+    {
+      "task_id": "a-06",
+      "category": "difficult_debugging",
+      "fixture": "../tasks/a-06",
+      "source_commit": "3d096f2c45303e8e6ae65ce5e6f14c7c0a1c2c97",
+      "rationale": "real fix: a rejected stage or pytest spawn preserves the staged evidence path"
+    },
+    {
+      "task_id": "a-07",
+      "category": "difficult_debugging",
+      "fixture": "../tasks/a-07",
+      "source_commit": "d5e04e38c03231350b21291ed6510148b9dd5d6b",
+      "rationale": "real fix: ingest order breaks birth-time ties by path so fork attribution is stable"
+    },
+    {
+      "task_id": "a-08",
+      "category": "multi_file_feature",
+      "fixture": "../tasks/a-08",
+      "source_commit": "818d03708173d0e95fc4c96fd5b4724b1ea8ae1d",
+      "rationale": "real feature: WorkClient.tree names the Media Discovery world via a query parameter"
+    },
+    {
+      "task_id": "a-09",
+      "category": "localized_bug",
+      "fixture": "../tasks/a-09",
+      "source_commit": "2ce4078fcacadb7d7345eb36c1f8d58431da9bbe",
+      "rationale": "real fix: a pending advisor delivery is counted only when it is routed"
+    },
+    {
+      "task_id": "a-10",
+      "category": "localized_bug",
+      "fixture": "../tasks/a-10",
+      "source_commit": "d254ae25766620aa526725d97ed440090a695186",
+      "rationale": "real feature: extract trial transcript and notes, refusing incomplete or ambiguous runs"
+    },
+    {
+      "task_id": "a-11",
+      "category": "seeded_defect",
+      "fixture": "../tasks/a-11",
+      "source_commit": "b00b6f91d21163b5ee7c95c7e8977668f3c510d1",
+      "rationale": "seeded defect: the core-dump wrapper no longer disables limits for spawned chunks"
+    },
+    {
+      "task_id": "a-12",
+      "category": "seeded_defect",
+      "fixture": "../tasks/a-12",
+      "source_commit": "823dc8e3831a977ad276e64d37927ae554e05f5a",
+      "rationale": "seeded defect: spoofed gitdir pointers pass the trusted-worktree check again"
+    },
+    {
+      "task_id": "a-13",
+      "category": "migration",
+      "fixture": "../tasks/a-13",
+      "source_commit": "6affbad543a4517d65101af41a490497db28903d",
+      "rationale": "real migration 0027: research component identity and campaign compatibility manifests"
+    },
+    {
+      "task_id": "a-14",
+      "category": "migration",
+      "fixture": "../tasks/a-14",
+      "source_commit": "a2d815bbe659c3d783e43d37c2589387dc0b120b",
+      "rationale": "real migration 0033: project egress policy store and append-only egress records"
+    }
+  ]
+}

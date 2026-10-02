@@ -1,0 +1,24 @@
+{
+  "project": {
+    "project_id": "00000000-0000-7000-8000-0000000000b1",
+    "name": "The Bookends",
+    "kind": "surface"
+  },
+  "items": [
+    {
+      "key": "OMP-1",
+      "work_id": "00000000-0000-7000-8000-000000000001",
+      "revision_id": "00000000-0000-7000-8000-000000000010",
+      "revision_number": 1,
+      "title": "Count a pending advisor delivery only when it is routed",
+      "description": "Our advisor supervision tallies are wrong when a note is delivered as a pending proposal. The gate counts it as delivered immediately, so if the proposal is displaced and never routed, the delivered total includes a note the user never saw. Track a pending delivery by its normalized note and count it only when it is routed, keeping the class it was admitted under. A displaced pending note, or a live delivery of that same note, must be dropped from the pending queue so it is not counted again. The delivered sum must stay equal to the number of notes actually routed after every operation.",
+      "scope": "initial/scope",
+      "acceptance_criteria": [
+        "a pending note is not counted as delivered until it is routed",
+        "a displaced pending note is not counted again",
+        "the delivered sum equals the number of routed notes after every seeded operation"
+      ],
+      "state": "IN_PROGRESS"
+    }
+  ]
+}

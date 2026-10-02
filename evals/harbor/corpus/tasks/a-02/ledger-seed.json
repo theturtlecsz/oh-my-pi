@@ -1,0 +1,24 @@
+{
+  "project": {
+    "project_id": "00000000-0000-7000-8000-0000000000b1",
+    "name": "The Bookends",
+    "kind": "surface"
+  },
+  "items": [
+    {
+      "key": "OMP-1",
+      "work_id": "00000000-0000-7000-8000-000000000001",
+      "revision_id": "00000000-0000-7000-8000-000000000010",
+      "revision_number": 1,
+      "title": "Pin the ECC manifest bytes and owner review into the build lock",
+      "description": "The committed ECC build lock records each asset's hash, but it does not tell me whether the manifest it was built from has drifted, and there is no place to record the owner review that approved an update. I need the lock to pin the manifest bytes and, when an update was reviewed, the review record's path and content hash. Verification must recompute the manifest pin and re-read the reviewed record, and it must fail fast when either the manifest or the reviewed record was edited by hand. Add a verify mode to the lock emitter so I can run the check without rewriting the lock.",
+      "scope": "initial/scope",
+      "acceptance_criteria": [
+        "the committed lock carries a manifest-bytes pin and a null review until one is recorded",
+        "verification fails when the manifest bytes or the reviewed record have drifted",
+        "an emitted review record is validated and a stale pin is reported with both hashes"
+      ],
+      "state": "IN_PROGRESS"
+    }
+  ]
+}

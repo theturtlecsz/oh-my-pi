@@ -1,0 +1,23 @@
+{
+  "task_id": "a-05",
+  "category": "multi_file_feature",
+  "title": "Import managed autoresearch results as unverified runs",
+  "source_commit": "d6ee2a1b6a20ca4874d963a516ade393632c3204",
+  "test_target": "packages/coding-agent/test/autoresearch-managed-import.test.ts",
+  "runner": "bun",
+  "source_paths": [
+    "packages/coding-agent/src/autoresearch/index.ts",
+    "packages/coding-agent/src/autoresearch/managed-import.ts",
+    "packages/coding-agent/src/autoresearch/state.ts",
+    "packages/coding-agent/src/autoresearch/storage.ts",
+    "packages/tui/src/apps/autoresearch-dashboard.ts",
+    "packages/tui/src/apps/autoresearch-data.ts",
+    "packages/tui/src/tools/autoresearch.ts"
+  ],
+  "instruction": "Our autoresearch sessions need a way to bring in results that were produced by a managed campaign instead of by the local loop. Add an `import-managed` command that reads a managed results file and records each accepted row as an unverified run in the active session, keeping its metric and direction. Rows that are malformed, point at an incompatible direction, or fail validation must be rejected and reported, and a row already imported must not be imported twice. The notification must report how many rows were imported, rejected, incompatible, and skipped.",
+  "acceptance_criteria": [
+    "accepted managed rows are stored as unverified runs with their metric and direction",
+    "malformed and incompatible rows are rejected before any import",
+    "a re-import skips rows already present and reports the counts"
+  ]
+}

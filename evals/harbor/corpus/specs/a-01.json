@@ -1,0 +1,16 @@
+{
+  "task_id": "a-01",
+  "category": "localized_bug",
+  "title": "Refuse an occupied destination when preparing an ECC advisor trial",
+  "source_commit": "13a24df0f101d7665fece6e3407aaaefe9ed6d54",
+  "test_target": "session-system/tests/ecc-advisor-trial-prepare.test.ts",
+  "runner": "bun",
+  "source_paths": [
+    "scripts/ecc-advisor-trial/prepare.ts"
+  ],
+  "instruction": "I use the ECC advisor trial prepare tool to stage a case into a work tree. If something already sits at the destination path, the tool removes it and replaces it without asking. I lost a staged worktree that way. Preparing a case has to refuse an occupied destination and tell me to clean it up myself, and an existing worktree registration for that path counts as occupied too.",
+  "acceptance_criteria": [
+    "preparing a case at an occupied destination fails instead of overwriting it",
+    "an existing worktree registration for the destination path is treated as occupied"
+  ]
+}
