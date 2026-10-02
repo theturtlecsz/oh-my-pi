@@ -1,4 +1,4 @@
-"""OMP-418/527: owner-run projects CLI (seed, show, check, sides, link-world, move-item)."""
+"""OMP-418/527: owner-run projects CLI (seed, show, check, sides, link-world, move-item, trusted-paths)."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from typing import Any
 from uuid import UUID
 
 from .project_store import ProjectNotFound, WorkItemNotFound, WorkStoreError
+from .trusted_paths import trusted_paths
 
 _WILDCARD_CHARS = ("*", "?", "[")
 
@@ -217,6 +218,8 @@ move_item_command = move_item
 cmd_sides = sides
 cmd_link_world = link_world
 cmd_move_item = move_item
+trusted_paths_command = trusted_paths
+cmd_trusted_paths = trusted_paths
 
 
 def run_projects(args: Any, store: Any = None) -> int:
@@ -239,4 +242,13 @@ def run_projects(args: Any, store: Any = None) -> int:
         return link_world(store, args.workspace, args.actor, args.world, args.project)
     if command == "move-item":
         return move_item(store, args.workspace, args.actor, args.key, args.project)
+    if command == "trusted-paths":
+        scan_roots = getattr(args, "scan_roots", None) or getattr(args, "scan_root", None)
+        return trusted_paths(
+            store,
+            args.workspace,
+            args.actor,
+            scan_roots=scan_roots,
+            output=getattr(args, "output", None),
+        )
     return 2

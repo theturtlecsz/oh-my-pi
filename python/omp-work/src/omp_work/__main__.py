@@ -359,6 +359,23 @@ def main(argv: list[str] | None = None) -> int | None:
     move_item_parser = projects_sub.add_parser("move-item", parents=[project_scope])
     move_item_parser.add_argument("--key", required=True)
     move_item_parser.add_argument("--project", required=True, type=UUID)
+    trusted_paths_parser = projects_sub.add_parser(
+        "trusted-paths", parents=[project_scope]
+    )
+    trusted_paths_parser.add_argument(
+        "--scan-root",
+        action="append",
+        required=True,
+        type=Path,
+        dest="scan_roots",
+        metavar="DIR",
+    )
+    trusted_paths_parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path.home() / ".omp" / "agent" / "trusted-projects.json",
+        metavar="FILE",
+    )
 
     stop = subcommands.add_parser("stop")
     stop_commands = stop.add_subparsers(dest="stop_command", required=True)
