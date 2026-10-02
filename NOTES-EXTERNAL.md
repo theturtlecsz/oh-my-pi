@@ -401,6 +401,109 @@ with omp still running, so parity compare then differs on transitions and result
 The 22Z note's "stop the unit only after the omp session has quit" is the same
 reversed order; a rerun follows step 4 instead.
 
+---
+
+# OMP-534 local edits in the deploy copies (flood operator)
+
+Status: **NOT APPLIED — both deploy copies and `deploy-omp.sh` live outside this
+repository.** The in-repo deliverable is `scripts/check-deploy-copy.ts` and its
+test; this section records the two edit dispositions and the exact external edits
+the operator applies.
+
+## Dispositions of the two local edits (acceptance 1)
+
+1. `~/flood-repos/oh-my-pi-deploy` tracked edit to
+   `session-system/agents/omp-AGENTS.md` (found 2026-10-02 13:18:55Z): the
+   ASD-STE100 owner-text paragraph and the `what is next` wording change.
+   **Kept on main through a pull request.** It is the same text OMP-526-s01
+   asks for; OMP-526 lands it in the same file and section on main and its
+   s02 slice drops this hand edit before the next deploy. The operator must not
+   keep the hand edit: after OMP-526-s01 merges,
+   `git -C ~/flood-repos/oh-my-pi-deploy checkout -- session-system/agents/omp-AGENTS.md`
+   drops it and the next `deploy-omp.sh` run moves the copy to main, which now
+   carries the same bytes.
+
+2. `~/oh-my-pi` tracked edits to `docs/report/evidence.json`,
+   `docs/report/verification.json`, `docs/report/verification.md` (only the
+   `generatedAt` / `Generated:` timestamps; HEAD held at d19f7c0c05,
+   2026-09-29). **Dropped.** These are regenerated report stubs; the timestamp
+   drift carries no fork behavior. The operator drops them with
+   `git -C ~/oh-my-pi checkout -- docs/report/evidence.json docs/report/verification.json docs/report/verification.md`,
+   then the next deploy moves the copy to main. If the relevance review wants
+   the refreshed stamps, it regenerates them on a branch and lands them by PR
+   instead of leaving them uncommitted in the deploy copy.
+
+## External edit 1 — guard in `deploy-omp.sh` (acceptance 2)
+
+Define the helper next to the other helpers (after the `log()` function), then
+call it once the two copies exist. Insert after the `log() { ... }` line:
+
+```bash
+GUARD=${GUARD:-/home/thetu/flood-repos/oh-my-pi/scripts/check-deploy-copy.ts}
+guard() { # tag copy — loud when a deploy copy is stale or carries a local edit
+    local tag=$1 copy=$2
+    [ -e "$copy/.git" ] || return 0   # first deploy: the copy is created later
+    if ! bun "$GUARD" --target "$head" "$copy"; then
+        log "$tag: $copy has local edits or is not at origin/main ${head:0:12}; resolve it and rerun"
+        return 1
+    fi
+}
+```
+
+Then call it after the `$DEPLOY` create/move block and after the owner-copy
+move block:
+
+```bash
+guard "REFUSING" "$DEPLOY" || exit 1
+```
+
+```bash
+guard "WARNING" "$OWNER" || true
+```
+
+`$DEPLOY` is the WorkService copy, so a stale/dirty deploy copy aborts the run
+before the restart (exit 1) — never a silent stay-on-the-old-version. `$OWNER`
+is the owner's working folder; local edits there are already left in place by
+design, and the guard makes that loud and names every edit instead of one
+`has local edits` line that hides which files moved.
+
+`check-deploy-copy.ts` prints one `deploy-copy-guard: <path> <verdict>: ...` line
+per copy and exits 1 for a stale copy (`HEAD != target`) or a tracked edit that
+survives a checkout (`*/uv.lock` edits, which the deploy discards by design, are
+reported but do not fail the run). This replaces the silent `git checkout
+--detach` that carried an edit into the new tree.
+
+## External edit 2 — resolve the two copies (acceptance 3)
+
+```bash
+# deploy copy edit (1): keep on main through OMP-526, then drop the hand edit
+git -C /home/thetu/flood-repos/oh-my-pi-deploy checkout -- session-system/agents/omp-AGENTS.md
+# owner copy edits (2): drop the regenerated report timestamps
+git -C /home/thetu/oh-my-pi checkout -- docs/report/evidence.json docs/report/verification.json docs/report/verification.md
+bash /home/thetu/flood/deploy-omp.sh
+bun /home/thetu/flood-repos/oh-my-pi/scripts/check-deploy-copy.ts /home/thetu/flood-repos/oh-my-pi-deploy /home/thetu/oh-my-pi
+```
+
+After the next deploy the guard prints `ok` for both copies (`HEAD` equal to
+`origin/main`), which is acceptance 3.
+
+## Recorded run against the live copies (2026-10-02, before the drops)
+
+Run from the clone so the guard resolves `origin/main` itself; the worktree
+path names the not-yet-merged copy of the script.
+
+```
+$ cd /home/thetu/flood-repos/oh-my-pi
+$ bun /home/thetu/flood-repos/oh-my-pi-wt/OMP-534/scripts/check-deploy-copy.ts \
+    /home/thetu/flood-repos/oh-my-pi-deploy /home/thetu/oh-my-pi
+deploy-copy-guard: /home/thetu/flood-repos/oh-my-pi-deploy dirty: HEAD c1199c401131 1 local edit(s): session-system/agents/omp-AGENTS.md
+deploy-copy-guard: /home/thetu/oh-my-pi stale+dirty: HEAD d19f7c0c0567 target c1199c401131 3 local edit(s): docs/report/evidence.json, docs/report/verification.json, docs/report/verification.md
+exit 1
+```
+
+The report is loud and names every edit; a silent stay-on-the-old-version is no
+longer possible once the guard is wired in.
+
 
 
 

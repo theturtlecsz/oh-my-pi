@@ -12,7 +12,8 @@ from datetime import UTC, datetime
 import hashlib
 import json
 from pathlib import Path
-import subprocess  # nosec B404 - only subprocess.TimeoutExpired is caught; no process is spawned here
+import shlex
+import subprocess
 import sys
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -33,13 +34,19 @@ from omp_work.orchestrator.service import (
 from omp_work.orchestrator.stages import ActionVerdict
 from omp_work.standing_policy import RepositoryRecord
 from omp_work.v1.canonical import canonical_json, sha256, text_sha256
-from omp_work.v1.models import EvidenceKind, EvidenceReceipt, MissionDraft
+from omp_work.v1.models import (
+    EvidenceKind,
+    EvidenceReceipt,
+    MAX_AUDITOR_LAUNCHES,
+    MissionDraft,
+)
 from omp_work.v1.service import WorkError
 
 __all__ = [
     "grant_owned",
     "judge_manifest",
     "register",
+    "run_audit",
     "run_confirm",
     "run_evaluate",
     "run_freeze",
@@ -61,6 +68,7 @@ def register() -> None:
     register_stage_operation("evaluate", run_evaluate)
     register_stage_operation("freeze", run_freeze)
     register_stage_operation("push", run_push)
+    register_stage_operation("audit", run_audit)
 
 
 def run_intake(ctx: StageContext) -> Outcome:
@@ -328,6 +336,22 @@ _MAX_GRANT_PHASE_PASSES = 3
 def run_grant(ctx: StageContext) -> Outcome:
     """Begin or resume one execution grant, then drive the active item's phase."""
     gid = service._ids(ctx.mission_id, "grant")
+    pin_key = f"grant-issue:{ctx.mission_id}"
+
+    def _attach_pin(outcome: Outcome) -> Outcome:
+        if outcome.outcome == "succeeded":
+            pin = ctx.intents.open(pin_key)
+            if pin is not None:
+                target = pin.get("target")
+                if isinstance(target, str):
+                    try:
+                        target = json.loads(target)
+                    except Exception:
+                        target = None
+                if isinstance(target, Mapping) and "issued_at" in target:
+                    outcome.data["issued_at"] = target["issued_at"]
+        return outcome
+
     judged = judge_manifest(ctx.config)
     if judged is None:
         return Outcome(
@@ -372,7 +396,19 @@ def run_grant(ctx: StageContext) -> Outcome:
                 outcome="failed",
                 data={"stage": "grant", "code": "judge_manifest_drift"},
             )
-        return _grant_phase(ctx, gid)
+        return _attach_pin(_grant_phase(ctx, gid))
+
+    open_pin = ctx.intents.open(pin_key)
+    target = open_pin.get("target") if isinstance(open_pin, Mapping) else None
+    if isinstance(target, str):
+        try:
+            target = json.loads(target)
+        except Exception:
+            target = None
+    issued_at = target.get("issued_at") if isinstance(target, Mapping) else None
+    if issued_at is None:
+        issued_at = datetime.now(UTC).isoformat()
+        ctx.intents.record_intent(pin_key, "begin_execution", {"issued_at": issued_at})
 
     rq = _request_mapping(ctx.request)
     intake_data = (ctx.prior.get("intake") or {}).get("data") or {}
@@ -387,7 +423,6 @@ def run_grant(ctx: StageContext) -> Outcome:
         description = str(getattr(work, "description"))
     actor_id = ctx.principal.actor_id
     focus = ctx.service.read(ctx.principal, ctx.workspace_id, "focus", str(actor_id))
-    issued_at = datetime.now(UTC).isoformat()
     project_id = item.get("project_id")
     payload: dict[str, Any] = {
         "grant_id": str(gid),
@@ -426,7 +461,7 @@ def run_grant(ctx: StageContext) -> Outcome:
                 data={"stage": "grant", "code": "grant_conflict"},
             )
         raise
-    return _grant_phase(ctx, gid)
+    return _attach_pin(_grant_phase(ctx, gid))
 
 
 def _grant_phase(ctx: StageContext, gid: UUID) -> Outcome:
@@ -650,7 +685,14 @@ def _worktree_name(ctx: StageContext) -> str:
     return Path(raw).name
 
 
-def _sandbox(ctx: StageContext, argv: Sequence[str], worktree: Path) -> int | None:
+def _sandbox(
+    ctx: StageContext,
+    argv: Sequence[str],
+    worktree: Path,
+    *,
+    identity: str = "worker",
+    ro_binds: Sequence[str | Path] = (),
+) -> int | None:
     """Run ``argv`` in the worker jail until the stage lease expires.
 
     ``None`` means the lease is already dead or the process timed out, so the
@@ -681,8 +723,8 @@ def _sandbox(ctx: StageContext, argv: Sequence[str], worktree: Path) -> int | No
             worktree=worktree,
             token=token,
             workservice_socket=ctx.config.workservice_url,
-            identity="worker",
-            ro_binds=(),
+            identity=identity,
+            ro_binds=ro_binds,
             timeout=remaining,
         )
     except subprocess.TimeoutExpired:
@@ -1000,6 +1042,594 @@ def run_push(ctx: StageContext) -> Outcome:
             if err.code != "idempotency_conflict" or not _push_receipt_exists(ctx, commit):
                 raise
     return Outcome(outcome="succeeded", data=data, action=verdict)
+
+
+def run_audit(ctx: StageContext) -> Outcome:
+    """Run candidate verification, record auditor launches, and settle the verdict."""
+    request = _request_mapping(ctx.request)
+    test_command = _argv(request, "test_command")
+    if not test_command:
+        return Outcome(
+            outcome="failed",
+            data={"stage": "audit", "code": "test_command_missing"},
+        )
+
+    if not ctx.config.verifier_argv:
+        return Outcome(
+            outcome="failed",
+            data={"stage": "audit", "code": "verifier_argv_missing"},
+        )
+
+    if not ctx.config.verifier_key_path or not ctx.config.verifier_key_path.is_file():
+        return Outcome(
+            outcome="failed",
+            data={"stage": "audit", "code": "verifier_key_missing"},
+        )
+
+    view = ctx.service.read(ctx.principal, ctx.workspace_id, "workflow", _work_key(ctx))
+    item = view.get("item") or {}
+    candidate = item.get("candidate") or {}
+
+    frozen = (ctx.prior.get("freeze") or {}).get("data") or {}
+    if not isinstance(frozen, Mapping):
+        frozen = {}
+    commit = frozen.get("candidate_commit") or candidate.get("commit_sha")
+    candidate_id = frozen.get("candidate_id") or candidate.get("candidate_id")
+    candidate_sha = frozen.get("candidate_sha256") or candidate.get("candidate_sha256")
+    revision_id = (
+        frozen.get("revision_id")
+        or (item.get("revision") or {}).get("revision_id")
+        or item.get("current_revision_id")
+    )
+
+    if not all(
+        isinstance(val, (str, UUID)) and val
+        for val in (commit, candidate_id, candidate_sha, revision_id)
+    ):
+        return Outcome(
+            outcome="failed",
+            data={"stage": "audit", "code": "freeze_missing"},
+        )
+
+    commit = str(commit)
+    candidate_id = str(candidate_id)
+    candidate_sha = str(candidate_sha)
+    revision_id = str(revision_id)
+
+    eval_bucket = ctx.prior.get("evaluate")
+    if not isinstance(eval_bucket, Mapping):
+        return Outcome(
+            outcome="failed",
+            data={"stage": "audit", "code": "evaluate_missing"},
+        )
+    eval_prior = eval_bucket.get("data") or {}
+    if not isinstance(eval_prior, Mapping):
+        eval_prior = {}
+    eval_cmd = eval_prior.get("command")
+    eval_code = eval_prior.get("exit_code")
+    eval_finished_at_raw = eval_prior.get("finished_at")
+
+    if (
+        not isinstance(eval_cmd, (list, tuple))
+        or not eval_cmd
+        or not all(isinstance(x, str) for x in eval_cmd)
+    ):
+        return Outcome(
+            outcome="failed",
+            data={"stage": "audit", "code": "command_missing"},
+        )
+    if not isinstance(eval_code, int):
+        return Outcome(
+            outcome="failed",
+            data={"stage": "audit", "code": "exit_code_missing"},
+        )
+    if not eval_finished_at_raw:
+        return Outcome(
+            outcome="failed",
+            data={"stage": "audit", "code": "finished_at_missing"},
+        )
+
+    try:
+        eval_finished_at = datetime.fromisoformat(str(eval_finished_at_raw))
+        if eval_finished_at.tzinfo is None:
+            eval_finished_at = eval_finished_at.replace(tzinfo=UTC)
+        else:
+            eval_finished_at = eval_finished_at.astimezone(UTC)
+    except Exception:
+        return Outcome(
+            outcome="failed",
+            data={"stage": "audit", "code": "finished_at_missing"},
+        )
+
+    # 0. Candidate's attempt audited, accepted_report_count >= 1 -> succeeded, pass; no reserve/cancel/settle.
+    close_attempts = view.get("close_attempts") or ()
+    audited_attempt = next(
+        (
+            a
+            for a in close_attempts
+            if isinstance(a, Mapping)
+            and str(a.get("candidate_id")) == candidate_id
+            and a.get("state") == "audited"
+            and int(a.get("accepted_report_count", 0)) >= 1
+        ),
+        None,
+    )
+    if audited_attempt is not None:
+        attempt_id_str = str(audited_attempt.get("attempt_id"))
+        launch_count = int(audited_attempt.get("launch_count", 1))
+        if ctx.intents.open(f"verifier:{attempt_id_str}:{launch_count}"):
+            ctx.intents.mark_done(f"verifier:{attempt_id_str}:{launch_count}", "settled")
+        return Outcome(
+            outcome="succeeded",
+            verdict="pass",
+            data={
+                "stage": "audit",
+                "candidate_commit": commit,
+                "candidate_id": candidate_id,
+                "candidate_sha256": candidate_sha,
+                "attempt_id": attempt_id_str,
+            },
+        )
+
+    # 1. Reuse its audit_ready/auditor_in_flight attempt; else begin_close_attempt, verification evidence, seal_audit_manifest.
+    attempt = next(
+        (
+            a
+            for a in close_attempts
+            if isinstance(a, Mapping)
+            and str(a.get("candidate_id")) == candidate_id
+            and a.get("state") in ("audit_ready", "auditor_in_flight")
+        ),
+        None,
+    )
+
+    task_sha256: str | None = None
+
+    if attempt is not None:
+        attempt_id = UUID(str(attempt["attempt_id"]))
+        manifest_row = view.get("audit_manifest")
+        if manifest_row and manifest_row.get("task_sha256"):
+            task_sha256 = str(manifest_row["task_sha256"])
+    else:
+        active_attempt = next(
+            (
+                a
+                for a in close_attempts
+                if isinstance(a, Mapping)
+                and str(a.get("candidate_id")) == candidate_id
+                and a.get("state") == "active"
+            ),
+            None,
+        )
+        if active_attempt is not None:
+            attempt_id = UUID(str(active_attempt["attempt_id"]))
+        else:
+            gid = service._ids(ctx.mission_id, "grant")
+            exec_view = ctx.service.read(
+                ctx.principal, ctx.workspace_id, "execution", str(gid)
+            )
+            grant = exec_view.get("grant") or {}
+            items = exec_view.get("items") or ()
+            grant_item = next(
+                (it for it in items if str(it.get("work_id")) == str(ctx.work_id)),
+                exec_view.get("active_item") or {},
+            )
+            if grant.get("state") != "active":
+                return Outcome(
+                    outcome="failed",
+                    data={"stage": "audit", "code": "execution_grant_inactive"},
+                )
+            grant_id = grant.get("grant_id")
+            if not grant_id:
+                return Outcome(
+                    outcome="failed",
+                    data={"stage": "audit", "code": "grant_id_missing"},
+                )
+            judged = judge_manifest(ctx.config)
+            if judged is None:
+                return Outcome(
+                    outcome="failed",
+                    data={"stage": "audit", "code": "verifier_argv_missing"},
+                )
+            judge_sha, _manifest_dict = judged
+            if not grant.get("judge_sha256"):
+                return Outcome(
+                    outcome="failed",
+                    data={"stage": "audit", "code": "judge_sha256_missing"},
+                )
+            if grant.get("judge_sha256") != judge_sha:
+                return Outcome(
+                    outcome="failed",
+                    data={"stage": "audit", "code": "judge_manifest_drift"},
+                )
+            for binding in (
+                "original_request_sha256",
+                "criteria_sha256",
+                "plan_stamp_sha256",
+            ):
+                if not grant_item.get(binding):
+                    return Outcome(
+                        outcome="failed",
+                        data={"stage": "audit", "code": f"{binding}_missing"},
+                    )
+            grant_issued_at_raw = grant.get("issued_at")
+            if not grant_issued_at_raw:
+                prov = grant.get("provenance")
+                if isinstance(prov, str):
+                    try:
+                        prov = json.loads(prov)
+                    except Exception:
+                        prov = {}
+                if isinstance(prov, Mapping):
+                    grant_issued_at_raw = prov.get("issued_at")
+            if not grant_issued_at_raw:
+                grant_prior = (ctx.prior.get("grant") or {}).get("data") or {}
+                if isinstance(grant_prior, Mapping):
+                    grant_issued_at_raw = grant_prior.get("issued_at")
+            if not grant_issued_at_raw:
+                return Outcome(
+                    outcome="failed",
+                    data={"stage": "audit", "code": "grant_issued_at_missing"},
+                )
+            if isinstance(grant_issued_at_raw, datetime):
+                grant_issued_at = grant_issued_at_raw
+            elif isinstance(grant_issued_at_raw, str):
+                grant_issued_at = datetime.fromisoformat(grant_issued_at_raw)
+            else:
+                return Outcome(
+                    outcome="failed",
+                    data={"stage": "audit", "code": "grant_issued_at_missing"},
+                )
+            if grant_issued_at.tzinfo is None:
+                grant_issued_at = grant_issued_at.replace(tzinfo=UTC)
+            else:
+                grant_issued_at = grant_issued_at.astimezone(UTC)
+
+            base_commit_value = request.get("base_commit")
+            if not base_commit_value:
+                return Outcome(
+                    outcome="failed",
+                    data={"stage": "audit", "code": "base_commit_missing"},
+                )
+            repository_value = request.get("repository")
+            if not repository_value:
+                return Outcome(
+                    outcome="failed",
+                    data={"stage": "audit", "code": "repository_missing"},
+                )
+
+            base_commit = str(base_commit_value)
+            audited = candidate_git.audit_inputs(
+                ctx.config.control_repo, base_commit, commit
+            )
+            diff_sha256 = str(audited["diff_sha256"])
+
+            attempt_id = service._ids(ctx.mission_id, f"close-attempt:{candidate_id}")
+            begin_payload = {
+                "work_id": str(ctx.work_id),
+                "attempt_id": str(attempt_id),
+                "authorization_ref": f"orchestrator:{ctx.mission_id}",
+                "owner_session_id": f"orchestrator:{ctx.mission_id}",
+                "owner_session_started_at": grant_issued_at.isoformat(),
+                "owner_session_start_commit": base_commit,
+                "repository": str(repository_value),
+                "diff_sha256": diff_sha256,
+                "starting_dirty_paths": [],
+                "riders": [],
+                "authorization_kind": "execution",
+                "execution_grant_id": str(grant_id),
+                "candidate_tree_sha": candidate_sha,
+                "original_request_sha256": str(grant_item["original_request_sha256"]),
+                "criteria_sha256": str(grant_item["criteria_sha256"]),
+                "plan_stamp_sha256": str(grant_item["plan_stamp_sha256"]),
+                "judge_sha256": str(grant["judge_sha256"]),
+            }
+            begin_res = ctx.command(
+                "begin_close_attempt",
+                begin_payload,
+                key=f"begin_close_attempt:{attempt_id}",
+            )
+            if begin_res.get("status") == "refused":
+                reason_code = (begin_res.get("event") or {}).get("reason_code") or "begin_close_attempt_refused"
+                return Outcome(
+                    outcome="failed",
+                    data={"stage": "audit", "code": reason_code},
+                )
+            active_attempt = begin_res.get("attempt") or {}
+
+        body_text = f"{shlex.join(eval_cmd)} exited {eval_code}"
+        verification_payload = {
+            "body": body_text,
+            "command": list(eval_cmd),
+            "exit_code": eval_code,
+        }
+        receipt_id = service._ids(ctx.mission_id, f"verification-receipt:{commit}")
+        evidence_receipt = EvidenceReceipt(
+            receipt_id=receipt_id,
+            work_id=ctx.work_id,
+            revision_id=UUID(revision_id),
+            candidate_id=UUID(candidate_id),
+            kind=EvidenceKind.VERIFICATION,
+            payload=verification_payload,
+            payload_sha256=sha256(verification_payload),
+            issuer="orchestrator",
+            issued_at=eval_finished_at,
+            candidate_sha256=candidate_sha,
+            candidate_commit=commit,
+        )
+        ctx.command(
+            "append_evidence",
+            {"receipt": evidence_receipt.model_dump(mode="json")},
+            key=f"verification-receipt:{commit}",
+        )
+
+        seal_res = ctx.command(
+            "seal_audit_manifest",
+            {
+                "attempt_id": str(attempt_id),
+                "verification_receipt_id": str(receipt_id),
+            },
+            key=f"seal_audit_manifest:{attempt_id}",
+        )
+        if seal_res.get("status") == "refused":
+            reason_code = (seal_res.get("event") or {}).get("reason_code") or "seal_refused"
+            return Outcome(
+                outcome="failed",
+                data={"stage": "audit", "code": reason_code},
+            )
+
+        attempt = seal_res.get("attempt") or active_attempt
+        manifest_data = seal_res.get("manifest") or {}
+        if manifest_data.get("task_sha256"):
+            task_sha256 = str(manifest_data["task_sha256"])
+
+    # 2. Dead in-flight launch: cancel, mark_done "cancelled".
+    if attempt.get("state") == "auditor_in_flight" and attempt.get("in_flight_launch_id"):
+        in_flight_id_str = str(attempt["in_flight_launch_id"])
+        auditor_launches = view.get("auditor_launches") or ()
+        launch_row = next(
+            (l for l in auditor_launches if str(l.get("launch_id")) == in_flight_id_str),
+            None,
+        )
+        launch_n = (
+            int(launch_row["launch_number"])
+            if launch_row and launch_row.get("launch_number") is not None
+            else int(attempt.get("launch_count", 1))
+        )
+        cancel_res = ctx.command(
+            "cancel_auditor_launch",
+            {"attempt_id": str(attempt_id), "launch_id": in_flight_id_str},
+            key=f"cancel_auditor_launch:{in_flight_id_str}",
+        )
+        ctx.intents.mark_done(f"verifier:{attempt_id}:{launch_n}", "cancelled")
+        attempt = cancel_res.get("attempt") or attempt
+
+    if not task_sha256:
+        fresh_view = ctx.service.read(
+            ctx.principal, ctx.workspace_id, "workflow", _work_key(ctx)
+        )
+        manifest_row = fresh_view.get("audit_manifest")
+        if manifest_row and manifest_row.get("task_sha256"):
+            task_sha256 = str(manifest_row["task_sha256"])
+    if not task_sha256:
+        return Outcome(
+            outcome="failed",
+            data={"stage": "audit", "code": "manifest_missing"},
+        )
+
+    # 3-5. Launch and evaluate verifier.
+    while True:
+        launch_count = int(attempt.get("launch_count", 0))
+        if launch_count >= MAX_AUDITOR_LAUNCHES:
+            return Outcome(
+                outcome="failed",
+                blocker="unrecoverable-blocker",
+                data={
+                    "stage": "audit",
+                    "code": "max_auditor_launches_exceeded",
+                    "launch_count": launch_count,
+                },
+            )
+        n = launch_count + 1
+        intent_key = f"verifier:{attempt_id}:{n}"
+        ctx.intents.record_intent(
+            intent_key,
+            "verifier",
+            {"attempt_id": str(attempt_id), "launch_number": n},
+        )
+        tool_call_id = f"call:{attempt_id}:{n}"
+        reserve_res = ctx.command(
+            "reserve_auditor_launch",
+            {
+                "attempt_id": str(attempt_id),
+                "task_sha256": task_sha256,
+                "tool_call_id": tool_call_id,
+            },
+            key=f"reserve_auditor_launch:{attempt_id}:{n}",
+        )
+        if reserve_res.get("status") == "refused":
+            code = (reserve_res.get("event") or {}).get("reason_code") or "reserve_refused"
+            return Outcome(
+                outcome="failed",
+                blocker="unrecoverable-blocker" if "exhausted" in code else None,
+                data={"stage": "audit", "code": code},
+            )
+        launch = reserve_res.get("launch") or {}
+        launch_id = str(launch.get("launch_id"))
+        attempt = reserve_res.get("attempt") or attempt
+
+        worktree_name = f"{ctx.mission_id}-{ctx.step_index}-verify"
+        worktree = candidate_git.reset_worktree(
+            ctx.config.control_repo,
+            ctx.config.worktrees_dir,
+            worktree_name,
+            commit,
+        )
+
+        omp_dir = worktree / ".omp"
+        omp_dir.mkdir(parents=True, exist_ok=True)
+        (omp_dir / "verdict.json").unlink(missing_ok=True)
+        (omp_dir / "audit-report.txt").unlink(missing_ok=True)
+
+        intake_data = request.get("intake") or {}
+        raw_criteria = (
+            intake_data.get("acceptance_criteria")
+            if isinstance(intake_data, Mapping)
+            else getattr(intake_data, "acceptance_criteria", ())
+        )
+        criteria_json = []
+        for c in raw_criteria or ():
+            if hasattr(c, "model_dump"):
+                criteria_json.append(c.model_dump(mode="json"))
+            elif isinstance(c, Mapping):
+                criteria_json.append(dict(c))
+            else:
+                criteria_json.append({"statement": str(c)})
+
+        task_json = {
+            "candidate_sha256": candidate_sha,
+            "attempt_id": str(attempt_id),
+            "verifier_id": "verifier",
+            "key_path": str(ctx.config.verifier_key_path),
+            "test_command": list(test_command),
+            "criteria": criteria_json,
+        }
+        (omp_dir / "verify-task.json").write_text(
+            json.dumps(task_json), encoding="utf-8"
+        )
+
+        try:
+            code = _sandbox(
+                ctx,
+                ctx.config.verifier_argv,
+                worktree,
+                identity="verifier",
+                ro_binds=[ctx.config.verifier_key_path],
+            )
+        except worker_sandbox.WorkerSandboxRefused as err:
+            cancel_res = ctx.command(
+                "cancel_auditor_launch",
+                {"attempt_id": str(attempt_id), "launch_id": str(launch_id)},
+                key=f"cancel_auditor_launch:{launch_id}",
+            )
+            ctx.intents.mark_done(intent_key, "crashed")
+            attempt = cancel_res.get("attempt") or attempt
+            if int(attempt.get("launch_count", 0)) < MAX_AUDITOR_LAUNCHES:
+                continue
+            return Outcome(
+                outcome="failed",
+                blocker="unrecoverable-blocker",
+                data={"stage": "audit", "code": err.code},
+            )
+
+        verdict_path = omp_dir / "verdict.json"
+        verdict_data: Mapping[str, object] | None = None
+        if verdict_path.is_file():
+            try:
+                loaded = json.loads(verdict_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, Mapping):
+                    verdict_data = loaded
+            except Exception:
+                verdict_data = None
+
+        # 4. Exit!=0, no verdict: cancel, mark_done "crashed"; relaunch while launch_count < MAX_AUDITOR_LAUNCHES, then blocker.
+        if (code is None or code != 0) and verdict_data is None:
+            cancel_res = ctx.command(
+                "cancel_auditor_launch",
+                {"attempt_id": str(attempt_id), "launch_id": str(launch_id)},
+                key=f"cancel_auditor_launch:{launch_id}",
+            )
+            ctx.intents.mark_done(intent_key, "crashed")
+            attempt = cancel_res.get("attempt") or attempt
+            if int(attempt.get("launch_count", 0)) < MAX_AUDITOR_LAUNCHES:
+                continue
+            return Outcome(
+                outcome="failed",
+                blocker="unrecoverable-blocker",
+                data={
+                    "stage": "audit",
+                    "code": "max_auditor_launches_exceeded",
+                    "launch_count": int(attempt.get("launch_count", 0)),
+                },
+            )
+
+        # 5. accept_candidate: False -> cancel; True -> settle_auditor_launch; mark_done.
+        verifier_key = ctx.config.verifier_key_path.read_bytes()
+        accepted = verifier.accept_candidate(
+            verifier_key,
+            verdict_data,
+            candidate_sha256=candidate_sha,
+            attempt_id=str(attempt_id),
+            producer_id="worker",
+        )
+
+        if not accepted:
+            cancel_res = ctx.command(
+                "cancel_auditor_launch",
+                {"attempt_id": str(attempt_id), "launch_id": str(launch_id)},
+                key=f"cancel_auditor_launch:{launch_id}",
+            )
+            ctx.intents.mark_done(intent_key, "rejected")
+            return Outcome(
+                outcome="failed",
+                verdict="fail",
+                data={
+                    "stage": "audit",
+                    "code": "candidate_rejected",
+                    "candidate_commit": commit,
+                    "candidate_sha256": candidate_sha,
+                    "attempt_id": str(attempt_id),
+                },
+            )
+
+        report_path = omp_dir / "audit-report.txt"
+        transport_payload = (
+            report_path.read_text(encoding="utf-8") if report_path.is_file() else None
+        )
+        settle_res = ctx.command(
+            "settle_auditor_launch",
+            {
+                "attempt_id": str(attempt_id),
+                "launch_id": str(launch_id),
+                "transport_payload": transport_payload,
+                "transport_failed": False,
+            },
+            key=f"settle_auditor_launch:{launch_id}",
+        )
+        ctx.intents.mark_done(intent_key, "settled")
+
+        # 6. Accepted PASS -> succeeded, pass; else failed, fail.
+        settled_verdict = settle_res.get("verdict")
+        if not settled_verdict and isinstance(settle_res.get("receipt"), Mapping):
+            settled_verdict = settle_res["receipt"].get("verdict")
+
+        is_applied = settle_res.get("status") == "applied" or bool(settle_res.get("receipt"))
+        if is_applied and isinstance(settled_verdict, str) and settled_verdict.upper() == "PASS":
+            return Outcome(
+                outcome="succeeded",
+                verdict="pass",
+                data={
+                    "stage": "audit",
+                    "candidate_commit": commit,
+                    "candidate_id": candidate_id,
+                    "candidate_sha256": candidate_sha,
+                    "attempt_id": str(attempt_id),
+                },
+            )
+        reason_code = (settle_res.get("event") or {}).get("reason_code")
+        if not reason_code and isinstance(settled_verdict, str):
+            reason_code = f"verdict_{settled_verdict.lower()}"
+        return Outcome(
+            outcome="failed",
+            verdict="fail",
+            data={
+                "stage": "audit",
+                "code": reason_code or "settle_failed",
+                "candidate_commit": commit,
+                "candidate_sha256": candidate_sha,
+                "attempt_id": str(attempt_id),
+            },
+        )
 
 
 def _file_sha256(mod: object) -> str:

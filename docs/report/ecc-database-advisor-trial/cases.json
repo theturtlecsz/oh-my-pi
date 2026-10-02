@@ -1,0 +1,68 @@
+[
+  {
+    "id": "k1",
+    "commit": "20900d3be9c5245be9aa0267bf6a3a122fd1ab7f",
+    "kind": "known_bad",
+    "scope": [
+      "python/omp-work/src/omp_work/jobs/store.py",
+      "python/omp-work/src/omp_work/operations/jobs_migrations/0003_native_research_jobs.sql"
+    ],
+    "known_defect": {
+      "ref": "E0187",
+      "summary": "concurrent same-id run_operation calls both run"
+    }
+  },
+  {
+    "id": "k2",
+    "commit": "44a2f9446f00786188e17567f5eaee79aa020658",
+    "kind": "known_bad",
+    "scope": [
+      "python/omp-work/src/omp_work/jobs/usage.py"
+    ],
+    "known_defect": {
+      "ref": "E0189",
+      "summary": "racy MAX(step_index)+1 insert"
+    }
+  },
+  {
+    "id": "o1",
+    "commit": "a2d815bbe659c3d783e43d37c2589387dc0b120b",
+    "kind": "ordinary",
+    "scope": [
+      "python/omp-work/src/omp_work/egress_store.py",
+      "python/omp-work/src/omp_work/operations/migrations/0033_project_egress.sql",
+      "python/omp-work/src/omp_work/v1/store.py"
+    ],
+    "known_defect": null
+  },
+  {
+    "id": "o2",
+    "commit": "b2a5ca700d2d48216134cdc074d1b611bdd0914a",
+    "kind": "ordinary",
+    "scope": [
+      "python/omp-work/src/omp_work/project_store.py",
+      "python/omp-work/src/omp_work/operations/migrations/0030_project_records.sql",
+      "python/omp-work/src/omp_work/v1/store.py"
+    ],
+    "known_defect": null
+  },
+  {
+    "id": "o3",
+    "commit": "3f38b2984d612e4d233f63419505cc8fedaead58",
+    "kind": "ordinary",
+    "scope": [
+      "python/omp-work/src/omp_work/operations/migrations/0029_bot_filed_intake_hold.sql",
+      "python/omp-work/src/omp_work/v1/store.py"
+    ],
+    "known_defect": null
+  },
+  {
+    "id": "o4",
+    "commit": "b9793a797d403da7be32c84b90c22189635a97cb",
+    "kind": "ordinary",
+    "scope": [
+      "python/omp-work/src/omp_work/v1/store.py"
+    ],
+    "known_defect": null
+  }
+]

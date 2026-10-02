@@ -162,6 +162,37 @@ It lists the workspace missions still in status `running`. Exit codes:
 
 To drain, wait for each listed mission to finish, or have the owner pause it. Engaging the agent stop does **not** drain: a frozen mission stays `running`, so the gate keeps exiting 1. Run `drain check` again and proceed only once it exits 0. The deploy wiring is in `flood deploy-omp.sh` (owner step OMP-519-s07).
 
+## Agent stop guards
+
+`stop install-guards` writes `50-omp-agent-stop.conf` into each target unit's
+drop-in directory. For a unit whose own file or existing drop-ins set
+`KillMode=process` or `KillMode=none`, it also writes
+`zz-omp-agent-stop-killmode.conf` (`KillMode=control-group`, which sorts last)
+and prints `stop: <U>: overriding ...`. The override is required because those
+kill modes leave the unit's cgroup running: in the OMP-447 drill the stop killed
+only `flock` and the worker kept the lock. `flood.service` is overridden too, so
+a stop ends its jobs.
+
+```sh
+python -m omp_work stop install-guards --unit flood.service --unit flood-operator.service --unit continuous-admit.service --interval 5
+```
+
+### continuous-admit
+
+Economy continuous_admit (sole durable life-owner), as of 2026-10-02 16:05Z.
+`Restart=always`, 60 s. Drop-ins: `50-omp-agent-stop.conf` (guard) and
+`killmode-process.conf` (`KillMode=process`). `ExecStart`
+`run-admit-systemd.sh` -> `flock` -> `continuous_admit.py` (2026-09-20,
+pre-flood "FLOOD-LB"). Every 15 s it imports `omp_work.parallel_streams` from
+`/home/thetu/oh-my-pi/python/omp-work/src`, enqueues implementer/review jobs
+there and tries to launch them. Last real launch 2026-09-23T19:13Z; since then
+every tick ends `launch refuse ... no small ledger item available` (334
+refusals logged). It calls `ps.claim`/`ps.release`/`ps.complete`, which current
+`parallel_streams` does not define. It does no work for OMP today; flood does
+that work.
+
+Keep or remove: decided in OMP-537-s04, recorded on OMP-537 in the Work Ledger.
+
 ## Authority and sealed epoch
 
 The Work Ledger is the sole workflow authority (`work.omp.dev/v1`), operating locally on PostgreSQL. The cutover epoch is sealed; live operations run directly against the loopback WorkService. Linear history is preserved offline as static immutable exports, encrypted reports, and provenance mappings. Linear is never a fallback or recovery authority.

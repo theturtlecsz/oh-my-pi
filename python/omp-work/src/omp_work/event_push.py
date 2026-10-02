@@ -6,6 +6,10 @@ or unusable file allows no host. ``check_destination`` refuses a non-https URL,
 userinfo, a host outside that set, a name that does not resolve, and any
 resolved address ``egress_policy.blocked_address`` refuses.
 
+``load_push_bearers`` reads ``<config_dir>/push-bearer.json``, mapping an exact
+push_url to the text of its token file. A URL bound there receives that token as
+its POST Authorization bearer; every other URL stays bearer-less.
+
 ``run_push`` walks every client's subscriptions. A row with no push_url is a
 pull subscription and is skipped, as are ops.* streams other than an
 ``ops.alarm`` or ``ops.digest`` row. A mission, ``ops.alarm``, or
@@ -16,10 +20,11 @@ only past what was delivered. An ``ops.alarm`` row replays every domain event,
 sends only the alerts past its cursor, and advances the cursor past what was
 delivered. An ``ops.digest`` row replays the same events and sends one digest
 per completed UTC day past its own cursor, advancing that cursor to the day's
-last sequence only after the digest is sent. Delivery is a signed, bearer-less
-POST (``send_signed``) whose Idempotency-Key is the mission_event_id, the
-alert's ``idempotency_key``, or ``digest:{workspace_id}:{day}``. A redirect is
-a failed delivery: the POST is not replayed to the Location.
+last sequence only after the digest is sent. Delivery is a signed POST
+(``send_signed``) whose Idempotency-Key is the mission_event_id, the
+alert's ``idempotency_key``, or ``digest:{workspace_id}:{day}``; a push_url
+bound in ``push-bearer.json`` additionally carries its token as a bearer. A
+redirect is a failed delivery: the POST is not replayed to the Location.
 """
 
 from __future__ import annotations
@@ -39,7 +44,8 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 from .alarm_classify import AlarmState, _to_utc_date, build_digest, classify
 from .egress_policy import blocked_address
-from .push_http import PushDeliveryError, send as push_send
+from .push_http import PushDeliveryError
+from .push_http import send as push_send
 from .v1.models import (
     AdvanceEventCursor,
     AdvanceEventCursorCommand,
@@ -50,6 +56,7 @@ __all__ = [
     "check_destination",
     "load_allowed_hosts",
     "load_master_key",
+    "load_push_bearers",
     "run_push",
     "send_signed",
     "signature",
@@ -230,22 +237,77 @@ def load_master_key(config_dir: Path | str) -> bytes:
     return key
 
 
+def load_push_bearers(config_dir: Path | str) -> dict[str, str]:
+    """Map an exact push_url to its bearer token from ``push-bearer.json``.
+
+    ``<config_dir>/push-bearer.json`` holds
+    ``{"token_files": {"<push_url>": "<absolute token file path>"}}``; the
+    token is the stripped text of that file. A missing ``push-bearer.json`` is
+    ``{}``. Every error is a ValueError naming a path, never the token: bad
+    JSON or shape, a token path that is not absolute or cannot be read, a
+    token file mode & 0o077, or an empty token or one holding CR, LF, or NUL.
+    """
+    path = Path(config_dir) / "push-bearer.json"
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except OSError as error:
+        raise ValueError(f"unreadable push-bearer config: {path}") from error
+    except UnicodeError as error:
+        raise ValueError(f"unreadable push-bearer config: {path}") from error
+    try:
+        document = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"invalid push-bearer config: {path}") from error
+    if not isinstance(document, dict) or not isinstance(
+        document.get("token_files"), dict
+    ):
+        raise ValueError(f"invalid push-bearer config: {path}")  # noqa: TRY004 - config shape, not a caller type
+    bearers: dict[str, str] = {}
+    for push_url, token_path in document["token_files"].items():
+        if not isinstance(push_url, str) or not isinstance(token_path, str):
+            raise ValueError(  # noqa: TRY004 - config shape, not a caller type
+                f"invalid push-bearer config: {path}"
+            )
+        target = Path(token_path)
+        if not target.is_absolute():
+            raise ValueError(f"token path must be absolute: {token_path!r}")
+        try:
+            metadata = target.stat()
+        except OSError as error:
+            raise ValueError(f"unreadable token file: {token_path}") from error
+        if stat.S_IMODE(metadata.st_mode) & 0o077:
+            raise ValueError(f"unsafe token file permissions: {token_path}")
+        try:
+            token = target.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            raise ValueError(f"unreadable token file: {token_path}") from error
+        token = token.strip()
+        if not token or "\r" in token or "\n" in token or "\0" in token:
+            raise ValueError(f"invalid token file: {token_path}")
+        bearers[push_url] = token
+    return bearers
+
+
 def send_signed(
     url: str,
     idempotency_key: str,
     body: Any,
     *,
     key: bytes,
+    token: str | None = None,
     attempts: int = 3,
     sleep: Callable[[float], None] = time.sleep,
 ) -> None:
-    """Signed, bearer-less POST of one push body.
+    """Signed POST of one push body, with an optional bearer.
 
-    Sends ``body`` through :func:`push_send` with ``token=None`` (no
-    Authorization header) and ``X-OMP-Signature`` for ``key``. ``push_send``
-    does not follow redirects, so a 3xx is a PushDeliveryError rather than a delivery
-    to the Location. A PushDeliveryError is retried after ``sleep(1)`` then
-    ``sleep(2)``; the third failure is raised.
+    Sends ``body`` through :func:`push_send` with ``X-OMP-Signature`` for
+    ``key``. ``token=None`` sends no Authorization header; a token sends it as
+    the bearer. ``push_send`` does not follow redirects, so a 3xx is a
+    PushDeliveryError rather than a delivery to the Location. A
+    PushDeliveryError is retried after ``sleep(1)`` then ``sleep(2)``; the
+    third failure is raised.
     """
     canonical = body_bytes(body)
     header = signature(key, idempotency_key, canonical)
@@ -253,7 +315,7 @@ def send_signed(
         try:
             push_send(
                 url,
-                None,
+                token,
                 idempotency_key,
                 canonical,
                 headers={_SIGNATURE_HEADER: header},
@@ -300,6 +362,20 @@ def _event_body(event: Any) -> Any:
     return dict(event)
 
 
+def _token_sender(send: Callable[..., Any], token: str) -> Callable[..., Any]:
+    """Bind ``token`` so a row's send carries its bearer.
+
+    Only a row whose stripped push_url is bound in ``push-bearer.json`` uses
+    this wrapper; every other row calls ``send(..., key=key)`` alone, so
+    senders that accept only ``key=`` are unaffected.
+    """
+
+    def sender(url: str, idempotency_key: str, body: Any, *, key: bytes) -> Any:
+        return send(url, idempotency_key, body, key=key, token=token)
+
+    return sender
+
+
 def run_push(
     client: Any,
     *,
@@ -309,6 +385,7 @@ def run_push(
     resolve: Callable[[str], Iterable[str]] = _getaddrinfo_ips,
     send: Callable[..., Any] | None = None,
     today: date | None = None,
+    bearers: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Deliver subscribed mission events, ops.alarm alerts, or ops.digest days.
 
@@ -348,12 +425,16 @@ def run_push(
 
     ``send`` defaults to the module-level :func:`send_signed` and is looked up
     at call time so a monkeypatched ``event_push.send_signed`` takes effect.
+    ``bearers`` maps a push_url to its bearer token (see
+    :func:`load_push_bearers`); a row whose stripped push_url is a key sends
+    with ``token=tok``, and every other row calls ``send(..., key=key)`` alone.
     """
     if send is None:
         send = send_signed
     if today is None:
         today = datetime.now(timezone.utc).date()
     allowed = frozenset(allowed_hosts)
+    tokens = bearers or {}
     pushed = 0
     page = client.event_subscriptions()
     for subscription in _items(_field(page, "subscriptions", ())):
@@ -367,13 +448,13 @@ def run_push(
         destination = _field(subscription, "push_url")
         if not isinstance(destination, str) or not destination.strip():
             continue
-        reason = check_destination(
-            destination, allowed_hosts=allowed, resolve=resolve
-        )
+        reason = check_destination(destination, allowed_hosts=allowed, resolve=resolve)
         if reason is not None:
             return {"refused": reason}
         cursor = int(_field(subscription, "cursor_sequence", 0) or 0)
         key = subscription_key(master_key, sub_id)
+        token = tokens.get(destination.strip())
+        row_send = _token_sender(send, token) if token is not None else send
         if event_types == ["ops.alarm"]:
             outcome = _push_ops_alarm(
                 client,
@@ -382,7 +463,7 @@ def run_push(
                 destination=destination,
                 cursor=cursor,
                 key=key,
-                send=send,
+                send=row_send,
             )
             if "failed" in outcome:
                 return {"failed": outcome["failed"]}
@@ -396,7 +477,7 @@ def run_push(
                 destination=destination,
                 cursor=cursor,
                 key=key,
-                send=send,
+                send=row_send,
                 today=today,
             )
             if "failed" in outcome:
@@ -416,7 +497,7 @@ def run_push(
                     if _field(event, "type") not in subscribed:
                         continue
                     event_id = str(_field(event, "mission_event_id", ""))
-                    send(
+                    row_send(
                         destination,
                         event_id,
                         _event_body(event),

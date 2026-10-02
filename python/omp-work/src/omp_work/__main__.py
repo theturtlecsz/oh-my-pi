@@ -37,6 +37,7 @@ from .v1.service import WorkError
 from .credential_watch import DEFAULT_ROOTS, watch_credentials
 from .budget_headroom import compute_headroom
 from .always_running import check_stall
+from . import client_ingress
 from . import owner_key
 from . import parallel_streams as ps
 
@@ -192,12 +193,18 @@ def _run_events_command(args: argparse.Namespace) -> int:
             except ValueError as error:
                 print(f"events: {error}", file=sys.stderr)
                 return 2
+            try:
+                bearers = event_push.load_push_bearers(config_dir)
+            except ValueError as error:
+                print(f"events: {error}", file=sys.stderr)
+                return 2
             allowed_hosts = event_push.load_allowed_hosts(config_dir)
             result = event_push.run_push(
                 client,
                 workspace_id=workspace_id,
                 master_key=master_key,
                 allowed_hosts=allowed_hosts,
+                bearers=bearers,
             )
             print(json.dumps(result, sort_keys=True))
             return 0
@@ -306,7 +313,7 @@ def main(argv: list[str] | None = None) -> int | None:
     subcommands = parser.add_subparsers(
         dest="command",
         required=True,
-        metavar="{schema,hash,approve,validate,ops,serve,headroom,stall-check,parallel-admit,budget-alerts,projects,stop,alarms,jobs,owner-key,orchestrator,drain}",
+        metavar="{schema,hash,approve,validate,ops,serve,headroom,stall-check,parallel-admit,budget-alerts,projects,stop,alarms,jobs,owner-key,ingress,orchestrator,drain}",
     )
 
     schema = subcommands.add_parser("schema")
@@ -352,6 +359,30 @@ def main(argv: list[str] | None = None) -> int | None:
     show_parser = projects_sub.add_parser("show", parents=[project_scope])
     show_parser.add_argument("--key", required=True)
     projects_sub.add_parser("check", parents=[project_scope])
+    projects_sub.add_parser("sides", parents=[project_scope])
+    link_world_parser = projects_sub.add_parser("link-world", parents=[project_scope])
+    link_world_parser.add_argument("--world", required=True, choices=["media-discovery"])
+    link_world_parser.add_argument("--project", required=True, type=UUID)
+    move_item_parser = projects_sub.add_parser("move-item", parents=[project_scope])
+    move_item_parser.add_argument("--key", required=True)
+    move_item_parser.add_argument("--project", required=True, type=UUID)
+    trusted_paths_parser = projects_sub.add_parser(
+        "trusted-paths", parents=[project_scope]
+    )
+    trusted_paths_parser.add_argument(
+        "--scan-root",
+        action="append",
+        required=True,
+        type=Path,
+        dest="scan_roots",
+        metavar="DIR",
+    )
+    trusted_paths_parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path.home() / ".omp" / "agent" / "trusted-projects.json",
+        metavar="FILE",
+    )
 
     stop = subcommands.add_parser("stop")
     stop_commands = stop.add_subparsers(dest="stop_command", required=True)
@@ -408,6 +439,7 @@ def main(argv: list[str] | None = None) -> int | None:
     subscriptions_parser.add_argument("--bearer-file", type=Path)
 
     owner_key.add_parser(subcommands)
+    client_ingress.add_parser(subcommands)
 
     jobs_parser = subcommands.add_parser("jobs")
     jobs_sub = jobs_parser.add_subparsers(dest="jobs_command", required=True)
@@ -564,6 +596,8 @@ def main(argv: list[str] | None = None) -> int | None:
         return run_projects(args)
     if args.command == "owner-key":
         return owner_key.run(args)
+    if args.command == "ingress":
+        return client_ingress.run(args)
     if args.command == "jobs":
         from .jobs.process import check, register_component, run_worker
 

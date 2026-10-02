@@ -1,0 +1,1 @@
+ompbot ALL=(thetu) NOPASSWD: /usr/local/libexec/omp-owner-action

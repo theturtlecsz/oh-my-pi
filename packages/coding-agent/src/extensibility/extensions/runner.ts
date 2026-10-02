@@ -110,6 +110,7 @@ import { cfgExtensionHandlersToolCallTimeoutMs } from "../settings";
 interface BeforeAgentStartCombinedResult {
 	messages?: NonNullable<BeforeAgentStartEventResult["message"]>[];
 	systemPrompt?: string[];
+	block?: { reason: string };
 }
 
 export type ExtensionErrorListener = (error: ExtensionError) => void;
@@ -759,6 +760,12 @@ export class ExtensionRunner {
 		this.#taskResultGate = resolve;
 	}
 
+	#projectTrustCheck: ((cwd: string) => boolean) | undefined;
+
+	setProjectTrustCheck(check: (cwd: string) => boolean): void {
+		this.#projectTrustCheck = check;
+	}
+
 	async enterTaskResultProcessing(toolName: string, id: string): Promise<void> {
 		if (toolName === "task") await this.#taskResultGate?.(id)?.enter();
 	}
@@ -1400,7 +1407,7 @@ export class ExtensionRunner {
 			cwd: this.cwd,
 			sessionManager: this.sessionManager,
 			modelRegistry: this.modelRegistry,
-			isProjectTrusted: () => true,
+			isProjectTrusted: () => (this.#projectTrustCheck ? this.#projectTrustCheck(this.cwd) : true),
 			agent: this.agent,
 			get model() {
 				return getModel();
@@ -2204,6 +2211,9 @@ export class ExtensionRunner {
 
 				if (handlerResult) {
 					const result = handlerResult as BeforeAgentStartEventResult;
+					if (result.block) {
+						return { block: { reason: result.reason ?? `Prompt blocked by extension ${ext.path}` } };
+					}
 					if (result.message) {
 						messages.push(result.message);
 					}

@@ -561,6 +561,8 @@ function buildExecutorOptions(
 		authStorage: session.authStorage,
 		modelRegistry: session.modelRegistry,
 		settings: session.settings,
+		// Task, eval agent(), cleanse, and isolation all build options here (E0433).
+		parentAutoApprove: session.getToolContext?.()?.autoApprove === true,
 		inheritedSessionAgents: session.getSessionAgents?.(),
 		mcpManager: enableMCP ? (session.mcpManager ?? MCPManager.instance()) : undefined,
 		enableMCP,

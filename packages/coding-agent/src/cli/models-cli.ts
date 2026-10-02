@@ -20,6 +20,7 @@ import { formatNumber, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import type { ConfigError } from "../config/config-file";
 import { ModelRegistry } from "../config/model-registry";
+import { isProjectPathTrusted } from "../config/project-trust";
 import { Settings } from "../config/settings";
 import { discoverAndLoadExtensions, ExtensionRunner, emitSessionShutdownEvent } from "../extensibility/extensions";
 import { discoverAuthStorage } from "../sdk";
@@ -347,6 +348,7 @@ export async function runModelsListing(options: RunModelsListingOptions): Promis
 					modelRegistry,
 				)
 			: undefined;
+	extensionRunner?.setProjectTrustCheck(dir => isProjectPathTrusted(dir));
 
 	try {
 		for (const { path: extPath, error } of extensionsResult.errors) {

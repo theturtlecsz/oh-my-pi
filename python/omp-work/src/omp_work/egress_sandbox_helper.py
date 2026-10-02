@@ -13,10 +13,10 @@ tmpfs over the socket root hides every other sandbox's sockets, with only this
 sandbox's directory bound back so ``record.sock`` stays reachable.
 
 A ``research`` or ``worker`` root skips the mount-proc shim and the setup_ok
-touch. The helper runs ``unshare --mount --pid --fork`` on
+touch. The helper runs ``unshare --mount --pid --fork --kill-child`` on
 :mod:`omp_work.egress_research_jail`, which builds that profile's root and
-marks setup_ok only after ``pivot_root``. Any other named root exits 125
-before setup.
+marks setup_ok only after ``pivot_root``. The jail process is killed when the
+helper dies. Any other named root exits 125 before setup.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ import ctypes
 import glob
 import json
 import os
+import signal
 from contextlib import suppress
 from pathlib import Path
 import shutil
@@ -73,6 +74,19 @@ def _executable(name: str, path: str | None = None) -> str:
     """Absolute path of a fixed tool, or the bare name when it is not on PATH."""
     found = shutil.which(name, path=path)
     return found if found is not None else name
+
+
+def _die_with_parent() -> None:
+    """Ask the kernel to SIGKILL this process when its parent dies.
+
+    ``PR_SET_PDEATHSIG`` is preserved across exec. A parent that is already
+    gone (reaped to init, or hidden by a pid namespace) kills this process
+    immediately so the race between fork and the prctl cannot leave an orphan.
+    """
+    if _libc.prctl(1, signal.SIGKILL, 0, 0, 0) != 0:
+        os._exit(127)
+    if os.getppid() in (0, 1):
+        os.kill(os.getpid(), signal.SIGKILL)
 
 
 class PacketTap:
@@ -519,13 +533,14 @@ def _spawn_research_jail(config_path: Path) -> int:
         "--mount",
         "--pid",
         "--fork",
+        "--kill-child",
         sys.executable,
         "-m",
         "omp_work.egress_research_jail",
         str(config_path),
     ]
     # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
-    jail = subprocess.Popen(cmd)  # nosec B603 - argv list, no shell
+    jail = subprocess.Popen(cmd, preexec_fn=_die_with_parent)  # nosec B603 - argv list, no shell
     return jail.wait()
 
 
@@ -593,6 +608,7 @@ def main() -> None:
             _executable("unshare", search_path),
             "--pid",
             "--fork",
+            "--kill-child",
             "--mount-proc",
             _executable("setpriv", search_path),
             "--bounding-set=-all",
@@ -606,6 +622,7 @@ def main() -> None:
             worker_cmd,
             cwd=workdir,
             env=worker_env,
+            preexec_fn=_die_with_parent,
         )
         returncode = worker.wait()
 

@@ -1,11 +1,15 @@
 /**
  * workflow/agent-stop.ts — hold this session while the workspace stop is engaged (OMP-405).
  *
- * Until the first poll settles, state is released. A stopped poll aborts a busy
+ * Until the first poll settles, poll state is released. A stopped poll aborts a busy
  * turn every time; the warning fires only on the released → stopped edge.
- * Turns that begin outside `input` (host resume, `.` / `c`, RPC `/`) are halted
- * by the next busy stopped poll, not at turn start. A failed poll keeps the
- * last settled state.
+ * A failed poll keeps the last settled state.
+ * Prompts that never see `input` (host resume, `.` / `c`, RPC `/`) are refused by
+ * before_agent_start, which calls stopStatus directly and does not use tick
+ * (apply may abort). A stopped read blocks the prompt; a released read returns
+ * undefined. A throw or rejection uses the last settled poll: block when that
+ * poll is stopped, otherwise undefined. The handler does not change poll state,
+ * notify, or abort.
  */
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { WorkClient } from "@oh-my-pi/pi-work-client";
@@ -88,5 +92,18 @@ export function installAgentStopGate(
 	pi.on("tool_call", () => {
 		if (!stopped) return undefined;
 		return { block: true, reason: engagedNotice(reason) };
+	});
+
+	// Direct read. Do not call tick(): apply may abort and notify, and it would
+	// publish this read into poll state.
+	pi.on("before_agent_start", async () => {
+		try {
+			const view = await client.stopStatus();
+			if (!view.stopped) return undefined;
+			return { block: true, reason: engagedNotice(view.reason) };
+		} catch {
+			if (!stopped) return undefined;
+			return { block: true, reason: engagedNotice(reason) };
+		}
 	});
 }

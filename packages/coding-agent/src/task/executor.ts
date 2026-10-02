@@ -562,6 +562,13 @@ export interface ExecutorOptions {
 	modelRegistry?: ModelRegistry;
 	settings?: Settings;
 	/**
+	 * Parent session is SDK/CLI auto-approve (full power). When true, the child
+	 * keeps that power: its `tools.approvalMode` is `yolo` and every
+	 * `createAgentSession` call receives `autoApprove: true`. Otherwise the child
+	 * reads the parent's `tools.approvalMode` live through the overlay.
+	 */
+	parentAutoApprove?: boolean;
+	/**
 	 * Parent session's live per-family service tiers, the source of truth for a
 	 * subagent whose `tier.subagent` is `"inherit"`. `null` = the parent
 	 * explicitly has no tier (e.g. `/fast off`); omitted = no live session, so
@@ -1102,10 +1109,6 @@ export function createSubagentSettings(
 		// owner job outlives the run, so worktree capture/cleanup stays
 		// race-free (previously both were force-disabled here).
 
-		// Subagents run headless — there is no UI to confirm prompts against, so
-		// the parent task approval is the authorization boundary. Use yolo mode
-		// to preserve unattended subagent execution. User `tools.approval` policies still apply.
-		"tools.approvalMode": "yolo",
 		// Subagents run unadvised by default; runSubprocess opts a spawn back in
 		// per agent (frontmatter `advisor` / `task.agentAdvisor`) via overrides.
 		"advisor.enabled": false,
@@ -1459,8 +1462,8 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 
 	// Wall-clock hard limit. Defense-in-depth for the case where a provider stream
 	// hang escapes the inference-layer watchdog (see openai-completions
-	// `isOpenAICompletionsProgressChunk`). Disabled by default; set
-	// `task.maxRuntimeMs > 0` to cap each subagent's lifetime.
+	// `isOpenAICompletionsProgressChunk`). Defaults to 2 hours
+	// (`task.maxRuntimeMs`); set it to 0 to disable the cap.
 	let runtimeTimeoutId: NodeJS.Timeout | undefined;
 	if (maxRuntimeMs > 0) {
 		runtimeTimeoutId = setTimeout(() => {
@@ -3737,6 +3740,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			...(advisorSelection?.model
 				? { modelRoles: { ...settings.getModelRoles(), advisor: advisorSelection.model } }
 				: undefined),
+			// Full-power parents keep yolo. Every other parent is read through live.
+			...(options.parentAutoApprove === true ? { "tools.approvalMode": "yolo" } : undefined),
 		},
 		options.parentServiceTier,
 	);
@@ -4200,6 +4205,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				},
 				sessionManager: sessionManagerForRun,
 				hasUI: false,
+				// No prompt and no wait. A tool the inherited mode does not approve
+				// is refused by the existing no-UI path.
+				...(options.parentAutoApprove === true ? { autoApprove: true } : {}),
 				prewalk,
 				spawns: spawnsEnv,
 				taskDepth: childDepth,
