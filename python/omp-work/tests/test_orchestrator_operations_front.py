@@ -17,6 +17,8 @@ Defends front pipeline contracts:
 - edited_draft drives the grant's item past criteria_pending: criteria_revision_id is set and that revision's acceptance criteria equal the request's.
 - crash_after_command("seal_execution_criteria") followed by a reclaimed lease leaves criteria_revision_id unchanged and one seal row with conflict_count 0.
 - empty work.acceptance_criteria fails the grant step with criteria_missing and leaves the item in criteria_pending.
+- crash_after_command("stamp_execution_plan") replayed under an expired lease keeps grant_version and plan_stamp_sha256 and leaves one stamp row with conflict_count 0.
+- empty test_command fails the grant step with test_command_missing and leaves the item in planning with no plan stamp and no stamp row.
 """
 
 from __future__ import annotations
@@ -816,6 +818,21 @@ def _seal_rows(world) -> list[dict]:
             SELECT operation_id::text AS operation_id, conflict_count
             FROM omp_control.idempotent_commands
             WHERE workspace_id = %s AND command_type = 'seal_execution_criteria'
+            """,
+            (world.workspace_id,),
+        )
+        return list(cur.fetchall())
+
+
+def _stamp_rows(world) -> list[dict]:
+    with psycopg.connect(
+        **world.config.ops.connection_kwargs("postgres"), row_factory=dict_row
+    ) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT operation_id::text AS operation_id, command_type, conflict_count
+            FROM omp_control.idempotent_commands
+            WHERE workspace_id = %s AND command_type = 'stamp_execution_plan'
             """,
             (world.workspace_id,),
         )
@@ -1640,6 +1657,87 @@ def test_edited_draft_constraint_stamps_execution_plan(
     candidate = candidates[0]
     assert candidate["candidate_id"] == pid
     assert candidate["candidate_sha256"] == expected_cand_sha
+
+
+def test_crash_after_stamp_execution_plan_replays(
+    service, tmp_path: Path, monkeypatch
+) -> None:
+    """Crash after stamp_execution_plan: replay keeps grant_version and plan_stamp_sha256."""
+    world, worker, _work_id = _open_front(
+        service, tmp_path / "grant_stamp_crash", monkeypatch, extra_capability=None
+    )
+
+    def plan_ran(view: dict) -> bool:
+        return any(
+            step.get("stage") == "plan" and step.get("kind") == "outcome"
+            for step in view["steps"]
+        )
+
+    tick_until(worker, world, plan_ran, limit=20)
+    crash_after_command(monkeypatch, "stamp_execution_plan")
+    with pytest.raises(SimulatedCrash):
+        worker.tick()
+
+    gid = _grant_id(world)
+    stamped = _grant_item_stamp_rows(world, gid)[0]
+    assert stamped["phase"] == "executing"
+    assert stamped["plan_stamp_sha256"] is not None
+    stamped_sha = stamped["plan_stamp_sha256"]
+    stamp_version = _grant_rows(world)[0]["grant_version"]
+
+    _expire_lease(world)
+    worker.tick()
+
+    outcome = _grant_step_outcome(world)
+    assert outcome["outcome"] == "succeeded"
+    assert outcome["data"]["phase"] == "executing"
+
+    replayed = _grant_item_stamp_rows(world, gid)[0]
+    assert replayed["plan_stamp_sha256"] == stamped_sha
+    assert _grant_rows(world)[0]["grant_version"] == stamp_version
+
+    stamps = _stamp_rows(world)
+    assert len(stamps) == 1
+    assert stamps[0]["conflict_count"] == 0
+
+
+def test_empty_test_command_fails_test_command_missing(
+    service, tmp_path: Path, monkeypatch
+) -> None:
+    """An empty request test_command fails the grant step with test_command_missing."""
+    world = open_e2e_world(
+        service,
+        tmp_path / "grant_no_test_command",
+        monkeypatch,
+        verifier_mode="pass",
+        worker_mode="ok",
+        extra_capability=None,
+        test_command=(),
+        operations=("omp_work.orchestrator.operations:register",),
+    )
+    submitted = submit(world.config, world.request)
+    work_id = UUID(str(submitted["work_id"]))
+    _seed_item_budget(world, service, work_id)
+    worker = open_worker(world)
+
+    def grant_ran(view: dict) -> bool:
+        return any(
+            step.get("stage") == "grant" and step.get("kind") == "outcome"
+            for step in view["steps"]
+        )
+
+    tick_until(worker, world, grant_ran, limit=40)
+
+    outcome = _grant_step_outcome(world)
+    assert outcome["outcome"] == "failed"
+    assert outcome["data"]["code"] == "test_command_missing"
+
+    gid = _grant_id(world)
+    items = _grant_item_stamp_rows(world, gid)
+    assert len(items) == 1
+    assert items[0]["phase"] == "planning"
+    assert items[0]["plan_stamp_sha256"] is None
+    assert _stamp_rows(world) == []
 
 
 
