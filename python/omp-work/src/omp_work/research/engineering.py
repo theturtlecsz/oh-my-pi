@@ -93,7 +93,7 @@ def materialize(
 
             dest_path = Path(dest)
             dest_path.mkdir(parents=True, exist_ok=True)
-            archive.extractall(path=dest_path)
+            archive.extractall(path=dest_path, filter="data")
             return dest_path
     except tarfile.TarError as err:
         raise ValueError(f"invalid tar archive: {err}") from err
