@@ -18,6 +18,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -126,7 +127,16 @@ class OrchestratorConfig:
     wait_seconds: int = 30
     workservice_url: str = DEFAULT_BASE_URL
     verifier_argv: tuple[str, ...] = ()
+    # The GitHub merge token file that merge_gate.release_merge_credential
+    # releases only for an owner-signed merge_protected_branch decision.
     merge_credential_path: Path | None = None
+    github_api_url: str = "https://api.github.com"
+    # Project repository key -> GitHub owner/name. Read-only. The merge stage
+    # gets its GitHub target only from this map.
+    github_repositories: Mapping[str, str] = MappingProxyType({})
+    # Token for opening pull requests and reading checks. Tier 2.
+    github_token_path: Path | None = None
+    required_checks: tuple[str, ...] = ()
     operations: tuple[str, ...] = ()
     ops: OperationsConfig = field(default_factory=OperationsConfig.defaults)
 
@@ -232,6 +242,35 @@ def load_config(path: Path | None = None, ops: OperationsConfig | None = None) -
     def _path(key: str) -> Path:
         return Path(data[key])
 
+    def _owner_name(value: object) -> str:
+        if not isinstance(value, str):
+            raise OrchestratorError("invalid_request")
+        owner, slash, name = value.partition("/")
+        if slash != "/" or "/" in name or not owner or not name:
+            raise OrchestratorError("invalid_request")
+        return value
+
+    def _github_repositories() -> Mapping[str, str]:
+        if "github_repositories" not in data:
+            return MappingProxyType({})
+        raw = data["github_repositories"]
+        if not isinstance(raw, dict):
+            raise OrchestratorError("invalid_request")
+        parsed: dict[str, str] = {}
+        for key, value in raw.items():
+            if not isinstance(key, str) or not key:
+                raise OrchestratorError("invalid_request")
+            parsed[key] = _owner_name(value)
+        return MappingProxyType(parsed)
+
+    def _required_checks() -> tuple[str, ...]:
+        if "required_checks" not in data:
+            return ()
+        raw = data["required_checks"]
+        if not isinstance(raw, list) or any(not isinstance(item, str) or not item for item in raw):
+            raise OrchestratorError("invalid_request")
+        return tuple(raw)
+
     return OrchestratorConfig(
         workspace_id=UUID(str(data["workspace_id"])),
         automation_capability_path=_path("automation_capability_path"),
@@ -251,6 +290,12 @@ def load_config(path: Path | None = None, ops: OperationsConfig | None = None) -
         merge_credential_path=(
             None if not data.get("merge_credential_path") else Path(data["merge_credential_path"])
         ),
+        github_api_url=str(data.get("github_api_url") or "https://api.github.com"),
+        github_repositories=_github_repositories(),
+        github_token_path=(
+            None if not data.get("github_token_path") else Path(data["github_token_path"])
+        ),
+        required_checks=_required_checks(),
         operations=tuple(str(item) for item in operations),
         ops=base,
     )
