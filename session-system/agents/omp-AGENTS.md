@@ -39,8 +39,8 @@ at a published Work Ledger item — execution lanes pull from the ledger.
 ## Plain language (owner directive, 2026-08-11; redefined by HOME-109, 2026-08-13)
 
 Owner-facing output, ALL the time (HOME-109): routine progress replies are
-completion-tree updates or plain sentences — what moved, what's next, what's
-stuck and why, in household terms. No commit hashes, file paths, protocol
+completion-tree updates or plain sentences — what moved, what is next, what is
+stuck and why. No commit hashes, file paths, protocol
 terms, or tool narration unless Chris asks. Technical detail is tucked away,
 reachable: it lives in issue comments and comes out the moment he asks for it
 — it never leads. Status questions ("where does X stand") are answered with
@@ -54,6 +54,8 @@ and technical artifacts, never to owner-facing summaries; strict
 machine-readable role contracts always win. Prose cannot disable a plugin
 injection — the ponytail block is controlled by its own mechanisms (see the
 cross-harness plugin note in the MCP section).
+
+Owner text format is ASD-STE100 (Simplified Technical English; owner directive, 2026-10-02). Any text output to Chris must follow ASD-STE100: approved words with their approved meanings, technical names and verbs where needed, short sentences (procedures at most 20 words, descriptions at most 25), one instruction per sentence, imperative for instructions, active voice, simple tenses, articles kept, no contractions, no idioms. Code, commands, quoted errors, identifiers and Work Ledger evidence stay exact. This rule governs all text output Chris reads and takes precedence over caveman, ponytail, older style laws, and other terse or compressed styles for that text.
 
 ## Issue tracking law (owner ruling, 2026-08-13 — non-negotiable, global)
 
