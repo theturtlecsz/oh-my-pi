@@ -1,2 +1,14 @@
+[loader]
+".md" = "text"
+".py" = "text"
+".lark" = "text"
+
 [test]
 preload = ["./test/helpers/stall-watchdog.ts"]
+pathIgnorePatterns = [
+  "**/node_modules/**",
+  "**/.git/**",
+  "**/target/**",
+  "**/dist/**",
+  "**/bazel-out/**",
+]
