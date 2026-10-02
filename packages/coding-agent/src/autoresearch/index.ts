@@ -19,6 +19,7 @@ import {
 	findBestKeptMetric,
 	reconstructControlState,
 } from "./state";
+import { importManagedResults } from "./managed-import";
 import { openAutoresearchStorage, openAutoresearchStorageIfExists, type RunRow, type SessionRow } from "./storage";
 import { createHypothesisTournamentTool } from "./tools/hypothesis-tournament";
 import { createInitExperimentTool } from "./tools/init-experiment";
@@ -130,8 +131,42 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
 	api.registerTool(createUpdateNotesTool({ dashboard, getRuntime, pi: api }));
 	api.registerTool(createHypothesisTournamentTool({ dashboard, getRuntime, pi: api }));
 
+	const importManaged = async (
+		ctx: ExtensionContext,
+		runtime: AutoresearchRuntime,
+		fileArg: string,
+	): Promise<void> => {
+		if (fileArg.length === 0) {
+			ctx.ui.notify("import-managed requires a results file.", "error");
+			return;
+		}
+		const filePath = path.isAbsolute(fileArg) ? fileArg : path.resolve(ctx.cwd, fileArg);
+		let text: string;
+		try {
+			text = fs.readFileSync(filePath, "utf8");
+		} catch (err) {
+			ctx.ui.notify(`Failed to read managed results: ${err instanceof Error ? err.message : String(err)}`, "error");
+			return;
+		}
+		const currentBranch = await tryReadBranch(ctx.cwd);
+		const storage = await openAutoresearchStorageIfExists(ctx.cwd);
+		const session = storage?.getActiveSessionForBranch(currentBranch) ?? null;
+		if (!storage || !session) {
+			ctx.ui.notify("No active autoresearch session.", "error");
+			return;
+		}
+		const outcome = importManagedResults(storage, session.id, text);
+		const refreshed = storage.getSessionById(session.id) ?? session;
+		runtime.state = buildExperimentState(refreshed, storage.listLoggedRuns(refreshed.id));
+		dashboard.updateWidget(ctx, runtime);
+		ctx.ui.notify(
+			`imported ${outcome.imported}, rejected ${outcome.rejected}, incompatible ${outcome.incompatible}, skipped ${outcome.skipped}`,
+			"info",
+		);
+	};
+
 	api.registerCommand("autoresearch", {
-		description: "Toggle builtin autoresearch mode, or pass off / clear, or a goal message.",
+		description: "Toggle builtin autoresearch mode, or pass off / clear / import-managed, or a goal message.",
 		getArgumentCompletions(argumentPrefix: string): AutocompleteItem[] | null {
 			if (argumentPrefix.includes(" ")) return null;
 			const normalized = argumentPrefix.trim().toLowerCase();
@@ -142,6 +177,11 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
 					label: "clear",
 					value: "clear",
 					description: "Reset worktree to baseline and close the active session",
+				},
+				{
+					label: "import-managed",
+					value: "import-managed",
+					description: "Import managed results as unverified runs",
 				},
 			];
 			const filtered = completions.filter(item => item.label.startsWith(normalized));
@@ -174,6 +214,12 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
 				const keepTree = flagPart.includes("--keep-tree");
 				const resetTreeForce = flagPart.includes("--reset-tree");
 				await handleClear(ctx, runtime, { keepTree, resetTreeForce });
+				return;
+			}
+
+			if (trimmed === "import-managed" || trimmed.startsWith("import-managed ")) {
+				const fileArg = trimmed === "import-managed" ? "" : trimmed.slice("import-managed ".length).trim();
+				await importManaged(ctx, runtime, fileArg);
 				return;
 			}
 

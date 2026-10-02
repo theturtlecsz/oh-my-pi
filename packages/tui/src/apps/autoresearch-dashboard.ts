@@ -13,6 +13,7 @@ import {
 	findBaselineSecondary,
 	formatElapsed,
 	isBetter,
+	provenanceLabel,
 } from "./autoresearch-data";
 import { formatNum, type ExperimentResult, type ExperimentState } from "../tools/autoresearch";
 import type { TspSpan, TspTableColumn, TspText } from "@oh-my-pi/pi-wire";
@@ -255,7 +256,13 @@ function describeTitle(runtime: AutoresearchDashboardRuntime): TspSpan[] {
 	const spans = [span(state.name ? `autoresearch: ${replaceTabs(state.name)}` : "autoresearch", "accent")];
 	const status = renderModeStatus(runtime, state);
 	if (status) spans.push(span(` · ${status}`, "muted"));
+	if (showUnmanagedLegacy(state)) spans.push(span(" · unmanaged (legacy)", "muted"));
 	return spans;
+}
+
+/** True when the current segment has no managed import. */
+function showUnmanagedLegacy(state: ExperimentState): boolean {
+	return !currentResults(state.results, state.currentSegment).some(result => result.provenance?.mode === "imported");
 }
 
 /** Widget shown while the very first run is in flight. */
@@ -450,6 +457,7 @@ function describeDashboard(runtime: AutoresearchDashboardRuntime, maxRows: numbe
 			priority: 1,
 		})),
 		{ id: "status", head: [span("status", "muted")], priority: 4 },
+		{ id: "src", head: [span("src", "muted")], truncate: "end", priority: 3 },
 		{ id: "description", head: [span("description", "muted")], truncate: "end", grow: 1, priority: 2 },
 	];
 	const indexed = state.results
@@ -463,6 +471,7 @@ function describeDashboard(runtime: AutoresearchDashboardRuntime, maxRows: numbe
 			commit: [span(result.commit || "-", "accent")],
 			metric: [span(formatNum(result.metric, state.metricUnit), token)],
 			status: [span(result.status, token)],
+			src: [span(provenanceLabel(result), "muted")],
 			description: [span(replaceTabs(result.description), "muted")],
 		};
 		state.secondaryMetrics.forEach((metric, metricIndex) => {
@@ -544,7 +553,9 @@ function shouldShowDashboard(runtime: AutoresearchDashboardRuntime, state: Exper
 function renderExpandedHeader(runtime: AutoresearchDashboardRuntime, width: number, theme: Theme): string {
 	const state = runtime.state;
 	const status = renderModeStatus(runtime, state);
-	const label = state.name ? ` autoresearch: ${replaceTabs(state.name)} ` : " autoresearch ";
+	const name = state.name ? `autoresearch: ${replaceTabs(state.name)}` : "autoresearch";
+	const legacy = showUnmanagedLegacy(state) ? " unmanaged (legacy)" : "";
+	const label = ` ${name}${legacy} `;
 	const hint = theme.fg(
 		"dim",
 		` ${formatKeyHint("ctrl+x")} collapse  ${formatKeyHint("ctrl+shift+x")} overlay${status ? `  ${status}` : ""} `,
@@ -734,13 +745,14 @@ export function renderDashboardLines(
 }
 
 function experimentColumns(state: ExperimentState, width: number): TableColumn[] {
-	const fixed = 4 + 10 + 12 + 11 * state.secondaryMetrics.length + 14;
+	const fixed = 4 + 10 + 12 + 11 * state.secondaryMetrics.length + 14 + 19;
 	return [
 		{ width: 4, align: "left", overflow: "truncate" },
 		{ width: 10, align: "left", overflow: "truncate" },
 		{ width: 12, align: "left", overflow: "truncate" },
 		...state.secondaryMetrics.map((): TableColumn => ({ width: 11, align: "left", overflow: "truncate" })),
 		{ width: 14, align: "left", overflow: "truncate" },
+		{ width: 19, align: "left", overflow: "truncate" },
 		{ width: Math.max(8, width - fixed), align: "left", overflow: "truncate", minWidth: 8 },
 	];
 }
@@ -758,6 +770,7 @@ function renderTableHeader(
 		{ text: state.metricName, style: text => theme.fg("warning", text) },
 		...state.secondaryMetrics.map((metric): TableCell => ({ text: truncateToWidth(metric.name, 10), style: muted })),
 		{ text: "status", style: muted },
+		{ text: "src", style: muted },
 		{ text: "description", style: muted },
 	];
 	return truncateToWidth(renderTableRow(cells, columns, width, { gap: "" }), width);
@@ -785,6 +798,7 @@ function renderResultRow(
 			),
 		})),
 		{ text: result.status, style: statusStyle },
+		{ text: provenanceLabel(result), style: text => theme.fg("muted", text) },
 		{ text: replaceTabs(result.description), style: text => theme.fg("muted", text) },
 	];
 	return truncateToWidth(renderTableRow(cells, columns, width, { gap: "" }), width);
@@ -856,7 +870,9 @@ function findBestResult(state: ExperimentState): { index: number; result: Experi
 	let best: { index: number; result: ExperimentResult } | null = null;
 	for (let index = 0; index < state.results.length; index += 1) {
 		const result = state.results[index];
-		if (result.segment !== state.currentSegment || result.status !== "keep" || result.metric <= 0) continue;
+		if (result.segment !== state.currentSegment || result.status !== "keep" || result.flagged || result.metric <= 0) {
+			continue;
+		}
 		if (!best || isBetter(result.metric, best.result.metric, state.bestDirection)) {
 			best = { index, result };
 		}
