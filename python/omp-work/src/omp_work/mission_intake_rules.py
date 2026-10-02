@@ -23,6 +23,7 @@ __all__ = [
     "clarifying_questions",
     "confirmation_route",
     "draft_from_intake",
+    "scope_draft",
 ]
 
 _RESERVED_SCOPE_KEYS: frozenset[str] = frozenset(
@@ -74,6 +75,22 @@ class Route:
     mandate_id: str | None = None
 
 
+def scope_draft(draft: MissionDraft) -> MissionScopeDraft:
+    """Build a mission scope draft from a mission draft."""
+    budget = draft.budget_policy
+    ceiling = None
+    if budget is not None:
+        usd_val = budget["usd"] if isinstance(budget, dict) else budget.usd
+        ceiling = Decimal(str(usd_val))
+    return MissionScopeDraft(
+        goals=frozenset({draft.objective}),
+        repositories=frozenset(draft.repositories),
+        capabilities=frozenset(draft.requested_capabilities),
+        tier3_classes=frozenset(draft.approval_classes),
+        budget_ceiling_usd=ceiling,
+    )
+
+
 def confirmation_route(
     approved_envelope: Mapping[str, object] | None,
     draft: MissionDraft,
@@ -91,14 +108,7 @@ def confirmation_route(
     if not cases:
         return Route(kind="approved_mission", cases=cases)
 
-    budget = draft.budget_policy
-    scope = MissionScopeDraft(
-        goals=frozenset({draft.objective}),
-        repositories=frozenset(draft.repositories),
-        capabilities=frozenset(draft.requested_capabilities),
-        tier3_classes=frozenset(draft.approval_classes),
-        budget_ceiling_usd=Decimal(budget.usd) if budget is not None else None,
-    )
+    scope = scope_draft(draft)
     if "undecidable" not in cases and mission_scope(
         mandate, scope, standing_ceiling_usd
     ).status == "approved":
