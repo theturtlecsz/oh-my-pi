@@ -1,9 +1,10 @@
-"""Tests for orchestrator front stage operations: intake and confirm (OMP-417-s07-s04-s01).
+"""Tests for orchestrator front stage operations: intake, confirm, and plan (OMP-417-s07-s04).
 
 Defends front pipeline contracts:
 - extra kept: intake data has decision_id, work_key; read item by work_key gives submitted work_id; confirm pause names decision; reject -> mission abandoned, no plan step.
-- edited_draft -> confirm succeeded, then a plan step.
-- extra_capability=None -> no decision_id, mission approved.
+- edited_draft -> confirm succeeded, then plan succeeded, project mission row approved, mission links work item, mission status running.
+- plain confirm (extra kept) -> confirm succeeded, plan failed with mission_not_admitted, no link, mission status running.
+- extra_capability=None -> no decision_id, confirm not paused, plan succeeded, row approved, mission running.
 - crash_after_command("draft_mission_intake") -> tick raises SimulatedCrash, expired lease reclaimed, intake succeeded, same decision_id, 1 command row, conflict_count 0.
 """
 
@@ -17,7 +18,7 @@ from uuid import UUID
 import psycopg
 import pytest
 from omp_work.orchestrator import service
-from omp_work.orchestrator.operations import run_confirm, run_intake
+from omp_work.orchestrator.operations import run_confirm, run_intake, run_plan
 from omp_work.orchestrator.service import (
     OrchestratorHandler,
     load_request,
@@ -165,7 +166,10 @@ def test_edited_draft_confirm_succeeded_then_plan(
     answer_intake(world, "edited_draft")
 
     def plan_step_run(v: dict) -> bool:
-        return any(s.get("stage") == "plan" for s in v["steps"])
+        return any(
+            s.get("stage") == "plan" and s.get("kind") == "outcome"
+            for s in v["steps"]
+        )
 
     tick_until(worker, world, plan_step_run, limit=20)
 
@@ -176,13 +180,126 @@ def test_edited_draft_confirm_succeeded_then_plan(
     assert len(confirm_outcomes) >= 1
     assert confirm_outcomes[-1]["outcome"] == "succeeded"
 
-    assert any(s.get("stage") == "plan" for s in steps)
+    plan_outcomes = [
+        s for s in steps if s.get("stage") == "plan" and s.get("kind") == "outcome"
+    ]
+    assert len(plan_outcomes) >= 1
+    assert plan_outcomes[-1]["outcome"] == "succeeded"
+
+    project_doc = world.store.read_project(
+        world.workspace_id, OWNER, world.project_id
+    )
+    mission_row = next(
+        m
+        for m in project_doc["missions"]
+        if str(m.get("mission_id")) == str(world.mission_id)
+    )
+    assert mission_row["status"] == "approved"
+
+    mission_view = world.store.read(
+        world.workspace_id, OWNER, "mission", str(world.mission_id)
+    )
+    assert any(
+        str(link.get("work_id")) == str(work_id)
+        for link in mission_view.get("links", ())
+    )
+    assert mission_view["status"] == "running"
+
+
+def test_plain_confirm_extra_kept_plan_failed_mission_not_admitted(
+    service, tmp_path: Path, monkeypatch
+) -> None:
+    """Plain confirm with extra capability kept: plan fails with mission_not_admitted, no link, status running."""
+    world = open_e2e_world(
+        service,
+        tmp_path / "plain_confirm",
+        monkeypatch,
+        verifier_mode="pass",
+        worker_mode="ok",
+        extra_capability="egress",
+        operations=("omp_work.orchestrator.operations:register",),
+    )
+    submitted = submit(world.config, world.request)
+    work_id = UUID(str(submitted["work_id"]))
+    _seed_item_budget(world, service, work_id)
+    worker = open_worker(world)
+
+    def paused_confirm(view: dict) -> bool:
+        return any(
+            s.get("kind") == "pause" and s.get("rule_id") == "d23-owner-confirm"
+            for s in view["steps"]
+        )
+
+    tick_until(worker, world, paused_confirm, limit=20)
+
+    handler = OrchestratorHandler(world.config)
+    handler.mission_id = world.mission_id
+    steps = handler.steps()
+
+    intake_outcome = next(
+        s for s in steps if s.get("stage") == "intake" and s.get("kind") == "outcome"
+    )
+    intake_data = intake_outcome["data"]
+    world.intake_decision_id = UUID(str(intake_data["decision_id"]))
+    world.mission_revision = int(intake_data["mission_revision"])
+
+    answer_intake(world, "confirm")
+
+    def confirm_advanced(v: dict) -> bool:
+        return any(
+            s.get("stage") == "confirm" and s.get("kind") == "advance"
+            for s in v["steps"]
+        )
+
+    tick_until(worker, world, confirm_advanced, limit=20)
+
+    steps = handler.steps()
+    advance_step = next(
+        s
+        for s in reversed(steps)
+        if s.get("stage") == "confirm" and s.get("kind") == "advance"
+    )
+    step_index = int(advance_step["step_index"]) + 1
+
+    job = {
+        "work_id": str(work_id),
+        "job_id": f"orch:{world.mission_id}:{step_index}",
+        "worker_id": "test-worker",
+        "fence": 1,
+    }
+    handler.project_id = world.request.project_id
+    handler._request = world.request.document()
+    handler._job_id = str(job["job_id"])
+    facts = handler._facts(steps, step_index, "plan", None)
+    outcome = handler._operate(job, step_index, "plan", facts)
+
+    assert outcome.outcome == "failed"
+    assert outcome.data.get("code") == "mission_not_admitted"
+
+    project_doc = world.store.read_project(
+        world.workspace_id, OWNER, world.project_id
+    )
+    mission_row = next(
+        m
+        for m in project_doc["missions"]
+        if str(m.get("mission_id")) == str(world.mission_id)
+    )
+    assert mission_row["status"] != "approved"
+
+    mission_view = world.store.read(
+        world.workspace_id, OWNER, "mission", str(world.mission_id)
+    )
+    assert not any(
+        str(link.get("work_id")) == str(work_id)
+        for link in mission_view.get("links", ())
+    )
+    assert mission_view["status"] == "running"
 
 
 def test_no_extra_capability_no_decision_approved(
     service, tmp_path: Path, monkeypatch
 ) -> None:
-    """Extra capability None: intake within mandate, no decision_id, mission approved directly."""
+    """Extra capability None: intake within mandate, no decision_id, mission approved directly, plan succeeds."""
     world = open_e2e_world(
         service,
         tmp_path / "no_extra",
@@ -197,10 +314,13 @@ def test_no_extra_capability_no_decision_approved(
     _seed_item_budget(world, service, work_id)
     worker = open_worker(world)
 
-    def past_confirm(view: dict) -> bool:
-        return any(s.get("stage") == "plan" for s in view["steps"])
+    def plan_step_run(view: dict) -> bool:
+        return any(
+            s.get("stage") == "plan" and s.get("kind") == "outcome"
+            for s in view["steps"]
+        )
 
-    tick_until(worker, world, past_confirm, limit=20)
+    tick_until(worker, world, plan_step_run, limit=20)
 
     handler = OrchestratorHandler(world.config)
     handler.mission_id = world.mission_id
@@ -211,15 +331,35 @@ def test_no_extra_capability_no_decision_approved(
     )
     assert "decision_id" not in intake_outcome["data"]
 
-    mission_view = world.store.read(
-        world.workspace_id, OWNER, "mission", str(world.mission_id)
-    )
-    assert mission_view["status"] in ("approved", "running")
-
     # Confirm never paused
     assert not any(
         s.get("kind") == "pause" and s.get("rule_id") == "d23-owner-confirm"
         for s in steps
+    )
+
+    plan_outcomes = [
+        s for s in steps if s.get("stage") == "plan" and s.get("kind") == "outcome"
+    ]
+    assert len(plan_outcomes) >= 1
+    assert plan_outcomes[-1]["outcome"] == "succeeded"
+
+    project_doc = world.store.read_project(
+        world.workspace_id, OWNER, world.project_id
+    )
+    mission_row = next(
+        m
+        for m in project_doc["missions"]
+        if str(m.get("mission_id")) == str(world.mission_id)
+    )
+    assert mission_row["status"] == "approved"
+
+    mission_view = world.store.read(
+        world.workspace_id, OWNER, "mission", str(world.mission_id)
+    )
+    assert mission_view["status"] == "running"
+    assert any(
+        str(link.get("work_id")) == str(work_id)
+        for link in mission_view.get("links", ())
     )
 
 
@@ -485,3 +625,23 @@ def test_missing_request_values_fail_with_named_codes(
     outcome = handler._operate(job, 0, "intake", handler._facts(steps, 0, "intake", None))
     assert outcome.outcome == "failed"
     assert outcome.data.get("code") == "instruction_missing"
+
+
+def test_plan_missing_approved_scope_fails() -> None:
+    """Plan returns failed with mission_not_admitted when approved_scope is missing."""
+
+    class DummyContext:
+        def __init__(self):
+            self.mission_id = UUID("11111111-1111-1111-1111-111111111111")
+            self.workspace_id = UUID("22222222-2222-2222-2222-222222222222")
+            self.principal = None
+            self.service = type(
+                "DummyService",
+                (),
+                {"read": lambda *args: {"approved_scope": None}},
+            )()
+
+    outcome = run_plan(DummyContext())  # type: ignore[arg-type]
+    assert outcome.outcome == "failed"
+    assert outcome.data.get("code") == "mission_not_admitted"
+

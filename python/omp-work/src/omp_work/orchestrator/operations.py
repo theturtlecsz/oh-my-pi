@@ -1,6 +1,6 @@
-"""Stage operations for the front orchestrator pipeline (OMP-417-s07-s04-s01).
+"""Stage operations for the front orchestrator pipeline (OMP-417-s07-s04).
 
-Provides deterministic intake and confirm stage operations.
+Provides deterministic intake, confirm, and plan stage operations.
 No constants or SQL statements are defined in this module.
 """
 
@@ -8,19 +8,23 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
+from uuid import UUID
 
+from omp_work.mission_intake_rules import scope_draft
 from omp_work.orchestrator import service
 from omp_work.orchestrator.service import (
     Outcome,
     StageContext,
     register_stage_operation,
 )
+from omp_work.v1.models import MissionDraft
 from omp_work.v1.service import WorkError
 
 __all__ = [
     "register",
     "run_confirm",
     "run_intake",
+    "run_plan",
 ]
 
 
@@ -28,6 +32,7 @@ def register() -> None:
     """Register front stage operations."""
     register_stage_operation("intake", run_intake)
     register_stage_operation("confirm", run_confirm)
+    register_stage_operation("plan", run_plan)
 
 
 def run_intake(ctx: StageContext) -> Outcome:
@@ -166,3 +171,88 @@ def run_confirm(ctx: StageContext) -> Outcome:
         )
 
     return Outcome(outcome="failed", data={"stage": "confirm", "status": status})
+
+
+def run_plan(ctx: StageContext) -> Outcome:
+    """Run the plan stage operation: admits mission to project, links work item, and starts mission."""
+    mission = ctx.service.read(
+        ctx.principal, ctx.workspace_id, "mission", str(ctx.mission_id)
+    )
+    approved_scope = (
+        mission.get("approved_scope") if isinstance(mission, dict) else None
+    )
+    if approved_scope is None or not isinstance(approved_scope, dict):
+        return Outcome(
+            outcome="failed",
+            data={"stage": "plan", "code": "mission_not_admitted"},
+        )
+
+    envelope_data = approved_scope.get("envelope")
+    if envelope_data is None:
+        return Outcome(
+            outcome="failed",
+            data={"stage": "plan", "code": "mission_not_admitted"},
+        )
+
+    envelope = (
+        envelope_data
+        if isinstance(envelope_data, MissionDraft)
+        else MissionDraft.model_validate(envelope_data)
+    )
+
+    draft_scope = scope_draft(envelope)
+    workspace_id = UUID(str(ctx.workspace_id))
+    actor_id = UUID(str(ctx.principal.actor_id))
+    project_id = UUID(str(ctx.project_id))
+    mission_id = UUID(str(ctx.mission_id))
+
+    ctx.projects.admit_mission(
+        workspace_id,
+        actor_id,
+        project_id,
+        mission_id,
+        envelope.objective,
+        draft_scope,
+    )
+
+    project_doc = ctx.projects.read_project(workspace_id, actor_id, project_id)
+    missions = project_doc.get("missions") or []
+    mission_row = next(
+        (
+            m
+            for m in missions
+            if isinstance(m, dict) and str(m.get("mission_id")) == str(ctx.mission_id)
+        ),
+        None,
+    )
+    if mission_row is None or mission_row.get("status") != "approved":
+        return Outcome(
+            outcome="failed",
+            data={"stage": "plan", "code": "mission_not_admitted"},
+        )
+
+    links = mission.get("links") or ()
+    already_linked = any(
+        isinstance(link, dict) and str(link.get("work_id")) == str(ctx.work_id)
+        for link in links
+    )
+    if not already_linked:
+        ctx.command(
+            "link_mission_work",
+            {"mission_id": str(ctx.mission_id), "work_id": str(ctx.work_id)},
+        )
+
+    status = str(mission.get("status") or "")
+    if status != "running":
+        ctx.command(
+            "set_mission_status",
+            {
+                "mission_id": str(ctx.mission_id),
+                "target_status": "running",
+                "cause_kind": "policy_rule",
+                "policy_rule_id": "stage-order",
+            },
+        )
+
+    return Outcome(outcome="succeeded", data={"stage": "plan"})
+
