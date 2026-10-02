@@ -719,9 +719,7 @@ describe("normalizeNoRenameConflicts", () => {
 	});
 	test("an add/add at a rename destination stays, and the old path is not added", () => {
 		const forkAddB = `:000000 100644 ${Z} ${B} A\tb.txt\n`;
-		const targetNoRenames = [`:100644 000000 ${A} ${Z} D\ta.txt`, `:000000 100644 ${Z} ${B} A\tb.txt`, ""].join(
-			"\n",
-		);
+		const targetNoRenames = [`:100644 000000 ${A} ${Z} D\ta.txt`, `:000000 100644 ${Z} ${B} A\tb.txt`, ""].join("\n");
 		const targetRename = `:100644 100644 ${A} ${B} R100\ta.txt\tb.txt\n`;
 		expect(paths(new Set(["b.txt"]), forkAddB, targetNoRenames, targetRename)).toEqual(["b.txt"]);
 	});
