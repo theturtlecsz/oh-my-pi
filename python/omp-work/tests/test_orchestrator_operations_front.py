@@ -1,4 +1,4 @@
-"""Tests for orchestrator front stage operations: intake, confirm, and plan (OMP-417-s07-s04).
+"""Tests for orchestrator front stage operations: intake, confirm, plan, and grant (OMP-417-s07-s04).
 
 Defends front pipeline contracts:
 - extra kept: intake data has decision_id, work_key; read item by work_key gives submitted work_id; confirm pause names decision; reject -> mission abandoned, no plan step.
@@ -6,6 +6,10 @@ Defends front pipeline contracts:
 - plain confirm (extra kept) -> confirm succeeded, plan failed with mission_not_admitted, no link, mission status running.
 - extra_capability=None -> no decision_id, confirm not paused, plan succeeded, row approved, mission running.
 - crash_after_command("draft_mission_intake") -> tick raises SimulatedCrash, expired lease reclaimed, intake succeeded, same decision_id, 1 command row, conflict_count 0.
+- edited_draft grant row is active for the mission grant id, stores the s03 judge manifest, and records the intake decision as owner_input_id.
+- extra_capability=None grant row records the active mandate id as owner_input_id.
+- crash_after_command("begin_execution") leaves one active grant and one begin_execution command row.
+- a grant already begun on the item leaves no mission grant row.
 """
 
 from __future__ import annotations
@@ -14,10 +18,12 @@ import dataclasses
 import hashlib
 import json
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
 import psycopg
+from psycopg.rows import dict_row
 import pytest
 import omp_work
 from omp_work import control_actions
@@ -35,8 +41,8 @@ from omp_work.orchestrator.service import (
     load_request,
     submit,
 )
-from omp_work.v1.canonical import sha256
-from omp_work.v1.models import ExecutionJudgeManifest
+from omp_work.v1.canonical import sha256, text_sha256
+from omp_work.v1.models import CommandEnvelope, ExecutionJudgeManifest
 from orchestrator_e2e_support import (
     SimulatedCrash,
     answer_intake,
@@ -726,4 +732,283 @@ def test_judge_manifest_tcb_contract(tmp_path: Path) -> None:
     # verifier_argv () -> None
     empty_config = dataclasses.replace(config, verifier_argv=())
     assert judge_manifest(empty_config) is None
+
+
+def _file_bytes_sha256(module: object) -> str:
+    mod_file = getattr(module, "__file__", None)
+    assert mod_file is not None
+    path = Path(mod_file)
+    if path.suffix in (".pyc", ".pyo"):
+        path = path.with_suffix(".py")
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _s03_manifest(config: OrchestratorConfig) -> dict:
+    """The judge manifest dict pinned by test_judge_manifest_tcb_contract."""
+    auditor = sha256(
+        {
+            "verifier_argv": list(config.verifier_argv),
+            "verifier_sha256": _file_bytes_sha256(verifier),
+        }
+    )
+    return {
+        "auditor_agent_sha256": auditor,
+        "host_sha256": _file_bytes_sha256(service),
+        "adapter_sha256": _file_bytes_sha256(operations),
+        "freeze_sha256": _file_bytes_sha256(candidate_git),
+        "runner_sha256": _file_bytes_sha256(worker_sandbox),
+        "executor_sha256": _file_bytes_sha256(control_actions),
+        "contract_sha256": omp_work.contract_sha256(),
+        "service_fingerprint": fingerprints.service_runtime_fingerprint(),
+        "service_code_fingerprint": fingerprints.code_fingerprint(),
+        "service_migration_sha256": database.migration_set_sha256(),
+    }
+
+
+def _grant_rows(world) -> list[dict]:
+    with psycopg.connect(
+        **world.config.ops.connection_kwargs("postgres"), row_factory=dict_row
+    ) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT grant_id::text AS grant_id, state, judge_manifest, provenance
+            FROM omp_work.execution_grants
+            WHERE workspace_id = %s
+            ORDER BY created_at
+            """,
+            (world.workspace_id,),
+        )
+        return list(cur.fetchall())
+
+
+def _begin_rows(world) -> list[dict]:
+    with psycopg.connect(
+        **world.config.ops.connection_kwargs("postgres"), row_factory=dict_row
+    ) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT operation_id::text AS operation_id, command_type, conflict_count
+            FROM omp_control.idempotent_commands
+            WHERE workspace_id = %s AND command_type = 'begin_execution'
+            """,
+            (world.workspace_id,),
+        )
+        return list(cur.fetchall())
+
+
+def _json_obj(value):
+    if isinstance(value, str):
+        return json.loads(value)
+    return value
+
+
+def _intake_data(world) -> dict:
+    handler = OrchestratorHandler(world.config)
+    handler.mission_id = world.mission_id
+    return next(
+        step["data"]
+        for step in handler.steps()
+        if step.get("stage") == "intake" and step.get("kind") == "outcome"
+    )
+
+
+def _open_front(service, root: Path, monkeypatch, *, extra_capability):
+    world = open_e2e_world(
+        service,
+        root,
+        monkeypatch,
+        verifier_mode="pass",
+        worker_mode="ok",
+        extra_capability=extra_capability,
+        operations=("omp_work.orchestrator.operations:register",),
+    )
+    submitted = submit(world.config, world.request)
+    work_id = UUID(str(submitted["work_id"]))
+    _seed_item_budget(world, service, work_id)
+    return world, open_worker(world), work_id
+
+
+def _grant_id(world) -> str:
+    return str(service._ids(world.mission_id, "grant"))
+
+
+def _expire_lease(world) -> None:
+    with psycopg.connect(
+        **world.config.ops.connection_kwargs("postgres"), autocommit=True
+    ) as conn:
+        conn.execute(
+            "UPDATE omp_jobs.jobs SET lease_expires_at = clock_timestamp() - interval '1 second' "
+            "WHERE workspace_id=%s AND lease_expires_at IS NOT NULL",
+            (world.workspace_id,),
+        )
+
+
+def test_edited_draft_grant_row_records_intake_decision(
+    service, tmp_path: Path, monkeypatch
+) -> None:
+    """Edited draft: the mission grant row is active and names the intake decision."""
+    world, worker, _work_id = _open_front(
+        service, tmp_path / "grant_edited", monkeypatch, extra_capability="egress"
+    )
+
+    def paused_confirm(view: dict) -> bool:
+        return any(
+            step.get("kind") == "pause" and step.get("rule_id") == "d23-owner-confirm"
+            for step in view["steps"]
+        )
+
+    tick_until(worker, world, paused_confirm, limit=20)
+    intake_data = _intake_data(world)
+    world.intake_decision_id = UUID(str(intake_data["decision_id"]))
+    world.mission_revision = int(intake_data["mission_revision"])
+    answer_intake(world, "edited_draft")
+    gid = _grant_id(world)
+
+    def grant_active(_view: dict) -> bool:
+        return any(
+            row["grant_id"] == gid and row["state"] == "active" for row in _grant_rows(world)
+        )
+
+    tick_until(worker, world, grant_active, limit=30)
+    rows = _grant_rows(world)
+    assert len(rows) == 1
+    assert rows[0]["grant_id"] == gid
+    assert rows[0]["state"] == "active"
+    assert _json_obj(rows[0]["judge_manifest"]) == _s03_manifest(world.config)
+    assert _json_obj(rows[0]["provenance"])["owner_input_id"] == str(
+        intake_data["decision_id"]
+    )
+
+
+def test_no_extra_capability_grant_uses_mandate(
+    service, tmp_path: Path, monkeypatch
+) -> None:
+    """No extra capability: the grant's owner_input_id is the active mandate id."""
+    world, worker, _work_id = _open_front(
+        service, tmp_path / "grant_mandate", monkeypatch, extra_capability=None
+    )
+    gid = _grant_id(world)
+
+    def grant_active(_view: dict) -> bool:
+        return any(
+            row["grant_id"] == gid and row["state"] == "active" for row in _grant_rows(world)
+        )
+
+    tick_until(worker, world, grant_active, limit=30)
+    rows = _grant_rows(world)
+    assert len(rows) == 1
+    assert rows[0]["state"] == "active"
+    assert _json_obj(rows[0]["provenance"])["owner_input_id"] == str(
+        world.mandate.mandate_id
+    )
+
+
+def test_crash_after_begin_execution_one_grant(
+    service, tmp_path: Path, monkeypatch
+) -> None:
+    """A crash after begin_execution replays to the same active grant and one command row."""
+    world, worker, _work_id = _open_front(
+        service, tmp_path / "grant_crash", monkeypatch, extra_capability=None
+    )
+
+    def plan_ran(view: dict) -> bool:
+        return any(
+            step.get("stage") == "plan" and step.get("kind") == "outcome"
+            for step in view["steps"]
+        )
+
+    tick_until(worker, world, plan_ran, limit=20)
+    crash_after_command(monkeypatch, "begin_execution")
+    with pytest.raises(SimulatedCrash):
+        worker.tick()
+    _expire_lease(world)
+    worker.tick()
+
+    gid = _grant_id(world)
+    rows = _grant_rows(world)
+    assert len(rows) == 1
+    assert rows[0]["grant_id"] == gid
+    assert rows[0]["state"] == "active"
+    begins = _begin_rows(world)
+    assert len(begins) == 1
+    assert begins[0]["conflict_count"] == 0
+
+
+def test_prior_grant_on_item_writes_no_mission_grant(
+    service, tmp_path: Path, monkeypatch
+) -> None:
+    """A grant already begun on the item blocks the mission grant id."""
+    world, worker, _work_id = _open_front(
+        service, tmp_path / "grant_conflict", monkeypatch, extra_capability=None
+    )
+
+    def plan_ran(view: dict) -> bool:
+        return any(
+            step.get("stage") == "plan" and step.get("kind") == "outcome"
+            for step in view["steps"]
+        )
+
+    tick_until(worker, world, plan_ran, limit=20)
+    intake_data = _intake_data(world)
+    item = world.store.read(world.workspace_id, OWNER, "item", intake_data["work_key"])
+    focus = world.store.read(world.workspace_id, OWNER, "focus", str(OWNER))
+    judged = judge_manifest(world.config)
+    assert judged is not None
+    judge_sha, manifest = judged
+    other_id = uuid4()
+    description = str(item["revision"]["description"])
+    project_id = item["project_id"]
+    envelope = CommandEnvelope.model_validate(
+        {
+            "api_version": "work.omp.dev/v1",
+            "workspace_id": str(world.workspace_id),
+            "operation_id": str(uuid4()),
+            "request_id": str(uuid4()),
+            "correlation_id": str(uuid4()),
+            "command": {
+                "type": "begin_execution",
+                "payload": {
+                    "grant_id": str(other_id),
+                    "provenance": {
+                        "owner_input_id": str(uuid4()),
+                        "owner_session_id": "session-prior",
+                        "normalized_command": f"/execute {intake_data['work_key']}",
+                        "workspace_id": str(world.workspace_id),
+                        "repository": world.repo_key,
+                        "nonce": str(uuid4()),
+                        "issued_at": datetime.now(UTC).isoformat(),
+                    },
+                    "remote_ref": world.candidate_ref,
+                    "mode": "single",
+                    "items": [
+                        {
+                            "work_id": str(item["work_id"]),
+                            "revision_id": str(item["revision"]["revision_id"]),
+                            "position": 0,
+                            "original_request": description,
+                            "original_request_sha256": text_sha256(description),
+                            "initial_git_baseline": world.base_commit,
+                            "project_id": None if project_id is None else str(project_id),
+                        }
+                    ],
+                    "expected_focus_version": int(focus["version"]),
+                    "judge_sha256": judge_sha,
+                    "judge_manifest": manifest,
+                },
+            },
+        }
+    )
+    world.store.execute(
+        envelope,
+        actor_id=OWNER,
+        actor_kind="automation",
+        required_scope="work.execute",
+    )
+    worker.tick()
+
+    gid = _grant_id(world)
+    rows = _grant_rows(world)
+    assert [row["grant_id"] for row in rows] == [str(other_id)]
+    assert gid not in {row["grant_id"] for row in rows}
+    assert rows[0]["state"] == "active"
 
