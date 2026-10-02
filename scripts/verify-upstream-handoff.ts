@@ -770,6 +770,46 @@ export function parseMergeTreeConflicts(output: string): Set<string> {
 	return paths;
 }
 
+/**
+ * Put conflict paths on `--no-renames` identity.
+ *
+ * Some git versions still detect renames under `merge-tree -X no-renames`.
+ * A no-renames merge reports a modify/delete at the fork path when upstream
+ * deleted it, and does not report a rename's new path unless the fork changed
+ * that path. When git already honors the flag, the set is unchanged.
+ * Paths are never remapped, and a path the fork changed is never dropped.
+ */
+export function normalizeNoRenameConflicts(
+	reported: Set<string>,
+	forkRaw: string,
+	targetRaw: string,
+	targetRenameRaw: string,
+): Set<string> {
+	const forkChanges = parseRawDiff(forkRaw);
+	const forkChanged = new Set(forkChanges.map(change => change.path));
+	const upstreamDeleted = new Set(
+		parseRawDiff(targetRaw)
+			.filter(change => change.status === "D")
+			.map(change => change.path),
+	);
+	const renameNewPaths = new Set(
+		parseRawDiff(targetRenameRaw)
+			.filter(change => change.status === "R")
+			.map(change => change.path),
+	);
+
+	const out = new Set(reported);
+	// Modify/delete that a no-renames merge reports: the fork changed, and did not delete, a path upstream deleted.
+	for (const change of forkChanges) {
+		if (change.status !== "D" && upstreamDeleted.has(change.path)) out.add(change.path);
+	}
+	// Drop only an upstream rename destination the fork did not change.
+	for (const path of renameNewPaths) {
+		if (!forkChanged.has(path)) out.delete(path);
+	}
+	return out;
+}
+
 // ---------------------------------------------------------------------------
 // CLI
 // ---------------------------------------------------------------------------
@@ -856,32 +896,34 @@ async function main(): Promise<void> {
 	// Diff the pinned trees under the fork pin's own attributes: the working
 	// tree's .gitattributes (e.g. a later `binary` marking) must not change the record.
 	const attrSource = `--attr-source=${pins.fork}`;
-	const [rawText, numstatText, diffText, forkNames, targetRawText, mergeTreeText] = await Promise.all([
-		git([attrSource, "diff", "--raw", "--no-renames", "--abbrev=40", "--no-color", diffRange]),
-		git([attrSource, "diff", "--numstat", "--no-renames", "--no-color", diffRange]),
-		git([attrSource, "diff", "--unified=0", "--no-renames", "--no-color", diffRange]),
-		git([attrSource, "diff", "--name-only", "--no-renames", "--no-color", diffRange]),
-		git([attrSource, "diff", "--raw", "--no-renames", "--abbrev=40", "--no-color", targetRange]),
-		// Explicit --merge-base: the pinned base commit removes any dependency on
-		// history connectivity, so depth-1 fetches of the three pins suffice (CI).
-		// -X no-renames keeps conflict paths on the same identity as the --no-renames
-		// diffs: an upstream rename of a fork-changed file conflicts at the fork path.
-		git(
-			[
-				attrSource,
-				"merge-tree",
-				"--write-tree",
-				"--no-messages",
-				"-X",
-				"no-renames",
-				"--merge-base",
-				pins.base,
-				pins.fork,
-				pins.target,
-			],
-			[0, 1],
-		),
-	]);
+	const [rawText, numstatText, diffText, forkNames, targetRawText, targetRenameRawText, mergeTreeText] =
+		await Promise.all([
+			git([attrSource, "diff", "--raw", "--no-renames", "--abbrev=40", "--no-color", diffRange]),
+			git([attrSource, "diff", "--numstat", "--no-renames", "--no-color", diffRange]),
+			git([attrSource, "diff", "--unified=0", "--no-renames", "--no-color", diffRange]),
+			git([attrSource, "diff", "--name-only", "--no-renames", "--no-color", diffRange]),
+			git([attrSource, "diff", "--raw", "--no-renames", "--abbrev=40", "--no-color", targetRange]),
+			git([attrSource, "diff", "--raw", "-M", "--abbrev=40", "--no-color", targetRange]),
+			// Explicit --merge-base: the pinned base commit removes any dependency on
+			// history connectivity, so depth-1 fetches of the three pins suffice (CI).
+			// -X no-renames keeps conflict paths on the same identity as the --no-renames
+			// diffs when this git honors it. normalizeNoRenameConflicts covers the rest.
+			git(
+				[
+					attrSource,
+					"merge-tree",
+					"--write-tree",
+					"--no-messages",
+					"-X",
+					"no-renames",
+					"--merge-base",
+					pins.base,
+					pins.fork,
+					pins.target,
+				],
+				[0, 1],
+			),
+		]);
 	const computedSources = computeSourceRecords(rawText, numstatText, diffText);
 	const computedUpstream = computeUpstreamChanges(targetRawText);
 
@@ -899,7 +941,12 @@ async function main(): Promise<void> {
 	const forkPaths = new Set(forkNames.split("\n").filter(Boolean).map(unquoteGitPath));
 	const targetPaths = new Set(computedUpstream.map(c => c.path));
 	const sharedPaths = new Set([...forkPaths].filter(p => targetPaths.has(p)));
-	const conflictPaths = parseMergeTreeConflicts(mergeTreeText);
+	const conflictPaths = normalizeNoRenameConflicts(
+		parseMergeTreeConflicts(mergeTreeText),
+		rawText,
+		targetRawText,
+		targetRenameRawText,
+	);
 
 	const changelogPaths = (await git(["ls-tree", "-r", "--name-only", pins.target]))
 		.split("\n")

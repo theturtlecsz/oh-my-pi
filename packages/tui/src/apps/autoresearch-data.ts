@@ -21,6 +21,11 @@ export function currentResults(results: ExperimentResult[], segment: number): Ex
 	return results.filter(result => result.segment === segment);
 }
 
+/** Label a run's source. Managed imports stay unverified on this side. */
+export function provenanceLabel(result: ExperimentResult): "imported-unverified" | "unmanaged" {
+	return result.provenance?.mode === "imported" ? "imported-unverified" : "unmanaged";
+}
+
 /** Find the first unflagged kept experiment in a segment. */
 export function findBaselineResult(results: ExperimentResult[], segment: number): ExperimentResult | null {
 	return currentResults(results, segment).find(result => result.status === "keep" && !result.flagged) ?? null;

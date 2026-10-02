@@ -40,6 +40,7 @@ import {
 	formatSourcesTsv,
 	formatUpstreamEntry,
 	type MatrixRow,
+	normalizeNoRenameConflicts,
 	parseChangelogTsv,
 	parseMatrixTsv,
 	parseMergeTreeConflicts,
@@ -454,33 +455,40 @@ export async function seedReview(options: SeedReviewOptions): Promise<SeedResult
 	// Diff the pinned trees under the fork pin's own attributes: the working
 	// tree's .gitattributes (e.g. a later `binary` marking) must not change the record.
 	const attrSource = `--attr-source=${forkSha}`;
-	const [rawText, numstatText, diffText, forkNames, targetRawText, mergeTreeText] = await Promise.all([
-		git([attrSource, "diff", "--raw", "--no-renames", "--abbrev=40", "--no-color", diffRange]),
-		git([attrSource, "diff", "--numstat", "--no-renames", "--no-color", diffRange]),
-		git([attrSource, "diff", "--unified=0", "--no-renames", "--no-color", diffRange]),
-		git([attrSource, "diff", "--name-only", "--no-renames", "--no-color", diffRange]),
-		git([attrSource, "diff", "--raw", "--no-renames", "--abbrev=40", "--no-color", targetRange]),
-		// -X no-renames: conflict paths share the --no-renames diffs' path identity.
-		git(
-			[
-				attrSource,
-				"merge-tree",
-				"--write-tree",
-				"--no-messages",
-				"-X",
-				"no-renames",
-				"--merge-base",
-				baseSha,
-				forkSha,
-				targetSha,
-			],
-			[0, 1],
-		),
-	]);
+	const [rawText, numstatText, diffText, forkNames, targetRawText, targetRenameRawText, mergeTreeText] =
+		await Promise.all([
+			git([attrSource, "diff", "--raw", "--no-renames", "--abbrev=40", "--no-color", diffRange]),
+			git([attrSource, "diff", "--numstat", "--no-renames", "--no-color", diffRange]),
+			git([attrSource, "diff", "--unified=0", "--no-renames", "--no-color", diffRange]),
+			git([attrSource, "diff", "--name-only", "--no-renames", "--no-color", diffRange]),
+			git([attrSource, "diff", "--raw", "--no-renames", "--abbrev=40", "--no-color", targetRange]),
+			git([attrSource, "diff", "--raw", "-M", "--abbrev=40", "--no-color", targetRange]),
+			// -X no-renames: conflict paths share the --no-renames diffs' path identity.
+			git(
+				[
+					attrSource,
+					"merge-tree",
+					"--write-tree",
+					"--no-messages",
+					"-X",
+					"no-renames",
+					"--merge-base",
+					baseSha,
+					forkSha,
+					targetSha,
+				],
+				[0, 1],
+			),
+		]);
 
 	const computedSources = computeSourceRecords(rawText, numstatText, diffText);
 	const computedUpstream = computeUpstreamChanges(targetRawText);
-	const conflictPaths = parseMergeTreeConflicts(mergeTreeText);
+	const conflictPaths = normalizeNoRenameConflicts(
+		parseMergeTreeConflicts(mergeTreeText),
+		rawText,
+		targetRawText,
+		targetRenameRawText,
+	);
 	const forkPaths = new Set(forkNames.split("\n").filter(Boolean).map(unquoteGitPath));
 	const targetPaths = new Set(computedUpstream.map(c => c.path));
 

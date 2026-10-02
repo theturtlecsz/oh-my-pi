@@ -66,6 +66,16 @@ ledger write; see routine self-confirmation below) before the session ends. A fi
 comment is unfiled, and unfiled = lost. This law is global: it applies in
 every repo and every session, whatever the project.
 
+## Project separation (owner directive, 2026-10-02, OMP-527)
+
+OMP and Media Discovery are separate projects with separate ledger items.
+An OMP session does not read, change or ask about Media Discovery items
+unless Chris names Media Discovery. Chris names it by saying Media Discovery,
+by naming a Media Discovery project, or by giving a Media Discovery item key.
+The project an item sits in decides its side, not the key prefix. HOME keys
+exist on both sides. OMP-422 (the Grok Bot resume gate) stays OMP.
+Chris's words: "we're only working on OMP here. Media-discovery is a completely seperate project and we should have better guardrails here. Lets not confuse the 2 projects...It's ledger items should be seperate".
+
 ## Routine ledger self-confirmation (OMP-23, owner ruling 2026-08-19)
 
 Routine Work Ledger bookkeeping never interrupts Chris with a confirmation

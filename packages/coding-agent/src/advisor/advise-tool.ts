@@ -189,7 +189,7 @@ const ADVISOR_ACK_SENT = "Delivered.";
 /** Held behind the in-progress primary turn; flushed when it completes. */
 const ADVISOR_ACK_DEFERRED = "Queued for the end of the turn. Do not re-raise.";
 /** A suppressed note is never described as recorded or queued. */
-const ADVISOR_ACK_SUPPRESSED: Record<AdvisorSuppressionReason, string> = {
+export const ADVISOR_ACK_SUPPRESSED: Record<AdvisorSuppressionReason, string> = {
 	empty: "Dropped: empty note.",
 	noise: "Dropped: nothing actionable.",
 	duplicate: "Dropped: already raised.",

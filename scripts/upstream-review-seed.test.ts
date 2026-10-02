@@ -767,6 +767,50 @@ describe("upstream-review-seed rename conflicts", () => {
 		expect(allowed.stderr.toString()).not.toContain("has no matrix row");
 		expect(allowed.exitCode).toBe(0);
 	});
+
+	test("an add/add at an upstream rename destination stays on destination without a source row", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-review-seed-rename-"));
+		dirs.push(dir);
+		await ok(dir, ["init", "-b", "main"]);
+		const lines = Array.from({ length: 12 }, (_, i) => `line ${i + 1}\n`);
+		await Bun.write(path.join(dir, "a.txt"), lines.join(""));
+		const baseSha = await commitAll(dir, "upstream baseline commit");
+
+		await ok(dir, ["checkout", "-b", "target", baseSha]);
+		await ok(dir, ["mv", "a.txt", "b.txt"]);
+		const targetSha = await commitAll(dir, "target renames a.txt to b.txt unchanged");
+
+		await ok(dir, ["checkout", "-b", "fork", baseSha]);
+		await Bun.write(path.join(dir, "b.txt"), "fork-added b.txt content\n");
+		const forkSha = await commitAll(dir, "fork adds b.txt");
+
+		await Bun.write(
+			path.join(dir, "docs", "upstream-baseline.json"),
+			`${JSON.stringify({ upstream_repo: "https://github.com/can1357/oh-my-pi", upstream_version: "1.0.0", target: baseSha, version_max: "1.0.0" }, null, "\t")}\n`,
+		);
+		await Bun.write(
+			path.join(dir, "docs", "upstream-fork-inventory.tsv"),
+			"path\tscope\tstate\thead_blob\tbehavior\tclassification\nb.txt\tshared\tadded\t111111111111\tb.txt fork patch\tretained\n",
+		);
+
+		await seedReview({ target: targetSha, version: "1.0.1", fork: forkSha, dir: "docs", cwd: dir });
+		const target12 = targetSha.slice(0, 12);
+		const matrixRows = parseMatrixTsv(
+			await Bun.file(path.join(dir, `docs/upstream-review-${target12}-matrix.tsv`)).text(),
+		);
+		expect(matrixRows.find(r => r.path === "b.txt")?.proof).toBe("pending:resolve and name the focused test");
+		expect(matrixRows.find(r => r.path === "a.txt")).toBeUndefined();
+
+		const verify = path.join(import.meta.dir, "verify-upstream-handoff.ts");
+		const recordRel = `docs/upstream-review-${target12}.json`;
+		const allowed = await $`bun ${verify} --record ${recordRel} --allow-pending`
+			.cwd(dir)
+			.quiet()
+			.nothrow()
+			.env(GIT_ENV);
+		expect(allowed.stderr.toString()).not.toContain("has no matrix row");
+		expect(allowed.exitCode).toBe(0);
+	});
 });
 
 describe("upstream-review-seed --settle mode", () => {

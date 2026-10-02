@@ -95,15 +95,21 @@ export function destinationPath(root: string, asset: ManifestAsset): string {
 }
 
 /**
+ * The upstream path of an asset's primary content. Skill assets name a
+ * directory upstream; their content is that directory's SKILL.md.
+ */
+export function primaryUpstreamPath(asset: ManifestAsset): string {
+	return asset.adaptation.kind === "skill-namespaced"
+		? path.posix.join(asset.upstream.path, "SKILL.md")
+		: asset.upstream.path;
+}
+
+/**
  * The mirrored file an asset's primary content lives in. Skill assets name a
  * directory upstream; their content is that directory's SKILL.md.
  */
 export function upstreamFilePath(eccRoot: string, asset: ManifestAsset): string {
-	const relative =
-		asset.adaptation.kind === "skill-namespaced"
-			? path.posix.join(asset.upstream.path, "SKILL.md")
-			: asset.upstream.path;
-	return path.join(eccRoot, "mirror", relative);
+	return path.join(eccRoot, "mirror", primaryUpstreamPath(asset));
 }
 
 /** Read an asset's primary mirrored content. */

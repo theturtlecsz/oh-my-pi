@@ -68,13 +68,15 @@ export function cloneExperimentState(state: ExperimentState): ExperimentState {
 }
 
 function cloneResult(result: ExperimentResult): ExperimentResult {
-	return {
+	const cloned: ExperimentResult = {
 		...result,
 		metrics: { ...result.metrics },
 		asi: result.asi ? structuredClone(result.asi) : undefined,
 		modifiedPaths: [...result.modifiedPaths],
 		scopeDeviations: [...result.scopeDeviations],
 	};
+	if (result.provenance) cloned.provenance = { ...result.provenance };
+	return cloned;
 }
 
 export function findBestKeptMetric(
@@ -167,6 +169,13 @@ export function buildExperimentState(session: SessionRow, loggedRuns: RunRow[]):
 			flagged: run.flagged,
 			flaggedReason: run.flaggedReason,
 		};
+		if (run.managedTrialId !== null && run.managedReceiptSha256 !== null) {
+			result.provenance = {
+				mode: "imported",
+				trialId: run.managedTrialId,
+				receiptSha256: run.managedReceiptSha256,
+			};
+		}
 		state.results.push(result);
 		if (run.segment === state.currentSegment) {
 			registerSecondaryMetrics(state.secondaryMetrics, result.metrics);

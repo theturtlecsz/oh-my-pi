@@ -68,6 +68,8 @@ export interface RunRow {
 	flaggedReason: string | null;
 	loggedAt: number | null;
 	abandonedAt: number | null;
+	managedTrialId: string | null;
+	managedReceiptSha256: string | null;
 }
 
 export interface OpenSessionParams {
@@ -137,6 +139,18 @@ export interface MarkRunLoggedParams {
 	loggedAt: number;
 }
 
+export interface InsertImportedRunParams {
+	sessionId: number;
+	segment: number;
+	status: ExperimentStatus;
+	description: string;
+	metric: number;
+	metrics: NumericMetricMap;
+	trialId: string;
+	receiptSha256: string;
+	loggedAt: number;
+}
+
 type SessionDbRow = {
 	id: number;
 	name: string;
@@ -187,9 +201,11 @@ type RunDbRow = {
 	flagged_reason: string | null;
 	logged_at: number | null;
 	abandoned_at: number | null;
+	managed_trial_id: string | null;
+	managed_receipt_sha256: string | null;
 };
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 const SCHEMA_SQL = `
 PRAGMA journal_mode=WAL;
@@ -245,7 +261,9 @@ CREATE TABLE IF NOT EXISTS runs (
 	flagged INTEGER NOT NULL DEFAULT 0,
 	flagged_reason TEXT,
 	logged_at INTEGER,
-	abandoned_at INTEGER
+	abandoned_at INTEGER,
+	managed_trial_id TEXT,
+	managed_receipt_sha256 TEXT
 );
 
 CREATE INDEX IF NOT EXISTS runs_session_segment_idx ON runs(session_id, segment);
@@ -265,6 +283,7 @@ export class AutoresearchStorage {
 		// Install the busy handler BEFORE any lock-taking statement. See #2421.
 		this.#db.run("PRAGMA busy_timeout = 5000");
 		this.#db.run(SCHEMA_SQL);
+		this.#ensureManagedRunColumns();
 		const versionRow = this.#db.query("PRAGMA user_version").get() as { user_version: number } | null;
 		const currentVersion = versionRow?.user_version ?? 0;
 		if (currentVersion < SCHEMA_VERSION) {
@@ -502,6 +521,39 @@ export class AutoresearchStorage {
 		return this.getRunByIdRequired(runId);
 	}
 
+	insertImportedRun(params: InsertImportedRunParams): RunRow {
+		const stmt = this.#db.prepare<{ id: number }, SQLQueryBindings[]>(
+			`INSERT INTO runs (
+				session_id, segment, command, started_at, log_path,
+				status, description, metric, metrics_json,
+				flagged, flagged_reason, logged_at,
+				managed_trial_id, managed_receipt_sha256
+			) VALUES (?, ?, 'import-managed', ?, 'import-managed', ?, ?, ?, ?, 1, 'imported-unverified', ?, ?, ?)
+			RETURNING id`,
+		);
+		const row = stmt.get(
+			params.sessionId,
+			params.segment,
+			params.loggedAt,
+			params.status,
+			params.description,
+			params.metric,
+			JSON.stringify(params.metrics),
+			params.loggedAt,
+			params.trialId,
+			params.receiptSha256,
+		);
+		if (!row) throw new Error("Failed to insert imported run");
+		return this.getRunByIdRequired(row.id);
+	}
+
+	listManagedTrialIds(sessionId: number): string[] {
+		const stmt = this.#db.prepare<{ managed_trial_id: string }, [number]>(
+			"SELECT managed_trial_id FROM runs WHERE session_id = ? AND managed_trial_id IS NOT NULL",
+		);
+		return stmt.all(sessionId).map(row => row.managed_trial_id);
+	}
+
 	abandonPendingRuns(sessionId: number): number {
 		const beforeRow = this.#db
 			.prepare<{ n: number }, [number]>(
@@ -546,6 +598,12 @@ export class AutoresearchStorage {
 			"SELECT * FROM runs WHERE session_id = ? AND status IS NOT NULL ORDER BY id ASC",
 		);
 		return stmt.all(sessionId).map(rowToRun);
+	}
+
+	/** v1 databases predate these columns. ADD COLUMN keeps every existing row. */
+	#ensureManagedRunColumns(): void {
+		ensureColumn(this.#db, "managed_trial_id");
+		ensureColumn(this.#db, "managed_receipt_sha256");
 	}
 }
 
@@ -654,7 +712,15 @@ function rowToRun(row: RunDbRow): RunRow {
 		flaggedReason: row.flagged_reason,
 		loggedAt: row.logged_at,
 		abandonedAt: row.abandoned_at,
+		managedTrialId: row.managed_trial_id,
+		managedReceiptSha256: row.managed_receipt_sha256,
 	};
+}
+
+function ensureColumn(db: Database, column: string): void {
+	const columns = db.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
+	if (columns.some(col => col.name === column)) return;
+	db.run(`ALTER TABLE runs ADD COLUMN ${column} TEXT`);
 }
 
 function parseStatus(value: string | null): ExperimentStatus | null {

@@ -81,4 +81,45 @@ describe("upstream-patch-check rename handling", () => {
 		expect(stdout.split("\n").some(line => line.includes("moved.txt"))).toBe(false);
 		expect(stdout).not.toContain("[uninventoried]");
 	});
+
+	test("upstream rename keeps a fork-added rename target as the conflicted shared path", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-patch-check-rename-"));
+		dirs.push(dir);
+		await ok(dir, ["init", "-b", "main"]);
+
+		await Bun.write(path.join(dir, "a.txt"), "a1\na2\na3\n");
+		const base = await commitAll(dir, "base: add a.txt");
+
+		// Branch target from base: rename a.txt to b.txt unchanged.
+		await ok(dir, ["checkout", "-b", "target", base]);
+		await ok(dir, ["mv", "a.txt", "b.txt"]);
+		const target = await commitAll(dir, "target: rename a.txt to b.txt");
+
+		// Branch fork from base: adds its own b.txt, leaves a.txt untouched.
+		await ok(dir, ["checkout", "-b", "fork", base]);
+		await Bun.write(path.join(dir, "b.txt"), "fork-b1\nfork-b2\n");
+		await Bun.write(
+			path.join(dir, "docs", "upstream-baseline.json"),
+			`${JSON.stringify({ upstream_repo: "https://github.com/can1357/oh-my-pi", target: base }, null, "\t")}\n`,
+		);
+		await Bun.write(
+			path.join(dir, "docs", "upstream-fork-inventory.tsv"),
+			[
+				"path\tscope\tstate\thead_blob\tbehavior\tclassification",
+				"b.txt\tshared\tmodified\t111111111111\tb.txt fork patch\tretained",
+				"",
+			].join("\n"),
+		);
+		await commitAll(dir, "fork: add b.txt and baseline/inventory");
+
+		const script = path.join(import.meta.dir, "upstream-patch-check.ts");
+		const proc = await $`bun ${script} --target ${target}`.cwd(dir).quiet().nothrow().env(GIT_ENV);
+		const exitCode = proc.exitCode;
+		const stdout = proc.text();
+
+		expect(exitCode).toBe(1);
+		expect(stdout).toContain("BROKEN b.txt [shared]");
+		expect(stdout.split("\n").some(line => line.includes("a.txt"))).toBe(false);
+		expect(stdout).not.toContain("[uninventoried]");
+	});
 });

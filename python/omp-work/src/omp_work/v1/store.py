@@ -65,7 +65,7 @@ from .models import (
     SameSessionFoundFixedPayload,
 )
 from omp_work.egress_store import EgressStoreMixin
-from omp_work.project_store import ProjectStoreMixin
+from omp_work.project_store import ProjectStoreMixin, media_discovery_project_ids
 from omp_work.research.store import ResearchStoreMixin
 from .store_shared import WorkStoreError
 from .store_shared import row_json as _row_json
@@ -6662,10 +6662,44 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
             if kind == "research_dataset":
                 return self._research_dataset_view(cur, workspace_id, value)
             if kind == "tree":
-                cur.execute(
-                    "SELECT a.key FROM omp_work.work_items i JOIN omp_work.work_aliases a ON a.work_id=i.work_id AND a.primary_alias WHERE i.workspace_id=%s ORDER BY a.key LIMIT 1000",
-                    (workspace_id,),
-                )
+                if value not in ("", "media-discovery"):
+                    raise WorkStoreError("invalid_request")
+                md_project_ids = media_discovery_project_ids(cur, workspace_id)
+                md_id_list = list(md_project_ids)
+
+                if value == "media-discovery":
+                    if not md_project_ids:
+                        return {
+                            "workspace_id": workspace_id,
+                            "items": [],
+                            "relations": [],
+                            "projects": [],
+                        }
+                    cur.execute(
+                        "SELECT a.key FROM omp_work.work_items i"
+                        " JOIN omp_work.work_aliases a ON a.work_id=i.work_id AND a.primary_alias"
+                        " WHERE i.workspace_id=%s AND i.project_id = ANY(%s)"
+                        " ORDER BY a.key LIMIT 1000",
+                        (workspace_id, md_id_list),
+                    )
+                else:
+                    if md_project_ids:
+                        cur.execute(
+                            "SELECT a.key FROM omp_work.work_items i"
+                            " JOIN omp_work.work_aliases a ON a.work_id=i.work_id AND a.primary_alias"
+                            " WHERE i.workspace_id=%s AND (i.project_id IS NULL OR NOT (i.project_id = ANY(%s)))"
+                            " ORDER BY a.key LIMIT 1000",
+                            (workspace_id, md_id_list),
+                        )
+                    else:
+                        cur.execute(
+                            "SELECT a.key FROM omp_work.work_items i"
+                            " JOIN omp_work.work_aliases a ON a.work_id=i.work_id AND a.primary_alias"
+                            " WHERE i.workspace_id=%s"
+                            " ORDER BY a.key LIMIT 1000",
+                            (workspace_id,),
+                        )
+
                 items = [
                     self._item_view(cur, workspace_id, key=row["key"])
                     for row in cur.fetchall()
@@ -6709,15 +6743,53 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
                         }
                     else:
                         item["intake_decision"] = None
-                cur.execute(
-                    "SELECT workspace_id,source_work_id,target_work_id,kind,active FROM omp_work.work_relations WHERE workspace_id=%s ORDER BY created_at LIMIT 5000",
-                    (workspace_id,),
-                )
-                relations = [dict(row) for row in cur.fetchall()]
-                cur.execute(
-                    "SELECT p.project_id,p.workspace_id,p.key,p.name,h.health,h.updated_at AS health_updated_at FROM omp_work.projects p LEFT JOIN omp_work.project_health h ON h.workspace_id=p.workspace_id AND h.project_id=p.project_id WHERE p.workspace_id=%s ORDER BY p.name LIMIT 500",
-                    (workspace_id,),
-                )
+
+                if not work_ids:
+                    relations = []
+                else:
+                    cur.execute(
+                        "SELECT workspace_id,source_work_id,target_work_id,kind,active"
+                        " FROM omp_work.work_relations"
+                        " WHERE workspace_id=%s AND source_work_id = ANY(%s) AND target_work_id = ANY(%s)"
+                        " ORDER BY created_at LIMIT 5000",
+                        (workspace_id, work_ids, work_ids),
+                    )
+                    returned_work_id_set = set(work_ids)
+                    relations = [
+                        dict(row)
+                        for row in cur.fetchall()
+                        if UUID(str(row["source_work_id"])) in returned_work_id_set
+                        and UUID(str(row["target_work_id"])) in returned_work_id_set
+                    ]
+
+                if value == "media-discovery":
+                    cur.execute(
+                        "SELECT p.project_id,p.workspace_id,p.key,p.name,h.health,h.updated_at AS health_updated_at"
+                        " FROM omp_work.projects p"
+                        " LEFT JOIN omp_work.project_health h ON h.workspace_id=p.workspace_id AND h.project_id=p.project_id"
+                        " WHERE p.workspace_id=%s AND p.project_id = ANY(%s)"
+                        " ORDER BY p.name LIMIT 500",
+                        (workspace_id, md_id_list),
+                    )
+                else:
+                    if md_project_ids:
+                        cur.execute(
+                            "SELECT p.project_id,p.workspace_id,p.key,p.name,h.health,h.updated_at AS health_updated_at"
+                            " FROM omp_work.projects p"
+                            " LEFT JOIN omp_work.project_health h ON h.workspace_id=p.workspace_id AND h.project_id=p.project_id"
+                            " WHERE p.workspace_id=%s AND NOT (p.project_id = ANY(%s))"
+                            " ORDER BY p.name LIMIT 500",
+                            (workspace_id, md_id_list),
+                        )
+                    else:
+                        cur.execute(
+                            "SELECT p.project_id,p.workspace_id,p.key,p.name,h.health,h.updated_at AS health_updated_at"
+                            " FROM omp_work.projects p"
+                            " LEFT JOIN omp_work.project_health h ON h.workspace_id=p.workspace_id AND h.project_id=p.project_id"
+                            " WHERE p.workspace_id=%s"
+                            " ORDER BY p.name LIMIT 500",
+                            (workspace_id,),
+                        )
                 projects = [dict(row) for row in cur.fetchall()]
                 return {
                     "workspace_id": workspace_id,

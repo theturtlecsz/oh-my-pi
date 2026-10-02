@@ -52,6 +52,12 @@ export interface ExperimentResult {
 	justification: string | null;
 	flagged: boolean;
 	flaggedReason: string | null;
+	/** Set for a managed-results import. Absent means an unmanaged (legacy) run. */
+	provenance?: {
+		mode: "imported";
+		trialId: string;
+		receiptSha256: string;
+	};
 }
 
 /** Current experiment baseline, history, and scope. */

@@ -10,6 +10,11 @@ with ``--help``, and requires the help text to name each flag on the line. It
 also requires exactly one ``text evidence`` block carrying every evidence field,
 so the drill cannot lose the record it is supposed to leave behind.
 
+The outage drill runbook is on the same list. The command-path check and the
+evidence check cover it. Its evidence block also carries ``Outage start:`` and
+``Outage end:``. The restart-set, mission-window, and failure-recovery checks
+stay on the credential-rotation runbook.
+
 It also defends against operational runbook drift:
 - Claiming units outside ``docs/work-ledger-operations.md`` must restart or
   misidentifying the restart set (``OperationsConfig.connection_kwargs`` reads
@@ -32,12 +37,15 @@ import pytest
 
 from omp_work.__main__ import main
 
+_RUNBOOK_DIR = Path(__file__).resolve().parents[3] / "docs" / "runbooks"
+
 RUNBOOKS = (
-    Path(__file__).resolve().parents[3]
-    / "docs"
-    / "runbooks"
-    / "omp-work-credential-rotation-drill.md",
+    _RUNBOOK_DIR / "omp-work-credential-rotation-drill.md",
+    _RUNBOOK_DIR / "omp-work-outage-drill.md",
 )
+
+_CREDENTIAL_RUNBOOK = "omp-work-credential-rotation-drill.md"
+_OUTAGE_RUNBOOK = "omp-work-outage-drill.md"
 
 EVIDENCE_LABELS = (
     "Date (UTC):",
@@ -49,6 +57,11 @@ EVIDENCE_LABELS = (
     "Observed:",
     "Result (PASS/FAIL):",
     "Follow-up items:",
+)
+
+_OUTAGE_EVIDENCE_LABELS = (
+    "Outage start:",
+    "Outage end:",
 )
 
 _CLI_PREFIX = "uv run --project python/omp-work omp-work "
@@ -95,6 +108,18 @@ def _cli_lines(text: str) -> list[tuple[list[str], list[str]]]:
     return parsed
 
 
+def _credential_runbooks() -> tuple[Path, ...]:
+    found = tuple(runbook for runbook in RUNBOOKS if runbook.name == _CREDENTIAL_RUNBOOK)
+    assert found, "credential-rotation runbook missing from RUNBOOKS"
+    return found
+
+
+def _evidence_labels(runbook: Path) -> tuple[str, ...]:
+    if runbook.name == _OUTAGE_RUNBOOK:
+        return (*EVIDENCE_LABELS, *_OUTAGE_EVIDENCE_LABELS)
+    return EVIDENCE_LABELS
+
+
 def _help_for(path: list[str]) -> str:
     capture = io.StringIO()
     with pytest.raises(SystemExit) as exited:
@@ -132,12 +157,12 @@ def test_runbook_has_exactly_one_complete_evidence_block() -> None:
             f"{runbook}: expected exactly one `text evidence` block, got {len(evidence)}"
         )
         body = "\n".join(evidence[0])
-        for label in EVIDENCE_LABELS:
+        for label in _evidence_labels(runbook):
             assert label in body, f"{runbook}: evidence block omits {label!r}"
 
 
 def test_runbook_restart_set_and_unit_list_accuracy() -> None:
-    for runbook in RUNBOOKS:
+    for runbook in _credential_runbooks():
         text = runbook.read_text(encoding="utf-8")
         assert "connection_kwargs" in text, f"{runbook}: must cite connection_kwargs"
         assert "read_secret" in text, f"{runbook}: must explain read_secret on each connection"
@@ -153,7 +178,7 @@ def test_runbook_restart_set_and_unit_list_accuracy() -> None:
 
 
 def test_runbook_mission_window_and_discovery() -> None:
-    for runbook in RUNBOOKS:
+    for runbook in _credential_runbooks():
         text = runbook.read_text(encoding="utf-8")
         assert "approved" in text, f"{runbook}: must require an approved mission"
         assert "awaiting_confirmation" in text, (
@@ -171,7 +196,7 @@ def test_runbook_mission_window_and_discovery() -> None:
 
 
 def test_runbook_failure_recovery_distinguishes_rollback_from_crash() -> None:
-    for runbook in RUNBOOKS:
+    for runbook in _credential_runbooks():
         text = runbook.read_text(encoding="utf-8")
         assert "credential rotation failed; recovery credential retained" in text, (
             f"{runbook}: must name the exact rotation failure error"
