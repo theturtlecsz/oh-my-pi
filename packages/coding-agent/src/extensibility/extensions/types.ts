@@ -1305,6 +1305,10 @@ export interface BeforeAgentStartEventResult {
 	message?: CustomMessagePayload;
 	/** Replace policy for the next request and its continuations, until the next preparation. Extensions chain in order. */
 	systemPrompt?: string[];
+	/** Refuse the turn: the first handler returning `true` stops the chain and rejects the prompt with a `PromptBlockedError` instead of dispatching it. */
+	block?: boolean;
+	/** Refusal reason surfaced to the caller. Defaults to `Prompt blocked by extension <path>`. */
+	reason?: string;
 }
 
 export interface BeforeSubagentSpawnEventResult {

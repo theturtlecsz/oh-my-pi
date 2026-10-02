@@ -596,6 +596,18 @@ export class PromptDroppedError extends Error {
 	}
 }
 
+/**
+ * Rejection from {@link AgentSession.prompt} when a `before_agent_start` handler
+ * refused the turn (`block: true`). The prompt was never persisted and no
+ * provider request was made, so resubmitting it is safe once the cause clears.
+ */
+export class PromptBlockedError extends Error {
+	constructor(reason: string) {
+		super(reason);
+		this.name = "PromptBlockedError";
+	}
+}
+
 const EXPERIMENTAL_CONTEXT_REQUIRED_TOOLS: Record<string, true> = {
 	context_notes: true,
 	new_context: true,
@@ -10074,7 +10086,10 @@ export class AgentSession implements SettingsScope {
 						: undefined,
 			});
 		} catch (error) {
-			if (error instanceof AgentStartPolicyChangedError && message.role === "user") {
+			if (
+				(error instanceof AgentStartPolicyChangedError || error instanceof PromptBlockedError) &&
+				message.role === "user"
+			) {
 				this.#promptDropped?.({ text: typedText, images: options?.images });
 			}
 			throw error;
@@ -10310,6 +10325,12 @@ export class AgentSession implements SettingsScope {
 			if (!isCurrent()) return cancelled;
 			const result = await this.#extensionRunner?.emitBeforeAgentStart(prompt, images, basePreparation.systemPrompt);
 			if (!isCurrent()) return cancelled;
+			if (result?.block) {
+				// Block the queued settle drain before Agent converts this error into an
+				// assistant message and resolves the running turn.
+				if (origin === "queued") this.#queuedMessageDrainBlocked = true;
+				throw new PromptBlockedError(result.block.reason);
+			}
 			// Overrides are opaque replacements, not string patches. Re-run only policy preparation
 			// against the winning base; discard this attempt's returned context and staged memory.
 			const overrideIsCurrent = () => {

@@ -588,6 +588,18 @@
               "kind": "property",
               "optional": true,
               "type": "string[]"
+            },
+            {
+              "name": "block",
+              "kind": "property",
+              "optional": true,
+              "type": "boolean"
+            },
+            {
+              "name": "reason",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
             }
           ]
         },

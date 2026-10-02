@@ -110,6 +110,7 @@ import { cfgExtensionHandlersToolCallTimeoutMs } from "../settings";
 interface BeforeAgentStartCombinedResult {
 	messages?: NonNullable<BeforeAgentStartEventResult["message"]>[];
 	systemPrompt?: string[];
+	block?: { reason: string };
 }
 
 export type ExtensionErrorListener = (error: ExtensionError) => void;
@@ -2204,6 +2205,9 @@ export class ExtensionRunner {
 
 				if (handlerResult) {
 					const result = handlerResult as BeforeAgentStartEventResult;
+					if (result.block) {
+						return { block: { reason: result.reason ?? `Prompt blocked by extension ${ext.path}` } };
+					}
 					if (result.message) {
 						messages.push(result.message);
 					}
