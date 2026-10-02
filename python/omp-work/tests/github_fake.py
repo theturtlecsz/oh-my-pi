@@ -188,7 +188,7 @@ class FakeGitHub:
             else:
                 pulls = [pull for pull in pulls if pull["head_ref"] == branch]
         pulls.sort(key=lambda pull: int(pull["number"]))
-        return [self._view(pull) for pull in pulls]
+        return [self._list_view(pull) for pull in pulls]
 
     def _create(self, body: Any) -> tuple[int, Any]:
         if not isinstance(body, dict):
@@ -293,6 +293,12 @@ class FakeGitHub:
             "base": {"ref": pull["base_ref"], "sha": base_sha},
             "merge_commit_sha": pull["merge_commit_sha"],
         }
+
+    def _list_view(self, pull: dict[str, Any]) -> dict[str, Any]:
+        """List entries use the simple shape, which omits ``merged``."""
+        view = self._view(pull)
+        del view["merged"]
+        return view
 
     def _commit_merge(
         self, base_ref: str, base_sha: str, head_sha: str, number: int

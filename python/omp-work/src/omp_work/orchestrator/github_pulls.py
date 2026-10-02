@@ -135,7 +135,7 @@ class GitHubPulls:
             raise PullRequestError("outcome_unknown")
         best: int | None = None
         for item in payload:
-            number = _pull(item).number
+            number = _integer(_mapping(item).get("number"))
             if best is None or number > best:
                 best = number
         return best
