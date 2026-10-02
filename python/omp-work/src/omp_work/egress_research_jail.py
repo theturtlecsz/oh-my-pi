@@ -3,9 +3,12 @@
 Started by the helper as ``unshare --mount --pid --fork python -m
 omp_work.egress_research_jail <config>``. ``/`` is made rprivate, a tmpfs
 becomes the new root, and ``pivot_root`` switches to it. setup_ok is created
-through the old root, that old root is detached, and the worker is exec'd
-with the s07 setpriv flags. chroot is not used. Every import is at module
-load, before the pivot.
+through the old root, that old root is detached, and this process stays PID 1.
+It forks and execs the worker with the s07 setpriv flags, then exits with the
+worker status. A signal death exits 128 plus the signal number: PID 1 ignores
+SIGKILL sent from inside the namespace, so a self-kill of PID 1 would look
+like exit 0. chroot is not used. Every import is at module load, before the
+pivot.
 
 A research root reads the CA certificate before any mount and lands in
 ``/home/research``. A worker root is that same jail plus one read-write bind
@@ -195,16 +198,33 @@ def _pivot_and_exec(
     _mark_setup_ok(setup_ok)
     _syscall_ok(_libc.umount2(b"/.old", _MNT_DETACH), "umount2")
     os.rmdir("/.old")
-    try:
-        # nosemgrep: python.lang.security.audit.dangerous-os-exec-tainted-env-args.dangerous-os-exec-tainted-env-args
-        os.execve(  # nosec B606 - absolute setpriv, fixed argv list, no shell, no user-controlled executable
-            setpriv,
-            [setpriv, "--bounding-set=-all", "--inh-caps=-all", "--no-new-privs", *argv],
-            env,
-        )
-    except OSError as exc:
-        sys.stderr.write(f"research jail: execve failed: {exc}\n")
-        sys.exit(127)
+    _exec_worker(setpriv, argv, env)
+
+
+def _exec_worker(setpriv: str, argv: list[str], env: dict[str, str]) -> None:
+    """Fork the worker off PID 1 and exit with its status."""
+    pid = os.fork()
+    if pid == 0:
+        try:
+            # nosemgrep: python.lang.security.audit.dangerous-os-exec-tainted-env-args.dangerous-os-exec-tainted-env-args
+            os.execve(  # nosec B606 - absolute setpriv, fixed argv list, no shell, no user-controlled executable
+                setpriv,
+                [setpriv, "--bounding-set=-all", "--inh-caps=-all", "--no-new-privs", *argv],
+                env,
+            )
+        except OSError as exc:
+            sys.stderr.write(f"research jail: execve failed: {exc}\n")
+            os._exit(127)
+    while True:
+        try:
+            _child, status = os.waitpid(pid, 0)
+        except InterruptedError:
+            continue
+        if os.WIFEXITED(status) or os.WIFSIGNALED(status):
+            break
+    if os.WIFSIGNALED(status):
+        os._exit(128 + os.WTERMSIG(status))
+    os._exit(os.WEXITSTATUS(status))
 
 
 def _bind_rw_dir(source: str, target: Path) -> None:
