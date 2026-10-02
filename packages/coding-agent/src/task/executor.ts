@@ -1462,8 +1462,8 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 
 	// Wall-clock hard limit. Defense-in-depth for the case where a provider stream
 	// hang escapes the inference-layer watchdog (see openai-completions
-	// `isOpenAICompletionsProgressChunk`). Disabled by default; set
-	// `task.maxRuntimeMs > 0` to cap each subagent's lifetime.
+	// `isOpenAICompletionsProgressChunk`). Defaults to 2 hours
+	// (`task.maxRuntimeMs`); set it to 0 to disable the cap.
 	let runtimeTimeoutId: NodeJS.Timeout | undefined;
 	if (maxRuntimeMs > 0) {
 		runtimeTimeoutId = setTimeout(() => {

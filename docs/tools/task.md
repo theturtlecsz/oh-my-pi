@@ -161,7 +161,7 @@ Artifacts and side channels:
 - Progress coalescing: `PROGRESS_COALESCE_MS = 150`; recent-output tail: `RECENT_OUTPUT_TAIL_BYTES = 8 * 1024` (last 8 non-empty lines).
 - Missing-`yield` reminder retries: `MAX_YIELD_RETRIES = 3`; MCP proxy timeout: `MCP_CALL_TIMEOUT_MS = 60_000` — both in `packages/coding-agent/src/task/executor.ts`.
 - Soft request budget: `task.softRequestBudget` defaults to 200 requests (`0` disables). Crossing it injects a wrap-up notice when `task.softRequestBudgetNotice` is enabled; at 1.5× the budget the run is force-stopped to yield partial findings. Bundled scout/sonic agents may impose a lower built-in cap.
-- Hard wall clock: `task.maxRuntimeMs` applies to every spawn; default `0` disables it.
+- Hard wall clock: `task.maxRuntimeMs` applies to every spawn; default `7200000` (2 hours), and `0` disables it.
 - Recursion depth: `task.maxRecursionDepth` defaults to `2`; negative values disable the cap. The tool registry and shared preflight enforce it, and `runSubprocess(...)` strips child `task` access at max depth.
 - Inline summaries use `FULL_OUTPUT_THRESHOLD = 5000` characters in `packages/coding-agent/src/task/result-summary.ts`; truncation requires a full output artifact. `agent://<id>` points to that artifact.
 
