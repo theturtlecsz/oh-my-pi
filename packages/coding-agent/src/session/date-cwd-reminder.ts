@@ -9,14 +9,18 @@
  * turn of each provider request instead: built at request time (never stored
  * in the session), deterministic per `(date, cwd)`, so the bytes are stable
  * for the lifetime of a session/day and refresh automatically at midnight.
+ *
+ * The optional stage context (compiled once at worker launch, see
+ * `stage-context.ts`) rides in the same reminder, so it reaches the model in
+ * the first provider request without a tool call.
  */
 import type { Context, Message, UserMessage } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
 import dateCwdReminderTemplate from "../prompts/system/date-cwd-reminder.md" with { type: "text" };
 
 /** Renders the reminder text for the given local calendar date and cwd. */
-export function renderDateCwdReminder(date: string, cwd: string): string {
-	return prompt.render(dateCwdReminderTemplate, { date, cwd }).trim();
+export function renderDateCwdReminder(date: string, cwd: string, stageContext?: string): string {
+	return prompt.render(dateCwdReminderTemplate, { date, cwd, stageContext }).trim();
 }
 
 function messageStartsWithReminder(message: UserMessage, reminder: string): boolean {
@@ -47,9 +51,9 @@ export class DateCwdReminderInjector {
 	#seen = new WeakSet<object>();
 
 	/** Apply the current reminder while preserving all earlier injected bytes. */
-	transform(context: Context, date: string, cwd: string): Context {
+	transform(context: Context, date: string, cwd: string, stageContext?: string): Context {
 		if (!context.systemPrompt || context.systemPrompt.length === 0 || context.messages.length === 0) return context;
-		const reminder = renderDateCwdReminder(date, cwd);
+		const reminder = renderDateCwdReminder(date, cwd, stageContext);
 		const messages = this.#inject(context.messages, reminder);
 		return messages === context.messages ? context : { ...context, messages };
 	}
