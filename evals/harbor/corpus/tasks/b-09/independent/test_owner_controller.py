@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
+import subprocess  # nosec B404
 from pathlib import Path
 from uuid import UUID
 
@@ -33,8 +33,9 @@ _EXPECTED_MESSAGE = (
 
 def _generate_key(tmp_path: Path, name: str) -> Path:
     key = tmp_path / name
-    subprocess.run(
-        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+    ssh_keygen = shutil.which("ssh-keygen") or "ssh-keygen"
+    subprocess.run(  # nosec B603, B607
+        [ssh_keygen, "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
         check=True,
         capture_output=True,
     )
@@ -49,8 +50,9 @@ def _allowed_signers(directory: Path, public_key: Path) -> Path:
 
 
 def _sign(key: Path, message: bytes, *, namespace: str = NAMESPACE) -> str:
-    completed = subprocess.run(
-        ["ssh-keygen", "-Y", "sign", "-f", str(key), "-n", namespace],
+    ssh_keygen = shutil.which("ssh-keygen") or "ssh-keygen"
+    completed = subprocess.run(  # nosec B603, B607
+        [ssh_keygen, "-Y", "sign", "-f", str(key), "-n", namespace],
         input=message,
         capture_output=True,
         check=True,

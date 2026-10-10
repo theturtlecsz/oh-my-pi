@@ -62,22 +62,22 @@ def _lookup_model(catalog: Mapping[str, Any], provider: str, model_id: str) -> d
 def model_price(
     catalog: Mapping[str, Any] | str | Path | None,
     provider: str,
-    id: str,
+    model_id: str,
 ) -> ModelPrice:
     """Resolve upper-bound token price and exact flag for a model in catalog."""
     cat = _load_catalog(catalog)
-    model_data = _lookup_model(cat, provider, id)
+    model_data = _lookup_model(cat, provider, model_id)
 
     base_cost = model_data.get("cost")
     if not isinstance(base_cost, Mapping):
-        raise ValueError(f"model {provider}/{id} has no cost object")
+        raise ValueError(f"model {provider}/{model_id} has no cost object")
 
     raw_base_inp = base_cost.get("input")
     raw_base_out = base_cost.get("output")
     if raw_base_inp is None or not isinstance(raw_base_inp, (int, float, Decimal)) or raw_base_inp <= 0:
-        raise ValueError(f"model {provider}/{id} base input price must be positive: {raw_base_inp}")
+        raise ValueError(f"model {provider}/{model_id} base input price must be positive: {raw_base_inp}")
     if raw_base_out is None or not isinstance(raw_base_out, (int, float, Decimal)) or raw_base_out <= 0:
-        raise ValueError(f"model {provider}/{id} base output price must be positive: {raw_base_out}")
+        raise ValueError(f"model {provider}/{model_id} base output price must be positive: {raw_base_out}")
 
     time_based = base_cost.get("timeBased") or model_data.get("timeBased")
     has_time_based = isinstance(time_based, Mapping) and bool(time_based)
@@ -230,13 +230,20 @@ class Arm:
 class ExperimentModel:
     """Model specification within an experiment."""
 
-    def __init__(self, provider: str, id: str, thinking: Any = None) -> None:
+    def __init__(
+        self,
+        provider: str,
+        model_id: str = "",
+        thinking: Any = None,
+        **kwargs: Any,
+    ) -> None:
+        resolved_id = model_id or kwargs.get("id", "")
         if not isinstance(provider, str) or not provider.strip():
             raise ValueError("model provider must be a non-empty string")
-        if not isinstance(id, str) or not id.strip():
+        if not isinstance(resolved_id, str) or not resolved_id.strip():
             raise ValueError("model id must be a non-empty string")
         self.provider = provider
-        self.id = id
+        self.id = resolved_id
         self.thinking = thinking
 
     def to_dict(self) -> dict[str, Any]:
@@ -282,7 +289,7 @@ class Experiment:
                 parsed_models.append(
                     ExperimentModel(
                         provider=m.get("provider", ""),
-                        id=m.get("id", ""),
+                        model_id=m.get("id", ""),
                         thinking=m.get("thinking"),
                     )
                 )

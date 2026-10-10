@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shutil
 import subprocess  # nosec B404
 import sys
@@ -13,12 +12,13 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from .corpus import CATEGORIES, _resolve_fixture_dir, extract_patch_paths
+from .corpus import CATEGORIES, extract_patch_paths
 from .fixtures import Fixture, IndependentTest, load_fixture
 from .verify import DEFAULT_RUNNERS, REPO_ROOT, _copy_fixture_files, _link_host_install, _run_test
 
 _parents = Path(__file__).resolve().parents
 EVALS_HARBOR_ROOT = _parents[2] if len(_parents) > 2 else Path("/evals/harbor")
+_GIT = shutil.which("git") or "git"
 
 
 class Worktree(type(Path())):
@@ -36,16 +36,16 @@ class Worktree(type(Path())):
             self._cleaned = True
             repo = getattr(self, "_repo", None)
             if repo is not None:
-                subprocess.run(
-                    ["git", "-C", str(repo), "worktree", "remove", "--force", str(self)],
+                subprocess.run(  # nosec B603, B607
+                    [_GIT, "-C", str(repo), "worktree", "remove", "--force", str(self)],
                     capture_output=True,
                     check=False,
                 )
             if self.exists():
                 shutil.rmtree(self, ignore_errors=True)
             if repo is not None:
-                subprocess.run(
-                    ["git", "-C", str(repo), "worktree", "prune"],
+                subprocess.run(  # nosec B603, B607
+                    [_GIT, "-C", str(repo), "worktree", "prune"],
                     capture_output=True,
                     check=False,
                 )
@@ -62,8 +62,8 @@ def worktree(repo: str | Path, commit: str = "HEAD") -> Worktree:
     repo_path = Path(repo).resolve()
     temp_dir = tempfile.mkdtemp(prefix="omp-harbor-wt-")
     shutil.rmtree(temp_dir, ignore_errors=True)
-    res = subprocess.run(  # nosec B603
-        ["git", "-C", str(repo_path), "worktree", "add", "--detach", temp_dir, commit],
+    res = subprocess.run(  # nosec B603, B607
+        [_GIT, "-C", str(repo_path), "worktree", "add", "--detach", temp_dir, commit],
         capture_output=True,
         text=True,
     )
@@ -81,15 +81,15 @@ def apply(tree: str | Path, patch: str | Path) -> None:
     tree_path = Path(tree).resolve()
     if isinstance(patch, (str, Path)) and "\n" not in str(patch) and Path(patch).is_file():
         patch_path = Path(patch).resolve()
-        res = subprocess.run(  # nosec B603
-            ["git", "-C", str(tree_path), "apply", str(patch_path)],
+        res = subprocess.run(  # nosec B603, B607
+            [_GIT, "-C", str(tree_path), "apply", str(patch_path)],
             capture_output=True,
             text=True,
         )
     else:
         patch_text = str(patch)
-        res = subprocess.run(  # nosec B603
-            ["git", "-C", str(tree_path), "apply", "-"],
+        res = subprocess.run(  # nosec B603, B607
+            [_GIT, "-C", str(tree_path), "apply", "-"],
             input=patch_text,
             capture_output=True,
             text=True,
@@ -180,16 +180,16 @@ def gradeable(fixture: Fixture | Path | str, repo: Path | str, commit: str = "HE
 
 def _make_delete_patch(repo: Path, target_file: str, commit: str) -> str:
     empty_tree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
-    res = subprocess.run(  # nosec B603
-        ["git", "-C", str(repo), "diff", "HEAD", empty_tree, "--", target_file],
+    res = subprocess.run(  # nosec B603, B607
+        [_GIT, "-C", str(repo), "diff", "HEAD", empty_tree, "--", target_file],
         capture_output=True,
         text=True,
     )
     if res.returncode == 0 and res.stdout.strip():
         return res.stdout
     if commit != "HEAD":
-        res = subprocess.run(  # nosec B603
-            ["git", "-C", str(repo), "diff", commit, empty_tree, "--", target_file],
+        res = subprocess.run(  # nosec B603, B607
+            [_GIT, "-C", str(repo), "diff", commit, empty_tree, "--", target_file],
             capture_output=True,
             text=True,
         )
@@ -214,8 +214,8 @@ def _reverse_patch_in_worktree(repo: Path, commit: str, patch_text: str) -> str:
     wt = worktree(repo, commit)
     try:
         apply(wt, patch_text)
-        res = subprocess.run(  # nosec B603
-            ["git", "-C", str(wt), "diff", "-R"],
+        res = subprocess.run(  # nosec B603, B607
+            [_GIT, "-C", str(wt), "diff", "-R"],
             capture_output=True,
             text=True,
             check=True,
@@ -312,8 +312,8 @@ def materialize(
     basename = Path(test_target_file).name
 
     # Read independent/<basename> from HEAD test_target
-    res_head = subprocess.run(  # nosec B603
-        ["git", "-C", str(repo_path), "show", f"HEAD:{test_target_file}"],
+    res_head = subprocess.run(  # nosec B603, B607
+        [_GIT, "-C", str(repo_path), "show", f"HEAD:{test_target_file}"],
         capture_output=True,
         text=True,
     )
@@ -359,8 +359,8 @@ def materialize(
             raise ValueError("source_paths must be a non-empty list")
         source_paths = [str(p) for p in source_paths_raw]
 
-        diff_res = subprocess.run(  # nosec B603
-            ["git", "-C", str(repo_path), "diff", source_commit, f"{source_commit}^", "--"] + source_paths,
+        diff_res = subprocess.run(  # nosec B603, B607
+            [_GIT, "-C", str(repo_path), "diff", source_commit, f"{source_commit}^", "--"] + source_paths,
             capture_output=True,
             text=True,
         )
@@ -377,8 +377,8 @@ def materialize(
 
         seed_patch_text = revert_diff.rstrip("\n") + "\n" + delete_patch
 
-        sol_res = subprocess.run(  # nosec B603
-            ["git", "-C", str(repo_path), "diff", f"{source_commit}^", source_commit, "--"] + source_paths,
+        sol_res = subprocess.run(  # nosec B603, B607
+            [_GIT, "-C", str(repo_path), "diff", f"{source_commit}^", source_commit, "--"] + source_paths,
             capture_output=True,
             text=True,
         )
