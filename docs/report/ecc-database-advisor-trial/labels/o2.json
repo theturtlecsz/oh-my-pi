@@ -1,0 +1,72 @@
+{
+	"case": "o2",
+	"commit": "b2a5ca700d2d48216134cdc074d1b611bdd0914a",
+	"labels": [
+		{
+			"n": 1,
+			"label": "false_alarm",
+			"rationale": "The note is a status line during the first look. It names no defect in python/omp-work/src/omp_work/operations/migrations/0030_project_records.sql:10.",
+			"matches_known_defect": false
+		},
+		{
+			"n": 2,
+			"label": "false_alarm",
+			"rationale": "The note is a status line. It names no defect in python/omp-work/src/omp_work/project_store.py:55.",
+			"matches_known_defect": false
+		},
+		{
+			"n": 3,
+			"label": "false_alarm",
+			"rationale": "The note reports no defect. It names no problem in python/omp-work/src/omp_work/operations/migrations/0030_project_records.sql:15.",
+			"matches_known_defect": false
+		},
+		{
+			"n": 4,
+			"label": "false_alarm",
+			"rationale": "The note is a status line. It names no defect in python/omp-work/src/omp_work/project_store.py:70.",
+			"matches_known_defect": false
+		},
+		{
+			"n": 5,
+			"label": "false_alarm",
+			"rationale": "The note is a status line. It names no defect in python/omp-work/src/omp_work/operations/migrations/0030_project_records.sql:64.",
+			"matches_known_defect": false
+		},
+		{
+			"n": 6,
+			"label": "false_alarm",
+			"rationale": "The note says it is ready for output. It names no defect in python/omp-work/src/omp_work/v1/store.py:393.",
+			"matches_known_defect": false
+		},
+		{
+			"n": 7,
+			"label": "false_alarm",
+			"rationale": "The note says the prompt already contains the diff. It names no defect in python/omp-work/src/omp_work/operations/migrations/0030_project_records.sql:10.",
+			"matches_known_defect": false
+		},
+		{
+			"n": 8,
+			"label": "false_alarm",
+			"rationale": "The note says it is ready for output. It names no defect in python/omp-work/src/omp_work/project_store.py:216.",
+			"matches_known_defect": false
+		},
+		{
+			"n": 9,
+			"label": "false_alarm",
+			"rationale": "The note reports ledger capture. That rule is at session-system/agents/omp-AGENTS.md:60. It names no defect in python/omp-work/src/omp_work/project_store.py:70.",
+			"matches_known_defect": false
+		},
+		{
+			"n": 10,
+			"label": "false_alarm",
+			"rationale": "The note says the review is complete. It names no defect in python/omp-work/src/omp_work/operations/migrations/0030_project_records.sql:88.",
+			"matches_known_defect": false
+		},
+		{
+			"n": 11,
+			"label": "false_alarm",
+			"rationale": "The note tells the model to confirm create_work. That rule is at session-system/agents/omp-AGENTS.md:78. It names no defect in python/omp-work/src/omp_work/project_store.py:70.",
+			"matches_known_defect": false
+		}
+	]
+}

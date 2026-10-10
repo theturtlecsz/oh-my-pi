@@ -93,6 +93,21 @@ _OUTBOX_STATES = frozenset({"open", "committed", "acknowledged", "closed", "fail
 _LEASED_STATUSES = frozenset({"admitted", "in_flight", "returned", "checking"})
 
 
+def _bound_operation_request(workspace_id: UUID, request: object) -> object:
+    """Hash input for one operation, bound to the caller's workspace.
+
+    A body that already carries this caller's workspace id is hashed as the
+    caller built it, so an existing ledger row keeps its hash. Every other
+    body is wrapped with the caller id. A copy of another workspace's body
+    therefore cannot hash equal, and a replay cannot return that workspace's
+    stored result.
+    """
+    workspace = str(workspace_id)
+    if isinstance(request, dict) and request.get("workspace_id") == workspace:
+        return request
+    return {"workspace_id": workspace, "request": request}
+
+
 class NativeJobStore:
     def __init__(self, config: OperationsConfig) -> None:
         self._config = config
@@ -126,10 +141,14 @@ class NativeJobStore:
 
         Same ``operation_id``, same workspace, and same request replays the
         stored result with no second effect. A different request, or the same id
-        stored for another workspace, is ``idempotency_conflict``. ``operation_id``
-        is the global primary key, so the row is read by id and then kept only
-        when its ``workspace_id`` is the caller's; another workspace's result is
-        never replayed.
+        stored for another workspace, is ``idempotency_conflict``. The hashed
+        request is bound to the caller's workspace (see
+        ``_bound_operation_request``), so an identical body from another
+        workspace does not match. ``operation_id`` is the global primary key,
+        so the row is read by id and then kept only when its ``workspace_id``
+        is the caller's. The stored result is read only with that workspace in
+        the filter, so another workspace's result is never loaded and never
+        replayed.
 
         A transaction-scoped advisory lock serialises callers that share one
         ``operation_id``. Without it the read below and the insert after
@@ -138,13 +157,13 @@ class NativeJobStore:
         aborts on the primary key instead of replaying. The lock releases on
         commit or rollback, so a retry after a rollback proceeds.
         """
-        request_sha256 = sha256(request)
+        request_sha256 = sha256(_bound_operation_request(workspace_id, request))
         cur.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended('omp_jobs.operation:' || %s, 0))",
             (operation_id,),
         )
         cur.execute(
-            "SELECT workspace_id, kind, request_sha256, result FROM omp_jobs.operations WHERE operation_id=%s FOR UPDATE",
+            "SELECT workspace_id, kind, request_sha256 FROM omp_jobs.operations WHERE operation_id=%s FOR UPDATE",
             (operation_id,),
         )
         stored = cur.fetchone()
@@ -155,7 +174,12 @@ class NativeJobStore:
                     ("operation id belongs to another workspace",),
                 )
             if stored["kind"] == kind and stored["request_sha256"] == request_sha256:
-                return OperationOutcome("replayed", dict(stored["result"] or {}))
+                cur.execute(
+                    "SELECT result FROM omp_jobs.operations WHERE operation_id=%s AND workspace_id=%s",
+                    (operation_id, workspace_id),
+                )
+                replayed = cur.fetchone()
+                return OperationOutcome("replayed", dict(replayed["result"] or {}))
             raise JobError(
                 "idempotency_conflict",
                 ("operation id already used for a different request",),

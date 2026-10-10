@@ -17,6 +17,7 @@ def test_jobs_migrations_returns_expected_files_in_ordinal_order() -> None:
         "0001_omp_jobs_schema.sql",
         "0002_shadow_provenance.sql",
         "0003_native_research_jobs.sql",
+        "0004_native_workspace_check.sql",
     ]
     for p in files:
         assert isinstance(p, Path)
@@ -26,14 +27,15 @@ def test_jobs_migrations_returns_expected_files_in_ordinal_order() -> None:
 
 def test_main_migrations_ledger_intact_and_isolated_from_jobs_migrations() -> None:
     main_migs = database.migrations()
-    assert len(main_migs) == 35
-    assert [ordinal for ordinal, _ in main_migs] == list(range(1, 36))
+    assert len(main_migs) == 36
+    assert [ordinal for ordinal, _ in main_migs] == list(range(1, 37))
 
     jobs_names = {p.name for p in jobs_migrations()}
     assert jobs_names == {
         "0001_omp_jobs_schema.sql",
         "0002_shadow_provenance.sql",
         "0003_native_research_jobs.sql",
+        "0004_native_workspace_check.sql",
     }
 
     main_names = {path.name for _, path in main_migs}

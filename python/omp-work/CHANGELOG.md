@@ -55,6 +55,7 @@
 - `ops controller message|designate|show` designates the workspace's owner controller: `message` prints the exact bytes to sign, `designate` writes the owner-signed `<config_dir>/owner-controller.json` (mode 0600) and exits 1 without writing when the signature does not verify, and `show` reports the designated controller or null (OMP-416).
 - `omp-work events subscribe` and `omp-work events subscriptions` register and list push subscriptions, and the work-ledger installer renders an `omp-events-push` timer that runs `omp-work events push` every 5 minutes in place of the removed `alarms run` / `alarms digest`.
 - The orchestrator grant step stamps the execution plan from the request, or fails with `test_command_missing` when the request's test command is empty.
+- managed research trials bind a deliverable only with a trusted, qualified evaluator receipt.
 
 ### Changed
 
@@ -76,6 +77,7 @@
 ### Fixed
 
 - `omp_work_readonly` and `omp_work_backup` can read the native jobs tables (workers, operations, outbox) when the jobs migrations ran as `omp_work_migrator` (OMP-554).
+- Concurrent ensure_project calls reuse one unarchived project (OMP-560).
 - Signed mission-event push skips a subscription with no push_url, rejects a redirect instead of following it, and treats a non-ASCII signature header as unverified (OMP-415).
 - Parallel job completion now releases leases and reservations in the terminal transaction, preserves a winning terminal result, and can persist a bounded downstream closeout obligation for safe retry after daemon interruption. Cancellation waits for verified worker termination; checkpoint outcomes remain supported.
 - Expired execution grants fence fresh grant-linked commands, work-item relation edits/removals, and focus changes while preserving idempotent replay, delivery/auditor settlement, and explicit owner reconciliation before replacement admission.

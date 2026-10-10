@@ -26,7 +26,8 @@ import argparse
 import json
 import math
 import re
-import subprocess
+import shutil
+import subprocess  # nosec B404
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -238,8 +239,9 @@ def _check_patch(item: dict[str, Any], repo: str | Path) -> list[str]:
 
     with worktree(repo) as tree:
         try:
-            checked = subprocess.run(
-                ["git", "-C", str(tree), "apply", "--check", "-"],
+            git_bin = shutil.which("git") or "git"
+            checked = subprocess.run(  # nosec B603, B607
+                [git_bin, "-C", str(tree), "apply", "--check", "-"],
                 input=patch_text, capture_output=True, text=True, check=False,
             )
             if checked.returncode != 0:

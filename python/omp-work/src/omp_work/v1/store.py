@@ -915,11 +915,32 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
             aggregate_type = (
                 "work_item" if aggregate_id != envelope.workspace_id else "workspace"
             )
+        # The advisory lock must precede the chain-head read: it total-orders
+        # event commits per workspace, and taking it after the read would let
+        # a second writer read a stale head and fork the hash chain (OMP-567).
+        # The read itself runs on a fresh autocommit connection: this
+        # transaction may be SERIALIZABLE, whose snapshot was fixed at its
+        # first table access — an in-transaction read after the lock wait
+        # would still miss the previous writer's commit. The forced RLS
+        # policy on omp_audit.domain_events requires the workspace/actor
+        # settings on the fresh connection too.
         cur.execute(
-            "SELECT event_sha256 FROM omp_audit.domain_events WHERE workspace_id=%s AND aggregate_id=%s ORDER BY sequence DESC LIMIT 1",
-            (envelope.workspace_id, aggregate_id),
+            "SELECT pg_advisory_xact_lock(hashtextextended('omp_audit.domain_events:' || %s, 0))",
+            (envelope.workspace_id,),
         )
-        previous = cur.fetchone()
+        with psycopg.connect(
+            **self._config.connection_kwargs("omp_work_app"),
+            autocommit=True,
+            row_factory=dict_row,
+        ) as head_conn:
+            head_conn.execute(
+                "SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)",
+                (str(envelope.workspace_id), str(actor_id)),
+            )
+            previous = head_conn.execute(
+                "SELECT event_sha256 FROM omp_audit.domain_events WHERE workspace_id=%s AND aggregate_id=%s ORDER BY sequence DESC LIMIT 1",
+                (envelope.workspace_id, aggregate_id),
+            ).fetchone()
         previous_hash = previous["event_sha256"] if previous else None
         payload_hash = sha256(result)
         event_hash = sha256(
@@ -931,10 +952,6 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
             }
         )
         outcome = "refused" if result.get("status") == "refused" else "applied"
-        cur.execute(
-            "SELECT pg_advisory_xact_lock(hashtextextended('omp_audit.domain_events:' || %s, 0))",
-            (envelope.workspace_id,),
-        )
         cur.execute(
             "INSERT INTO omp_audit.domain_events(event_id,workspace_id,aggregate_type,aggregate_id,aggregate_version,actor_id,actor_kind,capability_id,request_id,correlation_id,operation_id,causation_id,event_type,outcome,payload,payload_sha256,previous_event_sha256,event_sha256) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
             (

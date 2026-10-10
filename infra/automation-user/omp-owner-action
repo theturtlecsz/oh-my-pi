@@ -1,7 +1,10 @@
 #!/usr/bin/python3 -I
 """omp-owner-action - owner-action gateway for restricted automation users (OMP-546)."""
+import base64
+import binascii
 from dataclasses import dataclass, field
 import datetime as dt
+import hashlib
 import io
 import json
 import os
@@ -65,6 +68,235 @@ def _write_all(fd: int, data: bytes) -> None:
         view = view[n:]
 
 
+# D47 owner signature (OMP-403). The caller does not name the key, the
+# namespace, or a file. Stdin above this size is refused and ssh-keygen is not run.
+_MAX_SIGN_MESSAGE = 64 * 1024
+
+# D44 contract approval. The contract arrives as data. This process does not
+# import or run the caller's worktree, and it does not write approval.json.
+_MAX_APPROVE_STDIN = 32 * 1024 * 1024
+_CONTRACT_VERSION = "work.omp.dev/v1"
+_CONTRACT_PATH_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
+
+
+def _sign_stream(stdin: Any) -> Any:
+    if stdin is None:
+        return sys.stdin.buffer
+    if isinstance(stdin, io.TextIOBase):
+        buffered = getattr(stdin, "buffer", None)
+        if buffered is not None:
+            return buffered
+    return stdin
+
+
+def _read_sign_message(stdin: Any) -> bytes | None:
+    """Return the stdin message, or None when it is larger than 64 KiB."""
+    if isinstance(stdin, str):
+        data = stdin.encode("utf-8")
+        return None if len(data) > _MAX_SIGN_MESSAGE else data
+    if isinstance(stdin, (bytes, bytearray, memoryview)):
+        data = bytes(stdin)
+        return None if len(data) > _MAX_SIGN_MESSAGE else data
+    stream = _sign_stream(stdin)
+    cap = _MAX_SIGN_MESSAGE + 1
+    buf = bytearray()
+    while len(buf) < cap:
+        chunk = stream.read(cap - len(buf))
+        if not chunk:
+            break
+        if isinstance(chunk, str):
+            chunk = chunk.encode("utf-8")
+        buf.extend(chunk)
+    if len(buf) > _MAX_SIGN_MESSAGE:
+        return None
+    return bytes(buf)
+
+
+def _execute_sign(fixed: Fixed, message: bytes, stdout: Any) -> int:
+    cmd = [
+        str(fixed.ssh_keygen),
+        "-Y",
+        "sign",
+        "-f",
+        str(fixed.signing_key),
+        "-n",
+        "omp-work-decision",
+    ]
+    try:
+        capture = stdout is not None and not _has_fileno(stdout)
+        proc = subprocess.run(
+            cmd,
+            input=message,
+            env=dict(fixed.env),
+            stdout=subprocess.PIPE if capture else stdout,
+            shell=False,
+            check=False,
+        )
+    except Exception as exc:
+        sys.stderr.write(f"omp-owner-action: execution failed: {exc}\n")
+        return 1
+    if capture and proc.stdout and hasattr(stdout, "write"):
+        if isinstance(stdout, io.TextIOBase):
+            stdout.write(proc.stdout.decode("utf-8", errors="replace"))
+        else:
+            stdout.write(proc.stdout)
+    return proc.returncode
+
+
+def _read_bounded(stdin: Any, limit: int) -> bytes | None:
+    """Return stdin bytes, or None when they are larger than limit."""
+    if isinstance(stdin, str):
+        data = stdin.encode("utf-8")
+        return None if len(data) > limit else data
+    if isinstance(stdin, (bytes, bytearray, memoryview)):
+        data = bytes(stdin)
+        return None if len(data) > limit else data
+    stream = _sign_stream(stdin)
+    buf = bytearray()
+    while True:
+        chunk = stream.read(64 * 1024)
+        if not chunk:
+            break
+        if isinstance(chunk, str):
+            chunk = chunk.encode("utf-8")
+        if len(buf) + len(chunk) > limit:
+            return None
+        buf.extend(chunk)
+    return bytes(buf)
+
+
+def _write_stdout(stdout: Any, text: str) -> None:
+    if stdout is None or isinstance(stdout, io.TextIOBase):
+        target = sys.stdout if stdout is None else stdout
+        target.write(text)
+        return
+    stdout.write(text.encode("utf-8"))
+
+
+def _refuse(reason: str) -> int:
+    sys.stderr.write(f"omp-owner-action: refused: {reason}\n")
+    return 2
+
+
+def _unsafe_contract_path(path: object) -> bool:
+    if not isinstance(path, str) or not path:
+        return True
+    if path.startswith("/") or path == "approval.json" or ".." in path:
+        return True
+    return _CONTRACT_PATH_RE.fullmatch(path) is None
+
+
+def _parse_manifest_paths(raw: bytes) -> list[str] | None:
+    try:
+        manifest = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(manifest, dict) or set(manifest) != {"paths"}:
+        return None
+    paths = manifest["paths"]
+    if not isinstance(paths, list) or not all(isinstance(item, str) for item in paths):
+        return None
+    return paths
+
+
+def _approval_issues(schema_bytes: bytes | None) -> list[str] | None:
+    if schema_bytes is None:
+        return None
+    try:
+        schema = json.loads(schema_bytes.decode("utf-8"))
+        enum = schema["models"]["Approval"]["properties"]["issue"]["enum"]
+    except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, AttributeError):
+        return None
+    if not isinstance(enum, list) or not all(isinstance(item, str) for item in enum):
+        return None
+    return enum
+
+
+def _contract_sha256(paths: list[str], files: Mapping[str, bytes]) -> str:
+    """Same byte recipe as omp_work.contract_sha256, over the stdin files."""
+    digest = hashlib.sha256()
+    for relative_path in paths:
+        data = files[relative_path]
+        digest.update(relative_path.encode())
+        digest.update(b"\0")
+        digest.update(hashlib.sha256(data).hexdigest().encode())
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _approval_attestation(contract_digest: str, issue: str, approved_at: str) -> str:
+    """Same byte recipe as omp_work.approval_attestation."""
+    digest = hashlib.sha256()
+    digest.update(b"omp-work approve\0")
+    digest.update(_CONTRACT_VERSION.encode())
+    digest.update(b"\0")
+    digest.update(contract_digest.encode())
+    digest.update(b"\0")
+    digest.update(issue.encode())
+    digest.update(b"\0")
+    digest.update(approved_at.encode())
+    return digest.hexdigest()
+
+
+def _decode_contract_files(files: object) -> dict[str, bytes] | int:
+    if not isinstance(files, dict):
+        return _refuse("contract files must be an object")
+    decoded: dict[str, bytes] = {}
+    for path, value in files.items():
+        if _unsafe_contract_path(path):
+            return _refuse("unsafe contract path")
+        if not isinstance(value, str):
+            return _refuse("bad base64")
+        try:
+            decoded[path] = base64.b64decode(value, validate=True)
+        except (binascii.Error, ValueError):
+            return _refuse("bad base64")
+    return decoded
+
+
+def _approve_contract(issue: str, raw: bytes, stdout: Any) -> int:
+    try:
+        body = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _refuse("contract stdin is not json")
+    if not isinstance(body, dict) or set(body) != {"files"}:
+        return _refuse("contract stdin must contain files")
+    decoded = _decode_contract_files(body["files"])
+    if isinstance(decoded, int):
+        return decoded
+    if "manifest.json" not in decoded:
+        return _refuse("manifest.json is required")
+    paths = _parse_manifest_paths(decoded["manifest.json"])
+    if paths is None:
+        return _refuse("manifest.json paths are invalid")
+    if paths != sorted(set(paths)) or "manifest.json" not in paths:
+        return _refuse("manifest paths must be sorted, unique, and include manifest.json")
+    for path in paths:
+        if _unsafe_contract_path(path):
+            return _refuse("unsafe contract path")
+    if set(decoded) != set(paths):
+        return _refuse("files do not match manifest paths")
+    enum = _approval_issues(decoded.get("schema.json"))
+    if enum is None or issue not in enum:
+        return _refuse("issue is not in the Approval enum")
+    digest = _contract_sha256(paths, decoded)
+    approved_at = dt.datetime.now(dt.timezone.utc).isoformat()
+    payload = {
+        "contract_version": _CONTRACT_VERSION,
+        "contract_sha256": digest,
+        "approved_by": "owner",
+        "approved_at": approved_at,
+        "issue": issue,
+        "attestation": _approval_attestation(digest, issue, approved_at),
+    }
+    try:
+        _write_stdout(stdout, json.dumps(payload) + "\n")
+    except Exception as exc:
+        sys.stderr.write(f"omp-owner-action: execution failed: {exc}\n")
+        return 1
+    return 0
+
+
 def main(
     argv: list[str] | None = None,
     fixed: Fixed = FIXED,
@@ -126,6 +358,41 @@ def main(
                 cwd = str(fixed.clone)
             else:
                 sys.stderr.write("omp-owner-action: refused: deploy takes no arguments\n")
+        elif action == "sign":
+            if len(action_args) != 0:
+                sys.stderr.write("omp-owner-action: refused: sign takes no arguments\n")
+            elif stdin is None:
+                # The CLI passes sys.stdin.buffer. No stream means no message.
+                sys.stderr.write("omp-owner-action: refused: sign reads the message from stdin\n")
+            else:
+                try:
+                    message = _read_sign_message(stdin)
+                except OSError:
+                    sys.stderr.write("omp-owner-action: refused: cannot read message\n")
+                else:
+                    if message is None:
+                        sys.stderr.write("omp-owner-action: refused: message exceeds 64 KiB\n")
+                    else:
+                        rc = _execute_sign(fixed, message, stdout)
+        elif action == "approve":
+            if (
+                len(action_args) != 2
+                or action_args[0] != "--issue"
+                or KEY_RE.fullmatch(action_args[1]) is None
+            ):
+                sys.stderr.write("omp-owner-action: refused: approve requires --issue KEY\n")
+            elif stdin is None:
+                sys.stderr.write("omp-owner-action: refused: approve reads the contract from stdin\n")
+            else:
+                try:
+                    raw_stdin = _read_bounded(stdin, _MAX_APPROVE_STDIN)
+                except OSError:
+                    sys.stderr.write("omp-owner-action: refused: cannot read contract\n")
+                else:
+                    if raw_stdin is None:
+                        sys.stderr.write("omp-owner-action: refused: contract exceeds 32 MiB\n")
+                    else:
+                        rc = _approve_contract(action_args[1], raw_stdin, stdout)
         else:
             sys.stderr.write(f"omp-owner-action: refused: unknown action {action!r}\n")
 
@@ -178,4 +445,4 @@ def main(
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(stdin=sys.stdin.buffer))

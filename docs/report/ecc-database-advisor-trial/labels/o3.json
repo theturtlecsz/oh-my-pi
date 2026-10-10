@@ -1,0 +1,18 @@
+{
+  "case": "o3",
+  "commit": "3f38b2984d612e4d233f63419505cc8fedaead58",
+  "labels": [
+    {
+      "n": 1,
+      "label": "useful",
+      "rationale": "python/omp-work/src/omp_work/v1/store.py:6349 adds scope_class and intake_hold to tree items. python/omp-work/src/omp_work/v1/api_models.py:40 declares WorkItemView without these fields. python/omp-work/src/omp_work/v1/models.py:12 forbids extra fields. python/omp-work/src/omp_work/v1/client.py:66 validates tree responses, so a nonempty tree fails client validation.",
+      "matches_known_defect": false
+    },
+    {
+      "n": 2,
+      "label": "false_alarm",
+      "rationale": "python/omp-work/src/omp_work/v1/store.py:6364 returns the tree response. The note concerns the reviewer's external ledger writes, not a problem or needed check in this case scope.",
+      "matches_known_defect": false
+    }
+  ]
+}
