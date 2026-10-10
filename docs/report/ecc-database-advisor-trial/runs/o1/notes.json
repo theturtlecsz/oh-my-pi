@@ -1,0 +1,22 @@
+{
+	"case": "o1",
+	"commit": "a2d815bbe659c3d783e43d37c2589387dc0b120b",
+	"advisor": "ECC Database Reviewer",
+	"mechanism": "omp -p --advisor (WATCHDOG.yml roster)",
+	"omp_exit": 0,
+	"advisor_completed": true,
+	"model": "google-antigravity/gemini-3.7-flash",
+	"transcript_sha256": "2a32d7996dfc88efeb12fd7fa970d3c8bba67e18c16777d8a4896d2145ee0b40",
+	"suppressed": 0,
+	"failed": 0,
+	"unmatched": 0,
+	"notes": [
+		{
+			"n": 1,
+			"tool_call_id": "call_39960",
+			"note": "In 0033_project_egress.sql, egress_records has a foreign key referencing projects(workspace_id, project_id) but lacks an index on (workspace_id, project_id[, mission_id], at). Consequently, list_egress_records() requires a sequential scan and sort over this append-only audit table. Suggest verifying query performance and noting the missing index.",
+			"severity": "nit",
+			"category": "semantic-concern"
+		}
+	]
+}

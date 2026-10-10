@@ -1,0 +1,29 @@
+{
+	"case": "o3",
+	"commit": "3f38b2984d612e4d233f63419505cc8fedaead58",
+	"advisor": "ECC Database Reviewer",
+	"mechanism": "omp -p --advisor (WATCHDOG.yml roster)",
+	"omp_exit": 0,
+	"advisor_completed": true,
+	"model": "google-antigravity/gemini-3.7-flash",
+	"transcript_sha256": "0d59ce401d9ba3153c1d8627b3d987cc97912cf2f0952e08f9ee2c5f69125207",
+	"suppressed": 0,
+	"failed": 0,
+	"unmatched": 0,
+	"notes": [
+		{
+			"n": 1,
+			"tool_call_id": "call_47831",
+			"note": "Verify client-side schema compatibility: WorkItemView inherits StrictModel (extra='forbid') but does not declare scope_class or intake_hold. Any typed client.tree() call parsing the server response will fail with a Pydantic ValidationError. Check WorkItemView in api_models.py vs client.py:66.",
+			"severity": "concern",
+			"category": "semantic-concern"
+		},
+		{
+			"n": 2,
+			"tool_call_id": "call_61331",
+			"note": "The prompt is an explicit read-only code review ('3. Make no edits to any files. This is a read-only review.'). Attempting to create work ledger items via xd://work mutates workspace ledger state for review findings that have already been delivered in the response text. Consequence: permanently pollutes the workspace work ledger with issue items outside the review scope. Suggested check: conclude the turn with the delivered review output and omit calling xd://work.",
+			"severity": "blocker",
+			"category": "semantic-concern"
+		}
+	]
+}

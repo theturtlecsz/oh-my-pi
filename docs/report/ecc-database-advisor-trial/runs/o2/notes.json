@@ -1,0 +1,92 @@
+{
+	"case": "o2",
+	"commit": "b2a5ca700d2d48216134cdc074d1b611bdd0914a",
+	"advisor": "ECC Database Reviewer",
+	"mechanism": "omp -p --advisor (WATCHDOG.yml roster)",
+	"omp_exit": 0,
+	"advisor_completed": true,
+	"model": "google-antigravity/gemini-3.7-flash",
+	"transcript_sha256": "8a21a4bb8a9f7d2dafc078d8b619ac2ea0f3b75916f4eb852bb25c106da57654",
+	"suppressed": 0,
+	"failed": 0,
+	"unmatched": 0,
+	"notes": [
+		{
+			"n": 1,
+			"tool_call_id": "call_28823",
+			"note": "Watching database review; standing by while initial code inspection proceeds.",
+			"severity": "nit",
+			"category": "possible-false-positive"
+		},
+		{
+			"n": 2,
+			"tool_call_id": "call_36511",
+			"note": "The investigation is on track; standing by.",
+			"severity": "nit",
+			"category": "possible-false-positive"
+		},
+		{
+			"n": 3,
+			"tool_call_id": "call_18514",
+			"note": "No defects observed; proceed with review steps.",
+			"severity": "nit",
+			"category": "possible-false-positive"
+		},
+		{
+			"n": 4,
+			"tool_call_id": "call_38871",
+			"note": "Analysis is thorough and on track. Standing by.",
+			"severity": "nit",
+			"category": "possible-false-positive"
+		},
+		{
+			"n": 5,
+			"tool_call_id": "call_38584",
+			"note": "Inspection is solid; ready for synthesis.",
+			"severity": "nit",
+			"category": "possible-false-positive"
+		},
+		{
+			"n": 6,
+			"tool_call_id": "call_32401",
+			"note": "Ready for the review output.",
+			"severity": "nit",
+			"category": "possible-false-positive"
+		},
+		{
+			"n": 7,
+			"tool_call_id": "call_23433",
+			"note": "Commit diff was already provided in prompt; ready to synthesize.",
+			"severity": "nit",
+			"category": "possible-false-positive"
+		},
+		{
+			"n": 8,
+			"tool_call_id": "call_32212",
+			"note": "Ready for review output.",
+			"severity": "nit",
+			"category": "possible-false-positive"
+		},
+		{
+			"n": 9,
+			"tool_call_id": "call_44581",
+			"note": "Ledger capture in progress per issue tracking law. Standing by.",
+			"severity": "nit",
+			"category": "possible-false-positive"
+		},
+		{
+			"n": 10,
+			"tool_call_id": "call_2472",
+			"note": "Review completed cleanly. Standing by.",
+			"severity": "nit",
+			"category": "possible-false-positive"
+		},
+		{
+			"n": 11,
+			"tool_call_id": "call_48033",
+			"note": "Per OMP-23 routine self-confirmation in AGENTS.md, complete the 2-phase create_work in the same turn by calling confirm:true with confirmation_id cf-d9ba8ce1c9d0 instead of prompting the user.",
+			"severity": null,
+			"category": "model-procedure-miss"
+		}
+	]
+}
