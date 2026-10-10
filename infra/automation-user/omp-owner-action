@@ -65,6 +65,75 @@ def _write_all(fd: int, data: bytes) -> None:
         view = view[n:]
 
 
+# D47 owner signature (OMP-403). The caller does not name the key, the
+# namespace, or a file. Stdin above this size is refused and ssh-keygen is not run.
+_MAX_SIGN_MESSAGE = 64 * 1024
+
+
+def _sign_stream(stdin: Any) -> Any:
+    if stdin is None:
+        return sys.stdin.buffer
+    if isinstance(stdin, io.TextIOBase):
+        buffered = getattr(stdin, "buffer", None)
+        if buffered is not None:
+            return buffered
+    return stdin
+
+
+def _read_sign_message(stdin: Any) -> bytes | None:
+    """Return the stdin message, or None when it is larger than 64 KiB."""
+    if isinstance(stdin, str):
+        data = stdin.encode("utf-8")
+        return None if len(data) > _MAX_SIGN_MESSAGE else data
+    if isinstance(stdin, (bytes, bytearray, memoryview)):
+        data = bytes(stdin)
+        return None if len(data) > _MAX_SIGN_MESSAGE else data
+    stream = _sign_stream(stdin)
+    cap = _MAX_SIGN_MESSAGE + 1
+    buf = bytearray()
+    while len(buf) < cap:
+        chunk = stream.read(cap - len(buf))
+        if not chunk:
+            break
+        if isinstance(chunk, str):
+            chunk = chunk.encode("utf-8")
+        buf.extend(chunk)
+    if len(buf) > _MAX_SIGN_MESSAGE:
+        return None
+    return bytes(buf)
+
+
+def _execute_sign(fixed: Fixed, message: bytes, stdout: Any) -> int:
+    cmd = [
+        str(fixed.ssh_keygen),
+        "-Y",
+        "sign",
+        "-f",
+        str(fixed.signing_key),
+        "-n",
+        "omp-work-decision",
+    ]
+    try:
+        capture = stdout is not None and not _has_fileno(stdout)
+        proc = subprocess.run(
+            cmd,
+            input=message,
+            env=dict(fixed.env),
+            stdout=subprocess.PIPE if capture else stdout,
+            shell=False,
+            check=False,
+        )
+    except Exception as exc:
+        sys.stderr.write(f"omp-owner-action: execution failed: {exc}\n")
+        return 1
+    if capture and proc.stdout and hasattr(stdout, "write"):
+        if isinstance(stdout, io.TextIOBase):
+            stdout.write(proc.stdout.decode("utf-8", errors="replace"))
+        else:
+            stdout.write(proc.stdout)
+    return proc.returncode
+
+
 def main(
     argv: list[str] | None = None,
     fixed: Fixed = FIXED,
@@ -126,6 +195,22 @@ def main(
                 cwd = str(fixed.clone)
             else:
                 sys.stderr.write("omp-owner-action: refused: deploy takes no arguments\n")
+        elif action == "sign":
+            if len(action_args) != 0:
+                sys.stderr.write("omp-owner-action: refused: sign takes no arguments\n")
+            elif stdin is None:
+                # The CLI passes sys.stdin.buffer. No stream means no message.
+                sys.stderr.write("omp-owner-action: refused: sign reads the message from stdin\n")
+            else:
+                try:
+                    message = _read_sign_message(stdin)
+                except OSError:
+                    sys.stderr.write("omp-owner-action: refused: cannot read message\n")
+                else:
+                    if message is None:
+                        sys.stderr.write("omp-owner-action: refused: message exceeds 64 KiB\n")
+                    else:
+                        rc = _execute_sign(fixed, message, stdout)
         else:
             sys.stderr.write(f"omp-owner-action: refused: unknown action {action!r}\n")
 
@@ -178,4 +263,4 @@ def main(
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(stdin=sys.stdin.buffer))
