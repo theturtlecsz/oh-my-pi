@@ -1,4 +1,4 @@
-"""NSI authority, taxonomy, claim, and status wire contracts reject invalid records."""
+"""NSI authority, taxonomy, claim, status, and contract schemas reject invalid records."""
 
 import json
 from copy import deepcopy
@@ -576,3 +576,190 @@ def test_status_records_accept_empty_lists_plain_timestamps_and_typed_answers():
         {"type": "entity", "value": {"id": "entity-1", "type": "requirement"}},
     ):
         STATUS_VALIDATOR.validate({**DECISION, "answer": answer})
+
+
+CONTRACT_SCHEMA = json.loads(
+    (Path(__file__).parents[1] / "src/omp_work/contracts/nsi/v1/contract.schema.json")
+    .read_text()
+)
+CONTRACT_VALIDATOR = Draft202012Validator(
+    CONTRACT_SCHEMA,
+    registry=Registry().with_resources(
+        (schema["$id"], Resource.from_contents(schema))
+        for schema in (SCHEMA, TAXONOMY_SCHEMA, CLAIM_SCHEMA, STATUS_SCHEMA)
+    ),
+)
+BINDING = {
+    "run_id": "run-1", "revision": 0,
+    "contract_hash": SHA256, "claim_set_hash": SHA256,
+    "rule_bundle_hash": SHA256, "schema_hash": SHA256, "source_hash": SHA256,
+}
+REQUIREMENT = {
+    "id": "requirement-1", "category": "non_functional_qualities",
+    "text": "Availability must reach 99.9%.",
+    "claim_ids": ["claim-1"], "dimension_ids": ["availability"],
+}
+CRITERION = {
+    "id": "criterion-1", "requirement_ids": ["requirement-1"],
+    "description": "Measure availability.", "verification_method": "monitoring",
+    "expected_result": {"type": "number", "value": 99.9},
+}
+FORMALIZATION = {
+    "id": "formalization-1", "requirement_ids": ["requirement-1"],
+    "language": "logic", "expression": "availability >= 99.9",
+    "scope": "service", "assumptions": [], "content_hash": SHA256,
+}
+FORMAL_CHECK = {
+    "id": "check-1", "formalization_id": "formalization-1",
+    "formalization_hash": SHA256, "status": "true", "scope": "service",
+    "evidence_ids": [], "checked_by": {"id": "tool-1", "kind": "tool"},
+    "created_at": "2026-10-10T00:00:00Z",
+}
+RATIFIED_BINDING = {
+    **BINDING, "formalization_id": "formalization-1", "formalization_hash": SHA256,
+    "check_result_id": "check-1", "ratified_by": {"id": "owner-1", "kind": "owner"},
+    "ratification_receipt_id": "ratification-1",
+}
+CONTRACT = {
+    "requirements": [REQUIREMENT], "acceptance_criteria": [CRITERION],
+    "formalizations": [FORMALIZATION], "waivers": [WAIVER],
+}
+ASSESSMENT = {
+    **BINDING, "status": "READY_FOR_RATIFICATION", "gaps": [GAP],
+    "conflicts": [CONFLICT], "derivation_receipt_ids": ["receipt-1"],
+    "assessed_by": {"id": "engine-1", "kind": "rule_engine"},
+    "created_at": "2026-10-10T00:00:00Z",
+}
+RATIFICATION = {
+    **BINDING, "assessment_id": "assessment-1", "formal_binding_ids": ["binding-1"],
+    "ratified_by": {"id": "owner-1", "kind": "owner"},
+    "created_at": "2026-10-10T00:00:00Z",
+}
+READINESS = {
+    **BINDING, "status": "ELIGIBLE_FOR_PUBLICATION",
+    "ratification_receipt_id": "ratification-1", "formal_binding_ids": ["binding-1"],
+    "derivation_receipt_ids": ["receipt-1"],
+    "issued_by": {"id": "engine-1", "kind": "rule_engine"},
+    "created_at": "2026-10-10T00:00:00Z",
+}
+PUBLICATION = {
+    **BINDING, "state": "published", "ratification_receipt_id": "ratification-1",
+    "readiness_receipt_id": "readiness-1", "publishedBy": {"id": "owner-1", "kind": "owner"},
+    "created_at": "2026-10-10T00:00:00Z",
+}
+CONTRACT_RECORDS = [
+    ("RequirementClause", REQUIREMENT), ("AcceptanceCriterion", CRITERION),
+    ("Formalization", FORMALIZATION), ("FormalCheckResult", FORMAL_CHECK),
+    ("Binding", BINDING), ("RatifiedFormalBinding", RATIFIED_BINDING),
+    ("IntakeContract", CONTRACT), ("IntakeReadinessAssessment", ASSESSMENT),
+    ("RatificationReceipt", RATIFICATION), ("IntakeReadinessReceipt", READINESS),
+    ("IntakePublicationReceipt", PUBLICATION),
+]
+
+
+def contract_definition_validator(definition):
+    return CONTRACT_VALIDATOR.evolve(
+        schema={**CONTRACT_SCHEMA, "$ref": f"#/$defs/{definition}"}
+    )
+
+
+@pytest.mark.parametrize("definition,record", CONTRACT_RECORDS)
+def test_contract_records_require_closed_complete_wire_shapes(definition, record):
+    Draft202012Validator.check_schema(CONTRACT_SCHEMA)
+    validator = contract_definition_validator(definition)
+    validator.validate(record)
+    if definition == "IntakeContract":
+        CONTRACT_VALIDATOR.validate(record)
+    for field in record:
+        incomplete = dict(record)
+        del incomplete[field]
+        with pytest.raises(ValidationError):
+            validator.validate(incomplete)
+    with pytest.raises(ValidationError):
+        validator.validate({**record, "unexpected": True})
+
+
+@pytest.mark.parametrize(
+    "definition,record",
+    [(name, record) for name, record in CONTRACT_RECORDS if "run_id" in record],
+)
+def test_every_bound_record_rejects_invalid_revision_and_hashes(definition, record):
+    validator = contract_definition_validator(definition)
+    for revision in (-1, 0.5, True):
+        with pytest.raises(ValidationError):
+            validator.validate({**record, "revision": revision})
+    for field in ("contract_hash", "claim_set_hash", "rule_bundle_hash", "schema_hash", "source_hash"):
+        for invalid in ("a" * 63, "a" * 65, "A" * 64, "g" * 64, 123):
+            with pytest.raises(ValidationError):
+                validator.validate({**record, field: invalid})
+
+
+@pytest.mark.parametrize(
+    "definition,record,field,value",
+    [
+        ("RequirementClause", REQUIREMENT, "text", ""),
+        ("RequirementClause", REQUIREMENT, "category", "unknown"),
+        ("RequirementClause", REQUIREMENT, "claim_ids", [1]),
+        ("RequirementClause", REQUIREMENT, "dimension_ids", [1]),
+        ("AcceptanceCriterion", CRITERION, "requirement_ids", []),
+        ("AcceptanceCriterion", CRITERION, "requirement_ids", [1]),
+        ("AcceptanceCriterion", CRITERION, "description", ""),
+        ("AcceptanceCriterion", CRITERION, "expected_result", {"type": "number", "value": "99.9"}),
+        ("Formalization", FORMALIZATION, "requirement_ids", []),
+        ("Formalization", FORMALIZATION, "assumptions", [1]),
+        ("Formalization", FORMALIZATION, "content_hash", "A" * 64),
+        ("FormalCheckResult", FORMAL_CHECK, "formalization_hash", "a" * 63),
+        ("FormalCheckResult", FORMAL_CHECK, "status", True),
+        ("FormalCheckResult", FORMAL_CHECK, "checked_by", {"id": "tool-1", "kind": "unknown"}),
+        ("FormalCheckResult", FORMAL_CHECK, "created_at", 123),
+        ("RatifiedFormalBinding", RATIFIED_BINDING, "formalization_hash", "g" * 64),
+        ("RatifiedFormalBinding", RATIFIED_BINDING, "ratified_by", {"id": "model-1", "kind": "model"}),
+        ("IntakeContract", CONTRACT, "requirements", [{**REQUIREMENT, "text": ""}]),
+        ("IntakeContract", CONTRACT, "acceptance_criteria", [{**CRITERION, "requirement_ids": []}]),
+        ("IntakeContract", CONTRACT, "formalizations", [{**FORMALIZATION, "content_hash": "invalid"}]),
+        ("IntakeContract", CONTRACT, "waivers", [{**WAIVER, "reason": ""}]),
+        ("IntakeReadinessAssessment", ASSESSMENT, "status", "ELIGIBLE_FOR_PUBLICATION"),
+        ("IntakeReadinessAssessment", ASSESSMENT, "gaps", [{**GAP, "reason": ""}]),
+        ("IntakeReadinessAssessment", ASSESSMENT, "conflicts", [{**CONFLICT, "claim_ids": ["claim-1"]}]),
+        ("IntakeReadinessAssessment", ASSESSMENT, "assessed_by", {"id": "owner-1", "kind": "owner"}),
+        ("RatificationReceipt", RATIFICATION, "ratified_by", {"id": "engine-1", "kind": "rule_engine"}),
+        ("IntakeReadinessReceipt", READINESS, "status", "READY_FOR_RATIFICATION"),
+        ("IntakeReadinessReceipt", READINESS, "issued_by", {"id": "owner-1", "kind": "owner"}),
+        ("IntakePublicationReceipt", PUBLICATION, "state", "ratified"),
+        ("IntakePublicationReceipt", PUBLICATION, "publishedBy", {"id": "model-1", "kind": "model"}),
+    ],
+)
+def test_contract_rejects_invalid_content_receipt_states_and_authority(definition, record, field, value):
+    with pytest.raises(ValidationError):
+        contract_definition_validator(definition).validate({**record, field: value})
+
+
+def test_contract_root_rejects_receipts_and_accepts_empty_collections():
+    CONTRACT_VALIDATOR.validate({field: [] for field in CONTRACT})
+    with pytest.raises(ValidationError):
+        CONTRACT_VALIDATOR.validate(PUBLICATION)
+
+
+@pytest.mark.parametrize("status", ["true", "false", "unknown"])
+def test_formal_checks_accept_three_valued_results(status):
+    contract_definition_validator("FormalCheckResult").validate({**FORMAL_CHECK, "status": status})
+
+
+@pytest.mark.parametrize("status", ["READY_FOR_RATIFICATION", "NEEDS_SPEC", "CONFLICTED"])
+def test_assessments_accept_readiness_outcomes(status):
+    contract_definition_validator("IntakeReadinessAssessment").validate({**ASSESSMENT, "status": status})
+
+
+@pytest.mark.parametrize(
+    "definition,record",
+    [(name, record) for name, record in CONTRACT_RECORDS
+     if name == "RequirementClause" or "created_at" in record],
+)
+def test_contract_preserves_allowed_empty_lists_and_plain_timestamp_strings(definition, record):
+    changed = {
+        field: ([] if isinstance(value, list) and field != "requirement_ids" else value)
+        for field, value in record.items()
+    }
+    if "created_at" in changed:
+        changed["created_at"] = "not-a-timestamp"
+    contract_definition_validator(definition).validate(changed)
