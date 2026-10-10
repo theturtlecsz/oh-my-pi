@@ -343,6 +343,7 @@ import {
 	cfgDisabledExtensions,
 	cfgExtensions,
 	cfgSkills,
+	trustedConfiguredExtensions,
 	type SkillsSettings,
 } from "./extensibility/settings";
 import { cfgTtsr } from "./export/ttsr-settings";
@@ -961,7 +962,9 @@ export async function discoverAuthStorage(
 export async function discoverExtensions(cwd?: string): Promise<LoadExtensionsResult> {
 	const resolvedCwd = cwd ?? getProjectDir();
 
-	return discoverAndLoadExtensions([], resolvedCwd);
+	return discoverAndLoadExtensions([], resolvedCwd, undefined, undefined, {
+		projectTrusted: isProjectPathTrusted(resolvedCwd),
+	});
 }
 
 type ExtensionDiscoveryOptions = Pick<
@@ -986,16 +989,25 @@ export async function discoverSessionExtensionPaths(
 	cwd: string,
 	settings: Settings,
 ): Promise<string[]> {
+	const projectTrusted = isProjectPathTrusted(cwd, settings.getAgentDir());
 	const roots = options.extensionRoots?.();
 	const explicit = roots?.explicit ?? options.additionalExtensionPaths ?? [];
 	const explicitOnly = roots ? roots.mode === "explicit-only" : options.disableExtensionDiscovery;
 	const configuredPaths = explicitOnly
 		? [...explicit]
-		: [...explicit, ...(roots?.configured ?? cfgExtensions.get(settings))];
+		: [
+				...explicit,
+				...(roots
+					? projectTrusted || roots.configuredLevel !== "project"
+						? roots.configured
+						: trustedConfiguredExtensions(settings, false)
+					: trustedConfiguredExtensions(settings, projectTrusted)),
+			];
 	const disabledExtensionIds = explicitOnly ? undefined : cfgDisabledExtensions.get(settings);
 	return discoverExtensionPaths(configuredPaths, cwd, disabledExtensionIds, {
 		ambient: !explicitOnly,
 		includeAmbientHooks: options.includeAmbientHooks,
+		projectTrusted,
 	});
 }
 

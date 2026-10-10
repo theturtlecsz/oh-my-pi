@@ -19,6 +19,10 @@ beforeEach(async () => {
 	agentTmp = await TempDir.create("@commit-extension-provider-agent-");
 	setProjectDir(tmp.path());
 	setAgentDir(agentTmp.path());
+	await Bun.write(
+		path.join(agentTmp.path(), "trusted-projects.json"),
+		JSON.stringify({ version: 1, paths: [tmp.path()] }),
+	);
 
 	const extensionPath = tmp.join("provider.ts");
 	await Bun.write(

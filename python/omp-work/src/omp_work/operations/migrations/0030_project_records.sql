@@ -85,11 +85,6 @@ CREATE TABLE omp_work.project_history (
   FOREIGN KEY (workspace_id, project_id) REFERENCES omp_work.projects(workspace_id, project_id)
 );
 
-CREATE INDEX project_missions_workspace_project_idx
-  ON omp_work.project_missions (workspace_id, project_id);
-CREATE INDEX project_history_workspace_project_idx
-  ON omp_work.project_history (workspace_id, project_id);
-
 CREATE OR REPLACE FUNCTION omp_control.seed_project_record() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog AS $$
 BEGIN
   INSERT INTO omp_work.project_records (workspace_id, project_id, purpose, updated_at)

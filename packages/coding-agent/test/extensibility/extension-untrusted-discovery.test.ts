@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { Settings, resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { discoverExtensionPaths } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
+import { DefaultPackageManager } from "@oh-my-pi/pi-coding-agent/extensibility/legacy-pi-coding-agent-shim";
+import { discoverSessionExtensionPaths } from "@oh-my-pi/pi-coding-agent/sdk";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 describe("extension discovery project trust gate (L-RT-04)", () => {
@@ -48,5 +50,54 @@ describe("extension discovery project trust gate (L-RT-04)", () => {
 		const paths = await discoverExtensionPaths(["../z.ts"], projectDir, undefined, { projectTrusted: false });
 
 		expect(has(paths, path.join(tempDir.path(), "z.ts"))).toBe(true);
+	});
+
+	it("gates session discovery on project trust from trusted-projects.json", async () => {
+		const agentDir = path.join(tempDir.path(), "agent");
+		fs.mkdirSync(agentDir, { recursive: true });
+
+		// Untrusted: no trusted-projects.json yet, so the project-native x.ts and
+		// the project-settings `../y.ts` entry are both withheld.
+		const untrustedSettings = await Settings.init({ inMemory: true, cwd: projectDir, agentDir });
+		const untrusted = await discoverSessionExtensionPaths({}, projectDir, untrustedSettings);
+		expect(has(untrusted, path.join(projectDir, ".omp", "extensions", "x.ts"))).toBe(false);
+		expect(has(untrusted, path.join(tempDir.path(), "y.ts"))).toBe(false);
+
+		// Trusted: after the project lands in the allowlist, both load again.
+		fs.writeFileSync(
+			path.join(agentDir, "trusted-projects.json"),
+			JSON.stringify({ version: 1, paths: [projectDir] }),
+		);
+		resetSettingsForTest();
+		const trustedSettings = await Settings.init({ inMemory: true, cwd: projectDir, agentDir });
+		const trusted = await discoverSessionExtensionPaths({}, projectDir, trustedSettings);
+		expect(has(trusted, path.join(projectDir, ".omp", "extensions", "x.ts"))).toBe(true);
+		expect(has(trusted, path.join(tempDir.path(), "y.ts"))).toBe(true);
+	});
+
+	it("gates legacy DefaultPackageManager.resolve on project trust from trusted-projects.json", async () => {
+		const agentDir = path.join(tempDir.path(), "agent");
+		fs.mkdirSync(agentDir, { recursive: true });
+		const resolve = () =>
+			new DefaultPackageManager({
+				cwd: projectDir,
+				agentDir,
+				settingsManager: Settings.init({ inMemory: true, cwd: projectDir, agentDir }),
+			}).resolve();
+
+		const untrusted = await resolve();
+		const untrustedPaths = untrusted.extensions.map(entry => entry.path);
+		expect(untrustedPaths.some(candidate => candidate.endsWith("x.ts"))).toBe(false);
+		expect(untrustedPaths.some(candidate => candidate.endsWith("y.ts"))).toBe(false);
+
+		fs.writeFileSync(
+			path.join(agentDir, "trusted-projects.json"),
+			JSON.stringify({ version: 1, paths: [projectDir] }),
+		);
+		resetSettingsForTest();
+		const trusted = await resolve();
+		const trustedPaths = trusted.extensions.map(entry => entry.path);
+		expect(trustedPaths.some(candidate => candidate.endsWith("x.ts"))).toBe(true);
+		expect(trustedPaths.some(candidate => candidate.endsWith("y.ts"))).toBe(true);
 	});
 });

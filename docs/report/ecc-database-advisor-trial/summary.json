@@ -1,0 +1,65 @@
+{
+	"cases": 6,
+	"known_bad_cases": 2,
+	"known_defects_caught": 0,
+	"useful": 2,
+	"false_alarm": 23,
+	"per_case": [
+		{
+			"id": "k1",
+			"commit": "20900d3be9c5245be9aa0267bf6a3a122fd1ab7f",
+			"kind": "known_bad",
+			"notes": 0,
+			"useful": 0,
+			"false_alarm": 0,
+			"known_defect_caught": false
+		},
+		{
+			"id": "k2",
+			"commit": "44a2f9446f00786188e17567f5eaee79aa020658",
+			"kind": "known_bad",
+			"notes": 7,
+			"useful": 0,
+			"false_alarm": 7,
+			"known_defect_caught": false
+		},
+		{
+			"id": "o1",
+			"commit": "a2d815bbe659c3d783e43d37c2589387dc0b120b",
+			"kind": "ordinary",
+			"notes": 1,
+			"useful": 0,
+			"false_alarm": 1,
+			"known_defect_caught": null
+		},
+		{
+			"id": "o2",
+			"commit": "b2a5ca700d2d48216134cdc074d1b611bdd0914a",
+			"kind": "ordinary",
+			"notes": 11,
+			"useful": 0,
+			"false_alarm": 11,
+			"known_defect_caught": null
+		},
+		{
+			"id": "o3",
+			"commit": "3f38b2984d612e4d233f63419505cc8fedaead58",
+			"kind": "ordinary",
+			"notes": 2,
+			"useful": 1,
+			"false_alarm": 1,
+			"known_defect_caught": null
+		},
+		{
+			"id": "o4",
+			"commit": "b9793a797d403da7be32c84b90c22189635a97cb",
+			"kind": "ordinary",
+			"notes": 4,
+			"useful": 1,
+			"false_alarm": 3,
+			"known_defect_caught": null
+		}
+	],
+	"rule": "keep iff useful >= false_alarm and known_defects_caught >= 1, else drop",
+	"recommendation": "drop"
+}
