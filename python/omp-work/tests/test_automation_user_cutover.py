@@ -3,7 +3,10 @@
 The script runs against fake `systemctl`/`sudo`/`docker` on PATH. The fake
 systemctl keeps the units' is-enabled/is-active state in a JSON file and logs
 every invocation, so the test can assert both the resulting unit state and
-that a refusal mutated nothing.
+that a refusal mutated nothing. `show -p LoadState --value` prints `loaded`
+for a unit present on that side (or that unit's `load_state`) and `not-found`
+otherwise, and exits 0 either way. `cat` always fails the way a remote user
+manager does ("Cannot remotely cat units").
 """
 
 from __future__ import annotations
@@ -34,7 +37,7 @@ OWNER_UNITS = [
     "flood-tmp-watch.timer",
     "flood-home-pkg-watch.path",
 ]
-AUTOMATION_UNITS = [*OWNER_UNITS, "robomp.service"]
+AUTOMATION_UNITS = [*OWNER_UNITS]
 
 FAKE_SYSTEMCTL = """#!/usr/bin/env bash
 # Fake systemctl for the cutover test: `-M <user>@` selects the automation
@@ -115,11 +118,17 @@ if cmd in ("enable", "disable", "start", "stop", "restart"):
         json.dump(state, handle)
     sys.exit(0)
 
-if cmd == "cat":
-    if args[-1] in section:
-        print("[Unit]")
-        print("Description=fake " + args[-1])
+if cmd == "show":
+    name = args[-1]
+    entry = section.get(name)
+    if not isinstance(entry, dict):
+        print("not-found")
         sys.exit(0)
+    print(entry.get("load_state", "loaded"))
+    sys.exit(0)
+
+if cmd == "cat":
+    print("Cannot remotely cat units", file=sys.stderr)
     sys.exit(1)
 
 sys.exit(0)
@@ -279,7 +288,19 @@ def test_apply_then_rollback_restores_each_snapshot(setup: dict[str, Any]) -> No
         }, unit
 
     # Every owner unit was stopped before any automation unit was started.
+    # Apply asks LoadState before it enables anything. `cat` is not a check:
+    # a remote user manager refuses it.
     calls = [parse_call(line) for line in read_calls(setup)]
+    raw_calls = read_calls(setup)
+    shown = [
+        unit
+        for side, verb, unit in calls
+        if side == "automation" and verb == "show"
+    ]
+    assert shown == AUTOMATION_UNITS
+    for unit in AUTOMATION_UNITS:
+        assert any(f"show -p LoadState --value {unit}" in line for line in raw_calls), unit
+    assert not any(verb == "cat" for _side, verb, _unit in calls)
     last_owner_disable = max(
         i
         for i, (side, verb, _) in enumerate(calls)
@@ -345,29 +366,31 @@ def test_apply_refuses_when_state_file_exists(setup: dict[str, Any]) -> None:
     assert json.loads(setup["state_file"].read_text(encoding="utf-8")) == existing
 
 
-def test_apply_refuses_when_automation_unit_missing(setup: dict[str, Any]) -> None:
+def test_apply_refuses_when_load_state_is_not_loaded(setup: dict[str, Any]) -> None:
+    # `systemctl show` exits 0 for a unit that is not loaded and prints
+    # `not-found`. Apply must compare the value, not the exit status.
     state = read_state(setup)
-    del state["automation"]["robomp.service"]
+    state["automation"]["flood.service"]["load_state"] = "not-found"
     setup["systemd_state"].write_text(json.dumps(state), encoding="utf-8")
     before = read_state(setup)
 
     proc = run_cutover(setup, "apply")
     assert proc.returncode == 1
-    assert "robomp.service" in proc.stderr
+    assert "flood.service" in proc.stderr
     assert read_state(setup) == before
     assert not setup["state_file"].exists()
+    assert any(
+        "show -p LoadState --value flood.service" in line for line in read_calls(setup)
+    )
+    assert not any(parse_call(line)[1] == "cat" for line in read_calls(setup))
 
 
-def test_apply_refuses_when_owner_robomp_container_runs(setup: dict[str, Any]) -> None:
-    before = read_state(setup)
-
+def test_apply_ignores_a_running_container(setup: dict[str, Any]) -> None:
     proc = run_cutover(
         setup, "apply", extra_env={"FAKE_DOCKER_OUTPUT": "robomp-ompbot"}
     )
-    assert proc.returncode == 1
-    assert "robomp" in proc.stderr
-    assert read_state(setup) == before
-    assert not setup["state_file"].exists()
+    assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
+    assert not any(line.startswith("docker ") for line in read_calls(setup))
 
 
 def test_failed_postcheck_exits_1_and_rollback_still_works(
@@ -379,7 +402,7 @@ def test_failed_postcheck_exits_1_and_rollback_still_works(
         setup, "apply", extra_env={"FAKE_SYSTEMD_STUCK": "flood-export.timer"}
     )
     assert proc.returncode == 1
-    assert "run: cutover.sh rollback --state-file" in proc.stdout + proc.stderr
+    assert "run: cutover.sh rollback --user ompbot --state-file" in proc.stdout + proc.stderr
     assert setup["state_file"].exists()
 
     failed_state = read_state(setup)
@@ -460,7 +483,7 @@ def test_apply_fails_when_owner_unit_cannot_be_stopped(setup: dict[str, Any]) ->
         extra_env={"FAKE_SYSTEMD_FAIL": "owner disable flood.service"},
     )
     assert proc.returncode == 1
-    assert "run: cutover.sh rollback --state-file" in proc.stdout + proc.stderr
+    assert "run: cutover.sh rollback --user ompbot --state-file" in proc.stdout + proc.stderr
     assert setup["state_file"].exists()
     # The failed stop left flood.service enabled and active.
     failed_state = read_state(setup)
@@ -488,6 +511,19 @@ def test_rollback_refuses_corrupt_state_file_before_mutation(
     # The snapshot was read before any unit was touched, so nothing changed.
     assert read_state(setup) == before
     assert setup["state_file"].read_text(encoding="utf-8") == "{not json"
+
+
+def test_shipped_units_omit_robomp() -> None:
+    shipped = (
+        REPO_ROOT / "infra" / "automation-user" / "cutover-units.tsv"
+    ).read_text(encoding="utf-8")
+    assert "robomp" not in shipped
+    automation = [
+        line.split("\t", 1)[1].strip()
+        for line in shipped.splitlines()
+        if line.startswith("automation\t")
+    ]
+    assert automation == OWNER_UNITS
 
 
 def test_rollback_reports_failed_owner_restore(setup: dict[str, Any]) -> None:

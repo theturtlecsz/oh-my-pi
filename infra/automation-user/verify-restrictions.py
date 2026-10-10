@@ -18,6 +18,9 @@ BANNED_GROUPS = frozenset(
     {"wheel", "sudo", "docker", "adm", "root", "lxd", "libvirt", "disk"}
 )
 
+# The automation user's only sudo rule: the owner-action gateway, run as the owner.
+OWNER_ACTION_GATEWAY = "/usr/local/libexec/omp-owner-action"
+
 SENSITIVE_OWNER_PATHS = (
     ".config/omp/work-ledger/capabilities",
     ".config/omp-work",
@@ -134,7 +137,32 @@ def check_owner_credentials(owner_home: Path | None) -> dict[str, Any]:
     }
 
 
-def check_sudo_named_only(admin_commands_file: Path | None) -> dict[str, Any]:
+def _nopasswd_entries(sudo_l_stdout: str) -> list[tuple[str, str]] | dict[str, Any]:
+    """Return (runas, command) pairs from `sudo -n -l`, or a failure detail."""
+    entries: list[tuple[str, str]] = []
+    for line in sudo_l_stdout.splitlines():
+        stripped = line.strip()
+        if "(ALL) ALL" in stripped or "(ALL : ALL) ALL" in stripped:
+            return {"ok": False, "detail": f"sudo privileges contain ALL: '{stripped}'"}
+        if "NOPASSWD: ALL" in stripped:
+            return {"ok": False, "detail": "sudo privileges contain NOPASSWD: ALL"}
+        if "NOPASSWD:" not in stripped:
+            continue
+        before, after = stripped.split("NOPASSWD:", 1)
+        runas = ""
+        if "(" in before and ")" in before:
+            runas = before[before.rfind("(") + 1 : before.rfind(")")].strip()
+        for cmd in after.split(","):
+            command = cmd.strip()
+            if not command:
+                continue
+            if command == "ALL" or command == "(ALL) ALL":
+                return {"ok": False, "detail": "sudo privileges contain ALL command"}
+            entries.append((runas, command))
+    return entries
+
+
+def check_sudo_named_only(owner_name: str, admin_commands_file: Path | None) -> dict[str, Any]:
     sudo = _executable("sudo")
     try:
         proc_true = subprocess.run(  # nosec B603 - absolute sudo from shutil.which, fixed argv, no shell
@@ -147,17 +175,14 @@ def check_sudo_named_only(admin_commands_file: Path | None) -> dict[str, Any]:
     except Exception as e:
         return {"ok": False, "detail": f"Failed to execute 'sudo -n true': {e}"}
 
-    if admin_commands_file is None or not admin_commands_file.exists():
-        return {"ok": False, "detail": f"Admin commands file '{admin_commands_file}' not found"}
-
-    try:
-        expected_commands = [
-            line.strip()
-            for line in admin_commands_file.read_text(encoding="utf-8").splitlines()
-            if line.strip() and not line.strip().startswith("#")
-        ]
-    except Exception as e:
-        return {"ok": False, "detail": f"Failed to read admin commands file: {e}"}
+    if admin_commands_file is not None and admin_commands_file.exists():
+        return {
+            "ok": False,
+            "detail": (
+                f"Admin commands file '{admin_commands_file}' exists; "
+                "the only sudo rule is the owner-action gateway"
+            ),
+        }
 
     try:
         proc_l = subprocess.run(  # nosec B603 - absolute sudo from shutil.which, fixed argv, no shell
@@ -170,36 +195,22 @@ def check_sudo_named_only(admin_commands_file: Path | None) -> dict[str, Any]:
     except Exception as e:
         return {"ok": False, "detail": f"Failed to execute 'sudo -n -l': {e}"}
 
-    lines = proc_l.stdout.splitlines()
+    entries = _nopasswd_entries(proc_l.stdout)
+    if isinstance(entries, dict):
+        return entries
 
-    for line in lines:
-        stripped = line.strip()
-        if "(ALL) ALL" in stripped or "(ALL : ALL) ALL" in stripped:
-            return {"ok": False, "detail": f"sudo privileges contain ALL: '{stripped}'"}
-        if "NOPASSWD: ALL" in stripped:
-            return {"ok": False, "detail": "sudo privileges contain NOPASSWD: ALL"}
-
-    nopasswd_cmds: list[str] = []
-    for line in lines:
-        stripped = line.strip()
-        if "NOPASSWD:" in stripped:
-            cmd_part = stripped.split("NOPASSWD:", 1)[1].strip()
-            for cmd in cmd_part.split(","):
-                c = cmd.strip()
-                if c:
-                    if c == "ALL" or c == "(ALL) ALL":
-                        return {"ok": False, "detail": "sudo privileges contain ALL command"}
-                    nopasswd_cmds.append(c)
-
-    if sorted(nopasswd_cmds) != sorted(expected_commands):
+    expected = [(owner_name, OWNER_ACTION_GATEWAY)]
+    if entries != expected:
         return {
             "ok": False,
-            "detail": f"NOPASSWD commands ({nopasswd_cmds}) do not match admin list ({expected_commands})",
+            "detail": (
+                f"sudo rule ({entries}) is not exactly {OWNER_ACTION_GATEWAY} as {owner_name}"
+            ),
         }
 
     return {
         "ok": True,
-        "detail": f"NOPASSWD commands match admin list exactly ({len(nopasswd_cmds)} commands)",
+        "detail": f"Only sudo rule is {OWNER_ACTION_GATEWAY} as {owner_name}",
     }
 
 
@@ -312,7 +323,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--admin-commands",
         type=Path,
         default=None,
-        help="Path to file listing allowed admin commands (one per line)",
+        help="Path that must not exist; an admin-commands file means sudo is not gateway-only",
     )
     parser.add_argument(
         "--client-config",
@@ -371,7 +382,7 @@ def main(argv: list[str] | None = None) -> int:
         "not_owner": check_not_owner(args.owner),
         "groups": check_groups(),
         "owner_credentials_unreadable": check_owner_credentials(owner_home),
-        "sudo_named_only": check_sudo_named_only(admin_commands_file),
+        "sudo_named_only": check_sudo_named_only(args.owner, admin_commands_file),
         "docker_socket": check_docker_socket(docker_socket),
         "no_cloud_credentials": check_no_cloud_credentials(),
         "ledger_principal": check_ledger_principal(client_config, owner_home),

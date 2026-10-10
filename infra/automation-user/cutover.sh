@@ -302,20 +302,17 @@ if [ "$action" = apply ]; then
 
 	missing=""
 	for unit in "${automation_units[@]}"; do
-		# `remote cat` fails for a unit the automation user does not have
-		# installed; a missing unit would fail the post-check anyway.
-		if ! remote cat "$unit" >/dev/null 2>&1; then
+		# `systemctl --user -M U@ cat` always fails ("Cannot remotely cat
+		# units"). LoadState is `loaded` only when that user's manager has the
+		# unit file; `show` prints the word and exits 0 even for `not-found`.
+		load_state=$(remote show -p LoadState --value "$unit" 2>/dev/null || true)
+		if [ "$load_state" != loaded ]; then
 			if [ -z "$missing" ]; then missing=$unit; else missing="$missing $unit"; fi
 		fi
 	done
 	if [ -n "$missing" ]; then
 		echo "cutover.sh: refusing: automation unit(s) missing for $user: $missing" >&2
 		echo "cutover.sh: provision the automation user and its units first (docs/automation-user.md)" >&2
-		exit 1
-	fi
-
-	if [ -n "$(docker ps --filter name=robomp --format '{{.Names}}' 2>/dev/null || true)" ]; then
-		echo "cutover.sh: refusing: an owner robomp container is running; stop it before cutover" >&2
 		exit 1
 	fi
 
@@ -356,7 +353,7 @@ if [ "$action" = apply ]; then
 	if [ -n "$owner_failed" ] || [ -n "$automation_failed" ]; then
 		[ -z "$owner_failed" ] || echo "cutover.sh: post-check failed: owner unit(s) not stopped: $owner_failed" >&2
 		[ -z "$automation_failed" ] || echo "cutover.sh: post-check failed: automation unit(s) not enabled+active: $automation_failed" >&2
-		echo "run: cutover.sh rollback --state-file $state_file"
+		echo "run: cutover.sh rollback --user $user --state-file $state_file"
 		exit 1
 	fi
 

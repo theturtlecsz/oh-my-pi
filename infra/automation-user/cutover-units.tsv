@@ -12,4 +12,3 @@ automation	flood-export.timer
 automation	flood-dashboard.timer
 automation	flood-tmp-watch.timer
 automation	flood-home-pkg-watch.path
-automation	robomp.service
