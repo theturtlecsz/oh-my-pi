@@ -222,18 +222,35 @@ class ProjectStoreMixin:
     def ensure_project(
         self, workspace_id: UUID, actor_id: UUID, key: str, name: str, kind: str
     ) -> UUID:
-        """Return the unarchived project with key, creating it (and its record) if absent."""
-        with self._transaction(workspace_id, actor_id) as cur:
-            project_id = self._existing_project_id(cur, workspace_id, key)
-            if project_id is not None:
-                return project_id
-            project_id = uuid4()
-            cur.execute(
-                "INSERT INTO omp_work.projects(project_id, workspace_id, key, name, kind)"
-                " VALUES (%s, %s, %s, %s, %s)",
-                (project_id, workspace_id, key, name, kind),
-            )
-            return project_id
+        """Return the unarchived project with key, creating it (and its record) if absent.
+
+        Two concurrent creators of one key both read it as absent, so the whole
+        lookup-plus-insert runs serializable: one commits, the other fails with
+        a SerializationFailure and retries with a fresh transaction and lookup,
+        which then reads the committed row. Three attempts, as execute does;
+        the third failure surfaces WorkStoreError("unavailable").
+        """
+        for attempt in range(1, 4):
+            try:
+                with self._transaction(
+                    workspace_id, actor_id, serializable=True
+                ) as cur:
+                    project_id = self._existing_project_id(cur, workspace_id, key)
+                    if project_id is not None:
+                        return project_id
+                    project_id = uuid4()
+                    cur.execute(
+                        "INSERT INTO omp_work.projects(project_id, workspace_id, key, name, kind)"
+                        " VALUES (%s, %s, %s, %s, %s)",
+                        (project_id, workspace_id, key, name, kind),
+                    )
+                    return project_id
+            except psycopg.errors.SerializationFailure as error:
+                if attempt == 3:
+                    raise WorkStoreError(
+                        "unavailable", ("retry_exhausted",)
+                    ) from error
+        raise AssertionError("unreachable")
 
     def find_project(
         self, workspace_id: UUID, actor_id: UUID, key: str
