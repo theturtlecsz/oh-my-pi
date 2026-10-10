@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+import shutil
 import subprocess
 from typing import Any
 
@@ -53,8 +54,16 @@ _LIT_DRAFT = (
 def _unshare_fails() -> bool:
     """Return True if unshare cannot isolate user, net, and mount namespaces."""
     try:
+        unshare = shutil.which("unshare")
+        true = shutil.which("true")
+        if unshare is None or true is None:
+            return True
         probe = subprocess.run(
-            ["unshare", "--user", "--map-root-user", "--net", "--mount", "true"],
+            [
+                str(Path(unshare).absolute()),
+                "--user", "--map-root-user", "--net", "--mount",
+                str(Path(true).absolute()),
+            ],
             capture_output=True,
             timeout=5,
         )
@@ -214,12 +223,14 @@ def run_ml(directory: str | Path, literature_dir: str | Path) -> dict[str, Any]:
     }
     bon_opened = run_policy("best_of_n", tree, budget=3, width=2)
     bon_winner_id = winner({k: tree[k] for k in bon_opened})
-    assert bon_winner_id is not None
+    if bon_winner_id is None:
+        raise AssertionError
     bon_metric = float(tree[bon_winner_id]["metric"])
 
     beam_opened = run_policy("beam", tree, budget=3, width=2)
     beam_winner_id = winner({k: tree[k] for k in beam_opened})
-    assert beam_winner_id is not None
+    if beam_winner_id is None:
+        raise AssertionError
     beam_metric = float(tree[beam_winner_id]["metric"])
 
     receipt_sha = "0" * 64

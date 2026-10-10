@@ -5,14 +5,13 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 import hashlib
-import json
 import math
 from pathlib import Path
 import statistics
 import threading
 from typing import Any
 
-from omp_work.jobs.runner import BackendIncompatible, LocalJailBackend, RunRequest, RunResult
+from omp_work.jobs.runner import LocalJailBackend, RunRequest, RunResult
 from omp_work.v1.canonical import canonical_json
 
 __all__ = [
