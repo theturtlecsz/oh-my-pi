@@ -201,6 +201,82 @@ def test_second_migrate_and_apply_jobs_migrations_are_noops(migrated) -> None:
     assert _jobs_rows(config) == before
 
 
+def test_legacy_native_row_does_not_block_workspace_check(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0004 is NOT VALID: a native row without workspace_id or kind, written
+    before the check, does not block migrate, and a new such row is refused.
+    """
+    from pg_native import native_postgres
+
+    root = tmp_path_factory.mktemp("jobs-0004-legacy-native")
+    config = _config(root)
+    real_jobs_migrations = database.jobs_migrations
+
+    def jobs_through_0003() -> list[tuple[int, Path]]:
+        return [(ordinal, path) for ordinal, path in real_jobs_migrations() if ordinal < 4]
+
+    monkeypatch.setattr(database, "validate_bundle", lambda **kw: None)
+    monkeypatch.setattr(database, "jobs_migrations", jobs_through_0003)
+    with native_postgres(root, config.port):
+        bootstrap(config)
+        legacy_id = "legacy-native-no-workspace"
+        with psycopg.connect(**config.connection_kwargs("postgres"), autocommit=True) as conn:
+            conn.execute(
+                "INSERT INTO omp_jobs.jobs (job_id, status, source) VALUES (%s, 'backlog', 'native')",
+                (legacy_id,),
+            )
+            recorded = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT filename FROM omp_jobs.schema_migrations ORDER BY ordinal"
+                ).fetchall()
+            ]
+            assert recorded == [
+                "0001_omp_jobs_schema.sql",
+                "0002_shadow_provenance.sql",
+                "0003_native_research_jobs.sql",
+            ]
+
+        monkeypatch.setattr(database, "jobs_migrations", real_jobs_migrations)
+        migrate(config)
+
+        with psycopg.connect(**config.connection_kwargs("omp_work_app"), autocommit=True) as conn:
+            assert conn.execute(
+                "SELECT source, workspace_id, kind FROM omp_jobs.jobs WHERE job_id=%s",
+                (legacy_id,),
+            ).fetchone() == ("native", None, None)
+            recorded = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT filename FROM omp_jobs.schema_migrations ORDER BY ordinal"
+                ).fetchall()
+            ]
+            assert recorded == [path.name for _, path in real_jobs_migrations()]
+            validated = conn.execute(
+                """
+                SELECT c.convalidated
+                FROM pg_constraint c
+                JOIN pg_class r ON r.oid = c.conrelid
+                JOIN pg_namespace n ON n.oid = r.relnamespace
+                WHERE n.nspname = 'omp_jobs'
+                  AND r.relname = 'jobs'
+                  AND c.conname = 'jobs_native_workspace_check'
+                """
+            ).fetchone()
+            assert validated == (False,)
+            new_id = "new-native-no-workspace"
+            with pytest.raises(psycopg.errors.CheckViolation) as refused:
+                conn.execute(
+                    "INSERT INTO omp_jobs.jobs (job_id, status, source) VALUES (%s, 'backlog', 'native')",
+                    (new_id,),
+                )
+            assert refused.value.diag.constraint_name == "jobs_native_workspace_check"
+            assert conn.execute(
+                "SELECT job_id FROM omp_jobs.jobs WHERE job_id=%s", (new_id,)
+            ).fetchone() is None
+
+
 def test_target_limits_workservice_ordinals_only(
     tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
