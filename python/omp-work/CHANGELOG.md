@@ -76,6 +76,7 @@
 ### Fixed
 
 - `omp_work_readonly` and `omp_work_backup` can read the native jobs tables (workers, operations, outbox) when the jobs migrations ran as `omp_work_migrator` (OMP-554).
+- Concurrent ensure_project calls reuse one unarchived project (OMP-560).
 - Signed mission-event push skips a subscription with no push_url, rejects a redirect instead of following it, and treats a non-ASCII signature header as unverified (OMP-415).
 - Parallel job completion now releases leases and reservations in the terminal transaction, preserves a winning terminal result, and can persist a bounded downstream closeout obligation for safe retry after daemon interruption. Cancellation waits for verified worker termination; checkpoint outcomes remain supported.
 - Expired execution grants fence fresh grant-linked commands, work-item relation edits/removals, and focus changes while preserving idempotent replay, delivery/auditor settlement, and explicit owner reconciliation before replacement admission.
