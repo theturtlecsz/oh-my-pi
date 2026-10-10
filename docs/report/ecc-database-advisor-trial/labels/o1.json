@@ -1,0 +1,12 @@
+{
+	"case": "o1",
+	"commit": "a2d815bbe659c3d783e43d37c2589387dc0b120b",
+	"labels": [
+		{
+			"n": 1,
+			"label": "false_alarm",
+			"rationale": "The first column of the primary key at python/omp-work/src/omp_work/operations/migrations/0033_project_egress.sql:47 is workspace_id. list_egress_records filters that column at python/omp-work/src/omp_work/egress_store.py:171. The planner can use the primary key. A sequential scan is not required. The note asks for one extra index. The list query stays correct without that index.",
+			"matches_known_defect": false
+		}
+	]
+}
