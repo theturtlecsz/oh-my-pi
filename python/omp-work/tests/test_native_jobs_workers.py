@@ -629,6 +629,37 @@ def test_append_event_stays_inside_the_native_workspace(native_jobs) -> None:
     assert written == {"events-home"}
 
 
+def test_append_event_concurrent_sequences_without_race(native_jobs) -> None:
+    """Concurrent transactions on one job serialize on the job row without sequence collisions."""
+    import concurrent.futures
+
+    _insert_native_job(native_jobs, job_id="events-concurrent")
+    store = _store(native_jobs)
+
+    def append_one(i: int) -> int:
+        with store.transaction(native_jobs.workspace_id, native_jobs.actor_id) as cur:
+            return store.append_event(
+                cur,
+                workspace_id=native_jobs.workspace_id,
+                job_id="events-concurrent",
+                kind=f"event-{i}",
+                actor=f"worker-{i}",
+            )
+
+    count = 10
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        seqs = list(executor.map(append_one, range(count)))
+
+    assert sorted(seqs) == list(range(1, count + 1))
+    with store.transaction(native_jobs.workspace_id, native_jobs.actor_id) as cur:
+        cur.execute(
+            "SELECT seq, kind FROM omp_jobs.job_events WHERE job_id='events-concurrent' ORDER BY seq"
+        )
+        rows = cur.fetchall()
+    assert [row["seq"] for row in rows] == list(range(1, count + 1))
+    assert len(rows) == count
+
+
 def test_worker_handshake_does_not_replay_across_workspaces(native_jobs) -> None:
     """A second workspace reusing the handshake operation id does not replay."""
     store = _store(native_jobs)

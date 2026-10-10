@@ -199,7 +199,8 @@ class NativeJobStore:
         ``job_events`` has no workspace column and no foreign key, so the job
         row is the isolation check: only a native job in ``workspace_id`` is
         appended. A flood mirror row, a missing id, or another workspace's job
-        is refused and writes nothing.
+        is refused and writes nothing. Locking the job row ``FOR UPDATE``
+        serialises concurrent sequence assignment on the same job.
         """
         cur.execute(
             "SELECT job_id FROM omp_jobs.jobs WHERE workspace_id=%s AND job_id=%s AND source='native' FOR UPDATE",
