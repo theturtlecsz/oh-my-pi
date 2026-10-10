@@ -21,7 +21,10 @@ const campaignId = "00000000-0000-0000-0000-000000000003";
 const operationId = "00000000-0000-0000-0000-000000000004";
 const sourceId = "00000000-0000-0000-0000-000000000005";
 
-function trial(id: string, payload: Record<string, unknown> = {}): ResearchTrial & { payload: Record<string, unknown> } {
+function trial(
+	id: string,
+	payload: Record<string, unknown> = {},
+): ResearchTrial & { payload: Record<string, unknown> } {
 	return {
 		trial_id: id,
 		workspace_id: workspaceId,
@@ -78,7 +81,10 @@ function researchView(): ResearchView {
 				created_at: "2026-10-02T00:00:00Z",
 			},
 		],
-		trials: [trial("pass", { metrics: { primary: 0.8 } }), trial("fix", { parent_id: "pass", metrics: { primary: "bad" } })],
+		trials: [
+			trial("pass", { metrics: { primary: 0.8 } }),
+			trial("fix", { parent_id: "pass", metrics: { primary: "bad" } }),
+		],
 		observations: [
 			observation("pass", {
 				verdict: "PASS",
@@ -99,24 +105,29 @@ function researchView(): ResearchView {
 function fakeService(view = researchView()) {
 	const posts: { envelope: CommandEnvelope; headers: Headers }[] = [];
 	const reads: string[] = [];
-	const client = new WorkClient("http://127.0.0.1:54322", workspaceId, () => "client-token", async (url, init) => {
-		if (init?.method === "POST") {
-			expect(String(url)).toBe("http://127.0.0.1:54322/v1/commands");
-			const envelope = JSON.parse(String(init.body)) as CommandEnvelope;
-			posts.push({ envelope, headers: new Headers(init.headers) });
-			view.campaigns[0].state = "cancelled";
-			return Response.json({
-				receipt: { operation_id: envelope.operation_id, request_id: envelope.request_id, state: "applied" },
-				result: { type: "cancel_research_campaign", status: "applied", campaign: view.campaigns[0] },
-			});
-		}
-		reads.push(String(url));
-		if (String(url).includes("/research-sources/")) {
-			return Response.json({ source: { source_id: sourceId }, content_base64: "bWVhc3VyZWQgcmVzdWx0" });
-		}
-		expect(String(url)).toBe(`http://127.0.0.1:54322/v1/work-items/${workId}/research`);
-		return Response.json(view);
-	});
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		workspaceId,
+		() => "client-token",
+		async (url, init) => {
+			if (init?.method === "POST") {
+				expect(String(url)).toBe("http://127.0.0.1:54322/v1/commands");
+				const envelope = JSON.parse(String(init.body)) as CommandEnvelope;
+				posts.push({ envelope, headers: new Headers(init.headers) });
+				view.campaigns[0].state = "cancelled";
+				return Response.json({
+					receipt: { operation_id: envelope.operation_id, request_id: envelope.request_id, state: "applied" },
+					result: { type: "cancel_research_campaign", status: "applied", campaign: view.campaigns[0] },
+				});
+			}
+			reads.push(String(url));
+			if (String(url).includes("/research-sources/")) {
+				return Response.json({ source: { source_id: sourceId }, content_base64: "bWVhc3VyZWQgcmVzdWx0" });
+			}
+			expect(String(url)).toBe(`http://127.0.0.1:54322/v1/work-items/${workId}/research`);
+			return Response.json(view);
+		},
+	);
 	return { client, posts, reads, view };
 }
 
@@ -129,7 +140,15 @@ function projectionWithDraft(): ResearchProjection {
 		sequence: 1,
 		timestamp: "2026-10-02T00:00:00Z",
 		factType: "research.campaign",
-		payload: { campaignId, status: "draft", objective: "old", domain: "machine_learning", revisionId: "rev-0", activeTrials: 0, completedTrials: 0 },
+		payload: {
+			campaignId,
+			status: "draft",
+			objective: "old",
+			domain: "machine_learning",
+			revisionId: "rev-0",
+			activeTrials: 0,
+			completedTrials: 0,
+		},
 	});
 	return projection;
 }
@@ -140,7 +159,9 @@ test("stop uses fetched revision and authenticated command; subsequent reads sho
 	expect((await readResearchViews(client, workId, projection)).campaigns[0].status).toBe("running");
 	const input = { workId, campaignId, expectedRevision: "rev-0", reason: "review stop", operationId };
 	await expect(stopResearchCampaign(client, input)).rejects.toMatchObject({ code: "version_stale" });
-	await expect(stopResearchCampaign(client, { ...input, campaignId: "missing" })).rejects.toMatchObject({ code: "unknown_campaign" });
+	await expect(stopResearchCampaign(client, { ...input, campaignId: "missing" })).rejects.toMatchObject({
+		code: "unknown_campaign",
+	});
 	expect(posts).toEqual([]);
 	await stopResearchCampaign(client, { ...input, expectedRevision: "rev-1" });
 	expect(posts).toHaveLength(1);
@@ -151,7 +172,10 @@ test("stop uses fetched revision and authenticated command; subsequent reads sho
 		operation_id: operationId,
 		request_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
 		correlation_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
-		command: { type: "cancel_research_campaign", payload: { campaign_id: campaignId, reason: input.reason, work_id: workId } },
+		command: {
+			type: "cancel_research_campaign",
+			payload: { campaign_id: campaignId, reason: input.reason, work_id: workId },
+		},
 	});
 	expect(envelope.request_id).not.toBe(envelope.correlation_id);
 	expect(headers.get("Authorization")).toBe("Bearer client-token");
@@ -165,9 +189,22 @@ test("stop uses fetched revision and authenticated command; subsequent reads sho
 test("service rows determine counts, graph payloads, and evidence; malformed evidence is skipped", async () => {
 	const { client, view } = fakeService();
 	view.trials.push({ ...trial("other"), campaign_id: "other-campaign" }, { ...trial("archived"), state: "archived" });
-	view.observations.push({ ...observation("other", {}), campaign_id: "other-campaign" }, { ...observation("crashed", {}), execution_status: "crashed" });
+	view.observations.push(
+		{ ...observation("other", {}), campaign_id: "other-campaign" },
+		{ ...observation("crashed", {}), execution_status: "crashed" },
+	);
 	const snapshot = await readResearchViews(client, workId);
-	expect(snapshot.campaigns).toEqual([{ campaignId, status: "running", objective: "compare candidates", domain: "machine_learning", revisionId: "rev-1", activeTrials: 2, completedTrials: 2 }]);
+	expect(snapshot.campaigns).toEqual([
+		{
+			campaignId,
+			status: "running",
+			objective: "compare candidates",
+			domain: "machine_learning",
+			revisionId: "rev-1",
+			activeTrials: 2,
+			completedTrials: 2,
+		},
+	]);
 	expect(snapshot.graph.nodes).toEqual([
 		{ id: "pass", parentId: null, metric: 0.8, cost: 0 },
 		{ id: "fix", parentId: "pass", metric: null, cost: 0 },
@@ -175,7 +212,9 @@ test("service rows determine counts, graph payloads, and evidence; malformed evi
 		{ id: "archived", parentId: null, metric: null, cost: 0 },
 	]);
 	expect(snapshot.graph.edges).toEqual([{ from: "pass", to: "fix" }]);
-	expect(snapshot.evidence).toEqual([{ claimId: "claim-1", status: "supported", sourceId, passage: "measured result" }]);
+	expect(snapshot.evidence).toEqual([
+		{ claimId: "claim-1", status: "supported", sourceId, passage: "measured result" },
+	]);
 	expect(snapshot.projectionStatus).toBeNull();
 	expect(snapshot.usage).toEqual({ computeSeconds: 0, modelTokens: 0, costUsd: "0", quotaExceeded: false });
 	expect(snapshot.workerActivity).toEqual({ workers: [], queueDepth: 0 });
@@ -184,7 +223,12 @@ test("service rows determine counts, graph payloads, and evidence; malformed evi
 test("only current projection exposes telemetry; offline and gap states clear it", async () => {
 	const { client } = fakeService();
 	const projection = projectionWithDraft();
-	const base = { schema: "cpk5/v1", sourceIdentity: "research-program", sourceVersion: "research-program.v1", timestamp: "2026-10-02T00:00:00Z" };
+	const base = {
+		schema: "cpk5/v1",
+		sourceIdentity: "research-program",
+		sourceVersion: "research-program.v1",
+		timestamp: "2026-10-02T00:00:00Z",
+	};
 	const usage = { computeSeconds: 12, modelTokens: 30, costUsd: "0.25", quotaExceeded: true };
 	const worker = { workerId: "worker-1", capabilities: ["evaluate"], activeLeases: 1, status: "busy", queueDepth: 2 };
 	projection.consume({ ...base, sequence: 2, factType: "research.usage", payload: usage });
@@ -210,7 +254,9 @@ test("evidence opens source bytes with optional project scope", async () => {
 	expect((await openResearchEvidence(client, sourceId)).content_base64).toBe("bWVhc3VyZWQgcmVzdWx0");
 	expect(reads.at(-1)).toBe(`http://127.0.0.1:54322/v1/workspaces/${workspaceId}/research-sources/${sourceId}`);
 	await openResearchEvidence(client, sourceId, "project-1");
-	expect(reads.at(-1)).toBe(`http://127.0.0.1:54322/v1/workspaces/${workspaceId}/research-sources/${sourceId}/projects/project-1`);
+	expect(reads.at(-1)).toBe(
+		`http://127.0.0.1:54322/v1/workspaces/${workspaceId}/research-sources/${sourceId}/projects/project-1`,
+	);
 	expect(posts).toEqual([]);
 });
 
@@ -233,7 +279,14 @@ test("summaries use last trial observation and finite PASS metrics only", () => 
 test("annotations reject stale revisions and remain local, isolated by target", () => {
 	const { posts } = fakeService();
 	const session = new CandidateReviewSession();
-	const annotation = { annotationId: "note-1", targetId: "pass", expectedRevision: "rev-1", author: "reviewer", text: "verify holdout", createdAt: "2026-10-02T00:00:00Z" };
+	const annotation = {
+		annotationId: "note-1",
+		targetId: "pass",
+		expectedRevision: "rev-1",
+		author: "reviewer",
+		text: "verify holdout",
+		createdAt: "2026-10-02T00:00:00Z",
+	};
 	session.addAnnotation(annotation, "rev-1");
 	expect(session.getAnnotations("pass")).toEqual([annotation]);
 	expect(session.getAnnotations("other")).toEqual([]);

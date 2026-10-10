@@ -53,10 +53,12 @@ export async function readResearchViews(client: WorkClient, workId: UUID, projec
 			objective: campaign.spec.objective,
 			domain: campaign.domain,
 			revisionId: campaign.revision_id,
-			activeTrials: view.trials.filter(trial => trial.campaign_id === campaign.campaign_id && trial.state === "proposed")
-				.length,
+			activeTrials: view.trials.filter(
+				trial => trial.campaign_id === campaign.campaign_id && trial.state === "proposed",
+			).length,
 			completedTrials: view.observations.filter(
-				observation => observation.campaign_id === campaign.campaign_id && observation.execution_status === "completed",
+				observation =>
+					observation.campaign_id === campaign.campaign_id && observation.execution_status === "completed",
 			).length,
 		})),
 		graph: {
