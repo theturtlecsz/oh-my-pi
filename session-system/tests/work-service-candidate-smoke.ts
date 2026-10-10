@@ -250,11 +250,8 @@ try {
 	const transportPayload = auditOut.transportPayload;
 	assert.ok(typeof transportPayload === "string", "transport payload is a string");
 	const parsedTransport = JSON.parse(transportPayload as string);
-	assert.deepEqual(Object.keys(parsedTransport), ["report"], "transport payload has exactly one report key");
-	assert.ok(
-		typeof parsedTransport.report === "string" && parsedTransport.report.startsWith("VERDICT: PASS"),
-		"transport report string starts with VERDICT: PASS",
-	);
+	assert.deepEqual(Object.keys(parsedTransport), ["audit_result"], "transport payload keys are exactly [audit_result]");
+	assert.equal(parsedTransport.audit_result.verdict, "PASS", "audit_result.verdict is PASS");
 
 	// Phase 2: closeout (fresh process restart, resumes attempt)
 	const closeoutOut = runHarness("closeout", key);
