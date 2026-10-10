@@ -27,7 +27,7 @@ import { discoverAuthStorage } from "../sdk";
 import { SessionManager } from "../session/session-manager";
 import { EventBus } from "../utils/event-bus";
 
-import { cfgDisabledExtensions, cfgExtensions } from "../extensibility/settings";
+import { cfgDisabledExtensions, trustedConfiguredExtensions } from "../extensibility/settings";
 
 export type ModelsAction = "ls" | "find" | "refresh";
 
@@ -311,6 +311,8 @@ export interface RunModelsListingOptions {
 	disabledExtensionIds?: string[];
 	/** When true, exclude ambient factories and resolve only `additionalExtensionPaths`. */
 	disableExtensionDiscovery?: boolean;
+	/** False gates project-level ambient extension paths; omitted keeps current behavior. */
+	projectTrusted?: boolean;
 }
 
 export async function runModelsListing(options: RunModelsListingOptions): Promise<void> {
@@ -325,6 +327,7 @@ export async function runModelsListing(options: RunModelsListingOptions): Promis
 		settingsExtensions = [],
 		disabledExtensionIds = [],
 		disableExtensionDiscovery = false,
+		projectTrusted,
 	} = options;
 
 	const eventBus = new EventBus();
@@ -336,7 +339,7 @@ export async function runModelsListing(options: RunModelsListingOptions): Promis
 		cwd,
 		eventBus,
 		disableExtensionDiscovery ? undefined : disabledExtensionIds,
-		{ ambient: !disableExtensionDiscovery, includeAmbientHooks: false },
+		{ ambient: !disableExtensionDiscovery, includeAmbientHooks: false, projectTrusted },
 	);
 	const extensionRunner =
 		extensionsResult.extensions.length > 0
@@ -392,6 +395,7 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 
 	const cwd = getProjectDir();
 	const settings = await Settings.init({ cwd, configFiles: command.flags.config });
+	const projectTrusted = isProjectPathTrusted(cwd);
 	const authStorage = await discoverAuthStorage(undefined, { settings });
 	try {
 		const modelRegistry = new ModelRegistry(authStorage);
@@ -413,9 +417,10 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 			json,
 			kind,
 			additionalExtensionPaths: cliExtensionPaths,
-			settingsExtensions: cfgExtensions.get(settings),
+			settingsExtensions: trustedConfiguredExtensions(settings, projectTrusted),
 			disabledExtensionIds: cfgDisabledExtensions.get(settings),
 			disableExtensionDiscovery: Boolean(command.flags.noExtensions),
+			projectTrusted,
 		});
 	} finally {
 		authStorage.close();
