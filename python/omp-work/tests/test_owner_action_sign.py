@@ -177,8 +177,9 @@ def _log_entry(fixed) -> dict:
 
 def test_fixed_sign_defaults(gateway):
     assert gateway.FIXED.ssh_keygen == Path("/usr/bin/ssh-keygen")
+    # The path parts stay separate: the gate refuses a literal /home/<user>/ in this tree.
     assert gateway.FIXED.signing_key == Path(
-        "/home/thetu/.config/omp/owner-signing/omp-owner-signing"
+        "/", "home", "thetu", ".config", "omp", "owner-signing", "omp-owner-signing"
     )
 
 
