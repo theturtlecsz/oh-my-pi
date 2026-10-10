@@ -1027,6 +1027,7 @@ packages/coding-agent/test/print-mode-prompt-blocked.test.ts	fork-only	added	650
 packages/coding-agent/test/print-mode-working-indicator.test.ts	shared	modified	8410d15dc149	OMP-246: Model required idle waiting in print fake session	retained
 packages/coding-agent/test/read-cli-mcp-resource-ready.test.ts	fork-only	added	c15d5bc2366c	OMP-433: a server still connecting after the startup race yields test://alpha once the init gate opens, and a server that never answers still reports the missing-resource error within OMP_MCP_TIMEOUT_MS	retained
 packages/coding-agent/test/rpc-client.restart.test.ts	shared	modified	b6b9d694b212	session candidate: OMP-127	retained
+packages/coding-agent/test/rpc-compatible-primitives.test.ts	shared	modified	c47e0c4b5f43	This test's TempDir prefix starts with `@`, so the directory is under the system temp directory.	retained
 packages/coding-agent/test/rpc-input-event.test.ts	fork-only	added	0359bc6f2100	OMP-246: Cover applyRpcPromptInput: plain text reaches the input handler with source rpc and a returned text is yielded, handled input is reported, slash commands skip the handler, and no-handler/no-runner inputs pass through unchanged	retained
 packages/coding-agent/test/rpc-stdin-lock.test.ts	shared	modified	c5e90fe4df3e	session candidate: OMP-127	retained
 packages/coding-agent/test/rpc.test.ts	shared	modified	78e8e5580f04	session candidate: OMP-127	retained
@@ -1036,6 +1037,7 @@ packages/coding-agent/test/sdk-session-isolation.test.ts	shared	modified	c5e22b0
 packages/coding-agent/test/session-manager/session-id.test.ts	shared	modified	e47db26845a3	OMP-410: reopen of a session file with an embedded id preserves that session id in getSessionId and the header instead of minting a new one	retained
 packages/coding-agent/test/session-stop-continuation-recap.test.ts	shared	modified	74868752da3c	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
 packages/coding-agent/test/session/session-init-instruction-degradation.test.ts	fork-only	added	c887acacf1b3	OMP-248: Test that session_init persists non-empty instructionPrepDegradations and omits the key when empty	retained
+packages/coding-agent/test/session/session-loader-source-size.test.ts	shared	modified	8b31430889ac	This test's TempDir prefix starts with `@`, so the directory is under the system temp directory.	retained
 packages/coding-agent/test/shell-snapshot.test.ts	shared	modified	d2b2be3d0aa4	OMP-488: remove omp-snap-* fixture directories under os.tmpdir() in afterEach	retained
 packages/coding-agent/test/silent-abort-print-mode.test.ts	shared	modified	8b59d6d7a8f4	OMP-246: Model required idle waiting without weakening aborted output assertions	retained
 packages/coding-agent/test/snapcompact-savings-journal.test.ts	shared	modified	87884ea1c0ca	OMP-341: remove each snap-savings-journal- temp dir in afterEach so the suite stops leaking it	retained
@@ -1045,6 +1047,7 @@ packages/coding-agent/test/system-prompt-dedup.test.ts	shared	modified	57689b6a7
 packages/coding-agent/test/system-prompt-instruction-prep.test.ts	fork-only	added	ff1756216bb5	OMP-248: Cover instruction-prep degradation reporting — required context-files timeout is reported and named on stderr, required context-files failure is reported with cause error and warns without stderr, and a decorative workspace-tree timeout stays silent	retained
 packages/coding-agent/test/system-prompt-inventory.test.ts	shared	modified	4e540c26322d	OMP-401: repair delegation-rule inventory test for the fork's role-scoped wording	retained
 packages/coding-agent/test/system-prompt-template.test.ts	shared	modified	41683caf4c0a	discovery test isolated through the shared host-isolation helper	retained
+packages/coding-agent/test/tan-extension-auth.test.ts	shared	modified	e62f2b3ecd16	This test's TempDir prefix starts with `@`, so the directory is under the system temp directory.	retained
 packages/coding-agent/test/task-read-continuation-contract.test.ts	fork-only	added	f63791506559	OMP-246: Refuse ambiguous, foreign or tampered persisted read history and previously claimed attempts	retained
 packages/coding-agent/test/task-recovery-contract.test.ts	fork-only	added	b8f82b7bd90a	OMP-246: Persisted identity, preparation membership and symlink confinement regressions	retained
 packages/coding-agent/test/task/executor-abort.test.ts	fork-only	added	26fcd7be5e8c	OMP-286: Verify task executor extension abort hook survives rejecting session.abort with throwing logger without unhandled rejections	retained
