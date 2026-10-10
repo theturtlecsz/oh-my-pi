@@ -3,6 +3,7 @@
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
 import { combine, register, type SettingValueOf } from "../config/registry";
+import type { Settings } from "../config/settings";
 import { DEFAULT_SKILLS_URL } from "@oh-my-pi/pi-wire/skillshare";
 
 const EMPTY_STRING_ARRAY: string[] = [];
@@ -10,6 +11,19 @@ const EMPTY_STRING_ARRAY: string[] = [];
 export const cfgExtensions = register({ id: "extensions", type: "array", default: EMPTY_STRING_ARRAY });
 
 export const cfgDisabledExtensions = register({ id: "disabledExtensions", type: "array", default: EMPTY_STRING_ARRAY });
+
+/**
+ * Effective `extensions` configured paths gated on project trust (L-RT-04): when
+ * the project at the session cwd is untrusted and the project settings layer owns
+ * `extensions`, those entries must not add load paths, so callers fall back to the
+ * string entries of the user-level (global) layer.
+ */
+export function trustedConfiguredExtensions(settings: Settings, projectTrusted: boolean): string[] {
+	if (projectTrusted || settings.extensionsSourceLevel() !== "project") return cfgExtensions.get(settings);
+	const global = settings.getGlobalSettings()["extensions"];
+	if (!Array.isArray(global)) return [];
+	return global.filter((entry): entry is string => typeof entry === "string");
+}
 
 // Skill registry (omp skill)
 export const cfgSkillsRegistryUrl = register({

@@ -207,7 +207,20 @@ describe("extensions discovery", () => {
 		const unwanted = tempDir.join("unwanted.ts");
 		await Bun.write(inherited, extensionCodeWithTool("inherited-tool"));
 		await Bun.write(unwanted, extensionCodeWithTool("unwanted-tool"));
-		const settings = Settings.isolated({ extensions: [unwanted] });
+		// The inherited lane carries project-level provenance, so it only applies
+		// when the project is trusted (L-RT-04).
+		const agentDir = tempDir.join("agent");
+		fs.mkdirSync(agentDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(agentDir, "trusted-projects.json"),
+			JSON.stringify({ version: 1, paths: [tempDir.path()] }),
+		);
+		const settings = await Settings.loadIsolated({
+			inMemory: true,
+			cwd: tempDir.path(),
+			agentDir,
+			overrides: { extensions: [unwanted] },
+		});
 		const paths = await discoverSessionExtensionPaths(
 			{
 				disableExtensionDiscovery: true,
