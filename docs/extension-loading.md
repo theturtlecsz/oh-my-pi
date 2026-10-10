@@ -141,6 +141,25 @@ authorize sibling hooks, tools, commands, skills, rules, prompts, or MCP config.
 This is still an in-process module allowlist, not a sandbox or a switch disabling
 other discovery subsystems.
 
+### Project trust
+
+Project-level extension sources load only in folders on the trusted-project
+list. That covers files under `<cwd>/.omp/extensions/` and the `extensions`
+entries of the project `.omp/settings.json` (and other project-layer config
+files).
+
+The list lives in `<agentDir>/trusted-projects.json` as
+`{"version":1,"paths":[...]}`. Subdirectories and linked git worktrees of a
+listed directory count as trusted. A missing, unreadable, or malformed file is
+an empty list, so the folder is untrusted.
+
+User-level items, installed plugins, and explicit CLI or user-configured paths
+load in every folder.
+
+There is no prompt and no wait. In an untrusted folder the project entries are
+skipped silently. A debug log records the skip count (`Skipped project
+extension paths in untrusted project`).
+
 ### Disable specific extension modules
 
 For ambient extension modules, installed-plugin entries, and entries expanded

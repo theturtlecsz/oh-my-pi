@@ -14,7 +14,7 @@ dependencies = ["fastapi>=0.112,<1", "httpx>=0.27,<1", "pydantic>=2.12.5,<2.13",
 [project.scripts]
 omp-work = "omp_work.__main__:main"
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-xdist>=3"]
+dev = ["pytest>=8", "pytest-xdist>=3", "jsonschema>=4.18,<5"]
 
 [tool.setuptools]
 package-dir = { "" = "src" }
@@ -23,7 +23,7 @@ package-dir = { "" = "src" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-omp_work = ["py.typed", "contracts/v1/*", "contracts/v1/decisions/*", "contracts/r02/*.json", "operations/sql/*.sql", "operations/migrations/*.sql", "operations/jobs_migrations/*.sql", "prompts/*.md", "routing/*.json"]
+omp_work = ["py.typed", "contracts/v1/*", "contracts/v1/decisions/*", "contracts/r02/*.json", "operations/sql/*.sql", "operations/migrations/*.sql", "operations/jobs_migrations/*.sql", "prompts/*.md", "routing/*.json", "contracts/nsi/v1/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -203,40 +203,49 @@ if (phase === "audit") {
 	out.hasRunAuditNextAction = nextActionScreen.includes(`NEXT REQUIRED ACTION: work action:"run_audit", work:"${key}"`);
 	out.noSealedTaskBytes = !nextActionScreen.includes("----- SEALED AUDITOR TASK BEGIN -----");
 
-	const REPORT = [
-		"VERDICT: PASS",
-		"",
-		"FINDINGS",
-		"(none)",
-		"",
-		"ACCEPTANCE COVERAGE",
-		"| AC-1 | met | smoke |",
-		"",
-		"OUT OF SCOPE",
-		"none",
-		"",
-		"CHECKS RUN",
-		"candidate smoke",
-		"",
-		"REMAINING QUESTIONS",
-		"none",
-	].join("\n");
-
-	// Discover auditor agent, require its output schema, and run yield through finalizeSubprocessOutput
+	// Discover auditor agent, require its output schema, and run the typed
+	// audit_result yield through finalizeSubprocessOutput. A typeless properties
+	// map is JTD, which requires `report` and rejects added keys. Root
+	// type "object", passed only when `type` is absent, selects the JSON Schema
+	// reading: added keys are allowed and `report` is not required. A schema
+	// that already sets `type` is passed through unchanged.
 	const discovery = await discoverAgents(probe);
 	const auditorAgent = getAgent(discovery.agents, "auditor");
 	if (!auditorAgent || !auditorAgent.output) {
 		throw new Error("discovered auditor agent is missing required output schema");
 	}
+	const declaredOutput = auditorAgent.output;
+	const outputSchema =
+		typeof declaredOutput === "object" &&
+		declaredOutput !== null &&
+		!Array.isArray(declaredOutput) &&
+		"properties" in declaredOutput &&
+		!("type" in declaredOutput)
+			? { type: "object", ...(declaredOutput as Record<string, unknown>) }
+			: declaredOutput;
 	const finalized = finalizeSubprocessOutput({
 		rawOutput: "",
 		exitCode: 0,
 		stderr: "",
-		yieldItems: [{ data: { report: REPORT } }],
-		outputSchema: auditorAgent.output,
+		yieldItems: [
+			{
+				data: {
+					audit_result: {
+						verdict: "PASS",
+						evidence: { references: [{ kind: "command", ref: "smoke", result: "pass" }] },
+						criteria: [{ criterion_id: "AC-1", status: "met", evidence: "smoke" }],
+					},
+				},
+			},
+		],
+		outputSchema,
 		outputSchemaSource: "agent",
 		outputSchemaMode: "strict",
 	});
+	// A schema violation settles no audit receipt.
+	if (finalized.exitCode !== 0) {
+		throw new Error(`${finalized.stderr}\n${finalized.rawOutput}`);
+	}
 	const transportPayload = finalized.rawOutput;
 	out.transportPayload = transportPayload;
 
