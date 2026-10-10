@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Settings, resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { discoverExtensionPaths } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
+import { DefaultPackageManager } from "@oh-my-pi/pi-coding-agent/extensibility/legacy-pi-coding-agent-shim";
 import { discoverSessionExtensionPaths } from "@oh-my-pi/pi-coding-agent/sdk";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
@@ -72,5 +73,31 @@ describe("extension discovery project trust gate (L-RT-04)", () => {
 		const trusted = await discoverSessionExtensionPaths({}, projectDir, trustedSettings);
 		expect(has(trusted, path.join(projectDir, ".omp", "extensions", "x.ts"))).toBe(true);
 		expect(has(trusted, path.join(tempDir.path(), "y.ts"))).toBe(true);
+	});
+
+	it("gates legacy DefaultPackageManager.resolve on project trust from trusted-projects.json", async () => {
+		const agentDir = path.join(tempDir.path(), "agent");
+		fs.mkdirSync(agentDir, { recursive: true });
+		const resolve = () =>
+			new DefaultPackageManager({
+				cwd: projectDir,
+				agentDir,
+				settingsManager: Settings.init({ inMemory: true, cwd: projectDir, agentDir }),
+			}).resolve();
+
+		const untrusted = await resolve();
+		const untrustedPaths = untrusted.extensions.map(entry => entry.path);
+		expect(untrustedPaths.some(candidate => candidate.endsWith("x.ts"))).toBe(false);
+		expect(untrustedPaths.some(candidate => candidate.endsWith("y.ts"))).toBe(false);
+
+		fs.writeFileSync(
+			path.join(agentDir, "trusted-projects.json"),
+			JSON.stringify({ version: 1, paths: [projectDir] }),
+		);
+		resetSettingsForTest();
+		const trusted = await resolve();
+		const trustedPaths = trusted.extensions.map(entry => entry.path);
+		expect(trustedPaths.some(candidate => candidate.endsWith("x.ts"))).toBe(true);
+		expect(trustedPaths.some(candidate => candidate.endsWith("y.ts"))).toBe(true);
 	});
 });

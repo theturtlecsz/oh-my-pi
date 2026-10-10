@@ -41,6 +41,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import { getPackageDir as getOmpPackageDir } from "../config";
 import { formatKeyHints } from "@oh-my-pi/pi-tui/app-keybindings";
+import { isProjectPathTrusted } from "../config/project-trust";
 import type { PromptTemplate } from "../config/prompt-templates";
 import { findScopedSettings, Settings } from "../config/settings";
 import { EditTool } from "../edit";
@@ -88,7 +89,7 @@ import { getEnabledPlugins, resolvePluginExtensionPaths, type ScopedInstalledPlu
 import type { Skill } from "./skills";
 import { loadSkillsFromDir } from "./skills";
 
-import { cfgDisabledExtensions, cfgExtensions, cfgSkills } from "./settings";
+import { cfgDisabledExtensions, cfgSkills, trustedConfiguredExtensions } from "./settings";
 
 const TOOL_DEFINITION_MARKER = "__isToolDefinition";
 const LEGACY_BUILTIN_TOOL_MARKER = "__ompLegacyBuiltinTool";
@@ -856,10 +857,11 @@ export class DefaultPackageManager {
 	/** Resolve enabled extension paths with their OMP plugin provenance. */
 	async resolve(_onMissing?: (source: string) => Promise<MissingSourceAction>): Promise<ResolvedPaths> {
 		const settings = await this.#settingsManager;
-		const configuredPaths = cfgExtensions.get(settings);
+		const projectTrusted = isProjectPathTrusted(this.#cwd, this.#agentDir);
+		const configuredPaths = trustedConfiguredExtensions(settings, projectTrusted);
 		const disabledExtensionIds = cfgDisabledExtensions.get(settings);
 		const [extensionPaths, plugins] = await Promise.all([
-			discoverExtensionPaths(configuredPaths, this.#cwd, disabledExtensionIds),
+			discoverExtensionPaths(configuredPaths, this.#cwd, disabledExtensionIds, { projectTrusted }),
 			getEnabledPlugins(this.#cwd),
 		]);
 		const pluginByExtensionPath = new Map<string, ScopedInstalledPlugin>();
