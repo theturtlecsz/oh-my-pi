@@ -91,10 +91,66 @@ def _ca_bytes(config: dict) -> bytes:
     return data
 
 
+def _read_mountinfo() -> str:
+    return Path("/proc/self/mountinfo").read_text(encoding="utf-8")
+
+
+def _iter_mountinfo():
+    """Yield ``(mount point, per-mount options)`` from mountinfo.
+
+    Optional fields sit between the options and the ``-`` separator, so the
+    mount point and the options stay at the fixed indexes 4 and 5.
+    """
+    for line in _read_mountinfo().splitlines():
+        parts = line.split()
+        if len(parts) < 6:
+            continue
+        yield _unescape_mount(parts[4]), set(parts[5].split(","))
+
+
+def _readonly_bind_flags(options: set[str]) -> int:
+    """Bind remount flags: read-only, plus every locked flag ``options`` carries."""
+    flags = _MS_BIND | _MS_REMOUNT | _MS_RDONLY
+    for name, bit in _REMOUNT_KEEP.items():
+        if name in options:
+            flags |= bit
+    return flags
+
+
+def _remount_readonly(destination: str, options: set[str] | None = None) -> None:
+    if options is None:
+        options = _mount_options(destination)
+    _mount("none", destination, None, _readonly_bind_flags(options))
+
+
 def _rbind_readonly(source: str, target: Path) -> None:
+    """Recursive read-only bind.
+
+    A user namespace rejects a remount that drops nosuid, nodev, noexec, or an
+    atime flag the source mount carries. The target and each submount are
+    remounted read-only with that mount's own flags. Children are remounted
+    before the target.
+    """
     target.mkdir(parents=True)
-    _mount(source, str(target), None, _MS_BIND | _MS_REC)
-    _mount("none", str(target), None, _MS_BIND | _MS_REMOUNT | _MS_RDONLY)
+    destination = os.path.normpath(str(target))
+    _mount(source, destination, None, _MS_BIND | _MS_REC)
+    prefix = destination + "/"
+    parent_options: set[str] | None = None
+    children: list[tuple[str, set[str]]] = []
+    seen: set[str] = set()
+    for point, options in _iter_mountinfo():
+        if point == destination:
+            if parent_options is None:
+                parent_options = options
+            continue
+        if not point.startswith(prefix) or point in seen:
+            continue
+        seen.add(point)
+        children.append((point, options))
+    children.sort(key=lambda item: (-item[0].count("/"), item[0]))
+    for point, options in children:
+        _remount_readonly(point, options)
+    _remount_readonly(destination, set() if parent_options is None else parent_options)
 
 
 def _place_host_tree(new: Path, name: str) -> None:
@@ -239,11 +295,10 @@ def _unescape_mount(text: str) -> str:
 def _mount_options(target: str) -> set[str]:
     """Per-mount options of ``target`` from mountinfo, or an empty set."""
     wanted = os.path.normpath(target)
-    for line in Path("/proc/self/mountinfo").read_text(encoding="utf-8").splitlines():
-        parts = line.split()
-        if len(parts) < 6 or _unescape_mount(parts[4]) != wanted:
+    for point, options in _iter_mountinfo():
+        if point != wanted:
             continue
-        return set(parts[5].split(","))
+        return options
     return set()
 
 
@@ -254,12 +309,7 @@ def _bind_ro_file(source: str, target: Path) -> None:
         target.touch()
     destination = str(target)
     _mount(source, destination, None, _MS_BIND)
-    flags = _MS_BIND | _MS_REMOUNT | _MS_RDONLY
-    options = _mount_options(destination)
-    for name, bit in _REMOUNT_KEEP.items():
-        if name in options:
-            flags |= bit
-    _mount("none", destination, None, flags)
+    _remount_readonly(destination)
 
 
 def _build_worker_root(config_path: Path, config: dict) -> Path:
