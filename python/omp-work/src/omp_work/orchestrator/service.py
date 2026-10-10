@@ -96,6 +96,8 @@ _POST_KINDS = frozenset(
     }
 )
 _TERMINAL_RULES = frozenset({"terminal-needs-basis", "terminal-with-basis"})
+# An orchestrator.json without an "operations" key runs the real stage operations.
+_DEFAULT_OPERATIONS = "omp_work.orchestrator.operations:register"
 _Run = Callable[["StageContext"], "Outcome"]
 _REGISTRY: dict[str, _Run] = {}
 
@@ -235,7 +237,7 @@ def load_config(path: Path | None = None, ops: OperationsConfig | None = None) -
     data = json.loads(source.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise OrchestratorError("invalid_request")
-    operations = data.get("operations") or []
+    operations = data.get("operations", [_DEFAULT_OPERATIONS]) or []
     if not isinstance(operations, list):
         raise OrchestratorError("invalid_request")
 

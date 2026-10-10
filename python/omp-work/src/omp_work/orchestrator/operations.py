@@ -1,8 +1,8 @@
 """Stage operations for the orchestrator pipeline (OMP-417-s07).
 
 Provides deterministic intake, confirm, plan, grant, implement, evaluate,
-freeze, and push stage operations. Repair runs the implement operation again.
-No SQL statements are defined in this module.
+freeze, push, audit, merge, and close stage operations. Repair runs the
+implement operation again. No SQL statements are defined in this module.
 """
 
 from __future__ import annotations
@@ -24,7 +24,13 @@ from omp_work.action_classify import ResolvedTarget, classify, parse_submission
 from omp_work.mission_intake_rules import scope_draft
 from omp_work.operations import database, fingerprints
 from omp_work.operations.capabilities import provision_task_capability
-from omp_work.orchestrator import candidate_git, service, verifier, worker_sandbox
+from omp_work.orchestrator import (
+    candidate_git,
+    merge_gate,
+    service,
+    verifier,
+    worker_sandbox,
+)
 from omp_work.orchestrator.service import (
     OrchestratorConfig,
     Outcome,
@@ -47,12 +53,14 @@ __all__ = [
     "judge_manifest",
     "register",
     "run_audit",
+    "run_close",
     "run_confirm",
     "run_evaluate",
     "run_freeze",
     "run_grant",
     "run_implement",
     "run_intake",
+    "run_merge",
     "run_plan",
     "run_push",
 ]
@@ -69,6 +77,8 @@ def register() -> None:
     register_stage_operation("freeze", run_freeze)
     register_stage_operation("push", run_push)
     register_stage_operation("audit", run_audit)
+    register_stage_operation("merge", run_merge)
+    register_stage_operation("close", run_close)
 
 
 def run_intake(ctx: StageContext) -> Outcome:
@@ -1014,6 +1024,11 @@ def run_push(ctx: StageContext) -> Outcome:
             "refs": [ref],
             "tips": [commit],
             "issued_at": done_at.isoformat(),
+            "repository": repository_key,
+            "candidate_commit": commit,
+            "remote_ref": ref,
+            "result_tip": commit,
+            "prior_tip": str(request["base_commit"]),
         }
         receipt = EvidenceReceipt(
             receipt_id=uuid5(
@@ -1616,6 +1631,423 @@ def run_audit(ctx: StageContext) -> Outcome:
                 "attempt_id": str(attempt_id),
             },
         )
+
+
+class _MergeCredentialRefused(Exception):
+    """The merge credential was not released for the answered merge decision."""
+
+
+_MERGE_RULE = "d41-merge-approval"
+
+
+def _release_merge_credential(
+    ctx: StageContext, operation: Mapping[str, Any], resolved: ResolvedTarget
+) -> Path | None:
+    """The merge credential for this operation's signed merge approval, or None."""
+    decision_id = ctx.answered_decision(_MERGE_RULE)
+    if decision_id is None:
+        return None
+    digest = classify(parse_submission(dict(operation)), resolved).target_sha256
+    credential_path = ctx.config.merge_credential_path
+    if digest is None or credential_path is None:
+        return None
+    with ctx.projects._transaction(ctx.workspace_id, ctx.principal.actor_id) as cur:
+        decision = merge_gate.load_answered_decision(cur, ctx.workspace_id, UUID(decision_id))
+    return merge_gate.release_merge_credential(
+        decision=decision,
+        workspace_id=ctx.workspace_id,
+        target_sha256=digest,
+        allowed_signers=ctx.config.allowed_signers,
+        credential_path=credential_path,
+    )
+
+
+def run_merge(ctx: StageContext) -> Outcome:
+    """Merge the frozen candidate into ``target_ref`` under the d41 merge approval.
+
+    ``act`` holds the tier-3 push until the owner signs the merge decision. The
+    executor releases the merge credential only for that signed approval and
+    then fast-forwards the target ref; without a released credential no git
+    command runs and the step blocks on ``merge_credential_refused``.
+    """
+    request = _request_mapping(ctx.request)
+    frozen = (ctx.prior.get("freeze") or {}).get("data") or {}
+    if not isinstance(frozen, Mapping):
+        frozen = {}
+    commit = frozen.get("candidate_commit")
+    if not isinstance(commit, str) or not commit:
+        return Outcome(
+            outcome="failed", data={"stage": "merge", "code": "freeze_incomplete"}
+        )
+    commit = str(commit)
+    target_ref = str(request.get("target_ref") or "")
+    if not target_ref:
+        return Outcome(
+            outcome="failed",
+            data={"stage": "merge", "code": "target_ref_missing", "candidate_commit": commit},
+        )
+    remote = str(request.get("remote") or "")
+    repository_key = str(request.get("repository") or "")
+    record = _repository_record(ctx, repository_key)
+    if record is None:
+        return Outcome(
+            outcome="failed",
+            data={"stage": "merge", "code": "repository_missing", "candidate_commit": commit},
+        )
+    operation = {
+        "kind": "git_push",
+        "repository": repository_key,
+        "branch": target_ref,
+        "commit": commit,
+    }
+    resolved = ResolvedTarget(repository=record, commit=commit, changed_paths=())
+
+    def executor(_operation: object, _resolved: object) -> None:
+        del _operation, _resolved
+        credential = _release_merge_credential(ctx, operation, resolved)
+        if credential is None:
+            raise _MergeCredentialRefused("merge_credential_refused")
+        candidate_git.merge(
+            ctx.config.control_repo,
+            commit,
+            remote,
+            target_ref,
+            intents=ctx.intents,
+            lease_ok=ctx.lease_ok,
+            credential_path=credential,
+        )
+
+    try:
+        result = ctx.act(operation, resolved, executor, rule_id=_MERGE_RULE)
+    except _MergeCredentialRefused:
+        verdict = _verdict(operation, resolved, allowed=True, code="merge_credential_refused")
+        return Outcome(
+            outcome="failed",
+            blocker="merge_credential_refused",
+            data={
+                "stage": "merge",
+                "code": "merge_credential_refused",
+                "candidate_commit": commit,
+                "target_ref": target_ref,
+            },
+            action=verdict,
+        )
+    allowed = result.status == "done"
+    verdict = _verdict(
+        operation,
+        resolved,
+        allowed=allowed,
+        code="allowed" if allowed else (result.code or result.status),
+    )
+    data: dict[str, Any] = {
+        "stage": "merge",
+        "candidate_commit": commit,
+        "target_ref": target_ref,
+        "status": result.status,
+    }
+    if result.decision_id is not None:
+        data["decision_id"] = result.decision_id
+    if result.status == "held":
+        return Outcome(outcome="failed", data=data, action=verdict)
+    if not allowed:
+        data["code"] = result.code or result.status
+        return Outcome(outcome="failed", blocker="merge_refused", data=data, action=verdict)
+    return Outcome(outcome="succeeded", data=data, action=verdict)
+
+
+def _deliver_checkpoints(ctx: StageContext, view: Mapping[str, Any]) -> Outcome | None:
+    """Attest one delivery per owed requires_delivery event. None when all delivered."""
+    deliveries: dict[str, list[Mapping[str, Any]]] = {}
+    for row in view.get("checkpoint_deliveries") or ():
+        if isinstance(row, Mapping):
+            deliveries.setdefault(str(row.get("event_id")), []).append(row)
+    for event in view.get("close_attempt_events") or ():
+        if not isinstance(event, Mapping) or not event.get("requires_delivery"):
+            continue
+        event_id = str(event.get("event_id"))
+        resolved = any(
+            str(delivery.get("status")) in ("delivered", "waived")
+            for delivery in deliveries.get(event_id, ())
+        )
+        if resolved:
+            continue
+        rendered = event.get("rendered_sha256")
+        if not isinstance(rendered, str) or not rendered:
+            return Outcome(
+                outcome="failed", data={"stage": "close", "code": "rendered_missing"}
+            )
+        result = ctx.command(
+            "attest_checkpoint_delivery",
+            {
+                "event_id": event_id,
+                "owner_session_id": f"orchestrator:{ctx.mission_id}",
+                "rendered_sha256": rendered,
+                "status": "delivered",
+            },
+            key=f"attest:{event_id}",
+        )
+        if result.get("status") == "refused":
+            event_row = result.get("event")
+            code = (
+                str(event_row.get("reason_code"))
+                if isinstance(event_row, Mapping) and event_row.get("reason_code")
+                else "attest_refused"
+            )
+            if code != "delivery_already_resolved":
+                return Outcome(outcome="failed", data={"stage": "close", "code": code})
+    return None
+
+
+def _close_evidence(
+    ctx: StageContext, view: Mapping[str, Any]
+) -> tuple[dict[str, Any] | None, Outcome | None]:
+    """The completion evidence built from the workflow view, or the failure."""
+    item = view.get("item") or {}
+    candidate = item.get("candidate") or {}
+    candidate_id = candidate.get("candidate_id")
+    candidate_sha = candidate.get("candidate_sha256")
+    commit = candidate.get("commit_sha")
+    revision = item.get("revision") or {}
+    revision_id = revision.get("revision_id") or item.get("current_revision_id")
+    if not all(
+        isinstance(value, (str, UUID)) and value
+        for value in (candidate_id, candidate_sha, commit, revision_id)
+    ):
+        return None, Outcome(
+            outcome="failed", data={"stage": "close", "code": "candidate_missing"}
+        )
+    attempt = next(
+        (
+            row
+            for row in view.get("close_attempts") or ()
+            if isinstance(row, Mapping)
+            and str(row.get("candidate_id")) == str(candidate_id)
+            and row.get("state") == "audited"
+        ),
+        None,
+    )
+    if attempt is None or not attempt.get("attempt_id"):
+        return None, Outcome(
+            outcome="failed", data={"stage": "close", "code": "attempt_missing"}
+        )
+    attempt_id = str(attempt["attempt_id"])
+    manifest = view.get("audit_manifest")
+    if (
+        not isinstance(manifest, Mapping)
+        or str(manifest.get("attempt_id")) != attempt_id
+        or not manifest.get("manifest_id")
+        or not manifest.get("task_sha256")
+    ):
+        return None, Outcome(
+            outcome="failed", data={"stage": "close", "code": "manifest_missing"}
+        )
+    receipts = [
+        row for row in view.get("receipts") or () if isinstance(row, Mapping)
+    ]
+
+    def _failed(code: str) -> tuple[None, Outcome]:
+        return None, Outcome(outcome="failed", data={"stage": "close", "code": code})
+
+    verification = next(
+        (
+            row
+            for row in receipts
+            if str(row.get("receipt_id")) == str(manifest["verification_receipt_id"])
+        ),
+        None,
+    )
+    if verification is None:
+        return _failed("verification_missing")
+    audit = next(
+        (
+            row
+            for row in receipts
+            if str(row.get("kind")) == EvidenceKind.AUDIT.value
+            and str(row.get("verdict") or "") == "PASS"
+            and bool(row.get("independent"))
+            and str(row.get("candidate_commit") or "") == str(commit)
+        ),
+        None,
+    )
+    if audit is None:
+        return _failed("audit_missing")
+    push = next(
+        (
+            row
+            for row in receipts
+            if str(row.get("kind")) == EvidenceKind.PUSH.value
+            and str(row.get("candidate_id")) == str(candidate_id)
+            and str(row.get("remote_commit") or "") == str(commit)
+        ),
+        None,
+    )
+    if push is None:
+        return _failed("push_missing")
+    audit_payload = audit.get("payload")
+    if isinstance(audit_payload, str):
+        try:
+            audit_payload = json.loads(audit_payload)
+        except json.JSONDecodeError:
+            audit_payload = None
+    launch_id = (
+        audit_payload.get("launch_id") if isinstance(audit_payload, Mapping) else None
+    )
+    launch = next(
+        (
+            row
+            for row in view.get("auditor_launches") or ()
+            if isinstance(row, Mapping)
+            and str(row.get("launch_id")) == str(launch_id)
+        ),
+        None,
+    )
+    if (
+        launch_id is None
+        or launch is None
+        or str(launch.get("attempt_id")) != attempt_id
+        or str(launch.get("manifest_id")) != str(manifest["manifest_id"])
+    ):
+        return _failed("launch_missing")
+    push_payload = push.get("payload")
+    if isinstance(push_payload, str):
+        try:
+            push_payload = json.loads(push_payload)
+        except json.JSONDecodeError:
+            push_payload = None
+    if not isinstance(push_payload, Mapping):
+        return _failed("push_missing")
+    repository = push_payload.get("repository") or attempt.get("repository")
+    remote_url = push_payload.get("remote_url")
+    remote_ref = push.get("remote_ref")
+    remote_commit = push.get("remote_commit")
+    if not repository or not remote_url or not remote_ref or not remote_commit:
+        return _failed("push_missing")
+
+    def _ref(receipt: Mapping[str, Any], kind: str) -> dict[str, Any]:
+        artifact = receipt.get("artifact_sha256")
+        return {
+            "receipt_id": str(receipt["receipt_id"]),
+            "kind": kind,
+            "payload_sha256": str(receipt["payload_sha256"]),
+            "artifact_sha256": None if artifact is None else str(artifact),
+        }
+
+    judge_sha = attempt.get("judge_sha256")
+    evidence = {
+        "runner": {
+            "issuer": "work-service/auditor-settle",
+            "launch_id": str(launch["launch_id"]),
+            "tool_call_id": str(launch["tool_call_id"]),
+            "task_sha256": str(launch["task_sha256"]),
+            "judge_sha256": None if not judge_sha else str(judge_sha),
+        },
+        "subject": {
+            "work_id": str(ctx.work_id),
+            "revision_id": str(revision_id),
+            "candidate_id": str(candidate_id),
+            "candidate_sha256": str(candidate_sha),
+            "candidate_commit": str(commit),
+        },
+        "check": {
+            "definition": "sealed_audit_manifest",
+            "version": int(manifest.get("manifest_version") or 1),
+            "manifest_id": str(manifest["manifest_id"]),
+            "task_sha256": str(manifest["task_sha256"]),
+        },
+        "result": "PASS",
+        "artifacts": [
+            _ref(verification, "verification"),
+            _ref(audit, "audit"),
+            _ref(push, "push"),
+        ],
+        "delivery": {
+            "repository": str(repository),
+            "remote_url": str(remote_url),
+            "remote_ref": str(remote_ref),
+            "candidate_commit": str(commit),
+            "remote_commit": str(remote_commit),
+        },
+    }
+    return evidence, None
+
+
+def run_close(ctx: StageContext) -> Outcome:
+    """Deliver owed checkpoint events, then complete the execution item.
+
+    Every fact (candidate, audited attempt, manifest, verification, PASS audit,
+    launch, push receipt, grant version) is read from the service views; a
+    missing piece fails the step with a named code. The stage decision ends the
+    mission as completed once this outcome succeeds.
+    """
+    view = ctx.service.read(ctx.principal, ctx.workspace_id, "workflow", _work_key(ctx))
+    failed = _deliver_checkpoints(ctx, view)
+    if failed is not None:
+        return failed
+    evidence, failure = _close_evidence(ctx, view)
+    if failure is not None:
+        return failure
+    if evidence is None:
+        return Outcome(
+            outcome="failed", data={"stage": "close", "code": "candidate_missing"}
+        )
+    gid = service._ids(ctx.mission_id, "grant")
+    try:
+        execution = ctx.service.read(ctx.principal, ctx.workspace_id, "execution", str(gid))
+    except WorkError as err:
+        if err.code in {"invalid_request", "not_found"}:
+            return Outcome(
+                outcome="failed",
+                data={"stage": "close", "code": "execution_grant_inactive"},
+            )
+        raise
+    grant = execution.get("grant") or {}
+    grant_version = grant.get("grant_version")
+    judge_sha = grant.get("judge_sha256")
+    if grant.get("state") != "active":
+        return Outcome(
+            outcome="failed",
+            data={"stage": "close", "code": "execution_grant_inactive"},
+        )
+    if not isinstance(grant_version, int):
+        return Outcome(
+            outcome="failed", data={"stage": "close", "code": "grant_version_missing"}
+        )
+    if not judge_sha:
+        return Outcome(
+            outcome="failed", data={"stage": "close", "code": "judge_sha256_missing"}
+        )
+    attempt = next(
+        row
+        for row in view.get("close_attempts") or ()
+        if isinstance(row, Mapping)
+        and str(row.get("candidate_id")) == str(evidence["subject"]["candidate_id"])
+        and row.get("state") == "audited"
+    )
+    try:
+        ctx.command(
+            "complete_execution_item",
+            {
+                "grant_id": str(gid),
+                "expected_grant_version": grant_version,
+                "work_id": str(ctx.work_id),
+                "attempt_id": str(attempt["attempt_id"]),
+                "evidence": evidence,
+                "judge_sha256": str(judge_sha),
+            },
+            key=f"complete:{attempt['attempt_id']}",
+        )
+    except WorkError as err:
+        if err.code == "idempotency_conflict":
+            raise
+        return Outcome(outcome="failed", data={"stage": "close", "code": err.code})
+    return Outcome(
+        outcome="succeeded",
+        data={
+            "stage": "close",
+            "attempt_id": str(attempt["attempt_id"]),
+            "candidate_commit": evidence["subject"]["candidate_commit"],
+        },
+    )
 
 
 def _file_sha256(mod: object) -> str:
