@@ -33,6 +33,7 @@ type CodingAgentTestPartition = Record<CodingAgentBucket, string[]>;
 const repoRoot = path.join(import.meta.dir, "..");
 const args = process.argv.slice(2);
 const isDryRun = args.includes("--dry-run");
+const skipSessionSystem = args.includes("--skip-session-system");
 const requestedMode = args.find(arg => !arg.startsWith("--")) ?? "all";
 // `--only-failures` is Bun's output filter — it hides passing tests within each
 // chunk, keeping the log terse, and is the default here (CI and the root
@@ -382,7 +383,7 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 			return [
 				...fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 8, { extraArgs: onlyFailuresArgs })),
 				...nativeAndIntegrationPackages.map(pkg => workspaceTestCommand(pkg, 4, { extraArgs: onlyFailuresArgs })),
-				sessionSystemTestCommand(),
+				...(skipSessionSystem ? [] : [sessionSystemTestCommand()]),
 				...localOnlyWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 4, { extraArgs: onlyFailuresArgs })),
 				...(await commandsForMode("coding-agent-heavy")),
 			];
