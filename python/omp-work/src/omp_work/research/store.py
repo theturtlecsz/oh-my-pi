@@ -21,6 +21,8 @@ from omp_work.research.custody import (
     retrieval_denied,
     validate_declared_location,
 )
+from omp_work.research.managed import is_managed_campaign, verify_managed_trial
+from omp_work.research.receipt import qualifies
 from omp_work.v1.canonical import canonical_json, sha256
 from omp_work.v1.models import (
     CommandEnvelope,
@@ -1422,6 +1424,19 @@ class ResearchStoreMixin:
         execution = trial_execution(cur, envelope.workspace_id, payload.trial_id)
         if execution["jobs"] and not execution["eligible"]:
             raise WorkStoreError("completion_blocked", tuple(execution["reasons"]))
+
+        if is_managed_campaign(cur, envelope.workspace_id, campaign):
+            receipt, reasons = verify_managed_trial(
+                cur,
+                envelope.workspace_id,
+                payload.trial_id,
+                data_dir=self._config.data_dir,
+            )
+            blockers = reasons
+            if not blockers and (receipt is None or not qualifies(receipt, reasons)):
+                blockers = ["not_qualified"]
+            if blockers:
+                raise WorkStoreError("completion_blocked", tuple(blockers))
 
         cur.execute(
             "SELECT work_id, revision_id, kind FROM omp_work.candidates WHERE workspace_id=%s AND candidate_id=%s",

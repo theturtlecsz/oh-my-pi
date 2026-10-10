@@ -12,6 +12,13 @@ from artifact bytes. Each test verifies a concrete boundary:
 - observation differences return contradictory_evidence, missing_observation, or malformed_observation;
 - settlement outcome/trust mismatch with receipt verdict returns contradictory_evidence;
 - managed_trials filters out non-managed campaigns and returns (trial, receipt, reasons).
+- a managed trial with only a candidate_authored observation and no managed job
+  refuses bind with completion_blocked and missing_managed_receipt;
+- a qualified managed job plus a later root job with trusted audit and release
+  receipts binds;
+- a candidate_failed receipt on a failed untrusted settlement plus that review
+  root refuses bind with not_qualified;
+- a non-managed campaign trial with no managed job still binds.
 """
 
 from __future__ import annotations
@@ -301,6 +308,130 @@ def _commit(
             payload_override=observation_payload,
         )
     return _verify(fix)
+
+
+def _bind_deliverable(fix: SimpleNamespace) -> tuple[int, dict[str, object]]:
+    binding_ident = {
+        "candidate_digest": fix.candidate_digest,
+        "campaign_id": str(fix.campaign_id),
+        "native_candidate_id": str(fix.final_cand_id),
+        "revision_id": str(fix.item["revision_id"]),
+        "trial_id": str(fix.trial_id),
+        "work_id": str(fix.item["work_id"]),
+        "workspace_id": str(fix.workspace_id),
+    }
+    payload = {
+        "trial_id": str(fix.trial_id),
+        "campaign_id": str(fix.campaign_id),
+        "work_id": str(fix.item["work_id"]),
+        "revision_id": str(fix.item["revision_id"]),
+        "candidate_digest": fix.candidate_digest,
+        "native_candidate_id": str(fix.final_cand_id),
+        "binding_sha256": sha256(binding_ident),
+    }
+    return _command(
+        fix.service,
+        fix.workspace_id,
+        {"type": "bind_research_deliverable", "payload": payload},
+    )
+
+
+def _binding_count(fix: SimpleNamespace) -> int:
+    store = _store(fix)
+    with store.transaction(fix.workspace_id, fix.actor_id) as cur:
+        cur.execute(
+            "SELECT count(*) AS n FROM omp_research.deliverable_bindings WHERE workspace_id=%s AND trial_id=%s",
+            (fix.workspace_id, fix.trial_id),
+        )
+        row = cur.fetchone()
+    assert row is not None
+    return int(row["n"])
+
+
+def _record_candidate_observation(fix: SimpleNamespace) -> None:
+    payload = {"note": "candidate authored", "score": 0.1}
+    status, body = _command(
+        fix.service,
+        fix.workspace_id,
+        {
+            "type": "record_research_observation",
+            "payload": {
+                "observation_id": str(uuid4()),
+                "campaign_id": str(fix.campaign_id),
+                "trial_id": str(fix.trial_id),
+                "issuer_kind": "candidate_authored",
+                "source_ref": f"candidate:{fix.trial_id}",
+                "execution_status": "completed",
+                "payload": payload,
+                "payload_sha256": sha256(payload),
+                "observed_at": datetime.now(UTC).isoformat(),
+            },
+        },
+    )
+    assert status == 200, body
+
+
+def _review_evidence() -> dict[str, object]:
+    return {
+        "id": f"ev-{uuid4()}",
+        "kind": "receipt",
+        "content_digest": "abcd1234ef",
+        "trust": "trusted",
+    }
+
+
+def _settle_review_root(fix: SimpleNamespace) -> None:
+    """Settle a later root job of the trial with trusted audit and release receipts."""
+    store = _store(fix)
+    job_id = f"review-{uuid4()}"
+    enqueued = enqueue_job(
+        store,
+        operation_id=str(uuid4()),
+        workspace_id=fix.workspace_id,
+        actor_id=fix.actor_id,
+        job_id=job_id,
+        work_id=UUID(str(fix.item["work_id"])),
+        kind="compute",
+        required_capabilities=[MANAGED_CAPABILITY],
+        resources=RESOURCES,
+        lease_seconds=60,
+        trial_id=fix.trial_id,
+    )
+    assert enqueued["status"] == "applied", enqueued
+    claimed = claim_job(
+        store,
+        operation_id=str(uuid4()),
+        workspace_id=fix.workspace_id,
+        actor_id=fix.actor_id,
+        worker_id=fix.worker_id,
+    )
+    assert claimed["status"] == "applied", claimed
+    job = claimed["job"]
+    assert job is not None
+    assert job["job_id"] == job_id, claimed
+    settled = settle_job(
+        store,
+        operation_id=str(uuid4()),
+        workspace_id=fix.workspace_id,
+        actor_id=fix.actor_id,
+        job_id=job_id,
+        worker_id=fix.worker_id,
+        fence=int(job["fence"]),
+        outcome="succeeded",
+        receipts=[
+            {
+                "role": "audit",
+                "issuer_component_sha256": fix.components["audit"],
+                "evidence": _review_evidence(),
+            },
+            {
+                "role": "release",
+                "issuer_component_sha256": fix.components["release"],
+                "evidence": _review_evidence(),
+            },
+        ],
+    )
+    assert settled["status"] == "applied", settled
 
 
 def _make_fixture(
@@ -926,3 +1057,67 @@ def test_managed_trials_returns_only_managed_campaign_trials(native_jobs) -> Non
     assert str(results[3][0]["campaign_id"]) == str(fix.campaign_id)
     assert results[3][1] is None
     assert results[3][2] == ["missing_managed_receipt"]
+
+
+def test_managed_bind_without_job_is_blocked(native_jobs) -> None:
+    """A candidate_authored observation does not bind a managed trial."""
+    fix = _make_fixture(native_jobs, enqueue_and_claim=False)
+    _record_candidate_observation(fix)
+
+    status, body = _bind_deliverable(fix)
+
+    assert status == 409, body
+    assert body["error"]["code"] == "completion_blocked"
+    assert "missing_managed_receipt" in body["error"]["diagnostics"]
+    assert _binding_count(fix) == 0
+
+
+def test_qualified_managed_trial_binds_after_review_root(native_jobs) -> None:
+    """A qualified managed job plus a later trusted review root binds."""
+    fix = _make_fixture(native_jobs)
+    receipt, reasons = _commit(fix, receipt_bytes=_receipt_bytes(fix))
+    assert reasons == []
+    assert receipt is not None
+    _settle_review_root(fix)
+
+    status, body = _bind_deliverable(fix)
+
+    assert status == 200, body
+    assert body["result"]["status"] == "applied"
+
+
+def test_candidate_failed_untrusted_settlement_is_not_qualified(native_jobs) -> None:
+    """A candidate_failed receipt on a failed untrusted settlement does not bind."""
+    fix = _make_fixture(native_jobs)
+    receipt_bytes = _receipt_bytes(
+        fix,
+        verdict="candidate_failed",
+        failure_reason="metric fell below baseline",
+        metrics={"score": 0.2},
+    )
+    receipt, reasons = _commit(
+        fix,
+        receipt_bytes=receipt_bytes,
+        outcome="failed",
+        trust="untrusted",
+    )
+    assert receipt is not None
+    assert reasons == []
+    _settle_review_root(fix)
+
+    status, body = _bind_deliverable(fix)
+
+    assert status == 409, body
+    assert body["error"]["code"] == "completion_blocked"
+    assert body["error"]["diagnostics"] == ["not_qualified"]
+    assert _binding_count(fix) == 0
+
+
+def test_non_managed_trial_binds_without_managed_job(native_jobs) -> None:
+    """A non-managed campaign trial binds without a managed job."""
+    fix = _make_fixture(native_jobs, managed=False, enqueue_and_claim=False)
+
+    status, body = _bind_deliverable(fix)
+
+    assert status == 200, body
+    assert body["result"]["status"] == "applied"
