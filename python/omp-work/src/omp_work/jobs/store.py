@@ -130,8 +130,19 @@ class NativeJobStore:
         is the global primary key, so the row is read by id and then kept only
         when its ``workspace_id`` is the caller's; another workspace's result is
         never replayed.
+
+        A transaction-scoped advisory lock serialises callers that share one
+        ``operation_id``. Without it the read below and the insert after
+        ``apply`` are not atomic: two first callers both miss the row, both run
+        the effect (including non-transactional side effects), and the loser
+        aborts on the primary key instead of replaying. The lock releases on
+        commit or rollback, so a retry after a rollback proceeds.
         """
         request_sha256 = sha256(request)
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended('omp_jobs.operation:' || %s, 0))",
+            (operation_id,),
+        )
         cur.execute(
             "SELECT workspace_id, kind, request_sha256, result FROM omp_jobs.operations WHERE operation_id=%s FOR UPDATE",
             (operation_id,),
@@ -415,6 +426,13 @@ def register_worker(
     ``capabilities`` are stored sorted and must sit within the component's
     descriptor. Re-registering the same identity replays; a changed identity or a
     drained worker is refused as ``job_worker_unavailable``.
+
+    ``worker_id`` is a global identity: ``omp_jobs.workers.worker_id`` is the
+    primary key and the worker process holds a lifetime advisory lock keyed on
+    ``worker_id`` alone. A worker id owned by another workspace is therefore
+    found by the lookup below and refused, never silently inserted. A
+    transaction-scoped advisory lock on the worker id serialises two first
+    registrations so the check and the insert stay atomic.
     """
     ordered = sorted(str(capability) for capability in capabilities)
     if capacity < 0:
@@ -438,11 +456,20 @@ def register_worker(
                     (f"capability outside descriptor: {', '.join(outside)}",),
                 )
             cur.execute(
-                f"SELECT {_WORKER_FIELDS} FROM omp_jobs.workers WHERE workspace_id=%s AND worker_id=%s FOR UPDATE",  # nosec B608 - static column list
-                (workspace_id, worker_id),
+                "SELECT pg_advisory_xact_lock(hashtextextended('omp_jobs.worker:' || %s, 0))",
+                (worker_id,),
+            )
+            cur.execute(
+                f"SELECT {_WORKER_FIELDS} FROM omp_jobs.workers WHERE worker_id=%s FOR UPDATE",  # nosec B608 - static column list
+                (worker_id,),
             )
             existing = cur.fetchone()
             if existing is not None:
+                if UUID(str(existing["workspace_id"])) != workspace_id:
+                    raise JobError(
+                        "job_worker_unavailable",
+                        ("worker id is registered in another workspace",),
+                    )
                 same_identity = (
                     existing["component_sha256"] == component_sha256
                     and list(existing["capabilities"]) == ordered
