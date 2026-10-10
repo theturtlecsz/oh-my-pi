@@ -17,15 +17,7 @@ export type GateScopeResult = GateScopeGroupResult[] & {
 	"ts-check": GateScopeGroupResult;
 };
 
-const TS_CHECK_FORCE_EXTENSIONS: readonly string[] = [
-	".ts",
-	".tsx",
-	".js",
-	".mjs",
-	".cjs",
-	".json",
-	".jsonc",
-] as const;
+const TS_CHECK_FORCE_EXTENSIONS: readonly string[] = [".ts", ".tsx", ".js", ".mjs", ".cjs", ".json", ".jsonc"] as const;
 
 function normalizePath(filePath: string): string {
 	return filePath.trim().replace(/\\/g, "/").replace(/^\.\//, "");
@@ -95,9 +87,7 @@ export function isSkipSafeTsCheck(filePath: string): boolean {
 }
 
 export function selectGateScope(changedFiles: string[]): GateScopeResult {
-	const normalizedFiles = changedFiles
-		.map(f => normalizePath(f))
-		.filter(f => f.length > 0);
+	const normalizedFiles = changedFiles.map(f => normalizePath(f)).filter(f => f.length > 0);
 
 	if (normalizedFiles.length === 0) {
 		const pythonLedgerResult: GateScopeGroupResult = {

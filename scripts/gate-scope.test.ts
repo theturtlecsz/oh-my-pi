@@ -3,12 +3,7 @@ import { $ } from "bun";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-	changedFiles,
-	isSkipSafePythonLedger,
-	isSkipSafeTsCheck,
-	selectGateScope,
-} from "./gate-scope.ts";
+import { changedFiles, isSkipSafePythonLedger, isSkipSafeTsCheck, selectGateScope } from "./gate-scope.ts";
 
 const repoRoot = path.join(import.meta.dir, "..");
 const tempDirs: string[] = [];
@@ -218,7 +213,7 @@ describe("gate-scope CLI", () => {
 		await $`git mv python/omp-work/src/omp_work/m.py scripts/m.py`.cwd(tempRepo).quiet();
 		await $`git commit -m "move python file to scripts"`.cwd(tempRepo).quiet();
 
-		const { exitCode, stdout, stderr } = await runCliSubprocess(
+		const { exitCode, stdout } = await runCliSubprocess(
 			{
 				GATE_SCOPE_BASE: "main",
 				GATE_SCOPE_OUTPUT: outputFile,
