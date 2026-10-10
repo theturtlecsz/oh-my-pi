@@ -260,6 +260,7 @@ class NativeJobStore:
         Cancellation is inherited: a job whose ancestor was cancelled must not be
         admitted. Only ancestors are walked — a job's own status is the caller's
         check. The walk is bounded so a malformed self-parent cannot loop.
+        A parent outside this workspace causes an error.
         """
         seen: set[str] = set()
         cur.execute(
@@ -276,7 +277,9 @@ class NativeJobStore:
             )
             row = cur.fetchone()
             if row is None:
-                return None
+                raise JobError(
+                    "invalid_request", ("parent job is not in this workspace",)
+                )
             if row["status"] == "cancelled":
                 return row_json(row)
             current = row["parent_job_id"]
