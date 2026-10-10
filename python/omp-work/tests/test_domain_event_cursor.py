@@ -615,3 +615,161 @@ def test_pagination_limits_and_validation(
             headers={"Authorization": "Bearer owner-token"},
         )
         assert resp.status_code == 400
+
+
+def test_workspace_aggregate_events_chain_across_concurrent_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # OMP-567: a raw session holds the workspace advisory lock with an
+    # uncommitted workspace-aggregate event; a concurrent create_work_batch
+    # must chain its event to the raw event's hash, not to a stale head.
+    config = _config(tmp_path)
+    with native_postgres(tmp_path, config.port):
+        monkeypatch.setattr(
+            "omp_work.operations.database.validate_bundle", lambda **kw: None
+        )
+        bootstrap(config)
+        workspace_id, actor_id = uuid4(), uuid4()
+        seed_authority(config.connection_kwargs("postgres"), workspace_id, actor_id)
+
+        capabilities = tmp_path / "capabilities"
+        capabilities.mkdir(mode=0o700, exist_ok=True)
+        (capabilities / "owner.json").write_text(
+            json.dumps(
+                {
+                    "token": "owner-token",
+                    "actor_id": str(actor_id),
+                    "actor_kind": "owner",
+                    "workspaces": [str(workspace_id)],
+                    "scopes": ["work.read", "work.mutate"],
+                }
+            )
+        )
+        (capabilities / "owner.json").chmod(0o600)
+
+        app = create_app(config, capabilities_dir=capabilities)
+        tc = TestClient(app)
+        client = WorkClient(
+            "http://testserver",
+            workspace_id,
+            capabilities / "owner.json",
+            transport=tc._transport,
+        )
+
+        # Raw session takes the workspace lock and inserts a workspace-aggregate
+        # domain event, uncommitted.
+        raw_conn = psycopg.connect(**config.connection_kwargs("omp_work_app"))
+        raw_conn.autocommit = False
+        raw_cur = raw_conn.cursor()
+        raw_cur.execute("SET LOCAL search_path = pg_catalog")
+        raw_cur.execute(
+            "SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)",
+            (str(workspace_id), str(actor_id)),
+        )
+        raw_cur.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended('omp_audit.domain_events:' || %s, 0))",
+            (workspace_id,),
+        )
+        raw_op_id = uuid4()
+        raw_payload_bytes = json.dumps({"source": "raw_session"})
+        raw_payload_hash = hashlib.sha256(raw_payload_bytes.encode()).hexdigest()
+        raw_event_hash = hashlib.sha256(b"raw-event-hash").hexdigest()
+        raw_cur.execute(
+            "INSERT INTO omp_audit.domain_events("
+            "event_id,workspace_id,aggregate_type,aggregate_id,aggregate_version,"
+            "actor_id,actor_kind,capability_id,request_id,correlation_id,operation_id,"
+            "causation_id,event_type,outcome,payload,payload_sha256,previous_event_sha256,event_sha256"
+            ") VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (
+                uuid4(),
+                workspace_id,
+                "workspace",
+                workspace_id,
+                1,
+                actor_id,
+                "owner",
+                raw_op_id,
+                uuid4(),
+                uuid4(),
+                raw_op_id,
+                raw_op_id,
+                "raw_uncommitted_event",
+                "applied",
+                raw_payload_bytes,
+                raw_payload_hash,
+                None,
+                raw_event_hash,
+            ),
+        )
+
+        cmd_done = threading.Event()
+        cmd_error: list[Exception | None] = [None]
+
+        def run_service_command() -> None:
+            try:
+                envelope = CommandEnvelope(
+                    api_version="work.omp.dev/v1",
+                    workspace_id=workspace_id,
+                    operation_id=uuid4(),
+                    request_id=uuid4(),
+                    correlation_id=uuid4(),
+                    command=CreateWorkBatchCommand(
+                        type="create_work_batch",
+                        payload=CreateWorkBatchPayload(
+                            items=(
+                                CreateWorkInput(client_ref="ref-chain-1", title="chain-work-1"),
+                            )
+                        ),
+                    ),
+                )
+                client.execute(envelope)
+            except Exception as e:
+                cmd_error[0] = e
+            finally:
+                cmd_done.set()
+
+        cmd_thread = threading.Thread(target=run_service_command)
+        cmd_thread.start()
+
+        # The service command must block on the advisory lock before reading
+        # the chain head.
+        found_lock = False
+        with psycopg.connect(
+            **config.connection_kwargs("postgres"),
+            row_factory=psycopg.rows.dict_row,
+            autocommit=True,
+        ) as stat_conn:
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                rows = stat_conn.execute(
+                    "SELECT wait_event_type FROM pg_stat_activity "
+                    "WHERE backend_type = 'client backend' "
+                    "  AND pid != pg_backend_pid() "
+                    "  AND wait_event_type = 'Lock'"
+                ).fetchall()
+                if rows:
+                    found_lock = True
+                    break
+                time.sleep(0.05)
+        assert found_lock, "service command was not observed with wait_event_type 'Lock'"
+
+        raw_conn.commit()
+        raw_conn.close()
+
+        cmd_thread.join(timeout=10)
+        assert cmd_done.is_set()
+        assert cmd_error[0] is None
+
+        with psycopg.connect(
+            **config.connection_kwargs("postgres"),
+            row_factory=psycopg.rows.dict_row,
+            autocommit=True,
+        ) as verify_conn:
+            row = verify_conn.execute(
+                "SELECT previous_event_sha256 FROM omp_audit.domain_events "
+                "WHERE workspace_id=%s AND event_type='create_work_batch'",
+                (workspace_id,),
+            ).fetchone()
+        assert row is not None
+        assert row["previous_event_sha256"] == raw_event_hash

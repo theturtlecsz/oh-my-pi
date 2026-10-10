@@ -470,21 +470,55 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
 
     @contextmanager
     def _transaction(
-        self, workspace_id: UUID, actor_id: UUID, *, serializable: bool = False
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        *,
+        serializable: bool = False,
+        lock_events: bool = False,
     ) -> Iterator[psycopg.Cursor[dict[str, object]]]:
         with psycopg.connect(
             **self._config.connection_kwargs("omp_work_app"), row_factory=dict_row
         ) as conn:
-            with conn.transaction():
-                with conn.cursor() as cur:
-                    if serializable:
-                        cur.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
-                    cur.execute("SET LOCAL search_path = pg_catalog")
-                    cur.execute(
-                        "SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)",
-                        (str(workspace_id), str(actor_id)),
+            locked = False
+            try:
+                if lock_events:
+                    # Session-level advisory lock, granted BEFORE BEGIN. Under
+                    # SERIALIZABLE the first statement of a transaction fixes its
+                    # snapshot, so any in-transaction lock — even
+                    # pg_advisory_xact_lock as the very first statement — is
+                    # granted too late: the head read in _record_event would run
+                    # on a snapshot taken before the wait, missing events
+                    # committed by the lock holder, and fork the hash chain
+                    # (OMP-567). Session scope lets the wait happen with no
+                    # snapshot held; the transaction snapshot taken after the
+                    # grant already includes the previous writer's commit.
+                    conn.autocommit = True
+                    conn.execute(
+                        "SELECT pg_advisory_lock(hashtextextended('omp_audit.domain_events:' || %s, 0))",
+                        (workspace_id,),
                     )
-                    yield cur
+                    conn.autocommit = False
+                    locked = True
+                with conn.transaction():
+                    with conn.cursor() as cur:
+                        if serializable:
+                            cur.execute(
+                                "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE"
+                            )
+                        cur.execute("SET LOCAL search_path = pg_catalog")
+                        cur.execute(
+                            "SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)",
+                            (str(workspace_id), str(actor_id)),
+                        )
+                        yield cur
+            finally:
+                if locked:
+                    conn.autocommit = True
+                    conn.execute(
+                        "SELECT pg_advisory_unlock(hashtextextended('omp_audit.domain_events:' || %s, 0))",
+                        (workspace_id,),
+                    )
 
     def execute(
         self,
@@ -530,7 +564,7 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
             "code": code,
             "diagnostics": list(diagnostics),
         }
-        with self._transaction(envelope.workspace_id, actor_id) as cur:
+        with self._transaction(envelope.workspace_id, actor_id, lock_events=True) as cur:
             self._record_event(
                 cur,
                 envelope,
@@ -603,7 +637,7 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
         }
         conflict = False
         with self._transaction(
-            envelope.workspace_id, actor_id, serializable=serializable
+            envelope.workspace_id, actor_id, serializable=serializable, lock_events=True
         ) as cur:
             cur.execute(
                 "SELECT request_sha256, response, result_sha256, diagnostics FROM omp_control.idempotent_commands WHERE workspace_id=%s AND operation_id=%s FOR UPDATE",
@@ -915,6 +949,13 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
             aggregate_type = (
                 "work_item" if aggregate_id != envelope.workspace_id else "workspace"
             )
+        # The advisory lock must precede the chain-head read: it total-orders
+        # event commits per workspace, and taking it after the SELECT would let
+        # a second writer read a stale head and fork the hash chain (OMP-567).
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended('omp_audit.domain_events:' || %s, 0))",
+            (envelope.workspace_id,),
+        )
         cur.execute(
             "SELECT event_sha256 FROM omp_audit.domain_events WHERE workspace_id=%s AND aggregate_id=%s ORDER BY sequence DESC LIMIT 1",
             (envelope.workspace_id, aggregate_id),
@@ -931,10 +972,6 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
             }
         )
         outcome = "refused" if result.get("status") == "refused" else "applied"
-        cur.execute(
-            "SELECT pg_advisory_xact_lock(hashtextextended('omp_audit.domain_events:' || %s, 0))",
-            (envelope.workspace_id,),
-        )
         cur.execute(
             "INSERT INTO omp_audit.domain_events(event_id,workspace_id,aggregate_type,aggregate_id,aggregate_version,actor_id,actor_kind,capability_id,request_id,correlation_id,operation_id,causation_id,event_type,outcome,payload,payload_sha256,previous_event_sha256,event_sha256) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
             (
