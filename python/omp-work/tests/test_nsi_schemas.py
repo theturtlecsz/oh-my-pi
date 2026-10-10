@@ -1,6 +1,7 @@
 """NSI authority, taxonomy, claim, status, and contract schemas reject invalid records."""
 
 import json
+import tomllib
 from copy import deepcopy
 from pathlib import Path
 
@@ -56,11 +57,14 @@ def test_only_models_are_restricted_to_proposals(kind):
     record = deepcopy(MUTATION)
     record["actor"]["kind"] = kind
     VALIDATOR.validate(record)
-    record["operation"] = "approve"
+    record["operation"] = "publish"
     if kind == "model":
         with pytest.raises(ValidationError):
             VALIDATOR.validate(record)
     else:
+        VALIDATOR.validate(record)
+    if kind == "owner":
+        record["operation"] = "ratify"
         VALIDATOR.validate(record)
 
 
@@ -316,7 +320,7 @@ def test_claim_enums_accept_exact_wire_vocabulary(definition, values):
 
 @pytest.mark.parametrize(
     "kind,valid,invalid",
-    [("string", "", 1), ("integer", 1, True), ("integer", 0, 1.5),
+    [("string", "", 1), ("integer", 3, True), ("integer", 0, 1.5),
      ("number", 1.5, True), ("boolean", False, 0), ("null", None, "null"),
      ("entity", ENTITY, {"id": "entity-1"})],
 )
@@ -763,3 +767,131 @@ def test_contract_preserves_allowed_empty_lists_and_plain_timestamp_strings(defi
     if "created_at" in changed:
         changed["created_at"] = "not-a-timestamp"
     contract_definition_validator(definition).validate(changed)
+
+
+NSI_SCHEMAS = {
+    "authority": SCHEMA,
+    "taxonomy": TAXONOMY_SCHEMA,
+    "claim": CLAIM_SCHEMA,
+    "status": STATUS_SCHEMA,
+    "contract": CONTRACT_SCHEMA,
+}
+NSI_REGISTRY = Registry().with_resources(
+    (schema["$id"], Resource.from_contents(schema))
+    for schema in NSI_SCHEMAS.values()
+)
+
+
+def nsi_validator(document, definition=None):
+    schema = NSI_SCHEMAS[document]
+    if definition is not None:
+        schema = {"$ref": f"{schema['$id']}#/$defs/{definition}"}
+    return Draft202012Validator(schema, registry=NSI_REGISTRY)
+
+
+def test_all_five_nsi_documents_are_valid_draft_2020_12_schemas():
+    schema_dir = Path(__file__).parents[1] / "src/omp_work/contracts/nsi/v1"
+    assert {path.name for path in schema_dir.glob("*.json")} == {
+        f"{name}.schema.json" for name in NSI_SCHEMAS
+    }
+    for name, schema in NSI_SCHEMAS.items():
+        assert schema["$id"] == f"https://omp.dev/contracts/nsi/v1/{name}.schema.json"
+        Draft202012Validator.check_schema(schema)
+
+
+def test_every_nsi_definition_accepts_a_conforming_wire_instance():
+    instances = {
+        "authority": {
+            "ActorKind": "model",
+            "ActorRef": MUTATION["actor"],
+            "OwnerRef": WAIVER["granted_by"],
+            "RuleEngineRef": RECEIPT["derived_by"],
+            "WaiverPolicy": "owner_with_reason",
+            "WaiverDefinition": WAIVER,
+            "AuthorityMatrixRule": RULE,
+            "MutationEnvelope": MUTATION,
+        },
+        "taxonomy": {
+            "IntakeCategory": "non_functional_qualities",
+            "EntityRef": ENTITY,
+            "PredicateDefinition": PREDICATE,
+            "RequirementDimensionDefinition": DIMENSION,
+        },
+        "claim": {
+            "ClaimOrigin": "model_proposal",
+            "ClaimState": "proposed",
+            "ClaimModality": "desired",
+            "Polarity": "positive",
+            "TypedValue": CLAIM["value"],
+            "EvidenceArtifact": ARTIFACT,
+            "EvidenceSpan": SPAN,
+            "IntakeClaim": CLAIM,
+        },
+        "status": {
+            "IntakeRunState": "collecting",
+            "DerivationReceipt": RECEIPT,
+            "Gap": GAP,
+            "Conflict": CONFLICT,
+            "ClarificationQuestion": QUESTION,
+            "OwnerDecision": DECISION,
+        },
+        "contract": dict(CONTRACT_RECORDS),
+    }
+    for document, records in instances.items():
+        assert records.keys() == NSI_SCHEMAS[document]["$defs"].keys()
+        for definition, instance in records.items():
+            nsi_validator(document, definition).validate(instance)
+    nsi_validator("contract", "Binding/$defs/Fields").validate(BINDING)
+
+
+def test_nsi_enum_sizes_and_members_match_wire_vocabularies():
+    for document, definition, count in (
+        ("taxonomy", "IntakeCategory", 11),
+        ("status", "IntakeRunState", 10),
+        ("authority", "ActorKind", 5),
+        ("claim", "ClaimOrigin", 6),
+        ("claim", "ClaimModality", 6),
+        ("claim", "ClaimState", 4),
+        ("claim", "Polarity", 2),
+    ):
+        values = NSI_SCHEMAS[document]["$defs"][definition]["enum"]
+        assert len(values) == count
+        validator = nsi_validator(document, definition)
+        for value in values:
+            validator.validate(value)
+        with pytest.raises(ValidationError):
+            validator.validate("unsupported")
+
+
+def test_readiness_receipts_forbid_gaps_but_assessments_require_them():
+    receipt_validator = nsi_validator("contract", "IntakeReadinessReceipt")
+    receipt_validator.validate(READINESS)
+    for gaps in ([], [GAP]):
+        with pytest.raises(ValidationError):
+            receipt_validator.validate({**READINESS, "gaps": gaps})
+
+    assessment_validator = nsi_validator("contract", "IntakeReadinessAssessment")
+    assessment_validator.validate(ASSESSMENT)
+    assessment_validator.validate({**ASSESSMENT, "gaps": []})
+    without_gaps = dict(ASSESSMENT)
+    del without_gaps["gaps"]
+    with pytest.raises(ValidationError):
+        assessment_validator.validate(without_gaps)
+
+
+def test_package_data_includes_nsi_schema_json_files():
+    project_dir = Path(__file__).parents[1]
+    config = tomllib.loads((project_dir / "pyproject.toml").read_text())
+    globs = config["tool"]["setuptools"]["package-data"]["omp_work"]
+    assert "contracts/nsi/v1/*.json" in globs
+
+
+def test_each_nsi_root_accepts_its_conforming_wire_record():
+    for document, instance in (
+        ("taxonomy", ENTITY),
+        ("claim", CLAIM),
+        ("status", GAP),
+        ("contract", CONTRACT),
+        ("authority", MUTATION),
+    ):
+        nsi_validator(document).validate(instance)
