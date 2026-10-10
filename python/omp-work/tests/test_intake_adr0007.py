@@ -57,13 +57,26 @@ _TRANSITIONS = (
     ("collecting", "reasoning", "rule engine"),
     ("reasoning", "needs_spec", "rule engine"),
     ("reasoning", "conflicted", "rule engine"),
+    ("reasoning", "invalid", "rule engine"),
     ("reasoning", "ready_for_ratification", "rule engine"),
     ("needs_spec", "collecting", "owner"),
     ("conflicted", "collecting", "owner"),
+    ("ready_for_ratification", "collecting", "owner"),
     ("ready_for_ratification", "ratified", "owner"),
-    ("ratified", "published", "rule engine"),
-    ("published", "stale", "rule engine"),
-    ("stale", "reasoning", "rule engine"),
+    ("ratified", "needs_spec", "rule engine"),
+    ("ratified", "conflicted", "rule engine"),
+    ("ratified", "invalid", "rule engine"),
+    ("ratified", "published", "owner"),
+    *(
+        (state, "stale", "rule engine")
+        for state in _STATES
+        if state not in ("stale", "superseded")
+    ),
+    ("stale", "collecting (new revision)", "owner"),
+    *(
+        (state, "superseded", "owner (via a new ratified revision)")
+        for state in ("ratified", "published", "stale")
+    ),
 )
 
 _AUTHORITY_ACTORS = (
@@ -85,9 +98,11 @@ def _section(text: str, heading: str) -> str:
         start = lines.index(heading)
     except ValueError:
         pytest.fail(f"{_ADR} has no {heading!r} section")
+    level = len(heading) - len(heading.lstrip("#"))
     end = len(lines)
     for index in range(start + 1, len(lines)):
-        if lines[index].startswith("## ") and not lines[index].startswith("### "):
+        match = re.match(r"^(#{1,6}) ", lines[index])
+        if match and len(match[1]) <= level:
             end = index
             break
     return "\n".join(lines[start:end])
@@ -158,22 +173,18 @@ def test_adr0007_status_model_states_and_transitions() -> None:
             actor.strip(),
         )
         for sources, target, actor in rows
-        if sources.strip() != "From"
+        if sources.strip() not in ("From", "---")
     ]
-    for sources, target, actor in _TRANSITIONS:
-        assert any(
-            row == ((sources,), target, actor) for row in parsed
-        ), (
-            f"{_ADR}: transition {sources} -> {target} by {actor} is missing "
-            "from the transition table"
-        )
-    assert any(
-        "invalid" in target and "owner" in actor.lower() for _, target, actor in parsed
-    ), f"{_ADR}: owner-only invalidation transition is missing"
-    assert any(
-        "superseded" in target and "owner" in actor.lower()
-        for _, target, actor in parsed
-    ), f"{_ADR}: owner supersession transition is missing"
+    expanded = [
+        (source, target, actor)
+        for sources, target, actor in parsed
+        for source in sources
+    ]
+    assert set(expanded) == set(_TRANSITIONS), (
+        f"{_ADR}: transitions must preserve owner publication, failure "
+        "assessments, rejection, and recovery through a new revision"
+    )
+    assert len(expanded) == len(_TRANSITIONS), f"{_ADR}: duplicate transitions"
 
 
 def test_adr0007_readiness_ratification_separation() -> None:
@@ -187,6 +198,7 @@ def test_adr0007_readiness_ratification_separation() -> None:
     assert re.search(
         r"and\s+only\s+the\s+owner\s+performs\s+it", section
     ), f"{_ADR}: ratification must be owner-only"
+    assert "`publishedBy`" in section and "`publishIntake`" in section
     assert "publication receipt" in section, (
         f"{_ADR}: publication receipt is missing"
     )
@@ -203,6 +215,11 @@ def test_adr0007_authority_matrix() -> None:
         assert actor in actors, (
             f"{_ADR}: authority matrix row for {actor!r} is missing"
         )
+    may = {actor.strip(): allowed.strip() for actor, allowed, _ in rows}
+    assert "publish" in may["Owner"], f"{_ADR}: publication requires an owner"
+    assert "publish" not in may["Rule engine"], (
+        f"{_ADR}: readiness derivation cannot authorize engine publication"
+    )
     may_not = {actor.strip(): ban.strip() for actor, _, ban in rows}
     model_ban = may_not["Model"]
     for ban in ("Admit claims", "waive gates", "become canonical state"):
@@ -237,6 +254,9 @@ def test_adr0007_waiver_policy() -> None:
     assert "revision" in section, (
         f"{_ADR}: waivers must pin the record revision"
     )
+    for gap in ("security", "migration", "destructive", "compatibility", "product-semantic"):
+        assert gap in section, f"{_ADR}: critical {gap} gaps must block waivers"
+    assert "`never`" in section and "`owner_with_reason`" in section
     assert "Critical gaps cannot be waived" in section, (
         f"{_ADR}: the unwaivable-critical-gaps rule is missing"
     )
@@ -250,3 +270,9 @@ def test_adr0007_client_contract_conformance() -> None:
     assert "No new CLI commands" in section, (
         f"{_ADR}: the no-new-commands rule is missing"
     )
+
+
+def test_section_stops_at_peer_or_parent_heading() -> None:
+    text = "### First\nrequired\n#### Child\nnested\n### Next\nforbidden\n## Parent\nother"
+    assert _section(text, "### First") == "### First\nrequired\n#### Child\nnested"
+    assert _section(text, "### Next") == "### Next\nforbidden"
