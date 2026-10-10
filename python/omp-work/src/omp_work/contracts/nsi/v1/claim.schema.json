@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omp.dev/contracts/nsi/v1/claim.schema.json",
+  "$ref": "#/$defs/IntakeClaim",
+  "$defs": {
+    "ClaimOrigin": {
+      "type": "string",
+      "enum": ["owner_statement", "policy_rule", "repository_observation", "tool_receipt", "model_proposal", "rule_derivation"]
+    },
+    "ClaimState": {
+      "type": "string",
+      "enum": ["proposed", "admitted", "rejected", "superseded"]
+    },
+    "ClaimModality": {
+      "type": "string",
+      "enum": ["observed", "desired", "required", "prohibited", "possible", "unknown"]
+    },
+    "Polarity": {
+      "type": "string",
+      "enum": ["positive", "negative"]
+    },
+    "TypedValue": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": { "type": { "const": "string" }, "value": { "type": "string" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": { "type": { "const": "integer" }, "value": { "type": "integer" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": { "type": { "const": "number" }, "value": { "type": "number" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": { "type": { "const": "boolean" }, "value": { "type": "boolean" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": { "type": { "const": "null" }, "value": { "type": "null" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "entity" },
+            "value": { "$ref": "https://omp.dev/contracts/nsi/v1/taxonomy.schema.json#/$defs/EntityRef" }
+          }
+        }
+      ]
+    },
+    "EvidenceArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "uri", "content_hash", "revision", "actor", "media_type"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "uri": { "type": "string", "format": "uri" },
+        "content_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "revision": { "type": "string", "minLength": 1 },
+        "actor": { "$ref": "https://omp.dev/contracts/nsi/v1/authority.schema.json#/$defs/ActorRef" },
+        "media_type": { "type": "string", "minLength": 1 }
+      }
+    },
+    "EvidenceSpan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_id", "start_byte", "end_byte"],
+      "properties": {
+        "artifact_id": { "type": "string", "minLength": 1 },
+        "start_byte": { "type": "integer", "minimum": 0 },
+        "end_byte": { "type": "integer", "minimum": 0 },
+        "quote": { "type": "string", "minLength": 1 }
+      }
+    },
+    "IntakeClaim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "category", "subject", "predicate_id", "value", "origin", "state", "modality", "polarity", "truth", "asserted_by", "evidence", "premise_ids"],
+      "properties": {
+        "id": { "type": "string" },
+        "category": { "$ref": "https://omp.dev/contracts/nsi/v1/taxonomy.schema.json#/$defs/IntakeCategory" },
+        "subject": { "$ref": "https://omp.dev/contracts/nsi/v1/taxonomy.schema.json#/$defs/EntityRef" },
+        "predicate_id": { "type": "string" },
+        "value": { "$ref": "#/$defs/TypedValue" },
+        "origin": { "$ref": "#/$defs/ClaimOrigin" },
+        "state": { "$ref": "#/$defs/ClaimState" },
+        "modality": { "$ref": "#/$defs/ClaimModality" },
+        "polarity": { "$ref": "#/$defs/Polarity" },
+        "truth": { "type": "string", "enum": ["true", "false", "unknown"] },
+        "asserted_by": { "$ref": "https://omp.dev/contracts/nsi/v1/authority.schema.json#/$defs/ActorRef" },
+        "evidence": { "type": "array", "items": { "$ref": "#/$defs/EvidenceSpan" } },
+        "premise_ids": { "type": "array", "items": { "type": "string" } },
+        "admitted_by": {
+          "oneOf": [
+            { "$ref": "https://omp.dev/contracts/nsi/v1/authority.schema.json#/$defs/OwnerRef" },
+            { "$ref": "https://omp.dev/contracts/nsi/v1/authority.schema.json#/$defs/RuleEngineRef" }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "origin": { "const": "model_proposal" } } },
+          "then": { "properties": { "asserted_by": { "properties": { "kind": { "const": "model" } } } } }
+        },
+        {
+          "if": { "properties": { "origin": { "const": "owner_statement" } } },
+          "then": { "properties": { "asserted_by": { "$ref": "https://omp.dev/contracts/nsi/v1/authority.schema.json#/$defs/OwnerRef" } } }
+        },
+        {
+          "if": { "properties": { "origin": { "const": "rule_derivation" } } },
+          "then": { "properties": { "asserted_by": { "$ref": "https://omp.dev/contracts/nsi/v1/authority.schema.json#/$defs/RuleEngineRef" } } }
+        },
+        {
+          "if": { "properties": { "state": { "const": "admitted" } } },
+          "then": {
+            "required": ["admitted_by"],
+            "if": { "properties": { "admitted_by": { "properties": { "kind": { "const": "rule_engine" } } } } },
+            "then": { "properties": { "evidence": { "minItems": 1 } } }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,4 +1,4 @@
-"""NSI authority and taxonomy wire contracts reject invalid records."""
+"""NSI authority, taxonomy, and claim wire contracts reject invalid records."""
 
 import json
 from copy import deepcopy
@@ -231,3 +231,167 @@ def test_predicates_accept_single_cardinality_and_shared_actor_kinds():
         **PREDICATE, "cardinality": "one", "exclusivity": True, "transitivity": False,
         "authority": ["owner", "service", "model", "tool", "rule_engine"],
     })
+
+
+CLAIM_SCHEMA = json.loads(
+    (Path(__file__).parents[1] / "src/omp_work/contracts/nsi/v1/claim.schema.json")
+    .read_text()
+)
+CLAIM_VALIDATOR = Draft202012Validator(
+    CLAIM_SCHEMA,
+    registry=Registry().with_resources(
+        (schema["$id"], Resource.from_contents(schema))
+        for schema in (SCHEMA, TAXONOMY_SCHEMA)
+    ),
+)
+CLAIM = {
+    "id": "claim-1",
+    "category": "non_functional_qualities",
+    "subject": ENTITY,
+    "predicate_id": "uptime_target",
+    "value": {"type": "number", "value": 99.9},
+    "origin": "model_proposal",
+    "state": "proposed",
+    "modality": "desired",
+    "polarity": "positive",
+    "truth": "unknown",
+    "asserted_by": {"id": "model-1", "kind": "model"},
+    "evidence": [],
+    "premise_ids": [],
+}
+ARTIFACT = {
+    "id": "artifact-1",
+    "uri": "https://example.com/requirements",
+    "content_hash": "a" * 64,
+    "revision": "revision-1",
+    "actor": {"id": "tool-1", "kind": "tool"},
+    "media_type": "text/plain",
+}
+SPAN = {"artifact_id": "artifact-1", "start_byte": 0, "end_byte": 12}
+
+
+def claim_definition_validator(definition):
+    return CLAIM_VALIDATOR.evolve(
+        schema={**CLAIM_SCHEMA, "$ref": f"#/$defs/{definition}"}
+    )
+
+
+@pytest.mark.parametrize(
+    "definition,record",
+    [("IntakeClaim", CLAIM), ("EvidenceArtifact", ARTIFACT), ("EvidenceSpan", SPAN)],
+)
+def test_claim_records_require_complete_closed_wire_shapes(definition, record):
+    Draft202012Validator.check_schema(CLAIM_SCHEMA)
+    validator = claim_definition_validator(definition)
+    validator.validate(record)
+    if definition == "IntakeClaim":
+        CLAIM_VALIDATOR.validate(record)
+    for field in record:
+        incomplete = dict(record)
+        del incomplete[field]
+        with pytest.raises(ValidationError):
+            validator.validate(incomplete)
+    with pytest.raises(ValidationError):
+        validator.validate({**record, "unexpected": True})
+
+
+@pytest.mark.parametrize(
+    "definition,values",
+    [
+        ("ClaimOrigin", ["owner_statement", "policy_rule", "repository_observation",
+                         "tool_receipt", "model_proposal", "rule_derivation"]),
+        ("ClaimState", ["proposed", "admitted", "rejected", "superseded"]),
+        ("ClaimModality", ["observed", "desired", "required", "prohibited", "possible", "unknown"]),
+        ("Polarity", ["positive", "negative"]),
+    ],
+)
+def test_claim_enums_accept_exact_wire_vocabulary(definition, values):
+    assert sorted(CLAIM_SCHEMA["$defs"][definition]["enum"]) == sorted(values)
+    validator = claim_definition_validator(definition)
+    for value in values:
+        validator.validate(value)
+    with pytest.raises(ValidationError):
+        validator.validate("unsupported")
+
+
+@pytest.mark.parametrize(
+    "kind,valid,invalid",
+    [("string", "", 1), ("integer", 1, True), ("integer", 0, 1.5),
+     ("number", 1.5, True), ("boolean", False, 0), ("null", None, "null"),
+     ("entity", ENTITY, {"id": "entity-1"})],
+)
+def test_typed_values_enforce_tagged_json_types_and_entity_refs(kind, valid, invalid):
+    validator = claim_definition_validator("TypedValue")
+    record = {"type": kind, "value": valid}
+    validator.validate(record)
+    CLAIM_VALIDATOR.validate({**CLAIM, "value": record})
+    for bad in ({"type": kind, "value": invalid}, {"value": valid},
+                {"type": kind}, {**record, "extra": True}):
+        with pytest.raises(ValidationError):
+            validator.validate(bad)
+
+
+@pytest.mark.parametrize(
+    "definition,record,field,value",
+    [
+        ("EvidenceArtifact", ARTIFACT, "id", ""),
+        ("EvidenceArtifact", ARTIFACT, "uri", 1),
+        ("EvidenceArtifact", ARTIFACT, "content_hash", "a" * 63),
+        ("EvidenceArtifact", ARTIFACT, "content_hash", "A" * 64),
+        ("EvidenceArtifact", ARTIFACT, "content_hash", "g" * 64),
+        ("EvidenceArtifact", ARTIFACT, "revision", ""),
+        ("EvidenceArtifact", ARTIFACT, "actor", {"id": "tool-1", "kind": "unknown"}),
+        ("EvidenceArtifact", ARTIFACT, "media_type", ""),
+        ("EvidenceSpan", SPAN, "artifact_id", ""),
+        ("EvidenceSpan", SPAN, "start_byte", -1),
+        ("EvidenceSpan", SPAN, "end_byte", -1),
+        ("EvidenceSpan", SPAN, "start_byte", 0.5),
+        ("EvidenceSpan", SPAN, "end_byte", True),
+        ("EvidenceSpan", SPAN, "quote", ""),
+        ("IntakeClaim", CLAIM, "category", "unknown"),
+        ("IntakeClaim", CLAIM, "subject", {"id": "entity-1", "type": ""}),
+        ("IntakeClaim", CLAIM, "truth", True),
+        ("IntakeClaim", CLAIM, "truth", "unsupported"),
+        ("IntakeClaim", CLAIM, "premise_ids", [1]),
+        ("IntakeClaim", CLAIM, "evidence", [{**SPAN, "start_byte": -1}]),
+        ("IntakeClaim", CLAIM, "admitted_by", {"id": "model-1", "kind": "model"}),
+    ],
+)
+def test_claim_records_reject_invalid_evidence_and_cross_file_refs(definition, record, field, value):
+    with pytest.raises(ValidationError):
+        claim_definition_validator(definition).validate({**record, field: value})
+
+
+@pytest.mark.parametrize(
+    "origin,required_kind",
+    [("model_proposal", "model"), ("owner_statement", "owner"),
+     ("rule_derivation", "rule_engine"), ("policy_rule", None),
+     ("repository_observation", None), ("tool_receipt", None)],
+)
+def test_claim_origin_constrains_asserting_actor(origin, required_kind):
+    for kind in ("owner", "service", "model", "tool", "rule_engine"):
+        record = {**CLAIM, "origin": origin, "asserted_by": {"id": "actor-1", "kind": kind}}
+        if required_kind is not None and kind != required_kind:
+            with pytest.raises(ValidationError):
+                CLAIM_VALIDATOR.validate(record)
+        else:
+            CLAIM_VALIDATOR.validate(record)
+
+
+@pytest.mark.parametrize("state", ["proposed", "admitted", "rejected", "superseded"])
+def test_admission_requires_authority_and_rule_engine_evidence(state):
+    record = {**CLAIM, "state": state}
+    if state == "admitted":
+        with pytest.raises(ValidationError):
+            CLAIM_VALIDATOR.validate(record)
+    else:
+        CLAIM_VALIDATOR.validate(record)
+    CLAIM_VALIDATOR.validate({**record, "admitted_by": {"id": "owner-1", "kind": "owner"}})
+    rule_record = {**record, "admitted_by": {"id": "engine-1", "kind": "rule_engine"}}
+    if state == "admitted":
+        with pytest.raises(ValidationError):
+            CLAIM_VALIDATOR.validate(rule_record)
+    else:
+        CLAIM_VALIDATOR.validate(rule_record)
+    CLAIM_VALIDATOR.validate({**rule_record, "evidence": [SPAN]})
+    CLAIM_VALIDATOR.validate({**rule_record, "evidence": [{**SPAN, "quote": "Requirements"}]})
