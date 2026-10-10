@@ -4,6 +4,7 @@
 
 ### Added
 
+- `omp-work projects trusted-paths` writes the trusted folder list to `~/.omp/agent/trusted-projects.json` (OMP-532, L-RT-03).
 - Missions run intake→signed merge.
 - Mission events, resumable event cursors, and signed push subscriptions, including OMP-406 alerts and daily digests (`omp-work events push`).
 - Bounded intake publication requires an item budget (money, tokens, wall-clock, sub-agents).

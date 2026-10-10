@@ -24,6 +24,10 @@
 
 ### Changed
 
+- Subagents inherit the parent approval mode; auto-approve parents still give children full power ([#532](https://github.com/can1357/oh-my-pi/issues/532)).
+- In omp sessions, `isProjectTrusted()` is true only for folders listed in `~/.omp/agent/trusted-projects.json` and their worktrees ([#532](https://github.com/can1357/oh-my-pi/issues/532)).
+- Project `.omp/extensions` do not load in other folders ([#532](https://github.com/can1357/oh-my-pi/issues/532)).
+- `task.maxRuntimeMs` defaults to 2 hours; `0` disables the limit ([#532](https://github.com/can1357/oh-my-pi/issues/532)).
 - `--queue` now orders items dependency-first so umbrella items run after their queued children instead of ahead of them.
 - Advisors now run on the structured CPK-6 supervisor by default, so no second legacy dedupe dispatcher runs; set `advisor.supervisionPath` to `legacy` to restore the previous behavior.
 
