@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omp.dev/contracts/nsi/v1/status.schema.json",
+  "oneOf": [
+    { "$ref": "#/$defs/DerivationReceipt" },
+    { "$ref": "#/$defs/Gap" },
+    { "$ref": "#/$defs/Conflict" },
+    { "$ref": "#/$defs/ClarificationQuestion" },
+    { "$ref": "#/$defs/OwnerDecision" }
+  ],
+  "$defs": {
+    "IntakeRunState": {
+      "type": "string",
+      "enum": [
+        "collecting",
+        "reasoning",
+        "needs_spec",
+        "conflicted",
+        "ready_for_ratification",
+        "ratified",
+        "published",
+        "stale",
+        "invalid",
+        "superseded"
+      ]
+    },
+    "DerivationReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "run_id", "revision", "contract_hash", "claim_set_hash", "rule_bundle_hash",
+        "schema_hash", "source_hash", "rule_id", "premise_ids", "conclusion_ids",
+        "derived_by", "created_at"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "run_id": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "contract_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "claim_set_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "rule_bundle_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "schema_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "source_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "rule_id": { "type": "string" },
+        "premise_ids": { "type": "array", "items": { "type": "string" } },
+        "conclusion_ids": { "type": "array", "items": { "type": "string" } },
+        "derived_by": { "$ref": "https://omp.dev/contracts/nsi/v1/authority.schema.json#/$defs/RuleEngineRef" },
+        "created_at": { "type": "string" }
+      }
+    },
+    "Gap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "dimension_id", "premise_id", "reason", "materiality", "waiver_policy"],
+      "properties": {
+        "id": { "type": "string" },
+        "dimension_id": { "type": "string" },
+        "premise_id": { "type": "string" },
+        "reason": { "type": "string", "minLength": 1 },
+        "materiality": { "type": "string", "enum": ["critical", "material", "minor"] },
+        "waiver_policy": { "type": "string", "enum": ["never", "owner_with_reason"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "materiality": { "const": "critical" } } },
+          "then": { "properties": { "waiver_policy": { "const": "never" } } }
+        }
+      ]
+    },
+    "Conflict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "claim_ids", "predicate_id", "reason"],
+      "properties": {
+        "id": { "type": "string" },
+        "claim_ids": {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        },
+        "predicate_id": { "type": "string" },
+        "reason": { "type": "string" }
+      }
+    },
+    "ClarificationQuestion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "question", "gap_ids", "conflict_ids", "category"],
+      "properties": {
+        "id": { "type": "string" },
+        "question": { "type": "string", "minLength": 1 },
+        "gap_ids": { "type": "array", "items": { "type": "string" } },
+        "conflict_ids": { "type": "array", "items": { "type": "string" } },
+        "category": { "$ref": "https://omp.dev/contracts/nsi/v1/taxonomy.schema.json#/$defs/IntakeCategory" }
+      }
+    },
+    "OwnerDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "run_id", "revision", "actor", "question_id", "answer", "reason", "created_at"],
+      "properties": {
+        "id": { "type": "string" },
+        "run_id": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "actor": { "$ref": "https://omp.dev/contracts/nsi/v1/authority.schema.json#/$defs/OwnerRef" },
+        "question_id": { "type": "string" },
+        "answer": { "$ref": "https://omp.dev/contracts/nsi/v1/claim.schema.json#/$defs/TypedValue" },
+        "reason": { "type": "string" },
+        "created_at": { "type": "string" }
+      }
+    }
+  }
+}

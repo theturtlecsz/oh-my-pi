@@ -1,4 +1,4 @@
-"""NSI authority, taxonomy, and claim wire contracts reject invalid records."""
+"""NSI authority, taxonomy, claim, and status wire contracts reject invalid records."""
 
 import json
 from copy import deepcopy
@@ -395,3 +395,184 @@ def test_admission_requires_authority_and_rule_engine_evidence(state):
         CLAIM_VALIDATOR.validate(rule_record)
     CLAIM_VALIDATOR.validate({**rule_record, "evidence": [SPAN]})
     CLAIM_VALIDATOR.validate({**rule_record, "evidence": [{**SPAN, "quote": "Requirements"}]})
+
+
+STATUS_SCHEMA = json.loads(
+    (Path(__file__).parents[1] / "src/omp_work/contracts/nsi/v1/status.schema.json")
+    .read_text()
+)
+STATUS_VALIDATOR = Draft202012Validator(
+    STATUS_SCHEMA,
+    registry=Registry().with_resources(
+        (schema["$id"], Resource.from_contents(schema))
+        for schema in (SCHEMA, TAXONOMY_SCHEMA, CLAIM_SCHEMA)
+    ),
+)
+SHA256 = "a" * 64
+RECEIPT = {
+    "id": "receipt-1",
+    "run_id": "run-1",
+    "revision": 0,
+    "contract_hash": SHA256,
+    "claim_set_hash": SHA256,
+    "rule_bundle_hash": SHA256,
+    "schema_hash": SHA256,
+    "source_hash": SHA256,
+    "rule_id": "rule-1",
+    "premise_ids": ["premise-1"],
+    "conclusion_ids": ["conclusion-1"],
+    "derived_by": {"id": "engine-1", "kind": "rule_engine"},
+    "created_at": "2026-10-10T00:00:00Z",
+}
+GAP = {
+    "id": "gap-1",
+    "dimension_id": "dimension-1",
+    "premise_id": "premise-1",
+    "reason": "Required premise is unknown.",
+    "materiality": "material",
+    "waiver_policy": "owner_with_reason",
+}
+CONFLICT = {
+    "id": "conflict-1",
+    "claim_ids": ["claim-1", "claim-2"],
+    "predicate_id": "uptime_target",
+    "reason": "Admitted claims contradict.",
+}
+QUESTION = {
+    "id": "question-1",
+    "question": "What uptime is required?",
+    "gap_ids": ["gap-1"],
+    "conflict_ids": [],
+    "category": "non_functional_qualities",
+}
+DECISION = {
+    "id": "decision-1",
+    "run_id": "run-1",
+    "revision": 0,
+    "actor": {"id": "owner-1", "kind": "owner"},
+    "question_id": "question-1",
+    "answer": {"type": "string", "value": "99.9"},
+    "reason": "Owner confirmed the target.",
+    "created_at": "2026-10-10T00:00:00Z",
+}
+INTAKE_RUN_STATES = [
+    "collecting", "reasoning", "needs_spec", "conflicted", "ready_for_ratification",
+    "ratified", "published", "stale", "invalid", "superseded",
+]
+
+
+@pytest.mark.parametrize(
+    "definition,record",
+    [("DerivationReceipt", RECEIPT), ("Gap", GAP), ("Conflict", CONFLICT),
+     ("ClarificationQuestion", QUESTION), ("OwnerDecision", DECISION)],
+)
+def test_status_root_and_definitions_require_closed_complete_records(definition, record):
+    Draft202012Validator.check_schema(STATUS_SCHEMA)
+    definition_validator = STATUS_VALIDATOR.evolve(
+        schema={**STATUS_SCHEMA, "oneOf": [{"$ref": f"#/$defs/{definition}"}]}
+    )
+    for validator in (STATUS_VALIDATOR, definition_validator):
+        validator.validate(record)
+        for field in record:
+            incomplete = dict(record)
+            del incomplete[field]
+            with pytest.raises(ValidationError):
+                validator.validate(incomplete)
+        with pytest.raises(ValidationError):
+            validator.validate({**record, "unexpected": True})
+
+
+def test_intake_run_state_accepts_exactly_the_ten_lifecycle_states():
+    assert STATUS_SCHEMA["$defs"]["IntakeRunState"]["enum"] == INTAKE_RUN_STATES
+    validator = STATUS_VALIDATOR.evolve(
+        schema={**STATUS_SCHEMA, "oneOf": [{"$ref": "#/$defs/IntakeRunState"}]}
+    )
+    for state in INTAKE_RUN_STATES:
+        validator.validate(state)
+    with pytest.raises(ValidationError):
+        validator.validate("unknown")
+    with pytest.raises(ValidationError):
+        STATUS_VALIDATOR.validate("collecting")
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["contract_hash", "claim_set_hash", "rule_bundle_hash", "schema_hash", "source_hash"],
+)
+@pytest.mark.parametrize("value", ["a" * 63, "a" * 65, "A" * 64, "g" * 64, ""])
+def test_receipt_hashes_are_lowercase_sha256(field, value):
+    with pytest.raises(ValidationError):
+        STATUS_VALIDATOR.validate({**RECEIPT, field: value})
+
+
+@pytest.mark.parametrize(
+    "record,field,value",
+    [
+        (RECEIPT, "revision", -1),
+        (RECEIPT, "revision", 0.5),
+        (RECEIPT, "premise_ids", [1]),
+        (RECEIPT, "conclusion_ids", [1]),
+        (RECEIPT, "derived_by", {"id": "engine-1", "kind": "owner"}),
+        (RECEIPT, "derived_by", {"id": "", "kind": "rule_engine"}),
+        (RECEIPT, "derived_by", {"id": "engine-1", "kind": "rule_engine", "extra": True}),
+        (GAP, "reason", ""),
+        (GAP, "materiality", "unknown"),
+        (GAP, "waiver_policy", "unknown"),
+        (CONFLICT, "claim_ids", ["claim-1"]),
+        (CONFLICT, "claim_ids", []),
+        (CONFLICT, "claim_ids", ["claim-1", "claim-1"]),
+        (CONFLICT, "claim_ids", ["claim-1", 2]),
+        (QUESTION, "question", ""),
+        (QUESTION, "gap_ids", [1]),
+        (QUESTION, "conflict_ids", [1]),
+        (QUESTION, "category", "unknown"),
+        (DECISION, "revision", -1),
+        (DECISION, "revision", 0.5),
+        (DECISION, "actor", {"id": "engine-1", "kind": "rule_engine"}),
+        (DECISION, "actor", {"id": "", "kind": "owner"}),
+        (DECISION, "actor", {"id": "owner-1", "kind": "owner", "extra": True}),
+        (DECISION, "answer", {"type": "string"}),
+        (DECISION, "answer", {"type": "entity", "value": {"id": "entity-1"}}),
+        (DECISION, "reason", 1),
+        (DECISION, "created_at", 1),
+    ],
+)
+def test_status_records_reject_invalid_bounds_hashes_and_cross_file_refs(record, field, value):
+    with pytest.raises(ValidationError):
+        STATUS_VALIDATOR.validate({**record, field: value})
+
+
+@pytest.mark.parametrize("materiality", ["critical", "material", "minor"])
+def test_critical_gaps_cannot_be_waived(materiality):
+    STATUS_VALIDATOR.validate({**GAP, "materiality": materiality, "waiver_policy": "never"})
+    record = {**GAP, "materiality": materiality, "waiver_policy": "owner_with_reason"}
+    if materiality == "critical":
+        with pytest.raises(ValidationError):
+            STATUS_VALIDATOR.validate(record)
+    else:
+        STATUS_VALIDATOR.validate(record)
+
+
+def test_status_records_accept_empty_lists_plain_timestamps_and_typed_answers():
+    STATUS_VALIDATOR.validate({
+        **RECEIPT,
+        "contract_hash": "0123456789abcdef" * 4,
+        "claim_set_hash": "fedcba9876543210" * 4,
+        "premise_ids": [],
+        "conclusion_ids": [],
+        "created_at": "not-a-timestamp",
+    })
+    STATUS_VALIDATOR.validate({**QUESTION, "gap_ids": [], "conflict_ids": []})
+    STATUS_VALIDATOR.validate({**CONFLICT, "claim_ids": ["claim-1", "claim-2", "claim-3"], "reason": ""})
+    STATUS_VALIDATOR.validate({**DECISION, "reason": "", "created_at": "not-a-timestamp"})
+    for category in TAXONOMY_SCHEMA["$defs"]["IntakeCategory"]["enum"]:
+        STATUS_VALIDATOR.validate({**QUESTION, "category": category})
+    for answer in (
+        {"type": "string", "value": ""},
+        {"type": "integer", "value": 0},
+        {"type": "number", "value": 1.5},
+        {"type": "boolean", "value": False},
+        {"type": "null", "value": None},
+        {"type": "entity", "value": {"id": "entity-1", "type": "requirement"}},
+    ):
+        STATUS_VALIDATOR.validate({**DECISION, "answer": answer})
