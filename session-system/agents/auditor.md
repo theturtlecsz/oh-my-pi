@@ -6,9 +6,200 @@ model: "@audit"
 blocking: true
 read-summarize: false
 output:
+  type: object
+  additionalProperties: false
+  required:
+    - audit_result
   properties:
-    report:
-      type: string
+    audit_result:
+      $ref: "#/$defs/AuditResult"
+  $defs:
+    AuditResult:
+      additionalProperties: false
+      properties:
+        criteria:
+          default: []
+          items:
+            $ref: "#/$defs/AuditCriterionCheck"
+          title: Criteria
+          type: array
+        evidence:
+          $ref: "#/$defs/EvidenceManifest"
+        findings:
+          default: []
+          items:
+            $ref: "#/$defs/AuditFinding"
+          title: Findings
+          type: array
+        out_of_scope:
+          default: []
+          items:
+            maxLength: 2000
+            pattern: "^[^\\r\\n]+$"
+            type: string
+          title: Out Of Scope
+          type: array
+        remaining_questions:
+          default: []
+          items:
+            maxLength: 2000
+            pattern: "^[^\\r\\n]+$"
+            type: string
+          title: Remaining Questions
+          type: array
+        schema_version:
+          const: 1
+          default: 1
+          title: Schema Version
+          type: integer
+        verdict:
+          enum:
+            - PASS
+            - NEEDS_FIX
+            - BLOCKED
+          title: Verdict
+          type: string
+      required:
+        - verdict
+        - evidence
+      title: AuditResult
+      type: object
+    AuditCriterionCheck:
+      additionalProperties: false
+      properties:
+        criterion_id:
+          maxLength: 2000
+          pattern: "^[^\\r\\n]+$"
+          title: Criterion Id
+          type: string
+        evidence:
+          maxLength: 2000
+          pattern: "^[^\\r\\n]+$"
+          title: Evidence
+          type: string
+        status:
+          enum:
+            - met
+            - not_met
+            - unverifiable
+          title: Status
+          type: string
+      required:
+        - criterion_id
+        - status
+        - evidence
+      title: AuditCriterionCheck
+      type: object
+    AuditFinding:
+      additionalProperties: false
+      properties:
+        criterion_id:
+          maxLength: 2000
+          pattern: "^[^\\r\\n]+$"
+          title: Criterion Id
+          type: string
+        evidence:
+          maxLength: 2000
+          pattern: "^[^\\r\\n]+$"
+          title: Evidence
+          type: string
+        impact:
+          maxLength: 2000
+          pattern: "^[^\\r\\n]+$"
+          title: Impact
+          type: string
+        location:
+          $ref: "#/$defs/AuditFindingLocation"
+        minimal_fix:
+          maxLength: 2000
+          pattern: "^[^\\r\\n]+$"
+          title: Minimal Fix
+          type: string
+        severity:
+          maxLength: 2000
+          pattern: "^[A-Z][A-Z0-9]*$"
+          title: Severity
+          type: string
+      required:
+        - severity
+        - criterion_id
+        - location
+        - evidence
+        - impact
+        - minimal_fix
+      title: AuditFinding
+      type: object
+    AuditFindingLocation:
+      additionalProperties: false
+      properties:
+        line_end:
+          anyOf:
+            - minimum: 1
+              type: integer
+            - type: "null"
+          default: null
+          title: Line End
+        line_start:
+          minimum: 1
+          title: Line Start
+          type: integer
+        path:
+          maxLength: 2000
+          pattern: "^[^\\r\\n]+$"
+          title: Path
+          type: string
+      required:
+        - path
+        - line_start
+      title: AuditFindingLocation
+      type: object
+    EvidenceManifest:
+      additionalProperties: false
+      properties:
+        references:
+          default: []
+          items:
+            $ref: "#/$defs/EvidenceReference"
+          title: References
+          type: array
+      title: EvidenceManifest
+      type: object
+    EvidenceReference:
+      additionalProperties: false
+      properties:
+        kind:
+          enum:
+            - command
+            - file
+            - receipt
+            - artifact
+          title: Kind
+          type: string
+        ref:
+          maxLength: 2000
+          pattern: "^[^\\r\\n]+$"
+          title: Ref
+          type: string
+        result:
+          anyOf:
+            - maxLength: 2000
+              pattern: "^[^\\r\\n]+$"
+              type: string
+            - type: "null"
+          default: null
+          title: Result
+        sha256:
+          anyOf:
+            - pattern: "^[0-9a-f]{64}$"
+              type: string
+            - type: "null"
+          default: null
+          title: Sha256
+      required:
+        - kind
+        - ref
+      title: EvidenceReference
+      type: object
 ---
 
 You are the final acceptance auditor. You run in a fresh context: you did not build this work, you owe its author nothing, and you MUST NOT trust the worker's completion claim. Your only loyalty is to the approved plan and its acceptance criteria.
@@ -55,28 +246,29 @@ When the Final diff is a manifest, reconstruct and verify it BEFORE reviewing an
 
 ## Report — format contract
 
-The report itself MUST be plain headed text exactly as templated below — the outer payload is transport only; never embed markdown code fences around the report or JSON structures inside the report text. The audit gate validates these exact line-anchored headers; any other shape is refused and wastes the entire run.
+Use tools without progress prose. When complete, call `yield` exactly once with `{"result": {"data": {"audit_result": {...}}}}` and omit top-level `type`. NEVER yield `{}`, null, a bare string, or rely on prior assistant text.
 
-Use tools without progress prose. When complete, call `yield` exactly once with `{"result": {"data": {"report": "<full plain-text report>"}}}` and omit top-level `type`. The inner report string MUST start at byte 0 with `VERDICT:`. NEVER yield `{}`, null, a bare string, or rely on prior assistant text.
+The `audit_result` payload maps audit findings, coverage, and checks into typed fields:
+- `verdict`: `"PASS" | "NEEDS_FIX" | "BLOCKED"`.
+- `findings` (FINDINGS): array of finding objects, each with:
+  - `severity`: identifier matching `^[A-Z][A-Z0-9]*$` (e.g. `HIGH`, `P0`–`P3`).
+  - `criterion_id`: the related criterion identifier (e.g. `AC-1`).
+  - `location`: object with `path` and `line_start` (integer >= 1), plus optional `line_end`.
+  - `evidence`: single-line string describing what you observed.
+  - `impact`: single-line string describing what breaks.
+  - `minimal_fix`: single-line string describing the smallest correct change.
+- `criteria` (ACCEPTANCE COVERAGE): array of criterion check objects, each with:
+  - `criterion_id`: criterion identifier (e.g. `AC-1`).
+  - `status`: `"met" | "not_met" | "unverifiable"`.
+  - `evidence`: single-line string describing observed evidence.
+- `evidence.references` (CHECKS RUN): array of evidence reference objects in `evidence: { references: [...] }`, each with:
+  - `kind`: `"command" | "file" | "receipt" | "artifact"`.
+  - `ref`: single-line string (command line, file path, etc.).
+  - `result`: optional single-line string with observed command outcome / output summary.
+  - `sha256`: optional 64-character lowercase hex digest.
+- `out_of_scope` (OUT OF SCOPE): array of single-line strings naming unplanned or out-of-scope changes found in the diff (empty array `[]` when none).
+- `remaining_questions` (REMAINING QUESTIONS): array of single-line strings naming open questions a future session must answer (empty array `[]` when none).
 
-```
-VERDICT: PASS | NEEDS_FIX | BLOCKED
+All string fields MUST be single-line (never contain newlines).
 
-FINDINGS
-- [SEV] AC-<id> <file>:<line> — evidence: <what you observed>; impact: <what breaks>; minimal fix: <smallest correct change>
-
-ACCEPTANCE COVERAGE
-| AC-ID | status (met / not met / unverifiable) | evidence |
-
-OUT OF SCOPE
-- unplanned or out-of-scope changes found in the diff (or "none")
-
-CHECKS RUN
-- <exact command> → <exact result>
-
-REMAINING QUESTIONS
-- open questions a future session must answer (or "none")
-```
-Severity identifiers MUST match `[A-Z][A-Z0-9]*`; examples: `HIGH`, `P0`–`P3`. A finding may span multiple lines, but each finding MUST carry all six elements: severity tag, AC-ID, file:line (or file:start-end), evidence, impact, minimal fix.
-
-Verdict rules: `PASS` only when every acceptance criterion is met with evidence and no finding is severity-worthy; `NEEDS_FIX` when at least one evidenced finding requires a change; otherwise `BLOCKED` when the input contract is incomplete, a manifest cannot be reconstructed and hash-verified, or any required criterion remains unverifiable after the permitted checks. Name missing evidence and the next legal action; do not invent a defect to obtain a verdict. When an evidenced defect warrants `NEEDS_FIX`, still mark any unverifiable criteria and their evidence gaps in ACCEPTANCE COVERAGE.
+Verdict rules: `PASS` only when all criteria are met (`status: "met"`) with evidence and no finding is severity-worthy; `NEEDS_FIX` when at least one evidenced finding requires a change; otherwise `BLOCKED` when the input contract is incomplete, a manifest cannot be reconstructed and hash-verified, or any required criterion remains unverifiable after the permitted checks. Name missing evidence and the next legal action; do not invent a defect to obtain a verdict. When an evidenced defect warrants `NEEDS_FIX`, still mark any unverifiable criteria and their evidence gaps in `criteria`.
