@@ -119,7 +119,9 @@ END $$;
 CREATE TRIGGER workers_no_reactivation BEFORE UPDATE ON omp_jobs.workers
     FOR EACH ROW EXECUTE FUNCTION omp_control.reject_worker_reactivation();
 
--- New tables: app reads and writes native job state. The tables 0001 created
--- already carry ALL to app through its grants/default privileges, so only the
--- tables added here need an explicit grant.
+-- Migration 0001 grants access to its tables explicitly. Its owner default
+-- privileges do not apply when the migrator creates tables. Grant access to
+-- these new tables explicitly for the app, read-only role, and backup role.
 GRANT SELECT, INSERT, UPDATE ON omp_jobs.workers, omp_jobs.operations, omp_jobs.outbox TO omp_work_app;
+GRANT USAGE ON SCHEMA omp_jobs TO omp_work_backup;
+GRANT SELECT ON omp_jobs.workers, omp_jobs.operations, omp_jobs.outbox TO omp_work_readonly, omp_work_backup;
