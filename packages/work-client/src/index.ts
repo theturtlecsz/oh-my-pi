@@ -47,6 +47,9 @@ import type {
 
 export { WORK_CONTRACT_SHA256 } from "./contract";
 export * from "./oversight";
+export * from "./research-facts";
+export * from "./research-views";
+export * from "./research-review";
 
 export type UUID = string;
 
@@ -1404,6 +1407,17 @@ export class WorkClient {
 
 	execute(envelope: CommandEnvelope): Promise<CommandResponse> {
 		return this.request("POST", "/v1/commands", envelope) as Promise<CommandResponse>;
+	}
+
+	researchCommand(operationId: UUID, command: Command): Promise<CommandResponse> {
+		return this.execute({
+			api_version: "work.omp.dev/v1",
+			workspace_id: this.workspaceId,
+			operation_id: operationId,
+			request_id: crypto.randomUUID(),
+			correlation_id: crypto.randomUUID(),
+			command,
+		});
 	}
 
 	workItem(key: string): Promise<WorkItemView> {
