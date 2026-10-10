@@ -3969,7 +3969,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 							}
 
 							if (settleOutcome.verdict === "NEEDS_FIX" || settleOutcome.verdict === "BLOCKED") {
-								const reportSuffix = auditRun.payload ? `\n\n## Auditor Report\n${auditRun.payload}` : "";
+								const report = settleOutcome.report ?? auditRun.payload;
+								const reportSuffix = report ? `\n\n## Auditor Report\n${report}` : "";
 								return okText(`${settleOutcome.event.renderedText}${reportSuffix}`);
 							}
 
@@ -4828,7 +4829,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 										footer(ctx);
 										return deny(`Audit verdict: ${settle.verdict}.\n${notice.fullNotice}\n\nFindings:\n${settle.event?.renderedText ?? ""}`);
 									}
-									const reportSuffix = auditRun.payload ? `\n\n## Auditor Report\n${auditRun.payload}` : "";
+									const report = settle.report ?? auditRun.payload;
+									const reportSuffix = report ? `\n\n## Auditor Report\n${report}` : "";
 									return okText(`Audit verdict: ${settle.verdict}.\n\nFindings:\n${settle.event?.renderedText ?? ""}${reportSuffix}\n\nUpdate plan, stamp plan, fix findings, and rerun review.`);
 								}
 								if (settle.verdict !== "PASS") {

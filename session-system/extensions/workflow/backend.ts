@@ -113,6 +113,7 @@ export interface CloseAttemptOutcome {
 	attemptState?: string;
 	verdict?: "PASS" | "NEEDS_FIX" | "BLOCKED";
 	launchId?: string;
+	report?: string;
 	event: CloseEventView;
 }
 

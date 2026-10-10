@@ -258,12 +258,21 @@ function eventView(event: CloseAttemptEvent): CloseEventView {
 	};
 }
 
-function outcomeOf(result: { status: "applied" | "refused"; attempt?: CloseAttempt | null; verdict?: "PASS" | "NEEDS_FIX" | "BLOCKED" | null; launch?: { launch_id: UUID } | null; event: CloseAttemptEvent }): CloseAttemptOutcome {
+function outcomeOf(result: {
+	status: "applied" | "refused";
+	attempt?: CloseAttempt | null;
+	verdict?: "PASS" | "NEEDS_FIX" | "BLOCKED" | null;
+	launch?: { launch_id: UUID } | null;
+	receipt?: { payload?: Record<string, unknown> | null } | null;
+	event: CloseAttemptEvent;
+}): CloseAttemptOutcome {
+	const report = typeof result.receipt?.payload?.report === "string" ? result.receipt.payload.report : undefined;
 	return {
 		status: result.status,
 		...(result.attempt ? { attemptId: result.attempt.attempt_id, attemptState: result.attempt.state } : {}),
 		...(result.verdict ? { verdict: result.verdict } : {}),
 		...(result.launch ? { launchId: result.launch.launch_id } : {}),
+		...(report !== undefined ? { report } : {}),
 		event: eventView(result.event),
 	};
 }
