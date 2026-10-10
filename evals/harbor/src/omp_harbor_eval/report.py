@@ -224,6 +224,56 @@ def _wilson(successes: int, total: int) -> tuple[float, float]:
     return _cap_unit(center - margin), _cap_unit(center + margin)
 
 
+def _vs_arm_a(group: Mapping[str, Any], arm_a: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Newcombe hybrid score interval (method 10) for group minus arm A."""
+    empty: dict[str, Any] = {
+        "arm_a": None,
+        "difference": None,
+        "ci_low": None,
+        "ci_high": None,
+        "verdict": None,
+    }
+    if arm_a is None:
+        return empty
+    p1 = group["ac_success"]
+    p2 = arm_a["ac_success"]
+    if p1 is None or p2 is None:
+        return {**empty, "arm_a": p2}
+    n1 = group["repetitions_final_decidable"]
+    n2 = arm_a["repetitions_final_decidable"]
+    l1, u1 = _wilson(round(p1 * n1), n1)
+    l2, u2 = _wilson(round(p2 * n2), n2)
+    diff = p1 - p2
+    low = diff - math.sqrt((p1 - l1) ** 2 + (u2 - p2) ** 2)
+    high = diff + math.sqrt((u1 - p1) ** 2 + (p2 - l2) ** 2)
+    if low > 0.0:
+        verdict = "better"
+    elif high < 0.0:
+        verdict = "worse"
+    else:
+        verdict = "not_different"
+    return {
+        "arm_a": p2,
+        "difference": diff,
+        "ci_low": low,
+        "ci_high": high,
+        "verdict": verdict,
+    }
+
+
+def _vs_a_cell(group: Mapping[str, Any]) -> str:
+    if group["verdict"] is None and group["arm_a"] is None:
+        return ""
+    fields = (
+        f"arm_a={_markdown_cell(group['arm_a'])}",
+        f"difference={_markdown_cell(group['difference'])}",
+        f"ci_low={_markdown_cell(group['ci_low'])}",
+        f"ci_high={_markdown_cell(group['ci_high'])}",
+        f"verdict={_markdown_cell(group['verdict'])}",
+    )
+    return ", ".join(fields)
+
+
 def _decimal_text(value: Decimal) -> str:
     text = format(value, "f")
     if "." in text:
@@ -693,11 +743,13 @@ def _markdown_cell(value: Any) -> str:
 
 
 def _markdown(groups: list[dict[str, Any]]) -> str:
-    header = "| " + " | ".join(_MD_COLUMNS) + " |"
-    separator = "| " + " | ".join("---" for _ in _MD_COLUMNS) + " |"
+    columns = (*_MD_COLUMNS, "vs A")
+    header = "| " + " | ".join(columns) + " |"
+    separator = "| " + " | ".join("---" for _ in columns) + " |"
     lines = [header, separator]
     for group in groups:
         cells = [_markdown_cell(group[column]) for column in _MD_COLUMNS]
+        cells.append(_vs_a_cell(group))
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines) + "\n"
 
@@ -720,6 +772,11 @@ def summarize(
         row = {"experiment": experiment, "arm": arm, "model": model}
         row.update(_summarize_records(grouped[key]))
         groups.append(row)
+    arm_a_rows = {
+        (g["experiment"], g["model"]): g for g in groups if g["arm"] == "A"
+    }
+    for row in groups:
+        row.update(_vs_arm_a(row, arm_a_rows.get((row["experiment"], row["model"]))))
     payload = {"groups": groups, "totals": _totals(groups)}
     json_path = Path(out_json)
     md_path = Path(out_md)

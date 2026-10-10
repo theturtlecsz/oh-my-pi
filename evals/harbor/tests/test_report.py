@@ -744,6 +744,7 @@ def test_summarize_retry_keeps_repetition_first_outcome(tmp_path: Path) -> None:
             "first_pass_rate": "0.5",
             "cost_per_success": "1.875",
             "success_per_minute": "1",
+            "vs A": "",
         }
     ]
 
@@ -1062,3 +1063,60 @@ def test_summarize_sorts_groups_and_pools_totals(tmp_path: Path) -> None:
     ]
     assert markdown[1]["ac_success"].startswith("0.333333")
     assert markdown[0]["cost_per_success"] != ""
+
+
+def _arm_records(arm: str, model: str, passes: int, total: int, experiment: str = "x") -> list[dict]:
+    return [
+        _record(
+            experiment=experiment,
+            arm=arm,
+            model=model,
+            task_id=f"t{i}",
+            status="pass" if i < passes else "fail",
+        )
+        for i in range(total)
+    ]
+
+
+def test_summarize_newcombe_verdict_against_arm_a(tmp_path: Path) -> None:
+    records = (
+        _arm_records("A", "same", 5, 10)
+        + _arm_records("B", "same", 6, 10)
+        + _arm_records("A", "low", 0, 20)
+        + _arm_records("B", "low", 20, 20)
+        + _arm_records("A", "high", 20, 20)
+        + _arm_records("B", "high", 0, 20)
+        + _arm_records("B", "lonely", 3, 4)
+        + _arm_records("B", "same", 9, 9, experiment="other")
+    )
+    payload = _run_summary(tmp_path, records)
+    rows = {(g["experiment"], g["arm"], g["model"]): g for g in payload["groups"]}
+
+    same = rows[("x", "B", "same")]
+    assert same["verdict"] == "not_different"
+    assert same["arm_a"] == pytest.approx(0.5)
+    assert same["difference"] == pytest.approx(0.1)
+    # Newcombe method 10, 6/10 vs 5/10.
+    assert same["ci_low"] == pytest.approx(-0.2898, abs=1e-3)
+    assert same["ci_high"] == pytest.approx(0.4509, abs=1e-3)
+    assert same["ci_low"] < 0 < same["ci_high"]
+
+    assert rows[("x", "B", "low")]["verdict"] == "better"
+    assert rows[("x", "B", "low")]["ci_low"] > 0
+    assert rows[("x", "B", "high")]["verdict"] == "worse"
+    assert rows[("x", "B", "high")]["ci_high"] < 0
+
+    # No arm A in the same experiment and model: all five fields are null.
+    for key in (("x", "B", "lonely"), ("other", "B", "same")):
+        row = rows[key]
+        assert [row[f] for f in ("arm_a", "difference", "ci_low", "ci_high", "verdict")] == [None] * 5
+
+    markdown = _markdown_rows((tmp_path / "summary.md").read_text(encoding="utf-8"))
+    by_id = {(r["experiment"], r["arm"], r["model"]): r for r in markdown}
+    cell = by_id[("x", "B", "same")]["vs A"]
+    assert "verdict=not_different" in cell
+    assert f"difference={same['difference']:.6g}" in cell
+    assert f"ci_low={same['ci_low']:.6g}" in cell
+    assert f"ci_high={same['ci_high']:.6g}" in cell
+    assert f"arm_a={same['arm_a']:.6g}" in cell
+    assert by_id[("x", "B", "lonely")]["vs A"] == ""
