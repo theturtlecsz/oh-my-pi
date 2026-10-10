@@ -922,14 +922,23 @@ class OrchestratorHandler:
         if outcome is not None:
             self._finish_recorded(job, step_index, outcome)
             return Settlement(outcome="succeeded", receipts=[])
-        self.record(
-            step_index,
-            {
-                "kind": "recovery",
-                "rule_id": "lease-recovery",
-                "idempotency_key": f"recovery:{self.mission_id}:{step_index}",
-            },
-        )
+        # One recovery step per faulted stage. A second observe of the same
+        # step replays the stage and does not write another recovery row.
+        if not any(
+            int(step.get("step_index", -1)) == step_index and step.get("kind") == "recovery"
+            for step in steps
+        ):
+            stage = _stage_for(steps, step_index)
+            self.record(
+                step_index,
+                {
+                    "kind": "recovery",
+                    "rule_id": "lease-recovery",
+                    "stage": stage,
+                    "resume": "recovery",
+                    "idempotency_key": f"recovery:{self.mission_id}:{step_index}",
+                },
+            )
         return self._dispatch(job, recovering=True)
 
     def steps(self) -> list[dict[str, Any]]:
@@ -1163,6 +1172,8 @@ class OrchestratorHandler:
         }
         if chosen.decision is not None:
             body["decision_id"] = str(chosen.decision.decision_id)
+        if chosen.kind == "retry":
+            body["resume"] = "retry"
         if chosen.kind in {"advance", "retry", "repair", "reroute", "reschedule"} and chosen.next_stage is not None:
             body["next_job"] = _stage_job(self.mission_id, step_index + 1)
         if chosen.kind == "pause" and chosen.decision is not None:

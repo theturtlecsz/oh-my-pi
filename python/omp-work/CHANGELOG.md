@@ -4,6 +4,7 @@
 
 ### Added
 
+- Missions run intake→signed merge.
 - Mission events, resumable event cursors, and signed push subscriptions, including OMP-406 alerts and daily digests (`omp-work events push`).
 - Bounded intake publication requires an item budget (money, tokens, wall-clock, sub-agents).
 - Runtime stops an item and its sub-agents when its budget is spent; budget notices at 50/80/100% are relayed as alarm signals to ops.alarm push subscribers (`omp-work budget-alerts`).
