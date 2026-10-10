@@ -236,6 +236,7 @@ evals/harbor/auditor-corpus/version-trailing-segments/item.json	fork-only	added	
 evals/harbor/auditor-corpus/xml-expansion-stack-guard/change.patch	fork-only	added	b31470609d30	OMP-543: Patch against HEAD for xml-expansion-stack-guard. XMLParser must keep a recursive entity reference unexpanded instead of reaching the expansion limit.	retained
 evals/harbor/auditor-corpus/xml-expansion-stack-guard/item.json	fork-only	added	f9d1b3cc19e4	OMP-543: Auditor security item. Defines the task, acceptance criteria, defect ranges, and optional exposing test for xml-expansion-stack-guard.	retained
 evals/harbor/corpus/batches/a.json	fork-only	added	aaa110f7db8a	OMP-541: batch A manifest — 14 corpus tasks (localized_bug 4, multi_file_feature 3, difficult_debugging 3, migration 2, seeded_defect 2) with one-line rationales	retained
+evals/harbor/corpus/batches/b.json	fork-only	added	f648ac6d28aa	OMP-542: corpus batch B manifest listing 14 new gradeable tasks plus fixtures f1 and f2 for load_batch	retained
 evals/harbor/corpus/specs/a-01.json	fork-only	added	a9b8e5923d22	OMP-541: task a-01 spec — localized_bug from source commit 13a24df0f101: real fix: case prepare refuses an occupied destination instead of overwriting it	retained
 evals/harbor/corpus/specs/a-02.json	fork-only	added	bf68a9f78744	OMP-541: task a-02 spec — multi_file_feature from source commit 229b8baa1e0c: real feature: build lock pins manifest bytes and owner review, with a verify mode	retained
 evals/harbor/corpus/specs/a-03.json	fork-only	added	038fa34e24c3	OMP-541: task a-03 spec — localized_bug from source commit d7904bc44bd0: real fix: stopped prompts are refused at before_agent_start	retained
@@ -252,6 +253,22 @@ evals/harbor/corpus/specs/a-12.defect.patch	fork-only	added	578817ad77ee	OMP-541
 evals/harbor/corpus/specs/a-12.json	fork-only	added	4bc07b67436a	OMP-541: task a-12 spec — seeded_defect from source commit 823dc8e3831a: seeded defect: spoofed gitdir pointers pass the trusted-worktree check again	retained
 evals/harbor/corpus/specs/a-13.json	fork-only	added	a92a9047ba31	OMP-541: task a-13 spec — migration from source commit 6affbad543a4: real migration 0027: research component identity and campaign compatibility manifests	retained
 evals/harbor/corpus/specs/a-14.json	fork-only	added	50fe153e18ab	OMP-541: task a-14 spec — migration from source commit a2d815bbe659: real migration 0033: project egress policy store and append-only egress records	retained
+evals/harbor/corpus/specs/b-01.json	fork-only	added	782f0d863705	OMP-542: materialize spec for b-01 (Stop guard install misreads systemd unit files)	retained
+evals/harbor/corpus/specs/b-02.json	fork-only	added	5c65e19c4ebd	OMP-542: materialize spec for b-02 (Graph recall slows to a crawl on densely linked memory banks)	retained
+evals/harbor/corpus/specs/b-03.json	fork-only	added	e09f23c63c54	OMP-542: materialize spec for b-03 (A malformed language-server or debugger stream can hang or exhaust the editor)	retained
+evals/harbor/corpus/specs/b-04.json	fork-only	added	e73de3ff9e06	OMP-542: materialize spec for b-04 (Any directory that fakes a git pointer is treated as a trusted project)	retained
+evals/harbor/corpus/specs/b-05.json	fork-only	added	5611e1903f36	OMP-542: materialize spec for b-05 (A rotated Cursor conversation replays the last user message and loses finished tool work)	retained
+evals/harbor/corpus/specs/b-06.json	fork-only	added	7343b44349d5	OMP-542: materialize spec for b-06 (Host reconnect to the collab relay drops guests when the relay refuses it)	retained
+evals/harbor/corpus/specs/b-07.json	fork-only	added	95842de656da	OMP-542: materialize spec for b-07 (Plugin skills get new names after every plugin update)	retained
+evals/harbor/corpus/specs/b-08.json	fork-only	added	57581eb33dac	OMP-542: materialize spec for b-08 (Cursor model prices come from a scraped web page instead of the rate card)	retained
+evals/harbor/corpus/specs/b-09.json	fork-only	added	978ee7493465	OMP-542: materialize spec for b-09 (The designate message cannot be signed straight from the command output)	retained
+evals/harbor/corpus/specs/b-10.json	fork-only	added	3007bd22a54e	OMP-542: materialize spec for b-10 (Cursor turns that stop early are not continued like other providers)	retained
+evals/harbor/corpus/specs/b-11.json	fork-only	added	efa9d21906d8	OMP-542: materialize spec for b-11 (The PR picker of the review command closes when a search fails)	retained
+evals/harbor/corpus/specs/b-12.json	fork-only	added	ba5e6ca56ee2	OMP-542: materialize spec for b-12 (Enter submits a half finished slash command that needs an argument)	retained
+evals/harbor/corpus/specs/b-13.defect.patch	fork-only	added	f1674dfa14c3	OMP-542: hand-written seeded defect patch for b-13; reverse of it is the solution	retained
+evals/harbor/corpus/specs/b-13.json	fork-only	added	f2e78990325d	OMP-542: materialize spec for b-13 (Windows-authored bracket math blocks are no longer recognised)	retained
+evals/harbor/corpus/specs/b-14.defect.patch	fork-only	added	0cba14daa4bb	OMP-542: hand-written seeded defect patch for b-14; reverse of it is the solution	retained
+evals/harbor/corpus/specs/b-14.json	fork-only	added	5d55383e6f29	OMP-542: materialize spec for b-14 (The XML reader drops content after a mismatched closing tag)	retained
 evals/harbor/corpus/tasks/.gitkeep	fork-only	added	e69de29bb2d1	OMP-539: anchor for the corpus tasks fixture directory copied into the workservice container	retained
 evals/harbor/corpus/tasks/a-01/environment/docker-compose.yaml	fork-only	added	dff80e4af4a9	OMP-541: task a-01 corpus fixture — isolated zero-spend Harbor environment compose copied from the corpus template	retained
 evals/harbor/corpus/tasks/a-01/fixture.json	fork-only	added	b627704d9298	OMP-541: task a-01 corpus fixture — scored_experiment repair; seed.patch reverts the fix and deletes the target, solution.patch restores the fix; independent_tests bun on session-system/tests/ecc-advisor-trial-prepare.test.ts; independent_tests_pass rule	retained
@@ -407,24 +424,6 @@ evals/harbor/corpus/tasks/a-14/solution.patch	fork-only	added	9135dcb4989f	OMP-5
 evals/harbor/corpus/tasks/a-14/solution/solve.sh	fork-only	added	1bab33ffad9d	OMP-541: task a-14 corpus fixture — reference solution runner copied from the corpus template	retained
 evals/harbor/corpus/tasks/a-14/task.toml	fork-only	added	c6d0f61e9ef8	OMP-541: task a-14 corpus fixture — Harbor task configuration copied from the corpus template	retained
 evals/harbor/corpus/tasks/a-14/tests/test.sh	fork-only	added	ee19423554e2	OMP-541: task a-14 corpus fixture — verifier script copied from the corpus template	retained
-evals/harbor/corpus/batches/b.json	fork-only	added	f648ac6d28aa	OMP-542: corpus batch B manifest listing 14 new gradeable tasks plus fixtures f1 and f2 for load_batch	retained
-evals/harbor/corpus/specs/b-01.json	fork-only	added	782f0d863705	OMP-542: materialize spec for b-01 (Stop guard install misreads systemd unit files)	retained
-evals/harbor/corpus/specs/b-02.json	fork-only	added	5c65e19c4ebd	OMP-542: materialize spec for b-02 (Graph recall slows to a crawl on densely linked memory banks)	retained
-evals/harbor/corpus/specs/b-03.json	fork-only	added	e09f23c63c54	OMP-542: materialize spec for b-03 (A malformed language-server or debugger stream can hang or exhaust the editor)	retained
-evals/harbor/corpus/specs/b-04.json	fork-only	added	e73de3ff9e06	OMP-542: materialize spec for b-04 (Any directory that fakes a git pointer is treated as a trusted project)	retained
-evals/harbor/corpus/specs/b-05.json	fork-only	added	5611e1903f36	OMP-542: materialize spec for b-05 (A rotated Cursor conversation replays the last user message and loses finished tool work)	retained
-evals/harbor/corpus/specs/b-06.json	fork-only	added	7343b44349d5	OMP-542: materialize spec for b-06 (Host reconnect to the collab relay drops guests when the relay refuses it)	retained
-evals/harbor/corpus/specs/b-07.json	fork-only	added	95842de656da	OMP-542: materialize spec for b-07 (Plugin skills get new names after every plugin update)	retained
-evals/harbor/corpus/specs/b-08.json	fork-only	added	57581eb33dac	OMP-542: materialize spec for b-08 (Cursor model prices come from a scraped web page instead of the rate card)	retained
-evals/harbor/corpus/specs/b-09.json	fork-only	added	978ee7493465	OMP-542: materialize spec for b-09 (The designate message cannot be signed straight from the command output)	retained
-evals/harbor/corpus/specs/b-10.json	fork-only	added	3007bd22a54e	OMP-542: materialize spec for b-10 (Cursor turns that stop early are not continued like other providers)	retained
-evals/harbor/corpus/specs/b-11.json	fork-only	added	efa9d21906d8	OMP-542: materialize spec for b-11 (The PR picker of the review command closes when a search fails)	retained
-evals/harbor/corpus/specs/b-12.json	fork-only	added	ba5e6ca56ee2	OMP-542: materialize spec for b-12 (Enter submits a half finished slash command that needs an argument)	retained
-evals/harbor/corpus/specs/b-13.defect.patch	fork-only	added	f1674dfa14c3	OMP-542: hand-written seeded defect patch for b-13; reverse of it is the solution	retained
-evals/harbor/corpus/specs/b-13.json	fork-only	added	f2e78990325d	OMP-542: materialize spec for b-13 (Windows-authored bracket math blocks are no longer recognised)	retained
-evals/harbor/corpus/specs/b-14.defect.patch	fork-only	added	0cba14daa4bb	OMP-542: hand-written seeded defect patch for b-14; reverse of it is the solution	retained
-evals/harbor/corpus/specs/b-14.json	fork-only	added	5d55383e6f29	OMP-542: materialize spec for b-14 (The XML reader drops content after a mismatched closing tag)	retained
-evals/harbor/corpus/tasks/.gitkeep	fork-only	added	e69de29bb2d1	OMP-539: anchor for the corpus tasks fixture directory copied into the workservice container	retained
 evals/harbor/corpus/tasks/b-01/environment/docker-compose.yaml	fork-only	added	dff80e4af4a9	OMP-542: b-01 isolated zero-spend environment compose template for: Stop guard install misreads systemd unit files	retained
 evals/harbor/corpus/tasks/b-01/fixture.json	fork-only	added	6330ac203d1c	OMP-542: b-01 fixture definition with the independent hidden test and rules for: Stop guard install misreads systemd unit files	retained
 evals/harbor/corpus/tasks/b-01/independent/test_stop_guard_killmode.py	fork-only	added	aefde0a55638	OMP-542: b-01 hidden test copied from HEAD, restored for grading for: Stop guard install misreads systemd unit files	retained
