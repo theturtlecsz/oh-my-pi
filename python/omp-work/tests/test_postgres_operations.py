@@ -51,6 +51,25 @@ def test_pinned_migration_set_is_forward_only() -> None:
     assert len(migration_set_sha256()) == 64
 
 
+def test_domain_events_workspace_indexes_exist(config: OperationsConfig, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Migration 0034 leads both indexes with workspace_id, so the per-workspace
+    MAX(sequence) watermark and page scan no longer walk other workspaces' rows."""
+    monkeypatch.setattr("omp_work.operations.database.validate_bundle", lambda **kw: None)
+    with native_postgres(config.state_dir, config.port):
+        bootstrap(config)
+        with psycopg.connect(**config.connection_kwargs("postgres")) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT indexname, indexdef FROM pg_indexes"
+                    " WHERE schemaname = 'omp_audit' AND tablename = 'domain_events'"
+                    "   AND indexname = ANY(%s)",
+                    (["domain_events_workspace_sequence_idx", "domain_events_workspace_aggregate_sequence_idx"],),
+                )
+                definitions = {name: definition for name, definition in cursor.fetchall()}
+    assert definitions["domain_events_workspace_sequence_idx"].endswith("(workspace_id, sequence)")
+    assert definitions["domain_events_workspace_aggregate_sequence_idx"].endswith("(workspace_id, aggregate_id, sequence)")
+
+
 def test_latest_backup_uses_completion_timestamp(monkeypatch: pytest.MonkeyPatch, config: OperationsConfig) -> None:
     monkeypatch.setattr(
         backup,
