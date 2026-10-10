@@ -58,7 +58,7 @@
 
 ### Changed
 
-- Per-workspace domain-event reads (event-cursor watermark, page scan, subscription replay, mission link walk, and the per-aggregate head) now use dedicated `(workspace_id, sequence)` and `(workspace_id, aggregate_id, sequence)` indexes instead of scanning every workspace's events (migration 0034, additive).
+- Per-workspace domain-event reads (event-cursor watermark, page scan, subscription replay, mission link walk, and the per-aggregate head) now use dedicated `(workspace_id, sequence)` and `(workspace_id, aggregate_id, sequence)` indexes instead of scanning every workspace's events (migration 0035, additive).
 - `ops capabilities grokbot` is now `ops capabilities client --name N [--stop-only]`, minting the `client` actor kind with `work.read`, `work.client`, `work.stop` (or `work.stop` alone with `--stop-only`) (OMP-416).
 - PostgreSQL backups now use the dedicated backup role to export every RLS-protected ledger table, and restore drills verify the selected completed backup in an isolated native PostgreSQL 18 instance.
 - Linear exports now use static read-only stream queries, encrypted immutable artifacts, redacted reconciliation summaries, and explicit scoped-OAuth or owner-managed personal-key authentication.

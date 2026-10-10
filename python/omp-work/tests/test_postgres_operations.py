@@ -46,13 +46,13 @@ def config(tmp_path: Path) -> OperationsConfig:
 
 def test_pinned_migration_set_is_forward_only() -> None:
     files = migrations()
-    assert [ordinal for ordinal, _ in files] == list(range(1, 35))
+    assert [ordinal for ordinal, _ in files] == list(range(1, 36))
     assert all(path.name.startswith(f"{ordinal:04d}_") for ordinal, path in files)
     assert len(migration_set_sha256()) == 64
 
 
 def test_domain_events_workspace_indexes_exist(config: OperationsConfig, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Migration 0034 leads both indexes with workspace_id, so the per-workspace
+    """Migration 0035 leads both indexes with workspace_id, so the per-workspace
     MAX(sequence) watermark and page scan no longer walk other workspaces' rows."""
     monkeypatch.setattr("omp_work.operations.database.validate_bundle", lambda **kw: None)
     with native_postgres(config.state_dir, config.port):
