@@ -504,6 +504,67 @@ exit 1
 The report is loud and names every edit; a silent stay-on-the-old-version is no
 longer possible once the guard is wired in.
 
+# omp-defect1-stage-context-push: proposed PR body
 
+No external PR exists. This worktree has no external credentials.
+The contributor must add their own sentence before they submit a PR, as CONTRIBUTING.md requires.
 
+## What
 
+Native auditor workers receive the current Work Ledger digest and stage inputs when `OMP_STAGE_CONTEXT_PUSH=1`.
+`PI_STAGE_CONTEXT_PUSH=1` is an alias. The OMP flag takes precedence.
+The feature defaults to off.
+
+The change removes the earlier file transport and the stage block from date and directory reminders.
+The launch path uses the existing context field and creates no new store.
+
+## Why
+
+The task states: “Any memory layer the project adopts depends on this delivery path.”
+A worker must receive the context before its first request, without an optional tool call.
+
+The first slice covers native auditor launches through `work run_audit` and `/execute`.
+Ordinary workers with the workflow extension already receive its digest through `before_agent_start`.
+Restricted native auditor workers exclude that extension, so they need this explicit launch path.
+
+## Worker launch and context assembly
+
+1. `session-system/extensions/workflow/host.ts` prepares the native auditor runner at both launch sites.
+   Each site supplies a callback to the existing `buildDigest(ctx.cwd)` function.
+2. `buildDigest` combines the current focus, scope, goal tree, workflow rules, and `backend.digestExtras(cwd)`.
+3. The Work Ledger backend in `session-system/extensions/workflow/work.ts` reads the current focus and workflow.
+   Its `digestExtras` function includes `stageContextLines` for the focused issue.
+4. `stageContextLines` reads the existing installer settings in `omp-knowledge/context.json`.
+   It selects plan, implement, or audit from the current workflow.
+   It sends the workflow and stage inputs to the existing stage compiler and verifies the returned bundle digest.
+   Existing unavailable-source messages remain visible in the compiled digest.
+5. `prepareNativeAuditRunner` calls `compileStageContext` immediately before `runSubprocess`.
+   The flag controls the compiler call. Empty or oversized context refuses launch.
+6. Despite its name, `runSubprocess` creates an in-process worker session through `createAgentSession`.
+   The executor renders its `context` field through the static `subagent-system-prompt.md` template.
+   It appends this block to the worker system prompt before the first task turn.
+7. The provider receives the block in its first request.
+   Subsequent requests reuse the same system block. Date and directory changes cannot append another stage block.
+
+The source describes the current focused issue. The sealed audit task remains the worker assignment.
+The transport preflight request occurs before worker launch and carries no stage context.
+
+## Testing
+
+- `cd packages/coding-agent && bun test test/stage-context.test.ts test/date-cwd-reminder.test.ts`
+- `bun test session-system/tests/stage-context.test.ts session-system/tests/auditor-runner.test.ts`
+- `bun scripts/upstream-inventory.ts`
+
+The wire test uses the real native launcher, executor, SDK, and stage-context adapter.
+It captures two requests through a local test provider and checks one stage block in each request.
+The compiler fixture verifies the current workflow input and returns a digest-verified audit bundle.
+Separate cases check the OMP flag, the PI alias, and the disabled path.
+The tests make no calls to a GPU, local model, or subscription provider.
+
+The owner limited this task to focused test files. Flood will run the normal test command after the commit.
+
+---
+
+- [ ] `bun check` passes
+- [x] Tested locally
+- [x] CHANGELOG updated with the required attribution (internal defect task, no external PR number)

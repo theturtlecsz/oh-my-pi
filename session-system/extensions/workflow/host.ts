@@ -3917,7 +3917,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 							}
 							let runner: NativeAuditRunner;
 							try {
-								runner = await prepareNativeAuditRunner(ctx, _signal);
+								runner = await prepareNativeAuditRunner(ctx, _signal, () => buildDigest(ctx.cwd));
 							} catch (error) {
 								return deny(`REFUSED — auditor runner preparation failed: ${error instanceof Error ? error.message : String(error)}`);
 							}
@@ -4772,7 +4772,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 										return deny(`Seal audit manifest refused: ${sealOutcome.event.renderedText}`);
 									}
 								}
-								const runner = await prepareNativeAuditRunner(ctx, _signal);
+								const runner = await prepareNativeAuditRunner(ctx, _signal, () => buildDigest(ctx.cwd));
 								const sealedTask = await backend.sealedAuditTask(targetIssue.key);
 								if (!sealedTask) return deny("sealed audit task missing");
 								const resv = await backend.reserveAuditorLaunch(targetIssue.key, sealedTask.taskSha256, _id);
