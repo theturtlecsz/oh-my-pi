@@ -179,6 +179,42 @@ The script prints a one-line JSON report and exits 0 (on bad arguments it prints
 
 5. Commit `mirror/`, `manifest.json`, `adapted.lock.json`, the review, and any changed `overlays/<id>.json` together.
 
+## Rolling back a pack update
+
+1. Revert the update commit on the normal merge path:
+
+   ```bash
+   git revert <update commit>
+   ```
+
+   The revert restores every file the update changed and deletes the review file.
+
+2. Flood `deploy-omp.sh` moves the live copy.
+
+3. For each project, from the repository root:
+
+   ```bash
+   bun session-system/ecc/adapter/cli.ts update --project <dir>
+   ```
+
+   No project lock: the command exits 1 and the JSON `error` is `no adapted.lock.json to update; run install first`.
+
+   The command writes every installable asset of both packs where the bytes differ or are absent. A one-pack project gets both. A primary file is written as transformed bytes (lock `adaptedSha256`). A `skill-namespaced` helper is written as mirror bytes (lock `files[].sha256`).
+
+   An unowned file with other bytes is refused before any write. An owned file unlike the project lock errors at that file. Earlier files may be written. The project lock is not written.
+
+   On success, the project lock has the restored `upstream.commit`.
+
+4. Confirm the repository lock:
+
+   ```bash
+   bun session-system/ecc/adapter/emit-lock.ts --check
+   ```
+
+   The check compares the repository lock with the `manifest.json` bytes, `upstream.commit`, and the pinned review. It does not check `mirror/` or a project.
+
+The drill in `session-system/tests/ecc-rollback.test.ts` re-pins, updates, reverts, and updates through `apply.ts` and `cli.ts`, restores the first install's tree and lock byte for byte, and reports one more update as `unchanged`.
+
 ## Building
 
 ```bash
@@ -196,10 +232,15 @@ the complete file set before writing anything.
 - **install** — writes only destinations that are absent. A destination that
   exists and is not owned by this installation aborts the whole install, so a
   user file is never overwritten.
-- **update** — `cli.ts update` plans every installable asset of both packs
-  against the current mirror and writes those destinations. An owned file
-  whose bytes no longer match the lock was modified after install, so update
-  refuses instead of clobbering the local edit.
+- **update** — `cli.ts update --project <dir>` exits 1 when the project has no
+  lock. The JSON `error` is `no adapted.lock.json to update; run install first`.
+  It writes every installable asset of both packs where the bytes differ or are
+  absent. A one-pack project gets both. A primary file is written as transformed
+  bytes (lock `adaptedSha256`). A `skill-namespaced` helper is written as mirror
+  bytes (lock `files[].sha256`). An unowned file with other bytes is refused
+  before any write. An owned file unlike the project lock errors at that file.
+  Earlier files may be written, and the project lock is not. On success the
+  project lock has the restored `upstream.commit`.
 - **remove** — deletes only lock-owned files whose bytes still match the recorded
   sha256, prunes directories it emptied, and deletes the lock. A modified owned
   file is refused.
@@ -208,9 +249,7 @@ Ownership is recorded per project in `<projectRoot>/.omp/ecc/adapted.lock.json`,
 so two projects never share an ownership record. Every step is idempotent:
 re-installing writes nothing new, and removing an absent installation is a no-op.
 
-Rollback restores the ECC root to its pre-update bytes and runs `update` again.
-That returns the project tree and `<projectRoot>/.omp/ecc/adapted.lock.json` to
-the bytes from the first install, and a second update reports unchanged.
+`remove` uninstalls the packs. A pack update rolls back per [Rolling back a pack update](#rolling-back-a-pack-update).
 
 ## Verification
 
@@ -231,6 +270,6 @@ verifies that an accepted review re-pins the mirror, the manifest, the review
 file, and the lock, and that a refusal leaves the ECC root unchanged. The
 manifest-pin test verifies the committed `manifestSha256`, review-pin refusal,
 `UpdateReview` rejection of unknown keys, and `emit-lock.ts --check` exit codes.
-The rollback test verifies that restoring the pre-update ECC root and running
-update returns the project tree and its lock to the first install, and that a
-second update reports unchanged.
+The rollback test re-pins, updates, reverts, and updates through `apply.ts` and
+`cli.ts`, restores the first install's tree and lock byte for byte, and reports
+one more update as `unchanged`.
