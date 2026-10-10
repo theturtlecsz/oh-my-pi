@@ -128,8 +128,9 @@ class NativeJobStore:
         stored result with no second effect. A different request, or the same id
         stored for another workspace, is ``idempotency_conflict``. ``operation_id``
         is the global primary key, so the row is read by id and then kept only
-        when its ``workspace_id`` is the caller's; another workspace's result is
-        never replayed.
+        when its ``workspace_id`` is the caller's. The stored result is read
+        only with that workspace in the filter, so another workspace's result
+        is never loaded and never replayed.
 
         A transaction-scoped advisory lock serialises callers that share one
         ``operation_id``. Without it the read below and the insert after
@@ -144,7 +145,7 @@ class NativeJobStore:
             (operation_id,),
         )
         cur.execute(
-            "SELECT workspace_id, kind, request_sha256, result FROM omp_jobs.operations WHERE operation_id=%s FOR UPDATE",
+            "SELECT workspace_id, kind, request_sha256 FROM omp_jobs.operations WHERE operation_id=%s FOR UPDATE",
             (operation_id,),
         )
         stored = cur.fetchone()
@@ -155,7 +156,12 @@ class NativeJobStore:
                     ("operation id belongs to another workspace",),
                 )
             if stored["kind"] == kind and stored["request_sha256"] == request_sha256:
-                return OperationOutcome("replayed", dict(stored["result"] or {}))
+                cur.execute(
+                    "SELECT result FROM omp_jobs.operations WHERE operation_id=%s AND workspace_id=%s",
+                    (operation_id, workspace_id),
+                )
+                replayed = cur.fetchone()
+                return OperationOutcome("replayed", dict(replayed["result"] or {}))
             raise JobError(
                 "idempotency_conflict",
                 ("operation id already used for a different request",),
