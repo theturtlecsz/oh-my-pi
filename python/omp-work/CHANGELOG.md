@@ -57,6 +57,7 @@
 - `omp-work events subscribe` and `omp-work events subscriptions` register and list push subscriptions, and the work-ledger installer renders an `omp-events-push` timer that runs `omp-work events push` every 5 minutes in place of the removed `alarms run` / `alarms digest`.
 - The orchestrator grant step stamps the execution plan from the request, or fails with `test_command_missing` when the request's test command is empty.
 - managed research trials bind a deliverable only with a trusted, qualified evaluator receipt.
+- The auditor yields a typed, validated AuditResult, and the host shows the service-rendered report (OMP-520).
 
 ### Changed
 
