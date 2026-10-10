@@ -147,6 +147,30 @@ docs/programme/REVIEW-SUMMARY.md	fork-only	added	8b15bdaa18ae	OMP-325: consolida
 docs/programme/SCOPE-PRESERVATION.md	fork-only	added	4a770b5114c9	OMP-325: scope-preservation check; copied byte-identical from /home/thetu/oh-my-pi/docs/programme/SCOPE-PRESERVATION.md	retained
 docs/report/ecc-database-advisor-trial/README.md	fork-only	added	438fa936db33	OMP-525-s03: method for the ECC Database Reviewer trial. Use the real roster entry, check out each case commit in a worktree, and run omp -p --advisor. A finding is an accepted advise call. useful means a real problem or a needed check in scope at that commit. Every other finding is a false alarm. Keep the advisor when useful >= false_alarm and at least one known defect is caught. Otherwise drop it.	retained
 docs/report/ecc-database-advisor-trial/cases.json	fork-only	added	f803165ec951	OMP-525-s01: trial case catalogue for ECC database advisor qualification trial	retained
+docs/report/ecc-database-advisor-trial/runs/k1/SHA256SUMS	fork-only	added	c542149b7a7e	OMP-525: ECC database advisor trial runs (owner run)	retained
+docs/report/ecc-database-advisor-trial/runs/k1/advisor-transcript.jsonl	fork-only	added	2dedcbe4f691	OMP-525: ECC database advisor trial runs (owner run)	retained
+docs/report/ecc-database-advisor-trial/runs/k1/notes.json	fork-only	added	c775855bd8f9	OMP-525: ECC database advisor trial runs (owner run)	retained
+docs/report/ecc-database-advisor-trial/runs/k1/prompt.md	fork-only	added	1533c6f4116c	OMP-525: ECC database advisor trial runs (owner run)	retained
+docs/report/ecc-database-advisor-trial/runs/k2/SHA256SUMS	fork-only	added	a8283f59587b	OMP-525: ECC database advisor trial runs (owner run)	retained
+docs/report/ecc-database-advisor-trial/runs/k2/advisor-transcript.jsonl	fork-only	added	d9dd79b6f18a	OMP-525: ECC database advisor trial runs (owner run)	retained
+docs/report/ecc-database-advisor-trial/runs/k2/notes.json	fork-only	added	ae091d170101	OMP-525: ECC database advisor trial runs (owner run)	retained
+docs/report/ecc-database-advisor-trial/runs/k2/prompt.md	fork-only	added	c71eff786b92	OMP-525: ECC database advisor trial runs (owner run)	retained
+docs/report/ecc-database-advisor-trial/runs/o1/SHA256SUMS	fork-only	added	064cdcce81f7	OMP-525: ECC database advisor trial runs (owner run)	retained
+docs/report/ecc-database-advisor-trial/runs/o1/advisor-transcript.jsonl	fork-only	added	d3f9fb142cad	OMP-525: ECC database advisor trial runs (owner run)	retained
+docs/report/ecc-database-advisor-trial/runs/o1/notes.json	fork-only	added	fa7e6d2bc9a0	OMP-525: ECC database advisor trial runs (owner run)	retained
+docs/report/ecc-database-advisor-trial/runs/o1/prompt.md	fork-only	added	3e9d75bad434	OMP-525: ECC database advisor trial runs (owner run)	retained
+docs/report/ecc-database-advisor-trial/runs/o2/SHA256SUMS	fork-only	added	b91a6f0b4e1a	OMP-525: ECC database advisor trial runs (owner run)	retained
+docs/report/ecc-database-advisor-trial/runs/o2/advisor-transcript.jsonl	fork-only	added	5c42fdba0055	OMP-525: ECC database advisor trial runs (owner run)	retained
+docs/report/ecc-database-advisor-trial/runs/o2/notes.json	fork-only	added	8d8a7b7dca8e	OMP-525: ECC database advisor trial runs (owner run)	retained
+docs/report/ecc-database-advisor-trial/runs/o2/prompt.md	fork-only	added	595014eff2f8	OMP-525: ECC database advisor trial runs (owner run)	retained
+docs/report/ecc-database-advisor-trial/runs/o3/SHA256SUMS	fork-only	added	24321c39ef59	OMP-525: ECC database advisor trial runs (owner run)	retained
+docs/report/ecc-database-advisor-trial/runs/o3/advisor-transcript.jsonl	fork-only	added	d0bfb83b2e83	OMP-525: ECC database advisor trial runs (owner run)	retained
+docs/report/ecc-database-advisor-trial/runs/o3/notes.json	fork-only	added	39137da6a483	OMP-525: ECC database advisor trial runs (owner run)	retained
+docs/report/ecc-database-advisor-trial/runs/o3/prompt.md	fork-only	added	a54969ba9b9d	OMP-525: ECC database advisor trial runs (owner run)	retained
+docs/report/ecc-database-advisor-trial/runs/o4/SHA256SUMS	fork-only	added	c3bcd2dbbf6d	OMP-525: ECC database advisor trial runs (owner run)	retained
+docs/report/ecc-database-advisor-trial/runs/o4/advisor-transcript.jsonl	fork-only	added	f8b15b72ffdc	OMP-525: ECC database advisor trial runs (owner run)	retained
+docs/report/ecc-database-advisor-trial/runs/o4/notes.json	fork-only	added	ebb8731a1376	OMP-525: ECC database advisor trial runs (owner run)	retained
+docs/report/ecc-database-advisor-trial/runs/o4/prompt.md	fork-only	added	e508883f42eb	OMP-525: ECC database advisor trial runs (owner run)	retained
 docs/report/evidence.json	fork-only	added	a5c10bd528b4	OMP-325: architecture evidence collector output stub; copied byte-identical from /home/thetu/oh-my-pi/docs/report/evidence.json	retained
 docs/report/jev-decision-classifier-review-2026-09-25.md	fork-only	added	5517a16c14c9	OMP-325: JEV decision-classifier review; copied byte-identical from /home/thetu/oh-my-pi/docs/report/jev-decision-classifier-review-2026-09-25.md	retained
 docs/report/omp-completion-continuation-review-2026-09-18.md	fork-only	added	2dd2a75ab201	OMP-325: OMP completion-continuation review; copied byte-identical from /home/thetu/oh-my-pi/docs/report/omp-completion-continuation-review-2026-09-18.md	retained

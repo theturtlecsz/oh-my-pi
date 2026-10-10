@@ -1,0 +1,43 @@
+{
+	"case": "o4",
+	"commit": "b9793a797d403da7be32c84b90c22189635a97cb",
+	"advisor": "ECC Database Reviewer",
+	"mechanism": "omp -p --advisor (WATCHDOG.yml roster)",
+	"omp_exit": 0,
+	"advisor_completed": true,
+	"model": "google-antigravity/gemini-3.7-flash",
+	"transcript_sha256": "3bda028d4032f5c8d4e01873786062cbb42046505a42d638e238932bd6932e53",
+	"suppressed": 0,
+	"failed": 0,
+	"unmatched": 0,
+	"notes": [
+		{
+			"n": 1,
+			"tool_call_id": "call_48756",
+			"note": "In store.py:538-556, pg_advisory_xact_lock is acquired after SELECT event_sha256. For concurrent operations on the same aggregate (e.g., workspace-level events or non-locking refused commands), both transactions can read the identical previous_event_sha256 before serializing on the lock, causing a hash chain fork upon insert. Check whether acquiring the advisory lock before line 538 serializes the hash-chain lookup.",
+			"severity": "concern",
+			"category": "semantic-concern"
+		},
+		{
+			"n": 2,
+			"tool_call_id": "call_49701",
+			"note": "When filing the finding via create_work on xd://work, ensure project is explicitly set to the target project (OMP) if required by the workspace's .work-project context.",
+			"severity": "nit",
+			"category": "semantic-concern"
+		},
+		{
+			"n": 3,
+			"tool_call_id": "call_48644",
+			"note": "Proceed with the planned batch filing. No further database issues identified in the diff scope.",
+			"severity": "nit",
+			"category": "possible-false-positive"
+		},
+		{
+			"n": 4,
+			"tool_call_id": "call_11045",
+			"note": "No further issues detected; proceed with two-phase preview and confirm for create_work on xd://work.",
+			"severity": "nit",
+			"category": "semantic-concern"
+		}
+	]
+}
