@@ -861,6 +861,12 @@
               "kind": "property",
               "optional": true,
               "type": "boolean"
+            },
+            {
+              "name": "projectTrusted",
+              "kind": "property",
+              "optional": true,
+              "type": "boolean"
             }
           ]
         },
