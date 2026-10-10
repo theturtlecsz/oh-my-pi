@@ -1,4 +1,6 @@
--- The migration owner validates all workspaces without a workspace claim.
+-- OMP-562: project_history.mission_id names a mission in the same workspace.
+-- A null mission_id is not a reference. An orphan reference fails this migration.
+-- Validation runs with FORCE RLS off: ops migrate holds no workspace claim.
 ALTER TABLE omp_work.project_history NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE omp_work.project_missions NO FORCE ROW LEVEL SECURITY;
 
