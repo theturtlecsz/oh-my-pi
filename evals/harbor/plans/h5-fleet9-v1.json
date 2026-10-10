@@ -1,0 +1,111 @@
+{
+  "plan_id": "h5-fleet9-v1",
+  "corpus_manifest": "../corpus/manifest.json",
+  "corpus_sha256": "8361e949b7c07e458a62e2af82d263b5ea37a04ca86e6673e795c45f1b875506",
+  "max_input_tokens": 2000000,
+  "max_output_tokens": 100000,
+  "trial_timeout_s": 3600,
+  "arms": [
+    {
+      "id": "A",
+      "command": "{instruction}",
+      "terminal": {"agent_end": true},
+      "status": "available",
+      "settings": {
+        "disabledExtensions": ["extension-module:work-now"]
+      }
+    },
+    {
+      "id": "B",
+      "command": "{instruction}",
+      "terminal": {"agent_end": true},
+      "status": "available",
+      "settings": {
+        "disabledExtensions": ["extension-module:work-now"],
+        "modelRoles": {"plan": "kimi-code/k3-256k"}
+      }
+    },
+    {
+      "id": "F",
+      "command": "/execute {key}",
+      "terminal": {"pointer": "/execution/grant/state", "in": ["completed", "stopped", "canceled"]},
+      "status": "available",
+      "settings": {}
+    },
+    {
+      "id": "C",
+      "command": "/execute {key}",
+      "terminal": {"pointer": "/execution/grant/state", "in": ["completed", "stopped", "canceled"]},
+      "status": "unavailable",
+      "reason": "no intake/approved plan mechanism",
+      "settings": {
+        "modelRoles": {"plan": "kimi-code/k3-256k", "intake": "kimi-code/k3-256k"}
+      }
+    },
+    {
+      "id": "D",
+      "command": "/execute {key}",
+      "terminal": {"pointer": "/execution/grant/state", "in": ["completed", "stopped", "canceled"]},
+      "status": "unavailable",
+      "reason": "no self-review mechanism",
+      "settings": {
+        "modelRoles": {"plan": "kimi-code/k3-256k", "intake": "kimi-code/k3-256k", "review": "kimi-code/k3-256k"}
+      }
+    },
+    {
+      "id": "E",
+      "command": "/execute {key}",
+      "terminal": {"pointer": "/execution/grant/state", "in": ["completed", "stopped", "canceled"]},
+      "status": "unavailable",
+      "reason": "no independent audit mechanism",
+      "settings": {
+        "modelRoles": {
+          "plan": "kimi-code/k3-256k",
+          "intake": "kimi-code/k3-256k",
+          "review": "kimi-code/k3-256k",
+          "audit": "kimi-code/k3-256k"
+        }
+      }
+    },
+    {
+      "id": "G",
+      "command": "/execute {key}",
+      "terminal": {"pointer": "/execution/grant/state", "in": ["completed", "stopped", "canceled"]},
+      "status": "unavailable",
+      "reason": "no typed contained harness mechanism",
+      "settings": {
+        "disabledExtensions": ["extension-module:contained-harness"]
+      }
+    }
+  ],
+  "experiments": [
+    {
+      "id": "arms",
+      "arms": ["A", "B", "C", "D", "E", "F", "G"],
+      "models": [{"provider": "kimi-code", "id": "k3-256k", "thinking": "high"}],
+      "tasks": "all",
+      "repetitions": 2
+    },
+    {
+      "id": "routing",
+      "arms": ["F"],
+      "models": [
+        {"provider": "kimi-code", "id": "k3-256k", "thinking": "high"},
+        {"provider": "google", "id": "gemini-3.8-flash", "thinking": "high"},
+        {"provider": "openai", "id": "gpt-5.6-terra", "thinking": "high"}
+      ],
+      "tasks": "all",
+      "repetitions": 2
+    },
+    {
+      "id": "long_horizon",
+      "arms": ["F"],
+      "models": [
+        {"provider": "kimi-code", "id": "k3-256k", "thinking": "high"},
+        {"provider": "kimi-code", "id": "k3", "thinking": "high"}
+      ],
+      "tasks": "long_horizon",
+      "repetitions": 2
+    }
+  ]
+}
