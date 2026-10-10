@@ -1,0 +1,14 @@
+{
+	"case": "k1",
+	"commit": "20900d3be9c5245be9aa0267bf6a3a122fd1ab7f",
+	"advisor": "ECC Database Reviewer",
+	"mechanism": "omp -p --advisor (WATCHDOG.yml roster)",
+	"omp_exit": 0,
+	"advisor_completed": true,
+	"model": "google-antigravity/gemini-3.7-flash",
+	"transcript_sha256": "64efe6001ac05e975c14954799d0a1083660e631dbb2df231cf05b7e13f43fc3",
+	"suppressed": 0,
+	"failed": 0,
+	"unmatched": 0,
+	"notes": []
+}

@@ -1,0 +1,64 @@
+{
+	"case": "k2",
+	"commit": "44a2f9446f00786188e17567f5eaee79aa020658",
+	"advisor": "ECC Database Reviewer",
+	"mechanism": "omp -p --advisor (WATCHDOG.yml roster)",
+	"omp_exit": 0,
+	"advisor_completed": true,
+	"model": "google-antigravity/gemini-3.7-flash",
+	"transcript_sha256": "ad0664eb6c5c2404103285553f35c8faef00088542577c8948f30a31041d2ec5",
+	"suppressed": 0,
+	"failed": 0,
+	"unmatched": 0,
+	"notes": [
+		{
+			"n": 1,
+			"tool_call_id": "call_49349",
+			"note": "Staying silent; agent is in progress exploring schema and transaction semantics.",
+			"severity": "nit",
+			"category": "possible-false-positive"
+		},
+		{
+			"n": 2,
+			"tool_call_id": "call_18467",
+			"note": "Staying silent; agent is continuing investigation.",
+			"severity": "nit",
+			"category": "possible-false-positive"
+		},
+		{
+			"n": 3,
+			"tool_call_id": "call_43539",
+			"note": "Staying silent; agent is evaluating findings.",
+			"severity": "nit",
+			"category": "possible-false-positive"
+		},
+		{
+			"n": 4,
+			"tool_call_id": "call_39253",
+			"note": "Staying silent; agent is preparing review output.",
+			"severity": "nit",
+			"category": "possible-false-positive"
+		},
+		{
+			"n": 5,
+			"tool_call_id": "call_51539",
+			"note": "Staying silent; agent is following ledger filing policy.",
+			"severity": "nit",
+			"category": "possible-false-positive"
+		},
+		{
+			"n": 6,
+			"tool_call_id": "call_48942",
+			"note": "Confirm whether target project for create_work should be \"Fleet\" or explicit OMP project, as OMP-335 showed project \"Fleet\" while working directory is scoped to \"The Bookends\".",
+			"severity": "nit",
+			"category": "semantic-concern"
+		},
+		{
+			"n": 7,
+			"tool_call_id": "call_26328",
+			"note": "Confirm whether to conclude the review response without further ledger writes, since the read-only review analysis and consistency checks are complete.",
+			"severity": "nit",
+			"category": "semantic-concern"
+		}
+	]
+}
