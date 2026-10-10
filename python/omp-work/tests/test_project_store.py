@@ -211,6 +211,29 @@ def test_projects_are_isolated_from_each_other(service) -> None:
     assert [h["kind"] for h in beta_view["history"]] == ["beta_event"]
 
 
+def test_link_mission_relink_moves_the_mission_to_the_new_project(service) -> None:
+    """Re-linking a mission updates project_id, not just objective/status."""
+    store = PostgresWorkStore(service.config)
+    workspace_id = uuid4()
+    actor_id = OWNER
+    _workspace(service, workspace_id)
+
+    alpha = store.ensure_project(workspace_id, actor_id, "alpha", "Alpha", "world")
+    beta = store.ensure_project(workspace_id, actor_id, "beta", "Beta", "surface")
+
+    mission_id = uuid4()
+    store.link_mission(workspace_id, actor_id, alpha, mission_id, "first", "draft")
+    store.link_mission(workspace_id, actor_id, beta, mission_id, "second", "running")
+
+    alpha_view = store.read_project(workspace_id, actor_id, alpha)
+    beta_view = store.read_project(workspace_id, actor_id, beta)
+    assert alpha_view["missions"] == []
+    assert [m["mission_id"] for m in beta_view["missions"]] == [str(mission_id)]
+    assert beta_view["missions"][0]["project_id"] == str(beta)
+    assert beta_view["missions"][0]["objective"] == "second"
+    assert beta_view["missions"][0]["status"] == "running"
+
+
 def test_ensure_project_is_idempotent_and_duplicate_key_raises(service) -> None:
     store = PostgresWorkStore(service.config)
     workspace_id = uuid4()

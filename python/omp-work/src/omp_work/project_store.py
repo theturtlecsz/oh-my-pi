@@ -560,7 +560,11 @@ class ProjectStoreMixin:
         basis_mandate_id: UUID | None = None,
         basis_decision_id: UUID | None = None,
     ) -> None:
-        """Attach or refresh a mission on the project."""
+        """Attach or refresh a mission on the project.
+
+        Re-linking an existing mission moves it: the conflict update sets
+        project_id as well, so the mission leaves the old project.
+        """
         with self._transaction(workspace_id, actor_id) as cur:
             self._require_project(cur, workspace_id, project_id)
             cur.execute(
@@ -568,6 +572,7 @@ class ProjectStoreMixin:
                 "(workspace_id, mission_id, project_id, objective, status, basis_mandate_id, basis_decision_id)"
                 " VALUES (%s, %s, %s, %s, %s, %s, %s)"
                 " ON CONFLICT (workspace_id, mission_id) DO UPDATE SET"
+                " project_id = EXCLUDED.project_id,"
                 " objective = EXCLUDED.objective,"
                 " status = EXCLUDED.status,"
                 " basis_mandate_id = EXCLUDED.basis_mandate_id,"
