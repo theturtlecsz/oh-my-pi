@@ -76,6 +76,7 @@
 
 ### Fixed
 
+- Concurrent domain-event appends for the same workspace and aggregate could fork the hash chain because the chain head was read before the workspace advisory lock was taken; the store now acquires the lock first and reads `previous_event_sha256` on a fresh snapshot, so every event links the committed head (OMP-567).
 - `omp_work_readonly` and `omp_work_backup` can read the native jobs tables (workers, operations, outbox) when the jobs migrations ran as `omp_work_migrator` (OMP-554).
 - Concurrent ensure_project calls reuse one unarchived project (OMP-560).
 - Signed mission-event push skips a subscription with no push_url, rejects a redirect instead of following it, and treats a non-ASCII signature header as unverified (OMP-415).
