@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omp.dev/contracts/nsi/v1/taxonomy.schema.json",
+  "oneOf": [
+    { "$ref": "#/$defs/EntityRef" },
+    { "$ref": "#/$defs/PredicateDefinition" },
+    { "$ref": "#/$defs/RequirementDimensionDefinition" }
+  ],
+  "$defs": {
+    "IntakeCategory": {
+      "type": "string",
+      "enum": [
+        "functional_scope_and_behavior",
+        "domain_and_data_model",
+        "interaction_and_ux_flow",
+        "non_functional_qualities",
+        "integrations_and_external_dependencies",
+        "edge_cases_and_failure_handling",
+        "constraints_and_tradeoffs",
+        "terminology",
+        "completion_signals",
+        "placeholders_and_ambiguities",
+        "scope_boundaries"
+      ]
+    },
+    "EntityRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "type": { "type": "string", "minLength": 1 }
+      }
+    },
+    "PredicateDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "subject_types", "object_types", "cardinality", "exclusivity", "transitivity", "authority"],
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "subject_types": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        },
+        "object_types": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        },
+        "cardinality": { "type": "string", "enum": ["one", "many"] },
+        "exclusivity": { "type": "boolean" },
+        "transitivity": { "type": "boolean" },
+        "authority": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "https://omp.dev/contracts/nsi/v1/authority.schema.json#/$defs/ActorKind" }
+        }
+      }
+    },
+    "RequirementDimensionDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "category", "applicability", "required_premises", "materiality", "waiver_policy"],
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "category": { "$ref": "#/$defs/IntakeCategory" },
+        "applicability": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["entity_types", "predicate_ids"],
+          "properties": {
+            "entity_types": { "type": "array", "items": { "type": "string" } },
+            "predicate_ids": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "required_premises": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        },
+        "materiality": { "type": "string", "enum": ["critical", "material", "minor"] },
+        "waiver_policy": { "$ref": "https://omp.dev/contracts/nsi/v1/authority.schema.json#/$defs/WaiverPolicy" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "materiality": { "const": "critical" } } },
+          "then": { "properties": { "waiver_policy": { "const": "never" } } }
+        }
+      ]
+    }
+  }
+}

@@ -1,4 +1,4 @@
-"""NSI authority wire contract accepts valid records and rejects authority gaps."""
+"""NSI authority and taxonomy wire contracts reject invalid records."""
 
 import json
 from copy import deepcopy
@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from jsonschema import Draft202012Validator, ValidationError
+from referencing import Registry, Resource
 
 
 SCHEMA = json.loads(
@@ -109,3 +110,124 @@ def test_specialized_actor_refs_reject_wrong_kind_empty_id_and_open_fields(defin
     ):
         with pytest.raises(ValidationError):
             validator.validate(invalid)
+
+
+TAXONOMY_SCHEMA = json.loads(
+    (Path(__file__).parents[1] / "src/omp_work/contracts/nsi/v1/taxonomy.schema.json")
+    .read_text()
+)
+TAXONOMY_VALIDATOR = Draft202012Validator(
+    TAXONOMY_SCHEMA,
+    registry=Registry().with_resource(SCHEMA["$id"], Resource.from_contents(SCHEMA)),
+)
+ENTITY = {"id": "entity-1", "type": "requirement"}
+PREDICATE = {
+    "id": "depends_on",
+    "title": "Depends on",
+    "subject_types": ["requirement"],
+    "object_types": ["service"],
+    "cardinality": "many",
+    "exclusivity": False,
+    "transitivity": True,
+    "authority": ["owner", "rule_engine"],
+}
+DIMENSION = {
+    "id": "availability",
+    "title": "Availability",
+    "category": "non_functional_qualities",
+    "applicability": {"entity_types": [], "predicate_ids": []},
+    "required_premises": ["uptime_target"],
+    "materiality": "material",
+    "waiver_policy": "owner_with_reason",
+}
+
+
+@pytest.mark.parametrize(
+    "definition,record",
+    [("EntityRef", ENTITY), ("PredicateDefinition", PREDICATE),
+     ("RequirementDimensionDefinition", DIMENSION)],
+)
+def test_taxonomy_root_and_definitions_require_closed_complete_records(definition, record):
+    Draft202012Validator.check_schema(TAXONOMY_SCHEMA)
+    definition_validator = TAXONOMY_VALIDATOR.evolve(
+        schema={**TAXONOMY_SCHEMA, "oneOf": [{"$ref": f"#/$defs/{definition}"}]}
+    )
+    for validator in (TAXONOMY_VALIDATOR, definition_validator):
+        validator.validate(record)
+        for field in record:
+            incomplete = dict(record)
+            del incomplete[field]
+            with pytest.raises(ValidationError):
+                validator.validate(incomplete)
+        with pytest.raises(ValidationError):
+            validator.validate({**record, "unexpected": True})
+
+
+def test_intake_categories_accept_exactly_the_eleven_supported_categories():
+    categories = [
+        "functional_scope_and_behavior", "domain_and_data_model",
+        "interaction_and_ux_flow", "non_functional_qualities",
+        "integrations_and_external_dependencies", "edge_cases_and_failure_handling",
+        "constraints_and_tradeoffs", "terminology", "completion_signals",
+        "placeholders_and_ambiguities", "scope_boundaries",
+    ]
+    assert sorted(TAXONOMY_SCHEMA["$defs"]["IntakeCategory"]["enum"]) == sorted(categories)
+    validator = TAXONOMY_VALIDATOR.evolve(
+        schema={**TAXONOMY_SCHEMA, "oneOf": [{"$ref": "#/$defs/IntakeCategory"}]}
+    )
+    for category in categories:
+        validator.validate(category)
+        TAXONOMY_VALIDATOR.validate({**DIMENSION, "category": category})
+    with pytest.raises(ValidationError):
+        validator.validate("unknown")
+
+
+@pytest.mark.parametrize(
+    "record,field,value",
+    [
+        (ENTITY, "id", ""),
+        (ENTITY, "type", ""),
+        (PREDICATE, "subject_types", []),
+        (PREDICATE, "subject_types", ["requirement", "requirement"]),
+        (PREDICATE, "subject_types", [1]),
+        (PREDICATE, "object_types", []),
+        (PREDICATE, "object_types", ["service", "service"]),
+        (PREDICATE, "object_types", [1]),
+        (PREDICATE, "cardinality", "unknown"),
+        (PREDICATE, "exclusivity", 1),
+        (PREDICATE, "transitivity", "true"),
+        (PREDICATE, "authority", []),
+        (PREDICATE, "authority", ["unknown"]),
+        (DIMENSION, "category", "unknown"),
+        (DIMENSION, "applicability", {"entity_types": []}),
+        (DIMENSION, "applicability", {"predicate_ids": []}),
+        (DIMENSION, "applicability", {"entity_types": [], "predicate_ids": [], "extra": True}),
+        (DIMENSION, "applicability", {"entity_types": [1], "predicate_ids": []}),
+        (DIMENSION, "applicability", {"entity_types": [], "predicate_ids": [1]}),
+        (DIMENSION, "required_premises", []),
+        (DIMENSION, "required_premises", [1]),
+        (DIMENSION, "materiality", "unknown"),
+        (DIMENSION, "waiver_policy", "unknown"),
+    ],
+)
+def test_taxonomy_rejects_invalid_types_bounds_and_authority_refs(record, field, value):
+    with pytest.raises(ValidationError):
+        TAXONOMY_VALIDATOR.validate({**record, field: value})
+
+
+@pytest.mark.parametrize("materiality", ["critical", "material", "minor"])
+def test_critical_dimensions_cannot_be_waived(materiality):
+    TAXONOMY_VALIDATOR.validate({**DIMENSION, "materiality": materiality, "waiver_policy": "never"})
+    record = {**DIMENSION, "materiality": materiality}
+    if materiality == "critical":
+        with pytest.raises(ValidationError):
+            TAXONOMY_VALIDATOR.validate(record)
+    else:
+        TAXONOMY_VALIDATOR.validate(record)
+
+
+def test_predicates_accept_single_cardinality_and_shared_actor_kinds():
+    TAXONOMY_VALIDATOR.validate({
+        **PREDICATE, "cardinality": "one", "exclusivity": True, "transitivity": False,
+        "authority": ["owner", "service", "model", "tool", "rule_engine"],
+    })
