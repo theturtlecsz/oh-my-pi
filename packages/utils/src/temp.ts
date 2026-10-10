@@ -73,8 +73,10 @@ function normalizePrefix(prefix?: string): string {
 		return `${kTempDir}${path.sep}pi-temp-`;
 	} else if (prefix.startsWith("@")) {
 		return path.join(kTempDir, prefix.slice(1));
+	} else if (path.isAbsolute(prefix)) {
+		return prefix;
 	}
-	return prefix;
+	throw new Error(`TempDir prefix "${prefix}" must start with "@" or be an absolute path`);
 }
 
 const kRemoveOptions = { recursive: true, force: true } as const;
