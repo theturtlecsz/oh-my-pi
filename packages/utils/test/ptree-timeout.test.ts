@@ -94,10 +94,34 @@ sleep 30
 				while (!(await pidFileExists()) && Date.now() < setupDeadline) await Bun.sleep(10);
 				expect(await pidFileExists(), "the launcher must create its worker").toBe(true);
 
-				const workerPid = Number.parseInt((await Bun.file(pidFile).text()).trim(), 10);
-				const subreaper = Process.fromPid(child.pid);
-				const command = subreaper?.children()[0];
-				const worker = Process.fromPid(workerPid);
+				let subreaper: Process | undefined;
+				let command: Process | undefined;
+				let worker: Process | undefined;
+				const captureDeadline = Date.now() + 2_000;
+				while (Date.now() < captureDeadline) {
+					let rawPid = "";
+					try {
+						rawPid = (await Bun.file(pidFile).text()).trim();
+					} catch {
+						await Bun.sleep(10);
+						continue;
+					}
+					if (!/^\d+$/.test(rawPid)) {
+						await Bun.sleep(10);
+						continue;
+					}
+					const workerPid = Number.parseInt(rawPid, 10);
+					const currentSubreaper = Process.fromPid(child.pid) ?? undefined;
+					const currentCommand = currentSubreaper?.children()[0];
+					const currentWorker = Process.fromPid(workerPid) ?? undefined;
+					if (currentSubreaper && currentCommand && currentWorker && currentWorker.ppid === currentCommand.pid) {
+						subreaper = currentSubreaper;
+						command = currentCommand;
+						worker = currentWorker;
+						break;
+					}
+					await Bun.sleep(10);
+				}
 				if (!subreaper || !command || !worker) throw new Error("failed to capture the subreaper process tree");
 				cleanupProcesses.push(worker, command, subreaper);
 				expect(worker.ppid, "the worker must initially belong to the supervised command").toBe(command.pid);

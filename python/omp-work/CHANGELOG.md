@@ -58,6 +58,7 @@
 
 ### Changed
 
+- Per-workspace domain-event reads (event-cursor watermark, page scan, subscription replay, mission link walk, and the per-aggregate head) now use dedicated `(workspace_id, sequence)` and `(workspace_id, aggregate_id, sequence)` indexes instead of scanning every workspace's events (migration 0035, additive).
 - `ops capabilities grokbot` is now `ops capabilities client --name N [--stop-only]`, minting the `client` actor kind with `work.read`, `work.client`, `work.stop` (or `work.stop` alone with `--stop-only`) (OMP-416).
 - PostgreSQL backups now use the dedicated backup role to export every RLS-protected ledger table, and restore drills verify the selected completed backup in an isolated native PostgreSQL 18 instance.
 - Linear exports now use static read-only stream queries, encrypted immutable artifacts, redacted reconciliation summaries, and explicit scoped-OAuth or owner-managed personal-key authentication.
@@ -74,6 +75,7 @@
 
 ### Fixed
 
+- `omp_work_readonly` and `omp_work_backup` can read the native jobs tables (workers, operations, outbox) when the jobs migrations ran as `omp_work_migrator` (OMP-554).
 - Signed mission-event push skips a subscription with no push_url, rejects a redirect instead of following it, and treats a non-ASCII signature header as unverified (OMP-415).
 - Parallel job completion now releases leases and reservations in the terminal transaction, preserves a winning terminal result, and can persist a bounded downstream closeout obligation for safe retry after daemon interruption. Cancellation waits for verified worker termination; checkpoint outcomes remain supported.
 - Expired execution grants fence fresh grant-linked commands, work-item relation edits/removals, and focus changes while preserving idempotent replay, delivery/auditor settlement, and explicit owner reconciliation before replacement admission.

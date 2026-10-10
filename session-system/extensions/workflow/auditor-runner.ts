@@ -8,6 +8,7 @@
 import { completeSimple, type Model } from "@oh-my-pi/pi-ai";
 import { getAgentDir, Settings, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { discoverAgents, getAgent } from "@oh-my-pi/pi-coding-agent/task";
+import { compileStageContext } from "@oh-my-pi/pi-coding-agent/session/stage-context";
 import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
 
 export interface NativeAuditRunResult {
@@ -46,7 +47,11 @@ export function resolveAuditModel(ctx: { models: { resolve(model: string): Model
  *    failures surface here instead of burning a reserved launch.
  * 4. Loads effective settings for `ctx.cwd` / `getAgentDir()`.
  */
-export async function prepareNativeAuditRunner(ctx: ExtensionContext, signal?: AbortSignal): Promise<NativeAuditRunner> {
+export async function prepareNativeAuditRunner(
+	ctx: ExtensionContext,
+	signal?: AbortSignal,
+	compileContext?: () => Promise<string>,
+): Promise<NativeAuditRunner> {
 	const discovery = await discoverAgents(ctx.cwd);
 	const agent = getAgent(discovery.agents, "auditor");
 	if (!agent) {
@@ -111,6 +116,7 @@ export async function prepareNativeAuditRunner(ctx: ExtensionContext, signal?: A
 				cwd: ctx.cwd,
 				agent,
 				task: taskBody,
+				context: await compileStageContext(compileContext),
 				modelOverride: agent.model,
 				modelRegistry: ctx.modelRegistry,
 				authStorage: ctx.modelRegistry?.authStorage,

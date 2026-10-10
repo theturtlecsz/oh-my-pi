@@ -77,7 +77,7 @@ def test_shadow_preserves_empty_soft_and_tombstones_only_its_namespace(service, 
             shadow.sync_leases(cur, leases)
             shadow.sync_reservations(cur, reservations)
             assert shadow.parity_report(cur, {"empty_soft": 1, "sealed": 1}, rows, leases, reservations)["diff_zero"]
-            cur.execute("INSERT INTO omp_jobs.jobs(job_id,status,source) VALUES('native-survivor','in_flight','native')")
+            cur.execute("INSERT INTO omp_jobs.jobs(job_id,status,source,workspace_id,kind) VALUES('native-survivor','in_flight','native',gen_random_uuid(),'compute')")
             cur.execute("INSERT INTO omp_jobs.leases(path_glob,job_id,held_until) VALUES('native/path','native-survivor',now())")
             shadow.sync_jobs(cur, [rows[1]])
             shadow.sync_leases(cur, [])
@@ -97,7 +97,7 @@ def test_shadow_preserves_empty_soft_and_tombstones_only_its_namespace(service, 
 def test_shadow_rejects_native_collisions_and_unknown_status(service, shadow):
     with psycopg.connect(**service.config.connection_kwargs("postgres")) as connection:
         with connection.transaction(force_rollback=True), connection.cursor() as cur:
-            cur.execute("INSERT INTO omp_jobs.jobs(job_id,status,source) VALUES('collision','in_flight','native')")
+            cur.execute("INSERT INTO omp_jobs.jobs(job_id,status,source,workspace_id,kind) VALUES('collision','in_flight','native',gen_random_uuid(),'compute')")
             with pytest.raises(ValueError, match="identity collision"):
                 shadow.sync_jobs(cur, [job("collision")])
             cur.execute("SELECT status,source FROM omp_jobs.jobs WHERE job_id='collision'")
@@ -141,7 +141,7 @@ def test_legacy_allowlist_rechecks_provenance_and_never_deletes(service, shadow,
                         "original_job_id": identity, "original_status": "failed",
                         "created_at": created.isoformat(), "updated_at": updated.isoformat()}
             if changed == "native":
-                cur.execute("UPDATE omp_jobs.jobs SET source='native' WHERE job_id=%s", (identity,))
+                cur.execute("UPDATE omp_jobs.jobs SET source='native',workspace_id=gen_random_uuid(),kind='compute' WHERE job_id=%s", (identity,))
             elif changed == "status":
                 cur.execute("UPDATE omp_jobs.jobs SET status='in_flight' WHERE job_id=%s", (identity,))
             elif changed == "timestamp":

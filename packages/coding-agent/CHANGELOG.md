@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added opt-in stage context for native auditor workers. Set `OMP_STAGE_CONTEXT_PUSH=1` to deliver the current Work Ledger digest and stage inputs at launch.
 - `before_agent_start` handlers can return `block`/`reason` to refuse a prompt before any provider call.
 - Added an opt-in Jev classifier for auto thinking effort.
 - Added an opt-in Jev unexpected-stop classifier with a configurable threshold.

@@ -1,4 +1,4 @@
-"""Managed trial ingestion and qualification checks (R06/R07, OMP-315-s05-s01).
+"""Managed trial ingestion and qualification checks (R06/R07, OMP-315-s05).
 
 Trust comes from the settlement and the worker's registered capability, never
 from artifact bytes. Each test verifies a concrete boundary:
@@ -7,8 +7,11 @@ from artifact bytes. Each test verifies a concrete boundary:
 - worker stripped of MANAGED_CAPABILITY in SQL after settling returns untrusted_issuer;
 - receipt with another confirmation_sha256 returns wrong_confirmation;
 - receipt bound to another job_id returns wrong_job;
-- qualified receipt on a failed settlement returns the receipt and no missing_managed_receipt;
-- missing custody artifacts return missing_managed_receipt or missing_protocol.
+- qualified receipt on a failed settlement returns the receipt, contradictory_evidence, and no missing_managed_receipt;
+- missing custody artifacts return missing_managed_receipt or missing_protocol;
+- observation differences return contradictory_evidence, missing_observation, or malformed_observation;
+- settlement outcome/trust mismatch with receipt verdict returns contradictory_evidence;
+- managed_trials filters out non-managed campaigns and returns (trial, receipt, reasons).
 """
 
 from __future__ import annotations
@@ -30,7 +33,11 @@ from native_jobs_support import native_jobs  # noqa: F401 (fixture)
 from omp_work.jobs.admission import claim_job, enqueue_job
 from omp_work.jobs.lease import settle_job
 from omp_work.jobs.store import NativeJobStore, register_worker
-from omp_work.research.managed import is_managed_campaign, verify_managed_trial
+from omp_work.research.managed import (
+    is_managed_campaign,
+    managed_trials,
+    verify_managed_trial,
+)
 from omp_work.research.receipt import (
     MANAGED_CAPABILITY,
     MANAGED_POLICY,
@@ -148,17 +155,35 @@ def _record_observation(
     receipt_bytes: bytes,
     *,
     job_id: str | None = None,
+    mode: str = "matching",
+    payload_override: dict[str, object] | None = None,
 ) -> None:
+    if mode == "absent":
+        return
     job_id = job_id or managed_job_id(fix.trial_id)
     receipt = json.loads(receipt_bytes)
-    payload: dict[str, object] = {
-        "receipt_sha256": hashlib.sha256(receipt_bytes).hexdigest(),
-        "verdict": receipt["verdict"],
-        "metrics": receipt["metrics"],
-        "exit_code": 0,
-        "duration_seconds": 0.25,
-        "harness_sha256": fix.evaluator_artifact,
-    }
+    if payload_override is not None:
+        payload = payload_override
+    elif mode == "malformed":
+        payload = {
+            "receipt_sha256": hashlib.sha256(receipt_bytes).hexdigest(),
+            "metrics": receipt["metrics"],
+        }
+    elif mode == "contradictory":
+        payload = {
+            "receipt_sha256": hashlib.sha256(receipt_bytes).hexdigest(),
+            "verdict": receipt["verdict"],
+            "metrics": {"score": 0.0},
+        }
+    else:
+        payload = {
+            "receipt_sha256": hashlib.sha256(receipt_bytes).hexdigest(),
+            "verdict": receipt["verdict"],
+            "metrics": receipt["metrics"],
+            "exit_code": 0,
+            "duration_seconds": 0.25,
+            "harness_sha256": fix.evaluator_artifact,
+        }
     status, body = _command(
         fix.service,
         fix.workspace_id,
@@ -185,6 +210,7 @@ def _settle_managed(
     receipt_bytes: bytes,
     *,
     outcome: str = "succeeded",
+    trust: str = "trusted",
 ) -> dict[str, object]:
     receipt = json.loads(receipt_bytes)
     receipts: list[dict[str, object]] = [
@@ -195,7 +221,7 @@ def _settle_managed(
                 "id": f"ev-managed:{managed_job_id(fix.trial_id)}",
                 "kind": "receipt",
                 "content_digest": hashlib.sha256(receipt_bytes).hexdigest(),
-                "trust": "trusted",
+                "trust": trust,
                 "metrics": receipt["metrics"],
             },
         }
@@ -258,13 +284,22 @@ def _commit(
     register_receipt: bool = True,
     register_protocol: bool = True,
     outcome: str = "succeeded",
+    trust: str = "trusted",
+    observation: str = "matching",
+    observation_payload: dict[str, object] | None = None,
 ) -> tuple[TrialReceipt | None, list[str]]:
     if register_protocol:
         _register_artifact_bytes(fix, fix.protocol_bytes, "protocol.json")
     if register_receipt:
         _register_artifact_bytes(fix, receipt_bytes, "receipt.json")
-    _settle_managed(fix, receipt_bytes, outcome=outcome)
-    _record_observation(fix, receipt_bytes)
+    _settle_managed(fix, receipt_bytes, outcome=outcome, trust=trust)
+    if observation != "absent":
+        _record_observation(
+            fix,
+            receipt_bytes,
+            mode=observation,
+            payload_override=observation_payload,
+        )
     return _verify(fix)
 
 
@@ -558,12 +593,14 @@ def test_qualified_on_failed_settlement_has_receipt_and_no_missing_managed_recei
 ) -> None:
     """A qualified receipt on a failed settlement is not rejected as missing_managed_receipt."""
     fix = _make_fixture(native_jobs)
-    receipt, reasons = _commit(fix, receipt_bytes=_receipt_bytes(fix), outcome="failed")
+    receipt, reasons = _commit(
+        fix, receipt_bytes=_receipt_bytes(fix), outcome="failed", trust="trusted"
+    )
 
     assert receipt is not None
     assert receipt.verdict == "qualified"
     assert "missing_managed_receipt" not in reasons
-    assert reasons == []
+    assert reasons == ["contradictory_evidence"]
 
 
 def test_missing_receipt_custody_is_missing_managed_receipt(native_jobs) -> None:
@@ -605,3 +642,287 @@ def test_is_managed_campaign(native_jobs) -> None:
             non_managed_fix.workspace_id,
             {"policy_sha256": non_managed_fix.policy_sha},
         )
+
+
+def test_observation_metrics_differ_is_contradictory_evidence(native_jobs) -> None:
+    """A legacy observation whose metrics differ from the receipt is contradictory evidence."""
+    fix = _make_fixture(native_jobs)
+    receipt, reasons = _commit(
+        fix, receipt_bytes=_receipt_bytes(fix), observation="contradictory"
+    )
+
+    assert receipt is not None
+    assert reasons == ["contradictory_evidence"]
+
+
+def test_observation_absent_is_missing_observation(native_jobs) -> None:
+    """A settled receipt with no legacy observation reports missing_observation."""
+    fix = _make_fixture(native_jobs)
+    receipt, reasons = _commit(
+        fix, receipt_bytes=_receipt_bytes(fix), observation="absent"
+    )
+
+    assert receipt is not None
+    assert reasons == ["missing_observation"]
+
+
+def test_observation_payload_without_verdict_is_malformed_observation(native_jobs) -> None:
+    """A legacy observation payload lacking verdict reports malformed_observation."""
+    fix = _make_fixture(native_jobs)
+    receipt, reasons = _commit(
+        fix, receipt_bytes=_receipt_bytes(fix), observation="malformed"
+    )
+
+    assert receipt is not None
+    assert reasons == ["malformed_observation"]
+
+
+def test_qualified_succeeded_trust_verified_is_contradictory_evidence(native_jobs) -> None:
+    """A qualified verdict on a succeeded job with trust verified reports contradictory_evidence."""
+    fix = _make_fixture(native_jobs)
+    receipt, reasons = _commit(
+        fix,
+        receipt_bytes=_receipt_bytes(fix, verdict="qualified"),
+        outcome="succeeded",
+        trust="verified",
+    )
+
+    assert receipt is not None
+    assert receipt.verdict == "qualified"
+    assert reasons == ["contradictory_evidence"]
+
+
+def test_candidate_failed_succeeded_trusted_is_contradictory_evidence(native_jobs) -> None:
+    """A candidate_failed verdict on a succeeded trusted job reports contradictory_evidence."""
+    fix = _make_fixture(native_jobs)
+    receipt_bytes = _receipt_bytes(
+        fix,
+        verdict="candidate_failed",
+        failure_reason="metric fell below baseline",
+        metrics={"score": 0.2},
+    )
+    receipt, reasons = _commit(
+        fix,
+        receipt_bytes=receipt_bytes,
+        outcome="succeeded",
+        trust="trusted",
+    )
+
+    assert receipt is not None
+    assert receipt.verdict == "candidate_failed"
+    assert reasons == ["contradictory_evidence"]
+
+
+def test_candidate_failed_failed_untrusted_with_matching_observation(native_jobs) -> None:
+    """A candidate_failed verdict on a failed untrusted settlement with matching observation has empty reasons."""
+    fix = _make_fixture(native_jobs)
+    receipt_bytes = _receipt_bytes(
+        fix,
+        verdict="candidate_failed",
+        failure_reason="metric fell below baseline",
+        metrics={"score": 0.2},
+    )
+    receipt, reasons = _commit(
+        fix,
+        receipt_bytes=receipt_bytes,
+        outcome="failed",
+        trust="untrusted",
+    )
+
+    assert receipt is not None
+    assert receipt.verdict == "candidate_failed"
+    assert reasons == []
+
+
+def test_managed_trials_returns_only_managed_campaign_trials(native_jobs) -> None:
+    """managed_trials returns only trials from managed campaigns, with receipt and reasons."""
+    fix = _make_fixture(native_jobs)
+    receipt_bytes = _receipt_bytes(fix)
+    _commit(fix, receipt_bytes=receipt_bytes)
+
+    # Propose two more unsettled trials in the first managed campaign
+    trial_2_id = UUID("33333333-3333-3333-3333-333333333333")
+    trial_4_id = UUID("22222222-2222-2222-2222-222222222222")
+    for t_id, digest in ((trial_2_id, "2" * 64), (trial_4_id, "4" * 64)):
+        status, body = _command(
+            fix.service,
+            fix.workspace_id,
+            {
+                "type": "propose_research_trial",
+                "payload": _trial_payload(
+                    fix.campaign_id,
+                    fix.item["work_id"],
+                    fix.policy_sha,
+                    fix.evaluator_sha,
+                    fix.components["environment"],
+                    trial_id=t_id,
+                    candidate_digest=digest,
+                ),
+            },
+        )
+        assert status == 200, body
+
+    manifest, manifest_sha = _manifest(
+        workers=(fix.worker_component,),
+        evaluators=(fix.evaluator_sha,),
+        audits=(fix.components["audit"],),
+        releases=(fix.components["release"],),
+        environments=(fix.components["environment"],),
+    )
+
+    # Create a second managed campaign to prove multi-campaign inclusion and cross-campaign ordering
+    managed_2_spec, managed_2_spec_sha = _sample_spec()
+    managed_campaign_2_id = uuid4()
+    status, body = _command(
+        fix.service,
+        fix.workspace_id,
+        {
+            "type": "create_research_campaign",
+            "payload": {
+                "campaign_id": str(managed_campaign_2_id),
+                "work_id": fix.item["work_id"],
+                "revision_id": fix.item["revision_id"],
+                "domain": "machine_learning",
+                "spec": managed_2_spec,
+                "spec_sha256": managed_2_spec_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    status, body = _command(
+        fix.service,
+        fix.workspace_id,
+        {
+            "type": "admit_research_campaign",
+            "payload": _admit_payload(
+                managed_campaign_2_id,
+                fix.item["work_id"],
+                fix.item["revision_id"],
+                managed_2_spec_sha,
+                fix.policy_sha,
+                manifest,
+                manifest_sha,
+            ),
+        },
+    )
+    assert status == 200, body
+
+    # Propose an unsettled trial in the second managed campaign
+    trial_3_id = UUID("11111111-1111-1111-1111-111111111111")
+    status, body = _command(
+        fix.service,
+        fix.workspace_id,
+        {
+            "type": "propose_research_trial",
+            "payload": _trial_payload(
+                managed_campaign_2_id,
+                fix.item["work_id"],
+                fix.policy_sha,
+                fix.evaluator_sha,
+                fix.components["environment"],
+                trial_id=trial_3_id,
+                candidate_digest="3" * 64,
+            ),
+        },
+    )
+    assert status == 200, body
+
+    # Create a non-managed campaign with a trial for the same work_id to prove exclusion
+    non_managed_spec, non_managed_spec_sha = _sample_spec()
+    non_managed_campaign_id = uuid4()
+    status, body = _command(
+        fix.service,
+        fix.workspace_id,
+        {
+            "type": "create_research_campaign",
+            "payload": {
+                "campaign_id": str(non_managed_campaign_id),
+                "work_id": fix.item["work_id"],
+                "revision_id": fix.item["revision_id"],
+                "domain": "machine_learning",
+                "spec": non_managed_spec,
+                "spec_sha256": non_managed_spec_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    status, body = _command(
+        fix.service,
+        fix.workspace_id,
+        {
+            "type": "admit_research_campaign",
+            "payload": _admit_payload(
+                non_managed_campaign_id,
+                fix.item["work_id"],
+                fix.item["revision_id"],
+                non_managed_spec_sha,
+                fix.components["policy"],
+                manifest,
+                manifest_sha,
+            ),
+        },
+    )
+    assert status == 200, body
+    status, body = _command(
+        fix.service,
+        fix.workspace_id,
+        {
+            "type": "propose_research_trial",
+            "payload": _trial_payload(
+                non_managed_campaign_id,
+                fix.item["work_id"],
+                fix.components["policy"],
+                fix.evaluator_sha,
+                fix.components["environment"],
+                trial_id=uuid4(),
+                candidate_digest="e" * 64,
+            ),
+        },
+    )
+    assert status == 200, body
+
+    # Set timestamps: fix.trial_id is earlier; trial_2_id, trial_3_id, trial_4_id share exact proposed_at to prove trial_id tie-break
+    t_early = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
+    t_tied = datetime(2026, 1, 2, 0, 0, 0, tzinfo=UTC)
+    store = _store(fix)
+    with store.transaction(fix.workspace_id, fix.actor_id) as cur:
+        cur.execute(
+            "UPDATE omp_research.trials SET proposed_at=%s WHERE trial_id=%s",
+            (t_early, fix.trial_id),
+        )
+        cur.execute(
+            "UPDATE omp_research.trials SET proposed_at=%s WHERE trial_id = ANY(%s)",
+            (t_tied, [trial_2_id, trial_3_id, trial_4_id]),
+        )
+        results = managed_trials(
+            cur, fix.workspace_id, fix.item["work_id"], data_dir=fix.data_dir
+        )
+
+    # 4 trials from the managed campaigns; non-managed campaign is excluded
+    assert len(results) == 4
+
+    # Trial 1: earliest proposed_at, qualified and trusted
+    trial_1, receipt_1, reasons_1 = results[0]
+    assert str(trial_1["trial_id"]) == str(fix.trial_id)
+    assert str(trial_1["campaign_id"]) == str(fix.campaign_id)
+    assert receipt_1 is not None
+    assert receipt_1.verdict == "qualified"
+    assert reasons_1 == []
+
+    # Trials with tied proposed_at are strictly ordered by trial_id:
+    # trial_3_id (1111...) < trial_4_id (2222...) < trial_2_id (3333...)
+    # This also proves cross-campaign ordering: trial_3_id is from managed_campaign_2_id.
+    assert str(results[1][0]["trial_id"]) == str(trial_3_id)
+    assert str(results[1][0]["campaign_id"]) == str(managed_campaign_2_id)
+    assert results[1][1] is None
+    assert results[1][2] == ["missing_managed_receipt"]
+
+    assert str(results[2][0]["trial_id"]) == str(trial_4_id)
+    assert str(results[2][0]["campaign_id"]) == str(fix.campaign_id)
+    assert results[2][1] is None
+    assert results[2][2] == ["missing_managed_receipt"]
+
+    assert str(results[3][0]["trial_id"]) == str(trial_2_id)
+    assert str(results[3][0]["campaign_id"]) == str(fix.campaign_id)
+    assert results[3][1] is None
+    assert results[3][2] == ["missing_managed_receipt"]

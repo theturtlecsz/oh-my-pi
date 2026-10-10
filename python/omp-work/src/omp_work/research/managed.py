@@ -10,7 +10,8 @@ candidate, evaluator descriptor, and confirmation data.
 
 Reasons are the same short, stable vocabulary the caller gates on:
 ``missing_managed_receipt``, ``untrusted_issuer``, ``missing_protocol``,
-``wrong_confirmation``, and ``wrong_job``.
+``wrong_confirmation``, ``wrong_job``, ``missing_observation``,
+``malformed_observation``, and ``contradictory_evidence``.
 """
 
 from __future__ import annotations
@@ -38,8 +39,11 @@ from omp_work.research.receipt import (
 
 __all__ = [
     "is_managed_campaign",
+    "managed_trials",
     "verify_managed_trial",
 ]
+
+_OBSERVATION_ISSUER = "legacy_autoresearch"
 
 _TRIAL_QUERY = """
 SELECT t.trial_id, t.campaign_id, t.candidate_digest, t.evaluator_sha256,
@@ -48,6 +52,16 @@ FROM omp_research.trials t
 JOIN omp_research.campaigns c
   ON c.workspace_id = t.workspace_id AND c.campaign_id = t.campaign_id
 WHERE t.workspace_id=%s AND t.trial_id=%s
+"""
+
+_WORK_TRIAL_QUERY = """
+SELECT t.trial_id, t.campaign_id, t.work_id, t.candidate_digest, t.evaluator_sha256,
+       t.proposed_at, c.compatibility, c.spec
+FROM omp_research.trials t
+JOIN omp_research.campaigns c
+  ON c.workspace_id = t.workspace_id AND c.campaign_id = t.campaign_id
+WHERE t.workspace_id=%s AND t.work_id=%s AND t.campaign_id = ANY(%s)
+ORDER BY t.proposed_at, t.trial_id
 """
 
 
@@ -73,6 +87,11 @@ def _json_list(value: object) -> list[object]:
             return []
         return parsed if isinstance(parsed, list) else []
     return []
+
+
+def _add_reason(reasons: list[str], reason: str) -> None:
+    if reason not in reasons:
+        reasons.append(reason)
 
 
 def _component_descriptor(
@@ -160,6 +179,16 @@ def _custody_bytes(
         )
     except (RuntimeError, OSError):
         return None
+
+
+def _observation(
+    cur: psycopg.Cursor[dict[str, object]], workspace_id: UUID, job_id: str
+) -> dict[str, Any] | None:
+    cur.execute(
+        "SELECT payload FROM omp_research.observations WHERE workspace_id=%s AND issuer_kind=%s AND source_ref=%s",
+        (workspace_id, _OBSERVATION_ISSUER, f"job:{job_id}"),
+    )
+    return cur.fetchone()
 
 
 def _verify(
@@ -254,6 +283,33 @@ def _verify(
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError, ValidationError):
         return None, reasons
 
+    # 7. observation (legacy_autoresearch, "job:" + managed_job_id(trial)): absent -> missing_observation; payload lacks receipt_sha256, verdict or metrics -> malformed_observation; any of them differs from (content_digest, receipt.verdict, receipt.metrics) -> contradictory_evidence.
+    observation = _observation(cur, workspace_id, job_id)
+    if observation is None:
+        _add_reason(reasons, "missing_observation")
+    else:
+        payload = _json_object(observation["payload"])
+        if (
+            payload is None
+            or "receipt_sha256" not in payload
+            or "verdict" not in payload
+            or "metrics" not in payload
+        ):
+            _add_reason(reasons, "malformed_observation")
+        elif (
+            payload.get("receipt_sha256") != content_digest
+            or payload.get("verdict") != receipt.verdict
+            or payload.get("metrics") != receipt.metrics
+        ):
+            _add_reason(reasons, "contradictory_evidence")
+
+    # 8. ok = settlement.outcome == "succeeded" and the evaluator receipt evidence.trust == "trusted" (exact; "verified" is not trusted). If ok != (receipt.verdict == "qualified") -> contradictory_evidence.
+    evidence_dict = evidence if isinstance(evidence, dict) else {}
+    evidence_trust = evidence_dict.get("trust")
+    ok = settlement.get("outcome") == "succeeded" and evidence_trust == "trusted"
+    if ok != (receipt.verdict == "qualified"):
+        _add_reason(reasons, "contradictory_evidence")
+
     return receipt, reasons
 
 
@@ -276,3 +332,36 @@ def verify_managed_trial(
     if trial is None:
         return None, ["missing_managed_receipt"]
     return _verify(cur, ws_uuid, trial, data_dir)
+
+
+def managed_trials(
+    cur: psycopg.Cursor[dict[str, object]],
+    workspace_id: UUID | str,
+    work_id: UUID | str,
+    *,
+    data_dir: object,
+) -> list[tuple[dict[str, Any], TrialReceipt | None, list[str]]]:
+    """Evaluate every trial of the work whose campaign is a MANAGED_POLICY campaign.
+
+    Returns ``(trial, receipt, reasons)`` per trial, in proposal order.
+    """
+    ws_uuid = UUID(str(workspace_id))
+    work_uuid = UUID(str(work_id))
+    cur.execute(
+        "SELECT campaign_id, policy_sha256 FROM omp_research.campaigns WHERE workspace_id=%s AND work_id=%s",
+        (ws_uuid, work_uuid),
+    )
+    managed_ids = [
+        campaign["campaign_id"]
+        for campaign in cur.fetchall()
+        if is_managed_campaign(cur, ws_uuid, campaign)
+    ]
+    if not managed_ids:
+        return []
+    cur.execute(_WORK_TRIAL_QUERY, (ws_uuid, work_uuid, managed_ids))
+    results: list[tuple[dict[str, Any], TrialReceipt | None, list[str]]] = []
+    for row in cur.fetchall():
+        trial = dict(row)
+        receipt, reasons = _verify(cur, ws_uuid, trial, data_dir)
+        results.append((trial, receipt, reasons))
+    return results
