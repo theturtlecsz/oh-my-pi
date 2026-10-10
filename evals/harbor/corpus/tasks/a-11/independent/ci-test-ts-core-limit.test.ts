@@ -8,7 +8,7 @@ import { ptree, TempDir } from "@oh-my-pi/pi-utils";
 // runTestCommandsInParallel/runTestCommand, not when imported.
 describe.skipIf(process.platform === "win32")("ci-test-ts core dump limit", () => {
 	test("runs each chunk with core dumps disabled", async () => {
-		using dir = TempDir.createSync("omp-test-core-limit-");
+		using dir = TempDir.createSync("@omp-test-core-limit-");
 		const softPath = dir.join("soft");
 		const hardPath = dir.join("hard");
 		const chunk = [
@@ -31,7 +31,7 @@ describe.skipIf(process.platform === "win32")("ci-test-ts core dump limit", () =
 	}, 15_000);
 
 	test("still reports a chunk's failing exit code through the wrapper", async () => {
-		using dir = TempDir.createSync("omp-test-core-limit-exit-");
+		using dir = TempDir.createSync("@omp-test-core-limit-exit-");
 		const outcomesPath = dir.join("outcomes.json");
 		const chunk = ["/bin/sh", "-c", "exit 3"];
 		const result = await ptree.exec(
