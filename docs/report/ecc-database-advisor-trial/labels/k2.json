@@ -1,0 +1,48 @@
+{
+  "case": "k2",
+  "commit": "44a2f9446f00786188e17567f5eaee79aa020658",
+  "labels": [
+    {
+      "n": 1,
+      "label": "false_alarm",
+      "rationale": "python/omp-work/src/omp_work/jobs/usage.py:209 starts the usage transaction. The note only reports review progress and identifies no problem or needed code check.",
+      "matches_known_defect": false
+    },
+    {
+      "n": 2,
+      "label": "false_alarm",
+      "rationale": "python/omp-work/src/omp_work/jobs/usage.py:248 computes the next step_index. The note only reports review progress and does not describe this race or another code problem.",
+      "matches_known_defect": false
+    },
+    {
+      "n": 3,
+      "label": "false_alarm",
+      "rationale": "python/omp-work/src/omp_work/jobs/usage.py:279 inserts the usage event. The note only reports review progress and identifies no problem or needed code check.",
+      "matches_known_defect": false
+    },
+    {
+      "n": 4,
+      "label": "false_alarm",
+      "rationale": "python/omp-work/src/omp_work/jobs/usage.py:364 returns the usage result. The note concerns review output and identifies no problem or needed code check.",
+      "matches_known_defect": false
+    },
+    {
+      "n": 5,
+      "label": "false_alarm",
+      "rationale": "python/omp-work/src/omp_work/jobs/usage.py:339 inserts a usage outbox event. The note concerns the reviewer's ledger procedure, outside the usage code scope.",
+      "matches_known_defect": false
+    },
+    {
+      "n": 6,
+      "label": "false_alarm",
+      "rationale": "python/omp-work/src/omp_work/jobs/usage.py:26 defines record_usage, with no create_work project selection. The note concerns the reviewer's target project, outside this case scope.",
+      "matches_known_defect": false
+    },
+    {
+      "n": 7,
+      "label": "false_alarm",
+      "rationale": "python/omp-work/src/omp_work/jobs/usage.py:355 executes the usage operation. The note concerns when the reviewer should stop ledger writes, outside this case scope.",
+      "matches_known_defect": false
+    }
+  ]
+}

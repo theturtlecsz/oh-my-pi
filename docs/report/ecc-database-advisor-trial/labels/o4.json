@@ -1,0 +1,30 @@
+{
+  "case": "o4",
+  "commit": "b9793a797d403da7be32c84b90c22189635a97cb",
+  "labels": [
+    {
+      "n": 1,
+      "label": "useful",
+      "rationale": "python/omp-work/src/omp_work/v1/store.py:538 reads the previous event hash before the advisory lock at python/omp-work/src/omp_work/v1/store.py:554. The insert at python/omp-work/src/omp_work/v1/store.py:558 uses that earlier hash. Concurrent operations can therefore share a predecessor despite the insert lock. The conflict path at python/omp-work/src/omp_work/v1/store.py:378 records events without an aggregate lock.",
+      "matches_known_defect": false
+    },
+    {
+      "n": 2,
+      "label": "false_alarm",
+      "rationale": "python/omp-work/src/omp_work/v1/store.py:506 defines audit event creation. The note concerns the reviewer's create_work project selection, not a problem or needed check in this case scope.",
+      "matches_known_defect": false
+    },
+    {
+      "n": 3,
+      "label": "false_alarm",
+      "rationale": "python/omp-work/src/omp_work/v1/store.py:558 inserts the audit event. The note authorizes the reviewer's ledger procedure and supplies no additional problem or needed code check.",
+      "matches_known_defect": false
+    },
+    {
+      "n": 4,
+      "label": "false_alarm",
+      "rationale": "python/omp-work/src/omp_work/v1/store.py:475 records a command event. The note concerns the reviewer's external preview and confirmation procedure, outside this case scope.",
+      "matches_known_defect": false
+    }
+  ]
+}
