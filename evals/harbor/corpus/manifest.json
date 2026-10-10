@@ -1,0 +1,307 @@
+{
+  "base_commit": "30f58b0793565701a39d41ca03a82ca595f7aa2d",
+  "batches": [
+    "evals/harbor/corpus/batches/a.json",
+    "evals/harbor/corpus/batches/b.json"
+  ],
+  "corpus_sha256": "8361e949b7c07e458a62e2af82d263b5ea37a04ca86e6673e795c45f1b875506",
+  "tasks": {
+    "a-01": {
+      "category": "localized_bug",
+      "fixture": "evals/harbor/corpus/tasks/a-01",
+      "long_horizon": false,
+      "source_paths": [
+        "scripts/ecc-advisor-trial/prepare.ts"
+      ],
+      "task_sha256": "2d5b3a7bc4eafa05499edb138597231e6759080f5ac8660ccd353f146af2ee00"
+    },
+    "a-02": {
+      "category": "multi_file_feature",
+      "fixture": "evals/harbor/corpus/tasks/a-02",
+      "long_horizon": true,
+      "source_paths": [
+        "session-system/ecc/adapted.lock.json",
+        "session-system/ecc/adapter/emit-lock.ts",
+        "session-system/ecc/adapter/pin.ts",
+        "session-system/ecc/adapter/review.ts",
+        "session-system/ecc/adapter/types.ts"
+      ],
+      "task_sha256": "5fbd2be55a340ab4ef47ada30589163af50884e83f082e4f79f44286695161cf"
+    },
+    "a-03": {
+      "category": "localized_bug",
+      "fixture": "evals/harbor/corpus/tasks/a-03",
+      "long_horizon": false,
+      "source_paths": [
+        "session-system/extensions/workflow/agent-stop.ts"
+      ],
+      "task_sha256": "abc8941ad8ce0ecc7a80a7414a84c3e28aba8bbb0e93a9cac9da02181524f039"
+    },
+    "a-04": {
+      "category": "difficult_debugging",
+      "fixture": "evals/harbor/corpus/tasks/a-04",
+      "long_horizon": false,
+      "source_paths": [
+        "packages/coding-agent/src/launch/client.ts"
+      ],
+      "task_sha256": "710bd82c42b97a82044e8075457850eb22efec50a240ed0b9c1a867821a81f89"
+    },
+    "a-05": {
+      "category": "multi_file_feature",
+      "fixture": "evals/harbor/corpus/tasks/a-05",
+      "long_horizon": true,
+      "source_paths": [
+        "packages/coding-agent/src/autoresearch/index.ts",
+        "packages/coding-agent/src/autoresearch/managed-import.ts",
+        "packages/coding-agent/src/autoresearch/state.ts",
+        "packages/coding-agent/src/autoresearch/storage.ts",
+        "packages/tui/src/apps/autoresearch-dashboard.ts",
+        "packages/tui/src/apps/autoresearch-data.ts",
+        "packages/tui/src/tools/autoresearch.ts"
+      ],
+      "task_sha256": "5ebb3d8b747f5ef46da21f9f44d02e52e3f036f85e19766ef609fb732d2bde0b"
+    },
+    "a-06": {
+      "category": "difficult_debugging",
+      "fixture": "evals/harbor/corpus/tasks/a-06",
+      "long_horizon": false,
+      "source_paths": [
+        "session-system/qualify-installed.ts"
+      ],
+      "task_sha256": "8304211c7e6c63d7ccff96298e9c48fcac77026e42b40e9102fe5a90693cae50"
+    },
+    "a-07": {
+      "category": "difficult_debugging",
+      "fixture": "evals/harbor/corpus/tasks/a-07",
+      "long_horizon": false,
+      "source_paths": [
+        "packages/stats/src/aggregator.ts"
+      ],
+      "task_sha256": "21795232fd96d90c10d0c7ac1ec63dff98278f89906c6043e92e49ed6f4190ef"
+    },
+    "a-08": {
+      "category": "multi_file_feature",
+      "fixture": "evals/harbor/corpus/tasks/a-08",
+      "long_horizon": false,
+      "source_paths": [
+        "packages/work-client/src/index.ts"
+      ],
+      "task_sha256": "450e3b406ebb672eec9c9cc027548cf7e2ead623e6533508158d6180f3556493"
+    },
+    "a-09": {
+      "category": "localized_bug",
+      "fixture": "evals/harbor/corpus/tasks/a-09",
+      "long_horizon": false,
+      "source_paths": [
+        "packages/coding-agent/src/advisor/supervision-gate.ts"
+      ],
+      "task_sha256": "eb5e3b6a8e21cb0685004ebeb56cb50ea5d4771928ed259c7ccc5ec9b522b3f7"
+    },
+    "a-10": {
+      "category": "localized_bug",
+      "fixture": "evals/harbor/corpus/tasks/a-10",
+      "long_horizon": false,
+      "source_paths": [
+        "packages/coding-agent/src/advisor/advise-tool.ts",
+        "scripts/ecc-advisor-trial/extract.ts"
+      ],
+      "task_sha256": "c11f6c148dda1b1c37e539d2b9d6c638036191812e1b51cd515fa9999a9b903b"
+    },
+    "a-11": {
+      "category": "seeded_defect",
+      "fixture": "evals/harbor/corpus/tasks/a-11",
+      "long_horizon": false,
+      "source_paths": [
+        "scripts/ci-test-ts.ts"
+      ],
+      "task_sha256": "c4538d838b79ddaa90dd79758479445d105c83380e222c1e84870d4b15c8c533"
+    },
+    "a-12": {
+      "category": "seeded_defect",
+      "fixture": "evals/harbor/corpus/tasks/a-12",
+      "long_horizon": false,
+      "source_paths": [
+        "packages/coding-agent/src/config/project-trust.ts"
+      ],
+      "task_sha256": "5b0ac21a5bc4dd591a0a877acf2c917f42297c919029a258d6f584fc0955d78b"
+    },
+    "a-13": {
+      "category": "migration",
+      "fixture": "evals/harbor/corpus/tasks/a-13",
+      "long_horizon": true,
+      "source_paths": [
+        "python/omp-work/src/omp_work/contracts/v1/decisions/0010-research-component-identity-and-compatibility.md",
+        "python/omp-work/src/omp_work/contracts/v1/research-component-hash.json",
+        "python/omp-work/src/omp_work/operations/migrations/0027_research_component_identity.sql",
+        "python/omp-work/src/omp_work/research/__init__.py",
+        "python/omp-work/src/omp_work/v1/store_shared.py"
+      ],
+      "task_sha256": "06fb40140dea0bdb1b92d01e207a248d6c1c71408f4cf9447d6c462b11fef06e"
+    },
+    "a-14": {
+      "category": "migration",
+      "fixture": "evals/harbor/corpus/tasks/a-14",
+      "long_horizon": false,
+      "source_paths": [
+        "python/omp-work/src/omp_work/egress_store.py",
+        "python/omp-work/src/omp_work/operations/migrations/0033_project_egress.sql"
+      ],
+      "task_sha256": "73de0b3be64154e579cd1ab14380ccf0cfc07aa4de16d71de9d931221c44d90f"
+    },
+    "b-01": {
+      "category": "security_concurrency",
+      "fixture": "evals/harbor/corpus/tasks/b-01",
+      "long_horizon": false,
+      "source_paths": [
+        "python/omp-work/src/omp_work/operations/stop.py"
+      ],
+      "task_sha256": "9b7f11dba5c509a34126aebc16bc734bf0f6ece5e65917ed9f9110a5700656d7"
+    },
+    "b-02": {
+      "category": "security_concurrency",
+      "fixture": "evals/harbor/corpus/tasks/b-02",
+      "long_horizon": true,
+      "source_paths": [
+        "packages/mnemopi/src/core/beam/consolidate.ts",
+        "packages/mnemopi/src/core/beam/recall.ts",
+        "packages/mnemopi/src/core/episodic-graph.ts",
+        "packages/mnemopi/src/core/polyphonic-recall.ts"
+      ],
+      "task_sha256": "c73fdbe40572f9e59f802d0b6e33914b310b2805173e1e29c097e230d54e37cb"
+    },
+    "b-03": {
+      "category": "security_concurrency",
+      "fixture": "evals/harbor/corpus/tasks/b-03",
+      "long_horizon": true,
+      "source_paths": [
+        "packages/coding-agent/src/dap/client.ts",
+        "packages/coding-agent/src/jsonrpc/message-framing.ts",
+        "packages/coding-agent/src/lsp/mux/daemon.ts",
+        "packages/coding-agent/src/lsp/mux/server.ts"
+      ],
+      "task_sha256": "c99bd40ffbe7395dba4084afa01ac62d65a702e69dac068ad5f5c7647714591f"
+    },
+    "b-04": {
+      "category": "security_concurrency",
+      "fixture": "evals/harbor/corpus/tasks/b-04",
+      "long_horizon": false,
+      "source_paths": [
+        "packages/coding-agent/src/config/project-trust.ts"
+      ],
+      "task_sha256": "6af475332603ceb49467c911d0f640371945c1ed6a74e5dd1326d9368f88938c"
+    },
+    "b-05": {
+      "category": "resume",
+      "fixture": "evals/harbor/corpus/tasks/b-05",
+      "long_horizon": false,
+      "source_paths": [
+        "packages/ai/src/providers/cursor.ts"
+      ],
+      "task_sha256": "e7096499063d3504ed53fa7d7a397a470d0a861645cc7bed16a03859ce30e6de"
+    },
+    "b-06": {
+      "category": "resume",
+      "fixture": "evals/harbor/corpus/tasks/b-06",
+      "long_horizon": false,
+      "source_paths": [
+        "packages/coding-agent/src/collab/relay-client.ts"
+      ],
+      "task_sha256": "fa28ad3a87b6067f04b9841bd9bd7ba64b5e94b66b80becd9dd832b8f218cce6"
+    },
+    "b-07": {
+      "category": "migration",
+      "fixture": "evals/harbor/corpus/tasks/b-07",
+      "long_horizon": true,
+      "source_paths": [
+        "packages/coding-agent/src/capability/types.ts",
+        "packages/coding-agent/src/discovery/agent-plugins.ts",
+        "packages/coding-agent/src/discovery/omp-plugins.ts",
+        "packages/coding-agent/src/discovery/skillshare.ts",
+        "packages/coding-agent/src/extensibility/skills.ts"
+      ],
+      "task_sha256": "e74c4c88f22ed653fbf2306e3440ab1ccd597c726e78bfd14b25d2ea4cb74978"
+    },
+    "b-08": {
+      "category": "migration",
+      "fixture": "evals/harbor/corpus/tasks/b-08",
+      "long_horizon": false,
+      "source_paths": [
+        "packages/catalog/src/discovery/cursor.ts",
+        "packages/catalog/src/provider-models/cache-provider-id.ts"
+      ],
+      "task_sha256": "70f9896dcefe97c34223da51cd17db9039a864241eb23093897d0d133306d703"
+    },
+    "b-09": {
+      "category": "ambiguous_intake",
+      "fixture": "evals/harbor/corpus/tasks/b-09",
+      "long_horizon": false,
+      "source_paths": [
+        "python/omp-work/src/omp_work/operations/cli.py"
+      ],
+      "task_sha256": "b14978eba7af54f247792fdca1b3db16a890e101c34d4735e19716554eef0a72"
+    },
+    "b-10": {
+      "category": "ambiguous_intake",
+      "fixture": "evals/harbor/corpus/tasks/b-10",
+      "long_horizon": false,
+      "source_paths": [
+        "packages/coding-agent/src/session/turn-recovery.ts"
+      ],
+      "task_sha256": "d4e595db2c7d53af110bc0b1738301f73376113de67962de1e712b20d9e64f3d"
+    },
+    "b-11": {
+      "category": "ambiguous_intake",
+      "fixture": "evals/harbor/corpus/tasks/b-11",
+      "long_horizon": false,
+      "source_paths": [
+        "packages/coding-agent/src/extensibility/custom-commands/bundled/review/index.ts"
+      ],
+      "task_sha256": "c4bed5e18b50c4e62e475412c8fec497628044fad1ef15a98fdb2d2601fc6921"
+    },
+    "b-12": {
+      "category": "ambiguous_intake",
+      "fixture": "evals/harbor/corpus/tasks/b-12",
+      "long_horizon": false,
+      "source_paths": [
+        "packages/tui/src/components/editor.ts"
+      ],
+      "task_sha256": "e4098e2924856a543f9da8d720fbbe9619019d66d0839f1addfbcbc32d1164aa"
+    },
+    "b-13": {
+      "category": "seeded_defect",
+      "fixture": "evals/harbor/corpus/tasks/b-13",
+      "long_horizon": false,
+      "source_paths": [
+        "packages/utils/src/math-delimiters.ts"
+      ],
+      "task_sha256": "9390cd42acc0b8396094c37f2c194f4b14c0aff8e60c6c776fc3945077476749"
+    },
+    "b-14": {
+      "category": "seeded_defect",
+      "fixture": "evals/harbor/corpus/tasks/b-14",
+      "long_horizon": false,
+      "source_paths": [
+        "packages/utils/src/xml.ts"
+      ],
+      "task_sha256": "5131421df86a579e2b6c138c5261e38508e3acd7f3e6d03166345fa43b1d5872"
+    },
+    "f1": {
+      "category": "localized_bug",
+      "fixture": "fixtures/f1",
+      "long_horizon": false,
+      "source_paths": [
+        "session-system/extensions/workflow/work.ts"
+      ],
+      "task_sha256": "0e40bfdd8e72bdee1a6820da48c2bd9d04d979eadb5dd09c289d789bdbcf24d5"
+    },
+    "f2": {
+      "category": "resume",
+      "fixture": "fixtures/f2",
+      "long_horizon": false,
+      "source_paths": [
+        "session-system/extensions/workflow/host.ts"
+      ],
+      "task_sha256": "a0d55d01b3dc563e1b4c16bc6d67af23dcac423760900ebf5b8978517d7c121b"
+    }
+  }
+}
