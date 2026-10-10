@@ -1,0 +1,20 @@
+{
+  "item_id": "snowflake-pack-shift",
+  "category": "functional",
+  "task": "Snowflake.formatParts must pack the 22-bit sequence below the timestamp field.",
+  "acceptance_criteria": [
+    "formatParts then getTimestamp/getSequence round-trips the parts"
+  ],
+  "defects": [
+    {
+      "path": "packages/utils/src/snowflake.ts",
+      "line_start": 46,
+      "line_end": null,
+      "severity": "HIGH"
+    }
+  ],
+  "exposing_test": {
+    "runner": "bun",
+    "target": "packages/utils/test/snowflake.test.ts"
+  }
+}

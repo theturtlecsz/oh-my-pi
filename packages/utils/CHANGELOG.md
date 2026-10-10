@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- A relative TempDir prefix is rejected, so that directory is not created in the working directory.
+
 ## [18.4.4] - 2026-09-29
 
 ### Added

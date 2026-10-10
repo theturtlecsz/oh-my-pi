@@ -1,0 +1,17 @@
+{
+  "task_id": "b-09",
+  "category": "ambiguous_intake",
+  "title": "The designate message cannot be signed straight from the command output",
+  "source_commit": "71845167aff6d5474babf0d49f5720938dfad687",
+  "runner": "pytest",
+  "test_target": "python/omp-work/tests/test_owner_controller.py",
+  "source_paths": [
+    "python/omp-work/src/omp_work/operations/cli.py"
+  ],
+  "instruction": "The owner flow prints a designation message that I must sign and give back to the designate step. When I sign exactly what the command printed, designate says the signature is not valid. Make what the command prints directly signable.",
+  "acceptance_criteria": [
+    "The bytes written to stdout are the designation message that designate verifies.",
+    "A signature over the printed output is accepted by designate."
+  ],
+  "withheld_detail": "newline"
+}

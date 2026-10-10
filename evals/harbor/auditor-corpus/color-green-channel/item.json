@@ -1,0 +1,20 @@
+{
+  "item_id": "color-green-channel",
+  "category": "functional",
+  "task": "hexToRgb must read the green channel from the second byte pair of a #rrggbb color.",
+  "acceptance_criteria": [
+    "hexToRgb('#00ff00') yields g=255 with r=b=0"
+  ],
+  "defects": [
+    {
+      "path": "packages/utils/src/color.ts",
+      "line_start": 48,
+      "line_end": null,
+      "severity": "MEDIUM"
+    }
+  ],
+  "exposing_test": {
+    "runner": "bun",
+    "target": "packages/utils/test/color.test.ts"
+  }
+}

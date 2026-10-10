@@ -1,0 +1,14 @@
+diff --git a/packages/coding-agent/src/extensibility/custom-commands/bundled/review/index.ts b/packages/coding-agent/src/extensibility/custom-commands/bundled/review/index.ts
+index 25848b103e..6dbaf8e13a 100644
+--- a/packages/coding-agent/src/extensibility/custom-commands/bundled/review/index.ts
++++ b/packages/coding-agent/src/extensibility/custom-commands/bundled/review/index.ts
+@@ -296,7 +296,8 @@ async function selectPullRequestRef(cwd: string, ctx: HookCommandContext): Promi
+ 		const number = parsePositivePrNumber(query.startsWith("#") ? query.slice(1) : query);
+ 		if (number !== undefined) return prNumberRef(repo, number);
+ 		const matches = await fetchOpenPullRequests(cwd, ctx, repo, query);
+-		if (matches === undefined) return undefined;
++		// The failure was already reported; stay in the picker on the list shown before.
++		if (matches === undefined) continue;
+ 		if (matches.length === 0) {
+ 			ctx.ui.notify(`No open pull requests matching "${query}" in ${repo}`, "warning");
+ 			activeQuery = undefined;

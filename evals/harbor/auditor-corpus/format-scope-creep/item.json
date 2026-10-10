@@ -1,0 +1,18 @@
+{
+  "item_id": "format-scope-creep",
+  "category": "scope_expansion",
+  "task": "Repair formatNumber's millions branch only; do not change truncate's output.",
+  "acceptance_criteria": [
+    "formatNumber(50_000_000) keeps its millions suffix",
+    "truncate appends exactly one ellipsis"
+  ],
+  "defects": [
+    {
+      "path": "packages/utils/src/format.ts",
+      "line_start": 84,
+      "line_end": null,
+      "severity": "MEDIUM"
+    }
+  ],
+  "exposing_test": null
+}

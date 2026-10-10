@@ -1,0 +1,18 @@
+{
+  "task_id": "a-12",
+  "category": "seeded_defect",
+  "title": "Repair the trusted-worktree registration check",
+  "source_commit": "823dc8e3831a977ad276e64d37927ae554e05f5a",
+  "defect_patch": "evals/harbor/corpus/specs/a-12.defect.patch",
+  "test_target": "packages/coding-agent/test/config/project-trust.test.ts",
+  "runner": "bun",
+  "source_paths": [
+    "packages/coding-agent/src/config/project-trust.ts"
+  ],
+  "instruction": "A regression landed in the project trusted-paths check. Directories that hand-write a `.git` pointer at a listed checkout, or that borrow an existing worktree's admin directory, are being treated as trusted linked worktrees again, and a trusted-paths file with a wrong or missing version field is accepted. Restore the check so only a genuine git-registered linked worktree is trusted and the trusted-paths file is validated on its version field.",
+  "acceptance_criteria": [
+    "only a genuine linked worktree of a listed checkout is trusted",
+    "an arbitrary gitdir-pointer directory and a borrowed admin directory are refused",
+    "a trusted-paths list whose version is missing or not exactly 1 yields no trusted paths"
+  ]
+}

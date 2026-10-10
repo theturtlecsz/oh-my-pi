@@ -1,0 +1,23 @@
+{
+  "project": {
+    "project_id": "00000000-0000-7000-8000-0000000000b1",
+    "name": "The Bookends",
+    "kind": "surface"
+  },
+  "items": [
+    {
+      "key": "OMP-1",
+      "work_id": "00000000-0000-7000-8000-000000000001",
+      "revision_id": "00000000-0000-7000-8000-000000000010",
+      "revision_number": 1,
+      "title": "The XML reader drops content after a mismatched closing tag",
+      "description": "Parsing slightly broken XML now loses data. When an element such as an unclosed br sits inside a paragraph, the closing tag of the paragraph no longer ends the paragraph, and the rest of the document is swallowed into the wrong element. The reader used to recover from this. Restore that recovery without making it loop.",
+      "scope": "initial/scope",
+      "acceptance_criteria": [
+        "A closing tag that belongs to an ancestor closes the open element implicitly.",
+        "Stray end tags and malformed markup do not stop the parse."
+      ],
+      "state": "IN_PROGRESS"
+    }
+  ]
+}

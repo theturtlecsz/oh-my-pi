@@ -1,0 +1,21 @@
+{
+  "id": "a-12",
+  "scored_experiment": "repair",
+  "seed_patch": "seed.patch",
+  "solution_patch": "solution.patch",
+  "independent_tests": [
+    {
+      "runner": "bun",
+      "target": "packages/coding-agent/test/config/project-trust.test.ts",
+      "files": [
+        "independent/project-trust.test.ts"
+      ]
+    }
+  ],
+  "scenario": "scenario.json",
+  "rules": [
+    {
+      "type": "independent_tests_pass"
+    }
+  ]
+}

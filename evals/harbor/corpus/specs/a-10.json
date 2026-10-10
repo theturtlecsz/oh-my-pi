@@ -1,0 +1,18 @@
+{
+  "task_id": "a-10",
+  "category": "localized_bug",
+  "title": "Extract ECC advisor trial transcript and notes from a completed run",
+  "source_commit": "d254ae25766620aa526725d97ed440090a695186",
+  "test_target": "session-system/tests/ecc-advisor-trial-extract.test.ts",
+  "runner": "bun",
+  "source_paths": [
+    "packages/coding-agent/src/advisor/advise-tool.ts",
+    "scripts/ecc-advisor-trial/extract.ts"
+  ],
+  "instruction": "I run the ECC database advisor trial and end up with a run directory that I need to turn into a reviewable record. Extract the advisor's delivered notes from the run, separate the ones that were delivered from the ones that were suppressed, errored, or never matched a call, and refuse the run when it is incomplete, exits non-zero, or is ambiguous. A completed run with no advise call is valid and yields zero findings. The command must write nothing to the output path when it refuses a run, and its exit code must reflect that refusal.",
+  "acceptance_criteria": [
+    "delivered notes are separated from suppressed, errored, and unmatched calls",
+    "an exit-code, incomplete, or ambiguous run is refused without writing to the output path",
+    "the command exits 1 on a refused run and 0 on a completed one"
+  ]
+}

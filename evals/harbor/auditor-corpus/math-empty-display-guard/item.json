@@ -1,0 +1,20 @@
+{
+  "item_id": "math-empty-display-guard",
+  "category": "boundary",
+  "task": "mathSpanAt must reject an all-whitespace display span such as '$$ $$'.",
+  "acceptance_criteria": [
+    "mathSpanAt('$$ $$', 0) is undefined"
+  ],
+  "defects": [
+    {
+      "path": "packages/utils/src/math-delimiters.ts",
+      "line_start": 86,
+      "line_end": null,
+      "severity": "MEDIUM"
+    }
+  ],
+  "exposing_test": {
+    "runner": "bun",
+    "target": "packages/utils/test/math-delimiters.test.ts"
+  }
+}

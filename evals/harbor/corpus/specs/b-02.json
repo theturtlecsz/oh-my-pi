@@ -1,0 +1,20 @@
+{
+  "task_id": "b-02",
+  "category": "security_concurrency",
+  "title": "Graph recall slows to a crawl on densely linked memory banks",
+  "source_commit": "adf27b52c73dcadca321646e556c506c72ae77a6",
+  "runner": "bun",
+  "test_target": "packages/mnemopi/test/recall-feature-wiring.test.ts",
+  "source_paths": [
+    "packages/mnemopi/src/core/beam/consolidate.ts",
+    "packages/mnemopi/src/core/beam/recall.ts",
+    "packages/mnemopi/src/core/episodic-graph.ts",
+    "packages/mnemopi/src/core/polyphonic-recall.ts"
+  ],
+  "instruction": "After I turned on proactive linking, memory recall takes seconds on banks where many memories share an entity. The graph part of polyphonic recall seems to walk every linked memory, so the work grows much faster than the bank. It also returns far more memories than I ever use. Bound the graph walk so dense banks cost about the same as sparse ones. While you are in there: when the consolidated facts backfill fails once (for example on a busy database), it is never tried again, and nothing is logged. Also, the enhanced recall call should give me the number of rows I asked for, not fewer because of a token budget.",
+  "acceptance_criteria": [
+    "The graph voice of polyphonic recall reads a bounded number of seeds, edges and memories per call, with one batched edge query per hop. polyphonic-recall exports GRAPH_VOICE_MAX_DEPTH (hops) and GRAPH_VOICE_MAX_RESULTS (memories reported).",
+    "A failed consolidated-facts backfill is retried on a later call and the failure is logged.",
+    "recallEnhanced returns up to topK rows without a token budget cut."
+  ]
+}

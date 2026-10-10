@@ -1,0 +1,17 @@
+{
+  "task_id": "a-07",
+  "category": "difficult_debugging",
+  "title": "Break stats ingest-order birth-time ties by path",
+  "source_commit": "d5e04e38c03231350b21291ed6510148b9dd5d6b",
+  "test_target": "packages/stats/test/ingest-order.test.ts",
+  "runner": "bun",
+  "source_paths": [
+    "packages/stats/src/aggregator.ts"
+  ],
+  "instruction": "Per-session attribution in `omp stats` flips when two session files are created in the same kernel clock tick. The ingest order sorts files by tier and birth time, but when those tie it falls back to the directory listing position, which is unrelated to creation order, so a fork can land before its parent and claim entries it copied. Session files are named `<timestamp>_<id>.jsonl`, so the file path is the creation order. Break the tie by path instead, so a fork created in the same tick stays behind its parent and the parent keeps ownership. The existing tier order must not change.",
+  "acceptance_criteria": [
+    "the parent keeps ownership of copied entries when the parent was created first",
+    "the parent keeps ownership of copied entries when the fork was created first",
+    "files created in the same clock tick order by path, not by directory listing position"
+  ]
+}

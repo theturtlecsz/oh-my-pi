@@ -1,0 +1,1 @@
+In the review command I pick a specific pull request, then search the open pull requests by text. When the GitHub search call fails (for example when it is rate limited), the whole picker ends and I have to start again. After a failed search I want to stay in the picker, see the list I had before, and still be able to choose a pull request.

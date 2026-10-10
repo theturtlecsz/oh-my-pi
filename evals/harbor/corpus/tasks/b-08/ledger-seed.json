@@ -1,0 +1,23 @@
+{
+  "project": {
+    "project_id": "00000000-0000-7000-8000-0000000000b1",
+    "name": "The Bookends",
+    "kind": "surface"
+  },
+  "items": [
+    {
+      "key": "OMP-1",
+      "work_id": "00000000-0000-7000-8000-000000000001",
+      "revision_id": "00000000-0000-7000-8000-000000000010",
+      "revision_number": 1,
+      "title": "Cursor model prices come from a scraped web page instead of the rate card",
+      "description": "Cursor model discovery downloads cursor.com's pricing page at run time and parses its table to price each model. The page layout changes without notice, discovery needs the network for prices, and the result can differ from what building the same model from the catalog rules gives. Move to the rate card that the catalog rules already hold: price each lane from the rule data, scale base-class rows by the declared multiplier, fall back to the bundled row, and leave a lane unpriced when nothing covers it. Discovery and model building must agree on every lane.",
+      "scope": "initial/scope",
+      "acceptance_criteria": [
+        "Discovery makes no pricing request and prices rich lanes from the rule rate card.",
+        "A lane that no rule or bundled row covers stays unpriced, and building a discovered lane never changes its cost."
+      ],
+      "state": "IN_PROGRESS"
+    }
+  ]
+}

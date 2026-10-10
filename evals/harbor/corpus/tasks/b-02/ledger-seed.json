@@ -1,0 +1,24 @@
+{
+  "project": {
+    "project_id": "00000000-0000-7000-8000-0000000000b1",
+    "name": "The Bookends",
+    "kind": "surface"
+  },
+  "items": [
+    {
+      "key": "OMP-1",
+      "work_id": "00000000-0000-7000-8000-000000000001",
+      "revision_id": "00000000-0000-7000-8000-000000000010",
+      "revision_number": 1,
+      "title": "Graph recall slows to a crawl on densely linked memory banks",
+      "description": "After I turned on proactive linking, memory recall takes seconds on banks where many memories share an entity. The graph part of polyphonic recall seems to walk every linked memory, so the work grows much faster than the bank. It also returns far more memories than I ever use. Bound the graph walk so dense banks cost about the same as sparse ones. While you are in there: when the consolidated facts backfill fails once (for example on a busy database), it is never tried again, and nothing is logged. Also, the enhanced recall call should give me the number of rows I asked for, not fewer because of a token budget.",
+      "scope": "initial/scope",
+      "acceptance_criteria": [
+        "The graph voice of polyphonic recall reads a bounded number of seeds, edges and memories per call, with one batched edge query per hop. polyphonic-recall exports GRAPH_VOICE_MAX_DEPTH (hops) and GRAPH_VOICE_MAX_RESULTS (memories reported).",
+        "A failed consolidated-facts backfill is retried on a later call and the failure is logged.",
+        "recallEnhanced returns up to topK rows without a token budget cut."
+      ],
+      "state": "IN_PROGRESS"
+    }
+  ]
+}

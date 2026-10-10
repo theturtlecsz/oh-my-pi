@@ -1,0 +1,13 @@
+diff --git b/packages/utils/src/math-delimiters.ts a/packages/utils/src/math-delimiters.ts
+index aa4ed0a0c9..fae0da5d6b 100644
+--- b/packages/utils/src/math-delimiters.ts
++++ a/packages/utils/src/math-delimiters.ts
+@@ -34,7 +34,7 @@ export interface MathBlock {
+ // grammar below. `\r?\n` at each line boundary keeps the grammar CRLF-safe for
+ // direct callers; marked-fed renderers already normalize line endings first.
+ const MATH_BLOCK_DOLLAR = /^ {0,3}\$\$[ \t]*\r?\n([\s\S]+?)\r?\n {0,3}\$\$[ \t]*(?:\r?\n|$)/;
+-const MATH_BLOCK_BRACKET = /^ {0,3}\\\[[ \t]*\n([\s\S]+?)\r?\n {0,3}\\\][ \t]*(?:\r?\n|$)/;
++const MATH_BLOCK_BRACKET = /^ {0,3}\\\[[ \t]*\r?\n([\s\S]+?)\r?\n {0,3}\\\][ \t]*(?:\r?\n|$)/;
+ 
+ /**
+  * Leftmost offset at or after `from` where an opener could begin. A scan hint,

@@ -1,0 +1,23 @@
+{
+  "project": {
+    "project_id": "00000000-0000-7000-8000-0000000000b1",
+    "name": "The Bookends",
+    "kind": "surface"
+  },
+  "items": [
+    {
+      "key": "OMP-1",
+      "work_id": "00000000-0000-7000-8000-000000000001",
+      "revision_id": "00000000-0000-7000-8000-000000000010",
+      "revision_number": 1,
+      "title": "Refuse an occupied destination when preparing an ECC advisor trial",
+      "description": "I use the ECC advisor trial prepare tool to stage a case into a work tree. If something already sits at the destination path, the tool removes it and replaces it without asking. I lost a staged worktree that way. Preparing a case has to refuse an occupied destination and tell me to clean it up myself, and an existing worktree registration for that path counts as occupied too.",
+      "scope": "initial/scope",
+      "acceptance_criteria": [
+        "preparing a case at an occupied destination fails instead of overwriting it",
+        "an existing worktree registration for the destination path is treated as occupied"
+      ],
+      "state": "IN_PROGRESS"
+    }
+  ]
+}

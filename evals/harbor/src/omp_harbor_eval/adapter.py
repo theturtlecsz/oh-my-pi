@@ -982,7 +982,8 @@ class RpcAdapter:
                     self._fire_kill()
                 if self._killed.is_set() and not self._restarted:
                     return self._restart_and_wait()
-            assert self._deadline is not None
+            if self._deadline is None:
+                raise AssertionError
             remaining = self._deadline - time.monotonic()
             if remaining <= 0:
                 reason = f"timed out after {self._timeout_s}s waiting for the agent to end"

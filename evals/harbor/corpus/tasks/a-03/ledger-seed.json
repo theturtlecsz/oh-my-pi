@@ -1,0 +1,24 @@
+{
+  "project": {
+    "project_id": "00000000-0000-7000-8000-0000000000b1",
+    "name": "The Bookends",
+    "kind": "surface"
+  },
+  "items": [
+    {
+      "key": "OMP-1",
+      "work_id": "00000000-0000-7000-8000-000000000001",
+      "revision_id": "00000000-0000-7000-8000-000000000010",
+      "revision_number": 1,
+      "title": "Block a stopped prompt at before_agent_start in the workflow stop gate",
+      "description": "Our workflow stop gate holds a session while the workspace stop is engaged, but prompts that never pass through the normal input path (host resume, the `.` and `c` shortcuts, RPC `/`) still start a turn. I want a stopped workspace to refuse those prompts at before_agent_start, before the turn begins, by reading the stop status directly. The read must not change poll state, notify, or abort. While the first poll is still pending and the workspace is stopped, the prompt is blocked. When the read throws or rejects, fall back to the last settled poll: block if that poll is stopped, otherwise allow the prompt.",
+      "scope": "initial/scope",
+      "acceptance_criteria": [
+        "a stopped read blocks the prompt even while the first poll is pending",
+        "a released read allows the prompt",
+        "a failed read blocks only when the last settled poll is stopped"
+      ],
+      "state": "IN_PROGRESS"
+    }
+  ]
+}

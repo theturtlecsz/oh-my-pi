@@ -1,0 +1,23 @@
+{
+  "project": {
+    "project_id": "00000000-0000-7000-8000-0000000000b1",
+    "name": "The Bookends",
+    "kind": "surface"
+  },
+  "items": [
+    {
+      "key": "OMP-1",
+      "work_id": "00000000-0000-7000-8000-000000000001",
+      "revision_id": "00000000-0000-7000-8000-000000000010",
+      "revision_number": 1,
+      "title": "The PR picker of the review command closes when a search fails",
+      "description": "In the review command I pick a specific pull request, then search the open pull requests by text. When the GitHub search call fails (for example when it is rate limited), the whole picker ends and I have to start again. After a failed search I want to stay in the picker, see the list I had before, and still be able to choose a pull request.",
+      "scope": "initial/scope",
+      "acceptance_criteria": [
+        "A failed search leaves the picker open on the previous list.",
+        "The user can still select a pull request after the failure and the review continues for it."
+      ],
+      "state": "IN_PROGRESS"
+    }
+  ]
+}

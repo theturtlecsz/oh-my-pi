@@ -1,0 +1,23 @@
+{
+  "project": {
+    "project_id": "00000000-0000-7000-8000-0000000000b1",
+    "name": "The Bookends",
+    "kind": "surface"
+  },
+  "items": [
+    {
+      "key": "OMP-1",
+      "work_id": "00000000-0000-7000-8000-000000000001",
+      "revision_id": "00000000-0000-7000-8000-000000000010",
+      "revision_number": 1,
+      "title": "Cursor turns that stop early are not continued like other providers",
+      "description": "With Cursor models, a turn that ends early after tools ran is reported as a plain failure. Other providers get an automatic continuation in the same situation. Cursor should be treated the same way when its stream ends early.",
+      "scope": "initial/scope",
+      "acceptance_criteria": [
+        "A Cursor stream that ends early is classed as a retriable transport failure like the other providers.",
+        "Replay-unsafe turns are not replayed."
+      ],
+      "state": "IN_PROGRESS"
+    }
+  ]
+}

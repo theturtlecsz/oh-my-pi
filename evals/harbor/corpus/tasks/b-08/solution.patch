@@ -1,0 +1,486 @@
+diff --git a/packages/catalog/src/discovery/cursor.ts b/packages/catalog/src/discovery/cursor.ts
+index a522b845db..deb4c26857 100644
+--- a/packages/catalog/src/discovery/cursor.ts
++++ b/packages/catalog/src/discovery/cursor.ts
+@@ -28,9 +28,6 @@ import { create, fromBinary, toBinary, type MessageCodec, type ProtoMessage } fr
+ 
+ const DEFAULT_CONTEXT_WINDOW = 200_000;
+ const DEFAULT_MAX_TOKENS = 64_000;
+-const CURSOR_PRICING_URL = "https://cursor.com/docs/models-and-pricing.md";
+-const CURSOR_PRICING_MAX_LENGTH = 256 * 1024;
+-const CURSOR_PRICING_TIMEOUT_MS = 2_000;
+ 
+ /**
+  * `GetUsableModels` carries no context-window field, so the 1M ceiling is
+@@ -86,8 +83,6 @@ export interface CursorModelDiscoveryOptions {
+ 	timeoutMs?: number;
+ 	/** Optional list of custom Cursor model ids to include in request context. */
+ 	customModelIds?: string[];
+-	/** Optional first-party pricing document URL override. */
+-	pricingUrl?: string;
+ }
+ 
+ /**
+@@ -96,7 +91,9 @@ export interface CursorModelDiscoveryOptions {
+  *   capabilities, aliases, and cost-multiplier metadata.
+  * - `GetUsableModels` supplies the exact legacy wire slugs the account can run.
+  * - `GetDefaultModelForCli` identifies the account's current default.
+- * - Cursor's first-party pricing document supplies current per-token rates.
++ *
++ * Per-token rates come from the reviewed `providers/cursor.kdl` rate card and
++ * the bundled rows; discovery only scales them by a variant's declared multiplier.
+  *
+  * Returns `null` unless at least one model-list RPC (`GetUsableModels` or
+  * `AvailableModels`) decoded. A successful empty catalog returns `[]`,
+@@ -107,7 +104,6 @@ export async function fetchCursorUsableModels(
+ ): Promise<ModelSpec<"cursor-agent">[] | null> {
+ 	const timeoutMs = options.timeoutMs ?? 5_000;
+ 	const baseUrl = (options.baseUrl ?? CURSOR_DEFAULT_BASE_URL).replace(/\/+$/, "");
+-	const pricingUrl = options.pricingUrl ?? (baseUrl === CURSOR_DEFAULT_BASE_URL ? CURSOR_PRICING_URL : undefined);
+ 	const usableRequest = create(GetUsableModelsRequestSchema, {
+ 		customModelIds: normalizeCustomModelIds(options.customModelIds),
+ 	});
+@@ -119,7 +115,7 @@ export async function fetchCursorUsableModels(
+ 	});
+ 	const defaultRequest = create(GetDefaultModelForCliRequestSchema, {});
+ 
+-	const [usablePayload, availablePayload, defaultPayload, pricing] = await Promise.all([
++	const [usablePayload, availablePayload, defaultPayload] = await Promise.all([
+ 		fetchCursorUnary(
+ 			baseUrl,
+ 			CURSOR_GET_USABLE_MODELS_PATH,
+@@ -141,9 +137,6 @@ export async function fetchCursorUsableModels(
+ 			options,
+ 			timeoutMs,
+ 		),
+-		pricingUrl === undefined
+-			? Promise.resolve<CursorPricingCatalog | undefined>(undefined)
+-			: fetchCursorPricingCatalog(pricingUrl, Math.min(timeoutMs, CURSOR_PRICING_TIMEOUT_MS)),
+ 	]);
+ 	const usable = decodeUnary(GetUsableModelsResponseSchema, usablePayload);
+ 	const available = decodeUnary(AvailableModelsResponseSchema, availablePayload);
+@@ -156,7 +149,7 @@ export async function fetchCursorUsableModels(
+ 	const legacyModels =
+ 		parsedUsable instanceof type.errors
+ 			? []
+-			: normalizeCursorModels(parsedUsable.models, options.baseUrl, references, pricing);
++			: normalizeCursorModels(parsedUsable.models, options.baseUrl, references);
+ 	const usableModelIds = usable === null ? undefined : new Set(legacyModels.map(model => model.id));
+ 	if (!available || available.models.length === 0) return legacyModels;
+ 	const richModels = normalizeRichCursorModels(
+@@ -164,7 +157,6 @@ export async function fetchCursorUsableModels(
+ 		usableModelIds,
+ 		options.baseUrl,
+ 		references,
+-		pricing,
+ 		defaultModel?.modelId,
+ 		defaultModel?.maxMode,
+ 	);
+@@ -295,186 +287,6 @@ function createCursorReferenceMap(): Map<string, ModelSpec<"cursor-agent">> {
+ 	return references;
+ }
+ 
+-type CursorPricingCatalog = ReadonlyMap<string, TokenCost>;
+-
+-interface CursorPricingFlags {
+-	fast?: boolean;
+-	longContext?: boolean;
+-}
+-interface CursorPricingColumns {
+-	model: number;
+-	input: number;
+-	cacheWrite: number;
+-	cacheRead: number;
+-	output: number;
+-}
+-
+-const CURSOR_NON_PRICING_VARIANT_TOKENS = new Set([
+-	"high",
+-	"low",
+-	"max",
+-	"medium",
+-	"minimal",
+-	"standard",
+-	"thinking",
+-	"xhigh",
+-]);
+-
+-async function fetchCursorPricingCatalog(url: string, timeoutMs: number): Promise<CursorPricingCatalog | undefined> {
+-	try {
+-		const response = await fetch(url, {
+-			signal: AbortSignal.timeout(timeoutMs),
+-		});
+-		if (!response.ok) return undefined;
+-		const declaredLength = Number(response.headers.get("content-length"));
+-		if (Number.isFinite(declaredLength) && declaredLength > CURSOR_PRICING_MAX_LENGTH) return undefined;
+-		const markdown = await response.text();
+-		if (markdown.length > CURSOR_PRICING_MAX_LENGTH) return undefined;
+-		return parseCursorPricingCatalog(markdown);
+-	} catch {
+-		return undefined;
+-	}
+-}
+-
+-function parseCursorPricingCatalog(markdown: string): CursorPricingCatalog | undefined {
+-	const costs = new Map<string, TokenCost>();
+-	const ambiguousKeys = new Set<string>();
+-	const lines = markdown.split("\n");
+-	let lineIndex = 0;
+-	while (lineIndex < lines.length - 1) {
+-		const header = parseMarkdownTableRow(lines[lineIndex]);
+-		const separator = parseMarkdownTableRow(lines[lineIndex + 1]);
+-		const columns = header ? cursorPricingColumns(header) : undefined;
+-		if (!columns || !separator || !isMarkdownTableDivider(separator, header?.length ?? 0)) {
+-			lineIndex++;
+-			continue;
+-		}
+-
+-		lineIndex += 2;
+-		while (lineIndex < lines.length) {
+-			const cells = parseMarkdownTableRow(lines[lineIndex]);
+-			if (!cells || isMarkdownTableDivider(cells, cells.length) || cursorPricingColumns(cells)) break;
+-			lineIndex++;
+-
+-			const input = parseCursorPrice(cells[columns.input]);
+-			const cacheWrite = parseCursorPrice(cells[columns.cacheWrite]);
+-			const cacheRead = parseCursorPrice(cells[columns.cacheRead]);
+-			const output = parseCursorPrice(cells[columns.output]);
+-			if (input === undefined || cacheWrite === undefined || cacheRead === undefined || output === undefined)
+-				continue;
+-			const key = cursorPricingLookupKey(cells[columns.model] ?? "");
+-			if (!key || ambiguousKeys.has(key)) continue;
+-			const cost = { input, output, cacheRead, cacheWrite };
+-			const existing = costs.get(key);
+-			if (existing && !equalTokenCost(existing, cost)) {
+-				costs.delete(key);
+-				ambiguousKeys.add(key);
+-			} else {
+-				costs.set(key, cost);
+-			}
+-		}
+-	}
+-	return costs.size > 0 ? costs : undefined;
+-}
+-
+-function parseMarkdownTableRow(line: string | undefined): string[] | undefined {
+-	const trimmed = line?.trim();
+-	if (!trimmed?.startsWith("|") || !trimmed.endsWith("|")) return undefined;
+-	return trimmed
+-		.slice(1, -1)
+-		.split("|")
+-		.map(cell => cell.trim());
+-}
+-
+-function cursorPricingColumns(header: readonly string[]): CursorPricingColumns | undefined {
+-	const normalized = header.map(cell =>
+-		cell
+-			.replace(/\*\*/g, "")
+-			.toLowerCase()
+-			.replace(/[^a-z]+/g, " ")
+-			.trim(),
+-	);
+-	const columns = {
+-		model: normalized.indexOf("model"),
+-		input: normalized.indexOf("input"),
+-		cacheWrite: normalized.indexOf("cache write"),
+-		cacheRead: normalized.indexOf("cache read"),
+-		output: normalized.indexOf("output"),
+-	};
+-	return Object.values(columns).every(index => index >= 0) ? columns : undefined;
+-}
+-
+-function isMarkdownTableDivider(cells: readonly string[], expectedLength: number): boolean {
+-	return cells.length === expectedLength && cells.every(cell => /^:?-{3,}:?$/.test(cell));
+-}
+-
+-function parseCursorPrice(value: string | undefined): number | undefined {
+-	const normalized = value?.trim();
+-	if (!normalized) return undefined;
+-	if (normalized === "-" || normalized === "—") return 0;
+-	const match = /^\$?(\d+(?:\.\d+)?)$/.exec(normalized.replace(/,/g, ""));
+-	if (!match?.[1]) return undefined;
+-	const price = Number(match[1]);
+-	return Number.isFinite(price) ? price : undefined;
+-}
+-
+-function cursorPricingLookupKey(label: string, flags: CursorPricingFlags = {}): string | undefined {
+-	const link = /^\[([^\]]+)\]\([^)]+\)$/.exec(label.trim());
+-	const normalized = (link?.[1] ?? label)
+-		.replace(/\u200b/g, "")
+-		.replace(/\(\s*fast(?:\s+mode)?\s*\)/gi, " fast ")
+-		.replace(/\*\*/g, "")
+-		.toLowerCase()
+-		.replace(/[^a-z0-9]+/g, " ")
+-		.trim();
+-	if (!normalized) return undefined;
+-	const rawTokens = normalized.split(/\s+/);
+-	const fast = flags.fast ?? rawTokens.includes("fast");
+-	const longContext = flags.longContext ?? rawTokens.includes("1m");
+-	const tokens = rawTokens.filter(
+-		(token, index) =>
+-			!(index === 0 && token === "cursor") &&
+-			token !== "fast" &&
+-			token !== "1m" &&
+-			!(longContext && token === "context") &&
+-			!CURSOR_NON_PRICING_VARIANT_TOKENS.has(token),
+-	);
+-	if (tokens.length === 0) return undefined;
+-	return `${tokens.sort().join("-")}\u0000fast=${fast}\u0000long=${longContext}`;
+-}
+-
+-function equalTokenCost(left: TokenCost, right: TokenCost): boolean {
+-	return (
+-		left.input === right.input &&
+-		left.output === right.output &&
+-		left.cacheRead === right.cacheRead &&
+-		left.cacheWrite === right.cacheWrite
+-	);
+-}
+-
+-function copyTokenCost(cost: TokenCost): TokenCost {
+-	return {
+-		input: cost.input,
+-		output: cost.output,
+-		cacheRead: cost.cacheRead,
+-		cacheWrite: cost.cacheWrite,
+-	};
+-}
+-
+-function resolveCursorDocumentCost(
+-	pricing: CursorPricingCatalog | undefined,
+-	candidates: readonly string[],
+-	flags: CursorPricingFlags = {},
+-): TokenCost | undefined {
+-	if (!pricing) return undefined;
+-	for (const candidate of candidates) {
+-		const key = cursorPricingLookupKey(candidate, flags);
+-		const cost = key ? pricing.get(key) : undefined;
+-		if (cost) return copyTokenCost(cost);
+-	}
+-	return undefined;
+-}
+-
+ function decodeUnary<TMessage extends ProtoMessage>(
+ 	schema: MessageCodec<TMessage>,
+ 	payload: Uint8Array | null,
+@@ -580,27 +392,6 @@ const CURSOR_REASONING_PARAMETER_IDS = new Set([
+ 	"thinking_effort",
+ ]);
+ 
+-function cursorRichPricingCandidates(details: AvailableModelsResponse_ModelDetails): string[] {
+-	return [
+-		details.name,
+-		details.clientDisplayName,
+-		details.serverModelName,
+-		details.inputboxShortModelName,
+-		...details.legacySlugs,
+-		...details.idAliases,
+-	].filter((candidate): candidate is string => typeof candidate === "string" && candidate.trim().length > 0);
+-}
+-
+-function cursorPricingFlags(parameters: readonly { id: string; value: string }[]): CursorPricingFlags {
+-	const fastValue = parameters.find(parameter => parameter.id === "fast")?.value.toLowerCase();
+-	const contextValue = parameters.find(parameter => parameter.id === "context")?.value;
+-	const contextWindow = parseCursorContextWindow(contextValue);
+-	return {
+-		...(fastValue === undefined ? undefined : { fast: fastValue === "true" }),
+-		...(contextWindow === undefined ? undefined : { longContext: contextWindow >= CURSOR_1M_CONTEXT_WINDOW }),
+-	};
+-}
+-
+ /** The declared definition value a variant parameter selects, when Cursor defines one. */
+ function cursorParameterValue(
+ 	details: AvailableModelsResponse_ModelDetails,
+@@ -654,32 +445,14 @@ function scaleTokenCost(cost: TokenCost, multiplier: number): TokenCost {
+ 	};
+ }
+ 
+-function resolveRichCursorCost(
+-	pricing: CursorPricingCatalog | undefined,
+-	details: AvailableModelsResponse_ModelDetails,
+-	entry: NormalizedRichVariant,
+-): TokenCost | undefined {
+-	const candidates = cursorRichPricingCandidates(details);
+-	const flags = cursorPricingFlags(entry.parameters);
+-	const exact = resolveCursorDocumentCost(pricing, candidates, flags);
+-	if (exact) return exact;
+-	if (flags.fast === true && flags.longContext === true) {
+-		const fast = resolveCursorDocumentCost(pricing, candidates, { fast: true, longContext: false });
+-		if (fast) return fast;
+-	}
+-	const base =
+-		resolveCursorDocumentCost(pricing, candidates, { fast: false, longContext: flags.longContext }) ??
+-		resolveCursorDocumentCost(pricing, candidates, { fast: false, longContext: false });
+-	if (!base) return undefined;
+-	return scaleTokenCost(base, cursorVariantCostMultiplier(details, entry));
+-}
+-
+ /**
+  * Price a rich variant from the reviewed `providers/cursor.kdl` rate card,
+  * which keys on Cursor wire slugs (`claude-opus-4-8-high`, `gpt-5.4`). Cursor
+  * bills per price class — the values of the model's cost-bearing parameters
+  * (`fast`, `context`) — not per effort or thinking toggle, so every slug in
+- * the variant's own class shares its price. Multiplier rule:
++ * the variant's own class shares its price. The lane id leads the own-class
++ * slugs: `buildModel` later resolves the same card by lane id, so a lane-keyed
++ * `cost-patch` must win here too or the two would disagree. Multiplier rule:
+  * - `cost-patch` on an own-class slug is that class's reviewed price and is
+  *   final, even for fast classes (`claude-opus-4-7-high-fast` $30/$150);
+  * - `cost-fallback` rows, and any base-class slug or the model name, carry the
+@@ -688,6 +461,7 @@ function resolveRichCursorCost(
+ function resolveRichCursorCardCost(
+ 	details: AvailableModelsResponse_ModelDetails,
+ 	entry: NormalizedRichVariant,
++	laneId: string,
+ ): TokenCost | undefined {
+ 	const costAxes = details.parameterDefinitions
+ 		.filter(definition =>
+@@ -700,7 +474,7 @@ function resolveRichCursorCardCost(
+ 	const priceClass = (parameters: readonly { id: string; value: string }[]): string =>
+ 		costAxes.map(id => parameters.find(parameter => parameter.id === id)?.value ?? "").join("\u0000");
+ 	const entryClass = priceClass(entry.parameters);
+-	const ownSlugs = [entry.id];
++	const ownSlugs = [laneId, entry.id];
+ 	const baseSlugs = [details.name.trim()];
+ 	for (const variant of details.variants) {
+ 		const slug = variant.legacySlug?.trim();
+@@ -756,27 +530,11 @@ function resolveCursorCardAxes(slug: string): { patch?: TokenCost; fallback?: To
+ 	return { patch: card(axes.costPatch), fallback: card(axes.costFallback) };
+ }
+ 
+-function resolveLegacyCursorCost(
+-	pricing: CursorPricingCatalog | undefined,
+-	details: CursorModelDetailsValue,
+-	id: string,
+-): TokenCost | undefined {
+-	const candidates = [
+-		id,
+-		details.displayName,
+-		details.displayNameShort,
+-		details.displayModelId,
+-		...details.aliases,
+-	].filter((candidate): candidate is string => typeof candidate === "string" && candidate.trim().length > 0);
+-	return resolveCursorDocumentCost(pricing, candidates);
+-}
+-
+ function normalizeRichCursorModels(
+ 	models: readonly AvailableModelsResponse_ModelDetails[],
+ 	usableModelIds: ReadonlySet<string> | undefined,
+ 	baseUrlOverride: string | undefined,
+ 	references: Map<string, ModelSpec<"cursor-agent">>,
+-	pricing: CursorPricingCatalog | undefined,
+ 	defaultModelId: string | undefined,
+ 	defaultMaxMode: boolean | undefined,
+ ): ModelSpec<"cursor-agent">[] {
+@@ -835,7 +593,6 @@ function normalizeRichCursorModels(
+ 					laneName,
+ 					baseUrlOverride,
+ 					references,
+-					pricing,
+ 					defaultModelId,
+ 					defaultMaxMode,
+ 				),
+@@ -976,7 +733,6 @@ function buildRichCursorLane(
+ 	laneName: string,
+ 	baseUrlOverride: string | undefined,
+ 	references: Map<string, ModelSpec<"cursor-agent">>,
+-	pricing: CursorPricingCatalog | undefined,
+ 	defaultModelId: string | undefined,
+ 	defaultMaxMode: boolean | undefined,
+ ): ModelSpec<"cursor-agent">[] {
+@@ -1058,18 +814,17 @@ function buildRichCursorLane(
+ 				: entry.effort !== undefined || isThinkingToggle(entry)
+ 					? true
+ 					: (details.supportsThinking ?? reference?.reasoning ?? false);
+-		// Price precedence: Cursor's live document, then the reviewed KDL rate
+-		// card by wire slug, then the member's own bundled reference (a sibling
+-		// reference carries the base card, so it takes the declared multiplier);
+-		// zero only when none knows the price.
++		// Price precedence: the reviewed KDL rate card by lane id and wire slug,
++		// then the member's own bundled reference (a sibling reference carries
++		// the base card, so it takes the declared multiplier); zero only when
++		// neither knows the price.
+ 		const referenceCost =
+ 			reference && (reference.cost.input !== 0 || reference.cost.output !== 0)
+ 				? reference === references.get(entry.id)
+ 					? reference.cost
+ 					: scaleTokenCost(reference.cost, cursorVariantCostMultiplier(details, entry))
+ 				: undefined;
+-		const cost = resolveRichCursorCost(pricing, details, entry) ??
+-			resolveRichCursorCardCost(details, entry) ??
++		const cost = resolveRichCursorCardCost(details, entry, laneId) ??
+ 			referenceCost ?? {
+ 				input: 0,
+ 				output: 0,
+@@ -1249,7 +1004,6 @@ function normalizeCursorModels(
+ 	models: readonly unknown[] | undefined,
+ 	baseUrlOverride: string | undefined,
+ 	references: Map<string, ModelSpec<"cursor-agent">>,
+-	pricing: CursorPricingCatalog | undefined,
+ ): ModelSpec<"cursor-agent">[] {
+ 	if (!models || models.length === 0) {
+ 		return [];
+@@ -1257,7 +1011,7 @@ function normalizeCursorModels(
+ 
+ 	const byId = new Map<string, ModelSpec<"cursor-agent">>();
+ 	for (const model of models) {
+-		const normalized = normalizeCursorModel(model, baseUrlOverride, references, pricing);
++		const normalized = normalizeCursorModel(model, baseUrlOverride, references);
+ 		if (!normalized) {
+ 			continue;
+ 		}
+@@ -1271,7 +1025,6 @@ function normalizeCursorModel(
+ 	model: unknown,
+ 	baseUrlOverride: string | undefined,
+ 	references: Map<string, ModelSpec<"cursor-agent">>,
+-	pricing: CursorPricingCatalog | undefined,
+ ): ModelSpec<"cursor-agent"> | null {
+ 	const parsedModel = CursorModelDetailsSchema(model);
+ 	if (parsedModel instanceof type.errors) {
+@@ -1296,12 +1049,6 @@ function normalizeCursorModel(
+ 		isCursorVersionedGrok(id) ||
+ 		Boolean(details.thinkingDetails) ||
+ 		reference?.reasoning === true;
+-	const cost = resolveLegacyCursorCost(pricing, details, id) ?? {
+-		input: 0,
+-		output: 0,
+-		cacheRead: 0,
+-		cacheWrite: 0,
+-	};
+ 
+ 	if (reference) {
+ 		return {
+@@ -1311,7 +1058,6 @@ function normalizeCursorModel(
+ 			baseUrl: baseUrlOverride ?? reference.baseUrl,
+ 			reasoning,
+ 			input: resolveCursorInput(id, reference.input),
+-			cost,
+ 			contextWindow: resolveCursorContextWindow(details, id, reference.contextWindow),
+ 			cursorMaxMode: details.maxMode,
+ 		};
+@@ -1324,7 +1070,7 @@ function normalizeCursorModel(
+ 		baseUrl: baseUrlOverride ?? CURSOR_DEFAULT_BASE_URL,
+ 		reasoning,
+ 		input: resolveCursorInput(id),
+-		cost,
++		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+ 		contextWindow: resolveCursorContextWindow(details, id, DEFAULT_CONTEXT_WINDOW),
+ 		maxTokens: DEFAULT_MAX_TOKENS,
+ 		cursorMaxMode: details.maxMode,
+diff --git a/packages/catalog/src/provider-models/cache-provider-id.ts b/packages/catalog/src/provider-models/cache-provider-id.ts
+index fc67fd79cb..649333d0fb 100644
+--- a/packages/catalog/src/provider-models/cache-provider-id.ts
++++ b/packages/catalog/src/provider-models/cache-provider-id.ts
+@@ -98,9 +98,9 @@ export function resolveModelCacheProviderId(providerId: string, options: ModelCa
+ 			// Cursor catalogs are entitlement-, admin-policy-, and privacy-mode
+ 			// scoped. A credential switch must never reuse another account's
+ 			// authoritative model rows.
+-			// v3 invalidates zero-price rows written before discovery joined
+-			// Cursor's first-party pricing document; v4 keys the scope on the
+-			// token's stable account subject instead of the rotating JWT.
++			// v3 invalidates zero-price rows written before rich lanes were priced
++			// from the KDL rate card; v4 keys the scope on the token's stable
++			// account subject instead of the rotating JWT.
+ 			const baseUrl = (options.baseUrl ?? CURSOR_DEFAULT_BASE_URL).replace(/\/+$/, "");
+ 			const apiKey = options.apiKey ?? "";
+ 			const scope = `${cursorCredentialSubject(apiKey) ?? apiKey}\u0000${baseUrl}`;

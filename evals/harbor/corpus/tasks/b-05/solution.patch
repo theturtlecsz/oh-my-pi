@@ -1,0 +1,75 @@
+diff --git a/packages/ai/src/providers/cursor.ts b/packages/ai/src/providers/cursor.ts
+index faf761626a..52b2508c5f 100644
+--- a/packages/ai/src/providers/cursor.ts
++++ b/packages/ai/src/providers/cursor.ts
+@@ -405,7 +405,6 @@ interface CursorRequestState {
+ 	conversationId: string;
+ 	blobStore: Map<string, Uint8Array>;
+ 	conversationState?: ConversationStateStructure;
+-	rotatedFresh?: boolean;
+ 	resume?: boolean;
+ }
+ 
+@@ -1114,6 +1113,11 @@ function streamCursorWithWireMode(
+ 				retryContext?.baseConversationId ?? options?.conversationId ?? options?.sessionId ?? crypto.randomUUID();
+ 			conversationId =
+ 				retryContext?.conversationId ?? rotatedConversationIds.get(baseConversationId) ?? baseConversationId;
++			// A freshly rotated id rebuilds from `context` alone: a mid-turn
++			// checkpoint cached under it would carry pendingToolCalls that re-poison
++			// the new conversation. The rebuilt history keeps every completed call
++			// and result, so the turn resumes where it stopped instead of replaying
++			// the last user message.
+ 			const rotatedFresh = retryContext ? false : freshRotatedConversationIds.has(conversationId);
+ 			activeBlobStore =
+ 				retryContext?.blobStore ?? conversationBlobStores.get(conversationId) ?? new Map<string, Uint8Array>();
+@@ -1129,7 +1133,6 @@ function streamCursorWithWireMode(
+ 					conversationId,
+ 					blobStore,
+ 					conversationState: cachedState,
+-					rotatedFresh,
+ 					resume: retryContext?.checkpoint !== undefined,
+ 				},
+ 				wireMode,
+@@ -6164,26 +6167,17 @@ async function buildGrpcRequestForWireMode(
+ 		storeCursorBlob(blobStore, new TextEncoder().encode(json)),
+ 	);
+ 
+-	const lastUserMessageIndex = findLastUserMessageIndex(context.messages);
+-	let activeUserMessageIndex = context.messages.length - 1;
+-	const activeMessage = context.messages[activeUserMessageIndex];
+-	let activeUserMessage =
+-		activeMessage?.role === "user" || activeMessage?.role === "developer" ? activeMessage : undefined;
+-	if (state.resume) {
+-		activeUserMessageIndex = -1;
+-		activeUserMessage = undefined;
+-	}
+-	if (state.rotatedFresh && !activeUserMessage && lastUserMessageIndex >= 0) {
+-		activeUserMessageIndex = lastUserMessageIndex;
+-		const lastUser = context.messages[lastUserMessageIndex];
+-		if (lastUser.role === "user" || lastUser.role === "developer") {
+-			activeUserMessage = lastUser;
+-		}
+-	}
++	// The trailing user/developer message rides in the action; anything else
++	// (trailing tool results, a checkpoint resume) is a resumeAction over the
++	// full history.
++	const lastMessage = context.messages.at(-1);
++	const activeUserMessage =
++		!state.resume && (lastMessage?.role === "user" || lastMessage?.role === "developer") ? lastMessage : undefined;
++	const historyEndIndex = activeUserMessage ? context.messages.length - 1 : -1;
+ 	let userContent: string | (TextContent | ImageContent)[] | undefined;
+ 	let userText = "";
+ 	let hasUserImages = false;
+-	if (activeUserMessage?.role === "user" || activeUserMessage?.role === "developer") {
++	if (activeUserMessage) {
+ 		userContent = activeUserMessage.content;
+ 		if (typeof userContent === "string") {
+ 			userText = userContent.trim();
+@@ -6192,7 +6186,6 @@ async function buildGrpcRequestForWireMode(
+ 			hasUserImages = hasImages(userContent);
+ 		}
+ 	}
+-	const historyEndIndex = activeUserMessage ? activeUserMessageIndex : -1;
+ 
+ 	const action = create(ConversationActionSchema, {
+ 		action:

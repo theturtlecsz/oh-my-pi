@@ -1,0 +1,20 @@
+{
+  "task_id": "a-13",
+  "category": "migration",
+  "title": "Port research component identity and campaign compatibility manifests",
+  "source_commit": "6affbad543a4517d65101af41a490497db28903d",
+  "test_target": "python/omp-work/tests/test_research_component_hash.py",
+  "runner": "pytest",
+  "source_paths": [
+    "python/omp-work/src/omp_work/contracts/v1/decisions/0010-research-component-identity-and-compatibility.md",
+    "python/omp-work/src/omp_work/contracts/v1/research-component-hash.json",
+    "python/omp-work/src/omp_work/operations/migrations/0027_research_component_identity.sql",
+    "python/omp-work/src/omp_work/research/__init__.py",
+    "python/omp-work/src/omp_work/v1/store_shared.py"
+  ],
+  "instruction": "We are porting the research component identity feature onto the record-only research contracts. Add a content-addressed research component descriptor and its hash vectors, and a schema migration that adds the workspace component registry and the campaign compatibility columns with immutability enforced. The component hash must be defined by the descriptor content, so the committed hash vectors must match what the implementation computes for each descriptor.",
+  "acceptance_criteria": [
+    "each descriptor's component hash equals the committed vector value",
+    "the migration adds the component registry and the campaign compatibility columns"
+  ]
+}

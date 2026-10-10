@@ -1,0 +1,265 @@
+diff --git a/packages/mnemopi/src/core/beam/consolidate.ts b/packages/mnemopi/src/core/beam/consolidate.ts
+index 621e9b5733..fd32976f48 100644
+--- a/packages/mnemopi/src/core/beam/consolidate.ts
++++ b/packages/mnemopi/src/core/beam/consolidate.ts
+@@ -1,4 +1,5 @@
+ import type { SQLQueryBindings } from "bun:sqlite";
++import { logger } from "@oh-my-pi/pi-utils";
+ import { polyphonicRecallEnabled } from "../../config";
+ import { generateId, stableMemoryId } from "../../util/ids";
+ import { aaakEncode } from "../aaak";
+@@ -379,8 +380,10 @@ function consolidateKgFact(
+ 			sourceMemoryVeracity(beam, sourceMemoryId),
+ 			sourceMemoryId,
+ 		);
+-	} catch {
+-		// Fact consolidation is an enrichment; the MEMORIA/KG rows above are already written.
++	} catch (error) {
++		// Fact consolidation is an enrichment; the MEMORIA/KG rows above are already written,
++		// and the next polyphonic engine built on this bank backfills the fact.
++		logger.warn("mnemopi: fact consolidation failed", { subject: cleanSubject, error: String(error) });
+ 	}
+ }
+ 
+diff --git a/packages/mnemopi/src/core/beam/recall.ts b/packages/mnemopi/src/core/beam/recall.ts
+index a6e163ca74..c3b66d7c43 100644
+--- a/packages/mnemopi/src/core/beam/recall.ts
++++ b/packages/mnemopi/src/core/beam/recall.ts
+@@ -1115,6 +1115,8 @@ async function polyphonicRecallEnhanced(
+ 		includeFacts: options.includeFacts === true,
+ 		baseline,
+ 		forcePolyphonic: true,
++		// `recallEnhanced` promises `topK` rows, not a token budget.
++		contextBudget: Number.POSITIVE_INFINITY,
+ 	});
+ 	const previewChars = options.contentPreviewChars ?? RECALL_CONTENT_PREVIEW_CHARS;
+ 	const results: RecallResult[] = [];
+diff --git a/packages/mnemopi/src/core/episodic-graph.ts b/packages/mnemopi/src/core/episodic-graph.ts
+index c8d0eeab92..312d25d357 100644
+--- a/packages/mnemopi/src/core/episodic-graph.ts
++++ b/packages/mnemopi/src/core/episodic-graph.ts
+@@ -450,6 +450,25 @@ export class EpisodicGraph {
+ 		}
+ 		return results;
+ 	}
++	/**
++	 * Edges touching any of `nodeIds` in one query, strongest first, at most `limit` rows.
++	 * Batched frontier expansion for bounded traversals; see {@link findRelatedMemories}
++	 * for the per-node walk.
++	 */
++	findEdgesTouching(nodeIds: readonly string[], edgeType: string, minWeight: number, limit: number): GraphEdge[] {
++		const max = Math.max(0, Math.trunc(limit));
++		if (nodeIds.length === 0 || max === 0) return [];
++		const placeholders = nodeIds.map(() => "?").join(", ");
++		const rows = this.db
++			.query(
++				`SELECT source, target, edge_type, weight, timestamp FROM graph_edges
++				 WHERE (source IN (${placeholders}) OR target IN (${placeholders})) AND edge_type = ? AND weight >= ?
++				 ORDER BY weight DESC, id
++				 LIMIT ?`,
++			)
++			.all(...nodeIds, ...nodeIds, edgeType, clampWeight(minWeight), max) as EdgeRow[];
++		return rows.map(edgeFromRow);
++	}
+ 	findFactsBySubject(subject: string): Fact[] {
+ 		const rows = this.db
+ 			.query("SELECT * FROM facts WHERE subject = ? ORDER BY confidence DESC, timestamp DESC")
+diff --git a/packages/mnemopi/src/core/polyphonic-recall.ts b/packages/mnemopi/src/core/polyphonic-recall.ts
+index 2d5a81daeb..56a811b4b1 100644
+--- a/packages/mnemopi/src/core/polyphonic-recall.ts
++++ b/packages/mnemopi/src/core/polyphonic-recall.ts
+@@ -1,4 +1,5 @@
+ import type { Database } from "bun:sqlite";
++import { logger } from "@oh-my-pi/pi-utils";
+ import { type Env, polyphonicRecallEnabled } from "../config";
+ import { closeQuietly, type DatabasePath, openDatabase } from "../db";
+ import { backfillConsolidatedFacts, ensureVeracityConsolidator } from "./beam/consolidate";
+@@ -51,6 +52,10 @@ export interface PolyphonicCallOptions {
+ 
+ export interface PolyphonicRecallOptions extends PolyphonicCallOptions {
+ 	readonly queryEmbedding?: readonly number[] | Float32Array | null;
++	/**
++	 * Approximate token budget for the returned rows (default 4000); rows past it are
++	 * dropped even below `topK`. `Infinity` disables the budget.
++	 */
+ 	readonly contextBudget?: number;
+ }
+ 
+@@ -120,6 +125,20 @@ const NEAR_DUPLICATE_JACCARD = 0.8;
+  * every result list with unrelated memories.
+  */
+ const VECTOR_VOICE_MIN_COSINE = 0.65;
++/**
++ * Graph voice bounds. Proactive linking makes banks dense (every memory sharing an
++ * entity links to every other), so an unbounded walk grows with the cube of the bank.
++ * The voice reports at most `MAX_DIRECT` entity matches, expands the `MAX_SEEDS`
++ * strongest of them and at most `MAX_FRONTIER` nodes per later hop, reads at most
++ * `MAX_EDGE_ROWS` edges per hop, and reports at most `MAX_RESULTS` memories in total.
++ */
++export const GRAPH_VOICE_MAX_DEPTH = 2;
++export const GRAPH_VOICE_MAX_DIRECT = 32;
++export const GRAPH_VOICE_MAX_SEEDS = 16;
++export const GRAPH_VOICE_MAX_FRONTIER = 32;
++export const GRAPH_VOICE_MAX_EDGE_ROWS = 512;
++export const GRAPH_VOICE_MAX_RESULTS = 64;
++const GRAPH_VOICE_MIN_EDGE_WEIGHT = 0.3;
+ 
+ /**
+  * Polyphonic recall gate: `MNEMOPI_POLYPHONIC_RECALL` wins when set, then the
+@@ -381,27 +400,30 @@ export class PolyphonicRecallEngine {
+ 		}
+ 		return [...byId.values()].sort((a, b) => b.score - a.score || a.memoryId.localeCompare(b.memoryId)).slice(0, 20);
+ 	}
++	/**
++	 * Memories whose gist or KG facts name a query entity (seeds), plus memories reached
++	 * from the strongest seeds over `ctx` edges. The walk is one multi-source BFS: each
++	 * node expands at most once, every hop is one batched edge query, and seeds, frontier,
++	 * edge rows and results are all capped, so dense proactively linked banks cost the
++	 * same bounded work as sparse ones.
++	 */
+ 	graphVoice(query: string): VoiceRecallResult[] {
+ 		if (envDisabled("MNEMOPI_VOICE_GRAPH")) return [];
+-		const results: VoiceRecallResult[] = [];
+-		const seedIds = new Set<string>();
++		const seeds = new Map<string, VoiceRecallResult>();
++		const addSeed = (hit: VoiceRecallResult): void => {
++			const existing = seeds.get(hit.memoryId);
++			if (existing === undefined || hit.score > existing.score) seeds.set(hit.memoryId, hit);
++		};
+ 		for (const entity of extractEntities(query)) {
+ 			for (const gist of this.graph.findGistsByParticipant(entity)) {
+ 				const memoryId = gist.id.startsWith("gist_") ? gist.id.slice(5) : gist.id;
+-				seedIds.add(memoryId);
+-				results.push({
+-					memoryId,
+-					score: 0.6,
+-					voice: "graph",
+-					metadata: { entity, gist: gist.text },
+-				});
++				addSeed({ memoryId, score: 0.6, voice: "graph", metadata: { entity, gist: gist.text } });
+ 			}
+ 			for (const fact of this.graph.findFactsBySubject(entity)) {
+ 				// Facts are graph nodes of their own; the memory they came from is what recall returns.
+ 				const memoryId = fact.memoryId ?? null;
+ 				if (memoryId === null || memoryId.length === 0) continue;
+-				seedIds.add(memoryId);
+-				results.push({
++				addSeed({
+ 					memoryId,
+ 					score: fact.confidence * 0.5,
+ 					voice: "graph",
+@@ -409,25 +431,39 @@ export class PolyphonicRecallEngine {
+ 				});
+ 			}
+ 		}
+-		const traversed = new Set<string>();
+-		for (const seedId of seedIds) {
+-			for (const related of this.graph.findRelatedMemories(seedId, 2, "ctx", 0.3)) {
+-				// Traversal also reaches gist nodes (`gist_<memoryId>`); recall wants the memory.
+-				const memoryId = related.memoryId.startsWith("gist_") ? related.memoryId.slice(5) : related.memoryId;
+-				if (seedIds.has(memoryId) || traversed.has(memoryId)) continue;
+-				traversed.add(memoryId);
++		// Stable sort: equal scores keep lookup order (gists newest first).
++		const direct = [...seeds.values()].sort((a, b) => b.score - a.score).slice(0, GRAPH_VOICE_MAX_DIRECT);
++		const results: VoiceRecallResult[] = [...direct];
++		const seen = new Set(seeds.keys());
++		let frontier = direct.slice(0, GRAPH_VOICE_MAX_SEEDS).map(seed => seed.memoryId);
++		const seedOf = new Map(frontier.map(id => [id, id]));
++		for (let depth = 1; depth <= GRAPH_VOICE_MAX_DEPTH && frontier.length > 0; depth++) {
++			if (results.length >= GRAPH_VOICE_MAX_RESULTS) break;
++			const expanding = new Set(frontier);
++			const next: string[] = [];
++			for (const edge of this.graph.findEdgesTouching(
++				frontier,
++				"ctx",
++				GRAPH_VOICE_MIN_EDGE_WEIGHT,
++				GRAPH_VOICE_MAX_EDGE_ROWS,
++			)) {
++				const from = expanding.has(edge.source) ? edge.source : edge.target;
++				const neighbor = from === edge.source ? edge.target : edge.source;
++				// A `gist_<memoryId>` node only links back to its own memory, already seen.
++				if (neighbor.startsWith("gist_") || seen.has(neighbor)) continue;
++				seen.add(neighbor);
++				const seed = seedOf.get(from) ?? from;
++				seedOf.set(neighbor, seed);
++				if (next.length < GRAPH_VOICE_MAX_FRONTIER) next.push(neighbor);
+ 				results.push({
+-					memoryId,
+-					score: 0.4 / Math.max(1, related.depth),
++					memoryId: neighbor,
++					score: 0.4 / depth,
+ 					voice: "graph",
+-					metadata: {
+-						seed: seedId,
+-						edge_type: related.edgeType,
+-						depth: related.depth,
+-						weight: related.weight,
+-					},
++					metadata: { seed, edge_type: edge.edgeType, depth, weight: edge.weight },
+ 				});
++				if (results.length >= GRAPH_VOICE_MAX_RESULTS) break;
+ 			}
++			frontier = next;
+ 		}
+ 		return results;
+ 	}
+@@ -679,29 +715,42 @@ function sortedVoiceScores(scores: Partial<Record<PolyphonicVoice, number>>): Pa
+ 	return out;
+ }
+ 
++/** Engines whose `consolidated_facts` backfill has succeeded. */
++const backfilledEngines = new WeakSet<PolyphonicRecallEngine>();
++
+ /**
+  * The beam's polyphonic engine, built on first use. Building it creates the fact voice
+- * tables and backfills `consolidated_facts` from KG facts extracted while polyphonic
+- * recall was off, so enabling the flag on an existing bank starts with a fact voice.
++ * tables; until it succeeds once, each call also backfills `consolidated_facts` from KG
++ * facts extracted while polyphonic recall was off, so enabling the flag on an existing
++ * bank starts with a fact voice and a failed backfill (e.g. a busy database) is retried.
+  */
+ export function getPolyphonicEngine(beam: BeamMemoryState): PolyphonicRecallEngine {
+ 	const cached = beam.caches.polyphonicEngine;
+-	if (cached instanceof PolyphonicRecallEngine && cached.db === beam.db) return cached;
+-	const consolidator = ensureVeracityConsolidator(beam);
+-	try {
+-		backfillConsolidatedFacts(beam, consolidator);
+-	} catch {
+-		// Backfill only enriches the fact voice; recall proceeds with what is consolidated.
++	let engine: PolyphonicRecallEngine;
++	if (cached instanceof PolyphonicRecallEngine && cached.db === beam.db) {
++		engine = cached;
++	} else {
++		engine = new PolyphonicRecallEngine({
++			db: beam.db,
++			dbPath: beam.dbPath,
++			sessionId: beam.sessionId,
++			channelId: beam.channelId,
++			graph: beam.episodicGraph instanceof EpisodicGraph ? beam.episodicGraph : undefined,
++			consolidator: ensureVeracityConsolidator(beam),
++		});
++		beam.caches.polyphonicEngine = engine;
++	}
++	if (!backfilledEngines.has(engine)) {
++		try {
++			backfillConsolidatedFacts(beam, engine.consolidator);
++			backfilledEngines.add(engine);
++		} catch (error) {
++			// Backfill only enriches the fact voice; recall proceeds with what is consolidated.
++			logger.warn("mnemopi: consolidated fact backfill failed; retrying on next polyphonic recall", {
++				error: String(error),
++			});
++		}
+ 	}
+-	const engine = new PolyphonicRecallEngine({
+-		db: beam.db,
+-		dbPath: beam.dbPath,
+-		sessionId: beam.sessionId,
+-		channelId: beam.channelId,
+-		graph: beam.episodicGraph instanceof EpisodicGraph ? beam.episodicGraph : undefined,
+-		consolidator,
+-	});
+-	beam.caches.polyphonicEngine = engine;
+ 	return engine;
+ }
+ export function polyphonicRecall(

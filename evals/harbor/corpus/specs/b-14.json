@@ -1,0 +1,17 @@
+{
+  "task_id": "b-14",
+  "category": "seeded_defect",
+  "title": "The XML reader drops content after a mismatched closing tag",
+  "source_commit": "238f433304d39ad05e8a7f5a6d9890f2238e85fe",
+  "runner": "bun",
+  "test_target": "packages/utils/test/xml.test.ts",
+  "source_paths": [
+    "packages/utils/src/xml.ts"
+  ],
+  "instruction": "Parsing slightly broken XML now loses data. When an element such as an unclosed br sits inside a paragraph, the closing tag of the paragraph no longer ends the paragraph, and the rest of the document is swallowed into the wrong element. The reader used to recover from this. Restore that recovery without making it loop.",
+  "acceptance_criteria": [
+    "A closing tag that belongs to an ancestor closes the open element implicitly.",
+    "Stray end tags and malformed markup do not stop the parse."
+  ],
+  "defect_patch": "evals/harbor/corpus/specs/b-14.defect.patch"
+}

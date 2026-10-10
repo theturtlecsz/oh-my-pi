@@ -1,0 +1,23 @@
+{
+  "project": {
+    "project_id": "00000000-0000-7000-8000-0000000000b1",
+    "name": "The Bookends",
+    "kind": "surface"
+  },
+  "items": [
+    {
+      "key": "OMP-1",
+      "work_id": "00000000-0000-7000-8000-000000000001",
+      "revision_id": "00000000-0000-7000-8000-000000000010",
+      "revision_number": 1,
+      "title": "Preserve qualify-installed staging evidence when a spawn is rejected",
+      "description": "When our qualify-installed run cannot spawn its stage command, the error escapes and the staged release and its evidence path are discarded, so I have nothing to inspect afterward. A runner that throws never produced a result, so treat it as a stage failure: report the failure and keep the staged root and its evidence. The same applies to the pytest launch: a launch failure must be folded into a pytest-failure result that still preserves the staged release and its evidence path, and pytest must never run when the stage failed.",
+      "scope": "initial/scope",
+      "acceptance_criteria": [
+        "a stage launch failure reports a stage failure and preserves its evidence path without running pytest",
+        "a pytest launch failure is reported as a pytest failure and preserves the staged release and its evidence path"
+      ],
+      "state": "IN_PROGRESS"
+    }
+  ]
+}

@@ -211,6 +211,29 @@ def test_projects_are_isolated_from_each_other(service) -> None:
     assert [h["kind"] for h in beta_view["history"]] == ["beta_event"]
 
 
+def test_link_mission_relink_moves_the_mission_to_the_new_project(service) -> None:
+    """Re-linking a mission updates project_id, not just objective/status."""
+    store = PostgresWorkStore(service.config)
+    workspace_id = uuid4()
+    actor_id = OWNER
+    _workspace(service, workspace_id)
+
+    alpha = store.ensure_project(workspace_id, actor_id, "alpha", "Alpha", "world")
+    beta = store.ensure_project(workspace_id, actor_id, "beta", "Beta", "surface")
+
+    mission_id = uuid4()
+    store.link_mission(workspace_id, actor_id, alpha, mission_id, "first", "draft")
+    store.link_mission(workspace_id, actor_id, beta, mission_id, "second", "running")
+
+    alpha_view = store.read_project(workspace_id, actor_id, alpha)
+    beta_view = store.read_project(workspace_id, actor_id, beta)
+    assert alpha_view["missions"] == []
+    assert [m["mission_id"] for m in beta_view["missions"]] == [str(mission_id)]
+    assert beta_view["missions"][0]["project_id"] == str(beta)
+    assert beta_view["missions"][0]["objective"] == "second"
+    assert beta_view["missions"][0]["status"] == "running"
+
+
 def test_ensure_project_is_idempotent_and_duplicate_key_raises(service) -> None:
     store = PostgresWorkStore(service.config)
     workspace_id = uuid4()
@@ -232,3 +255,105 @@ def test_ensure_project_is_idempotent_and_duplicate_key_raises(service) -> None:
         store.find_project(workspace_id, actor_id, "missing")
     with pytest.raises(ProjectNotFound):
         store.read_project(workspace_id, actor_id, uuid4())
+
+
+def test_update_profile_replace_and_append_semantics(service) -> None:
+    store = PostgresWorkStore(service.config)
+    workspace_id = uuid4()
+    actor_id = OWNER
+    _workspace(service, workspace_id)
+
+    project_id = store.ensure_project(
+        workspace_id, actor_id, "profile-test", "Profile Test", "surface"
+    )
+
+    store.update_profile(
+        workspace_id,
+        actor_id,
+        project_id,
+        purpose="Initial purpose",
+        goals=["Goal 0", "Goal 1"],
+        questions=["Question 0?"],
+        refs=[{"kind": "decision", "ref": "D1", "title": "Decision 1"}],
+        repositories=[
+            {
+                "key": "repo-1",
+                "name": "repo-1",
+                "url": "https://example.test/repo-1.git",
+                "default_branch": "main",
+                "protected_branches": ["main"],
+                "automation_ci_secret_free": False,
+            }
+        ],
+    )
+
+    initial_view = store.read_project(workspace_id, actor_id, project_id)
+    assert initial_view["purpose"] == "Initial purpose"
+    assert [g["goal"] for g in initial_view["goals"]] == ["Goal 0", "Goal 1"]
+    assert [q["question"] for q in initial_view["questions"]] == ["Question 0?"]
+    assert [r["ref"] for r in initial_view["refs"]] == ["D1"]
+    assert [r["title"] for r in initial_view["refs"]] == ["Decision 1"]
+
+    # Re-updating the profile:
+    # 1. Purpose is replaced.
+    # 2. Goals: existing positions (0, 1) retain existing text due to ON CONFLICT DO NOTHING;
+    #    new position 2 is appended; removed positions are not deleted.
+    # 3. Refs: existing (kind, ref) retains existing title due to ON CONFLICT DO NOTHING;
+    #    new (kind, ref) is appended; removed refs are not deleted.
+    # 4. Questions: existing question retains resolved flag; new question is appended.
+    # 5. Repositories: existing repo updates branches/secrets; new repo is appended.
+    store.update_profile(
+        workspace_id,
+        actor_id,
+        project_id,
+        purpose="Updated purpose",
+        goals=["Attempted overwrite 0", "Attempted overwrite 1", "Goal 2"],
+        questions=["Question 0?", "Question 1?"],
+        refs=[
+            {"kind": "decision", "ref": "D1", "title": "Attempted overwrite D1"},
+            {"kind": "roadmap", "ref": "R1", "title": "Roadmap 1"},
+        ],
+        repositories=[
+            {
+                "key": "repo-1",
+                "name": "repo-1",
+                "url": "https://example.test/repo-1.git",
+                "default_branch": "develop",
+                "protected_branches": ["develop", "release/*"],
+                "automation_ci_secret_free": True,
+            }
+        ],
+    )
+
+    updated_view = store.read_project(workspace_id, actor_id, project_id)
+    assert updated_view["purpose"] == "Updated purpose"
+    assert [g["goal"] for g in updated_view["goals"]] == ["Goal 0", "Goal 1", "Goal 2"]
+    assert len(updated_view["refs"]) == 2
+    assert updated_view["refs"][0]["kind"] == "decision"
+    assert updated_view["refs"][0]["ref"] == "D1"
+    assert updated_view["refs"][0]["title"] == "Decision 1"
+    assert updated_view["refs"][1]["kind"] == "roadmap"
+    assert updated_view["refs"][1]["ref"] == "R1"
+    assert updated_view["refs"][1]["title"] == "Roadmap 1"
+    assert [q["question"] for q in updated_view["questions"]] == ["Question 0?", "Question 1?"]
+    assert updated_view["repositories"][0]["default_branch"] == "develop"
+    assert list(updated_view["repositories"][0]["protected_branches"]) == ["develop", "release/*"]
+    assert updated_view["repositories"][0]["automation_ci_secret_free"] is True
+
+    # Calling update_profile with shorter/empty lists does NOT delete previously inserted entries
+    store.update_profile(
+        workspace_id,
+        actor_id,
+        project_id,
+        purpose="Final purpose",
+        goals=["Only goal 0"],
+        questions=[],
+        refs=[],
+    )
+
+    final_view = store.read_project(workspace_id, actor_id, project_id)
+    assert final_view["purpose"] == "Final purpose"
+    assert [g["goal"] for g in final_view["goals"]] == ["Goal 0", "Goal 1", "Goal 2"]
+    assert len(final_view["refs"]) == 2
+    assert len(final_view["questions"]) == 2
+

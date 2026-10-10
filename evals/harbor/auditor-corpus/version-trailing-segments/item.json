@@ -1,0 +1,21 @@
+{
+  "item_id": "version-trailing-segments",
+  "category": "functional",
+  "task": "compareVersions must pad a shorter numeric version so '1.2' equals '1.2.0' and orders before '1.2.1'.",
+  "acceptance_criteria": [
+    "compareVersions('1.2', '1.2.0') === 0",
+    "compareVersions('1.2', '1.2.1') === -1"
+  ],
+  "defects": [
+    {
+      "path": "packages/utils/src/version.ts",
+      "line_start": 52,
+      "line_end": null,
+      "severity": "HIGH"
+    }
+  ],
+  "exposing_test": {
+    "runner": "bun",
+    "target": "packages/utils/test/version.test.ts"
+  }
+}

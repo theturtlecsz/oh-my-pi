@@ -1,0 +1,21 @@
+{
+  "id": "a-11",
+  "scored_experiment": "repair",
+  "seed_patch": "seed.patch",
+  "solution_patch": "solution.patch",
+  "independent_tests": [
+    {
+      "runner": "bun",
+      "target": "scripts/ci-test-ts-core-limit.test.ts",
+      "files": [
+        "independent/ci-test-ts-core-limit.test.ts"
+      ]
+    }
+  ],
+  "scenario": "scenario.json",
+  "rules": [
+    {
+      "type": "independent_tests_pass"
+    }
+  ]
+}

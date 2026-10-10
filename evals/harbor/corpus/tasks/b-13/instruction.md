@@ -1,0 +1,1 @@
+Notes that were saved with Windows line endings lose their display math. A block whose delimiter lines are alone on their line renders as plain text when the lines end in carriage return plus line feed. This worked before and only fails for one of the two block forms. Find the cause and restore it.

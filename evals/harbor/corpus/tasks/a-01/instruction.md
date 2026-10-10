@@ -1,0 +1,1 @@
+I use the ECC advisor trial prepare tool to stage a case into a work tree. If something already sits at the destination path, the tool removes it and replaces it without asking. I lost a staged worktree that way. Preparing a case has to refuse an occupied destination and tell me to clean it up myself, and an existing worktree registration for that path counts as occupied too.

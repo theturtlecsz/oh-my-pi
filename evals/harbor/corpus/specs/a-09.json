@@ -1,0 +1,17 @@
+{
+  "task_id": "a-09",
+  "category": "localized_bug",
+  "title": "Count a pending advisor delivery only when it is routed",
+  "source_commit": "2ce4078fcacadb7d7345eb36c1f8d58431da9bbe",
+  "test_target": "packages/coding-agent/test/advisor/supervision-gate-deferred-tally.test.ts",
+  "runner": "bun",
+  "source_paths": [
+    "packages/coding-agent/src/advisor/supervision-gate.ts"
+  ],
+  "instruction": "Our advisor supervision tallies are wrong when a note is delivered as a pending proposal. The gate counts it as delivered immediately, so if the proposal is displaced and never routed, the delivered total includes a note the user never saw. Track a pending delivery by its normalized note and count it only when it is routed, keeping the class it was admitted under. A displaced pending note, or a live delivery of that same note, must be dropped from the pending queue so it is not counted again. The delivered sum must stay equal to the number of notes actually routed after every operation.",
+  "acceptance_criteria": [
+    "a pending note is not counted as delivered until it is routed",
+    "a displaced pending note is not counted again",
+    "the delivered sum equals the number of routed notes after every seeded operation"
+  ]
+}

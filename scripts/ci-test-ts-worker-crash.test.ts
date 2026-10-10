@@ -22,7 +22,7 @@ describe("worker crash attribution", () => {
 	});
 
 	test("reports a worker crash as a failure naming the file", async () => {
-		using dir = TempDir.createSync("omp-test-runner-worker-crash-");
+		using dir = TempDir.createSync("@omp-test-runner-worker-crash-");
 		await Bun.write(
 			dir.join("crash.test.ts"),
 			'import { test } from "bun:test";\ntest("crashes", () => {\n\tprocess.kill(process.pid, "SIGKILL");\n});\n',

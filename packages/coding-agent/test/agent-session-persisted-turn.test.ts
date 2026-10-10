@@ -29,7 +29,7 @@ describe("persisted no-tool turn continuation", () => {
 	let session: AgentSession | undefined;
 
 	beforeEach(() => {
-		tempDir = TempDir.createSync("omp-persisted-turn-");
+		tempDir = TempDir.createSync("@omp-persisted-turn-");
 		auth = createInMemoryAuthStorage();
 		auth.keys.setRuntime("anthropic", "test-key");
 	});

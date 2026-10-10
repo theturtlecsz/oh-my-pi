@@ -1,0 +1,20 @@
+{
+  "task_id": "b-07",
+  "category": "migration",
+  "title": "Plugin skills get new names after every plugin update",
+  "source_commit": "b2fff8577568bbecb90ac6d185d2aad897066ae1",
+  "runner": "bun",
+  "test_target": "packages/coding-agent/test/discovery/agent-plugins.test.ts",
+  "source_paths": [
+    "packages/coding-agent/src/capability/types.ts",
+    "packages/coding-agent/src/discovery/agent-plugins.ts",
+    "packages/coding-agent/src/discovery/omp-plugins.ts",
+    "packages/coding-agent/src/discovery/skillshare.ts",
+    "packages/coding-agent/src/extensibility/skills.ts"
+  ],
+  "instruction": "Two installed plugins both ship a skill called tdd. The colliding one gets a prefix so the names stay unique, but the prefix is the name of the version directory that holds the skill folder. After a plugin update the prefix changes, so saved commands and prompts that use the skill name stop working. The prefix must come from the plugin itself and stay the same across version changes.",
+  "acceptance_criteria": [
+    "A colliding plugin skill is prefixed with the plugin manifest name, never with a version directory.",
+    "The skill names are identical before and after both plugins move to new versions."
+  ]
+}

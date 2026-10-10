@@ -1,0 +1,60 @@
+{
+  "locks": {
+    "jobs-worker-kill-restart": {
+      "item": "OMP-417",
+      "test": "tests/test_jobs_check_midkill.py"
+    },
+    "lock-1": {
+      "item": "OMP-417",
+      "test": "tests/test_orchestrator_candidate_git.py"
+    },
+    "lock-2": {
+      "item": "OMP-417",
+      "test": "tests/test_orchestrator_worker_sandbox.py"
+    },
+    "lock-3": {
+      "item": "OMP-417",
+      "test": "tests/test_orchestrator_worker_sandbox.py"
+    },
+    "lock-4": {
+      "item": "OMP-421, OMP-417",
+      "test": "tests/test_task_capability.py"
+    },
+    "lock-5": {
+      "item": "OMP-417, OMP-400",
+      "test": "tests/test_orchestrator_kill_restart.py"
+    },
+    "lock-6": {
+      "item": "OMP-417, OMP-420",
+      "test": "tests/test_orchestrator_mission_e2e.py"
+    },
+    "lock-7": {
+      "item": "OMP-418, OMP-413, OMP-430",
+      "test": "tests/test_item_budget_stop.py"
+    },
+    "lock-8": {
+      "item": "OMP-431",
+      "test": "tests/test_egress_policy.py"
+    },
+    "lock-9": {
+      "item": "OMP-403, OMP-418",
+      "test": "tests/test_tier3_authorization_store.py"
+    },
+    "lock-10": {
+      "item": "OMP-405, OMP-430, OMP-425, OMP-417",
+      "test": "tests/test_jobs_stop_frozen_lease.py"
+    },
+    "lock-11": {
+      "item": "OMP-417, OMP-415",
+      "test": "tests/test_orchestrator_audit_chain.py"
+    },
+    "lock-12": {
+      "item": "OMP-421, OMP-403",
+      "test": "tests/test_control_plane_fail_closed.py"
+    },
+    "omp16-rollout": {
+      "item": "OMP-417",
+      "test": "tests/test_orchestrator_rollout.py"
+    }
+  }
+}

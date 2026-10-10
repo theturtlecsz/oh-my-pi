@@ -387,7 +387,8 @@ def install_guards(
     for unit in unique_units:
         mode, source = _inspect_unit_kill_mode(unit, target_dir)
         if mode in {"process", "none"}:
-            assert source is not None
+            if source is None:
+                raise AssertionError
             unit_overrides[unit] = (mode, source)
 
     target_dir.mkdir(parents=True, exist_ok=True)

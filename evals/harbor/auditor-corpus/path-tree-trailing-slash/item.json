@@ -1,0 +1,20 @@
+{
+  "item_id": "path-tree-trailing-slash",
+  "category": "boundary",
+  "task": "formatGroupedPaths must normalize a trailing slash so a matched directory keeps its own heading.",
+  "acceptance_criteria": [
+    "formatGroupedPaths(['alpha/tests/', 'beta/tests/']) emits both directory headings"
+  ],
+  "defects": [
+    {
+      "path": "packages/utils/src/path-tree.ts",
+      "line_start": 76,
+      "line_end": null,
+      "severity": "HIGH"
+    }
+  ],
+  "exposing_test": {
+    "runner": "bun",
+    "target": "packages/utils/test/path-tree.test.ts"
+  }
+}

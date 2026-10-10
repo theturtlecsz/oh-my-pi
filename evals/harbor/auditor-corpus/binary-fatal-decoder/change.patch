@@ -1,0 +1,13 @@
+diff --git a/packages/utils/src/binary.ts b/packages/utils/src/binary.ts
+index e96e8da637..1d6ca4f063 100644
+--- a/packages/utils/src/binary.ts
++++ b/packages/utils/src/binary.ts
+@@ -33,7 +33,7 @@ export const BINARY_SNIFF_BYTES = 8192;
+ export function isProbablyBinaryHeader(header: Uint8Array): boolean {
+ 	if (header.indexOf(0) !== -1) return true;
+ 	try {
+-		new TextDecoder("utf-8", { fatal: true }).decode(header, { stream: true });
++		new TextDecoder("utf-8").decode(header, { stream: true });
+ 		return false;
+ 	} catch {
+ 		return true;

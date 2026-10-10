@@ -1,0 +1,21 @@
+{
+  "id": "b-13",
+  "scored_experiment": "repair",
+  "seed_patch": "seed.patch",
+  "solution_patch": "solution.patch",
+  "independent_tests": [
+    {
+      "runner": "bun",
+      "target": "packages/utils/test/math-delimiters.test.ts",
+      "files": [
+        "independent/math-delimiters.test.ts"
+      ]
+    }
+  ],
+  "scenario": "scenario.json",
+  "rules": [
+    {
+      "type": "independent_tests_pass"
+    }
+  ]
+}

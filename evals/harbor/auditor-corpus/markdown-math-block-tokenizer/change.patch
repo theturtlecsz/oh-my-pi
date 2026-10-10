@@ -1,0 +1,12 @@
+diff --git a/packages/tui/src/components/markdown.ts b/packages/tui/src/components/markdown.ts
+--- a/packages/tui/src/components/markdown.ts
++++ b/packages/tui/src/components/markdown.ts
+@@ -607,7 +607,7 @@ const mathBlockExtension: TokenizerAndRendererExtension = {
+ 	// No `start` hint: marked only probes block extensions at a block boundary
+ 	// here and never consults their hints.
+ 	tokenizer(src) {
+-		const block = mathBlockAt(src);
++		const block = mathBlockAt(src) ?? (src.startsWith("$$") ? { raw: src, body: src.slice(2) } : undefined);
+ 		if (!block) return undefined;
+ 		return { type: "math", raw: block.raw, text: block.body, display: true };
+ 	},

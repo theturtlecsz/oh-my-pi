@@ -1,0 +1,21 @@
+{
+  "id": "a-03",
+  "scored_experiment": "repair",
+  "seed_patch": "seed.patch",
+  "solution_patch": "solution.patch",
+  "independent_tests": [
+    {
+      "runner": "bun",
+      "target": "session-system/tests/agent-stop-prompt-admission.test.ts",
+      "files": [
+        "independent/agent-stop-prompt-admission.test.ts"
+      ]
+    }
+  ],
+  "scenario": "scenario.json",
+  "rules": [
+    {
+      "type": "independent_tests_pass"
+    }
+  ]
+}
