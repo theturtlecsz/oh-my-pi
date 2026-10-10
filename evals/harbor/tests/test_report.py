@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from omp_harbor_eval import EvidenceWriter, load_fixture
-from omp_harbor_eval.report import ingest, main
+from omp_harbor_eval.report import ingest, main, summarize
 
 
 def _write_fixture(root: Path, fixture_id: str = "f1", *, rules: list[dict] | None = None) -> object:
@@ -613,3 +613,452 @@ def test_cli_ingest_appends_to_existing_file(tmp_path: Path, sample_catalog: Pat
     assert len(lines) == 2
     assert lines[0]["attempt"] == 1
     assert lines[1]["attempt"] == 2
+
+
+def _record(**overrides: object) -> dict:
+    base: dict = {
+        "experiment": "exp",
+        "plan_id": "plan-1",
+        "arm": "B",
+        "model": "provider/model",
+        "task_id": "task-1",
+        "repetition": 1,
+        "attempt": 1,
+        "status": "pass",
+        "tokens": {"input": 100, "cached": 0, "output": 10},
+        "cost_usd": "1.25",
+        "cost_basis": "exact",
+        "turns": 2,
+        "interventions": 1,
+        "latency_s": 60,
+    }
+    base.update(overrides)
+    return base
+
+
+def _write_records(path: Path, records: list[dict]) -> None:
+    lines = [json.dumps(row) for row in records]
+    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+
+
+def _run_summary(tmp_path: Path, records: list[dict]) -> dict:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    source = tmp_path / "records.jsonl"
+    _write_records(source, records)
+    return summarize(
+        source,
+        out_json=tmp_path / "summary.json",
+        out_md=tmp_path / "summary.md",
+    )
+
+
+def _markdown_rows(text: str) -> list[dict[str, str]]:
+    lines = [line for line in text.splitlines() if line.startswith("|")]
+    header = [cell.strip() for cell in lines[0].strip("|").split("|")]
+    rows = []
+    for line in lines[2:]:
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        rows.append(dict(zip(header, cells, strict=True)))
+    return rows
+
+
+def test_summarize_retry_keeps_repetition_first_outcome(tmp_path: Path) -> None:
+    # One task, two repetitions. Repetition 2 fails, then passes on the retry.
+    # The retry does not change the first outcome and does not add a repetition.
+    payload = _run_summary(
+        tmp_path,
+        [
+            _record(repetition=1, attempt=1, status="pass", cost_usd="1.25", latency_s=60, turns=2),
+            _record(
+                repetition=2,
+                attempt=1,
+                status="fail",
+                tokens={"input": 50, "cached": 5, "output": 20},
+                cost_usd="2.50",
+                latency_s=60,
+                turns=3,
+                interventions=None,
+            ),
+            _record(
+                repetition=2,
+                attempt=2,
+                status="pass",
+                tokens=None,
+                cost_usd="9.00",
+                latency_s=999,
+                turns=9,
+                interventions=4,
+            ),
+        ],
+    )
+    row = payload["groups"][0]
+    assert row["repetitions"] == 2
+    assert row["records"] == 3
+    assert row["undecided"] == 0
+    assert row["repetitions_first_pass"] == 1
+    assert row["repetitions_first_decidable"] == 2
+    assert row["first_pass_rate"] == 0.5
+    assert row["repetitions_final_pass"] == 2
+    assert row["repetitions_final_decidable"] == 2
+    assert row["ac_success"] == 1.0
+    assert row["wilson_low"] == pytest.approx(0.3423802239546494)
+    assert row["wilson_high"] == pytest.approx(1.0)
+    assert row["status_counts"] == {
+        "pass": 2,
+        "fail": 1,
+        "harness_defect": 0,
+        "invalid_evidence": 0,
+    }
+    # Same task: one first-fail makes the task first_pass 0. Final stays 1.
+    assert row["tasks"] == [
+        {"task_id": "task-1", "repetitions": 2, "first_pass": 0, "final_pass": 1}
+    ]
+    assert row["task_rates"]["first"] == {"counted": 1, "passing": 0, "rate": 0.0}
+    assert row["task_rates"]["final"] == {"counted": 1, "passing": 1, "rate": 1.0}
+    # The null-token retry is unknown and is left out of the sums.
+    assert row["unknown"] == 1
+    assert row["sums"]["input"] == 150
+    assert row["sums"]["cached"] == 5
+    assert row["sums"]["output"] == 30
+    assert row["sums"]["cost_usd"] == "3.75"
+    assert row["sums"]["turns"] == 5
+    assert row["sums"]["interventions"] == 1
+    assert row["sums"]["latency_s"] == 120
+    assert row["cost_per_success"] == "1.875"
+    assert row["success_per_minute"] == 1.0
+    assert payload["totals"]["ac_success"] == 1.0
+    assert payload["totals"]["first_pass_rate"] == 0.5
+
+    written = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+    assert written == payload
+    markdown = _markdown_rows((tmp_path / "summary.md").read_text(encoding="utf-8"))
+    assert markdown == [
+        {
+            "experiment": "exp",
+            "arm": "B",
+            "model": "provider/model",
+            "repetitions": "2",
+            "undecided": "0",
+            "repetitions_final_pass": "2",
+            "ac_success": "1",
+            "first_pass_rate": "0.5",
+            "cost_per_success": "1.875",
+            "success_per_minute": "1",
+        }
+    ]
+
+
+def test_summarize_two_attempt_one_records_are_two_repetitions(tmp_path: Path) -> None:
+    same_task = _run_summary(
+        tmp_path / "same",
+        [
+            _record(task_id="task-1", repetition=1, attempt=1, status="pass"),
+            _record(task_id="task-1", repetition=2, attempt=1, status="fail"),
+        ],
+    )
+    same = same_task["groups"][0]
+    assert same["repetitions"] == 2
+    assert same["ac_success"] == 0.5
+    assert same["first_pass_rate"] == 0.5
+    assert same["wilson_low"] == pytest.approx(0.09453120463920084)
+    assert same["wilson_high"] == pytest.approx(0.9054687953607992)
+
+    two_tasks = _run_summary(
+        tmp_path / "tasks",
+        [
+            _record(task_id="task-1", repetition=1, attempt=1, status="pass"),
+            _record(task_id="task-2", repetition=1, attempt=1, status="fail"),
+        ],
+    )
+    split = two_tasks["groups"][0]
+    assert split["repetitions"] == 2
+    assert split["ac_success"] == 0.5
+    assert split["first_pass_rate"] == 0.5
+    assert split["task_rates"]["first"] == {"counted": 2, "passing": 1, "rate": 0.5}
+    assert split["task_rates"]["final"] == {"counted": 2, "passing": 1, "rate": 0.5}
+
+
+def test_summarize_non_decidable_attempts_do_not_set_the_outcome(tmp_path: Path) -> None:
+    # Attempt 1 harness_defect, attempt 2 pass: first is null, final is 1.
+    defect_then_pass = _run_summary(
+        tmp_path / "defect",
+        [
+            _record(attempt=1, status="harness_defect"),
+            _record(attempt=2, status="pass"),
+        ],
+    )["groups"][0]
+    assert defect_then_pass["first_pass_rate"] is None
+    assert defect_then_pass["repetitions_first_decidable"] == 0
+    assert defect_then_pass["ac_success"] == 1.0
+    assert defect_then_pass["undecided"] == 0
+    assert defect_then_pass["tasks"][0]["first_pass"] is None
+    assert defect_then_pass["tasks"][0]["final_pass"] == 1
+    assert defect_then_pass["status_counts"]["harness_defect"] == 1
+    assert defect_then_pass["status_counts"]["pass"] == 1
+
+    # Attempt 1 fail, attempt 2 invalid_evidence: the fail still decides.
+    fail_then_invalid = _run_summary(
+        tmp_path / "invalid",
+        [
+            _record(attempt=1, status="fail"),
+            _record(attempt=2, status="invalid_evidence"),
+        ],
+    )["groups"][0]
+    assert fail_then_invalid["first_pass_rate"] == 0.0
+    assert fail_then_invalid["ac_success"] == 0.0
+    assert fail_then_invalid["undecided"] == 0
+    assert fail_then_invalid["repetitions"] == 1
+    assert fail_then_invalid["repetitions_final_decidable"] == 1
+    assert fail_then_invalid["status_counts"]["invalid_evidence"] == 1
+
+    # No attempt 1: first stays null. Final uses the decidable attempts.
+    no_first = _run_summary(
+        tmp_path / "nofirst",
+        [
+            _record(attempt=2, status="fail"),
+            _record(attempt=3, status="pass"),
+        ],
+    )["groups"][0]
+    assert no_first["first_pass_rate"] is None
+    assert no_first["ac_success"] == 1.0
+    assert no_first["tasks"][0]["first_pass"] is None
+    assert no_first["tasks"][0]["final_pass"] == 1
+
+    # A later defect does not replace an earlier fail. Pass then fail ends at 0.
+    later_defect = _run_summary(
+        tmp_path / "later",
+        [
+            _record(attempt=1, status="fail"),
+            _record(attempt=2, status="pass"),
+            _record(attempt=3, status="harness_defect"),
+        ],
+    )["groups"][0]
+    assert later_defect["first_pass_rate"] == 0.0
+    assert later_defect["ac_success"] == 1.0
+    assert later_defect["repetitions"] == 1
+
+    pass_then_fail = _run_summary(
+        tmp_path / "down",
+        [
+            _record(attempt=1, status="pass"),
+            _record(attempt=2, status="fail"),
+        ],
+    )["groups"][0]
+    assert pass_then_fail["first_pass_rate"] == 1.0
+    assert pass_then_fail["ac_success"] == 0.0
+
+
+def test_summarize_defect_and_invalid_stay_out_of_ac_success(tmp_path: Path) -> None:
+    row = _run_summary(
+        tmp_path,
+        [
+            _record(task_id="only-defect", repetition=1, attempt=1, status="harness_defect"),
+            _record(task_id="only-invalid", repetition=1, attempt=1, status="invalid_evidence"),
+            _record(task_id="ok", repetition=1, attempt=1, status="pass"),
+        ],
+    )["groups"][0]
+    assert row["repetitions"] == 3
+    assert row["undecided"] == 2
+    assert row["repetitions_final_pass"] == 1
+    assert row["repetitions_final_decidable"] == 1
+    assert row["ac_success"] == 1.0
+    assert row["status_counts"]["harness_defect"] == 1
+    assert row["status_counts"]["invalid_evidence"] == 1
+    assert row["status_counts"]["pass"] == 1
+    assert row["tasks"] == [
+        {"task_id": "ok", "repetitions": 1, "first_pass": 1, "final_pass": 1},
+        {"task_id": "only-defect", "repetitions": 1, "first_pass": None, "final_pass": None},
+        {"task_id": "only-invalid", "repetitions": 1, "first_pass": None, "final_pass": None},
+    ]
+    assert row["task_rates"]["final"] == {"counted": 1, "passing": 1, "rate": 1.0}
+
+
+def test_summarize_null_tokens_make_cost_rates_null(tmp_path: Path) -> None:
+    all_null = _run_summary(
+        tmp_path / "all",
+        [
+            _record(status="pass", tokens=None, cost_usd="4.00", latency_s=30, turns=4),
+            _record(
+                repetition=2,
+                status="fail",
+                tokens=None,
+                cost_usd="1.00",
+                latency_s=30,
+                turns=1,
+            ),
+        ],
+    )["groups"][0]
+    assert all_null["unknown"] == 2
+    assert all_null["ac_success"] == 0.5
+    assert all_null["sums"]["input"] is None
+    assert all_null["sums"]["cost_usd"] is None
+    assert all_null["sums"]["latency_s"] is None
+    assert all_null["sums"]["turns"] is None
+    assert all_null["cost_per_success"] is None
+    assert all_null["success_per_minute"] is None
+
+    # Tokens present but no input value: the summed input is null, so both rates are null.
+    missing_input = _run_summary(
+        tmp_path / "partial",
+        [
+            _record(
+                status="pass",
+                tokens={"cached": 1},
+                cost_usd="1.00",
+                latency_s=60,
+            )
+        ],
+    )["groups"][0]
+    assert missing_input["unknown"] == 0
+    assert missing_input["sums"]["input"] is None
+    assert missing_input["sums"]["cached"] == 1
+    assert missing_input["sums"]["cost_usd"] == "1"
+    assert missing_input["cost_per_success"] is None
+    assert missing_input["success_per_minute"] is None
+
+
+def test_summarize_rates_null_when_a_divisor_is_zero(tmp_path: Path) -> None:
+    no_success = _run_summary(
+        tmp_path / "fail",
+        [_record(status="fail", cost_usd="2.00", latency_s=30, tokens={"input": 10, "cached": 0, "output": 1})],
+    )["groups"][0]
+    assert no_success["ac_success"] == 0.0
+    assert no_success["cost_per_success"] is None
+    assert no_success["success_per_minute"] == 0.0
+    assert no_success["wilson_low"] == pytest.approx(0.0)
+    assert no_success["wilson_high"] == pytest.approx(0.7934506882081973)
+
+    no_latency = _run_summary(
+        tmp_path / "nolat",
+        [
+            _record(
+                status="pass",
+                latency_s=None,
+                cost_usd="2.00",
+                tokens={"input": 10, "cached": 0, "output": 1},
+            )
+        ],
+    )["groups"][0]
+    assert no_latency["cost_per_success"] == "2"
+    assert no_latency["success_per_minute"] is None
+
+    zero_latency = _run_summary(
+        tmp_path / "zero",
+        [
+            _record(
+                status="pass",
+                latency_s=0,
+                cost_usd="2.00",
+                tokens={"input": 10, "cached": 0, "output": 1},
+            )
+        ],
+    )["groups"][0]
+    assert zero_latency["success_per_minute"] is None
+
+
+def test_summarize_duplicate_record_exits_1_and_writes_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = tmp_path / "records.jsonl"
+    _write_records(
+        source,
+        [
+            _record(attempt=1, status="pass"),
+            _record(attempt=1, status="fail"),
+        ],
+    )
+    out_json = tmp_path / "out.json"
+    out_md = tmp_path / "out.md"
+    out_json.write_text("keep\n", encoding="utf-8")
+    out_md.write_text("keep\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as raised:
+        summarize(source, out_json=out_json, out_md=out_md)
+    assert raised.value.code == 1
+    assert out_json.read_text(encoding="utf-8") == "keep\n"
+    assert out_md.read_text(encoding="utf-8") == "keep\n"
+    assert "duplicate record" in capsys.readouterr().err
+
+    rc = main(
+        [
+            "summarize",
+            "--records",
+            str(source),
+            "--out-json",
+            str(tmp_path / "cli.json"),
+            "--out-md",
+            str(tmp_path / "cli.md"),
+        ]
+    )
+    assert rc == 1
+    assert not (tmp_path / "cli.json").exists()
+    assert not (tmp_path / "cli.md").exists()
+    assert "duplicate record" in capsys.readouterr().err
+
+
+def test_summarize_sorts_groups_and_pools_totals(tmp_path: Path) -> None:
+    payload = _run_summary(
+        tmp_path,
+        [
+            _record(experiment="b", arm="A", model="m", task_id="t", status="pass"),
+            _record(experiment="a", arm="B", model="m", task_id="t", status="fail"),
+            _record(experiment="a", arm=None, model="m", task_id="t", status="pass"),
+            _record(experiment="a", arm="A", model="z", task_id="t", status="fail"),
+            _record(experiment="a", arm="A", model="m", task_id="t1", status="pass"),
+            _record(experiment="a", arm="A", model="m", task_id="t2", repetition=1, status="fail"),
+            _record(experiment="a", arm="A", model="m", task_id="t2", repetition=2, status="fail"),
+        ],
+    )
+    identities = [(row["experiment"], row["arm"], row["model"]) for row in payload["groups"]]
+    assert identities == [
+        ("a", None, "m"),
+        ("a", "A", "m"),
+        ("a", "A", "z"),
+        ("a", "B", "m"),
+        ("b", "A", "m"),
+    ]
+    # Arm A / model m is 1 pass and 2 fails. The five groups pool to 3 passes of 7.
+    arm = payload["groups"][1]
+    assert arm["repetitions"] == 3
+    assert arm["repetitions_final_pass"] == 1
+    assert arm["ac_success"] == pytest.approx(1 / 3)
+    totals = payload["totals"]
+    assert totals["repetitions"] == 7
+    assert totals["repetitions_final_pass"] == 3
+    assert totals["repetitions_final_decidable"] == 7
+    assert totals["ac_success"] == pytest.approx(3 / 7)
+    assert totals["wilson_low"] == pytest.approx(0.15821985399244537)
+    assert totals["wilson_high"] == pytest.approx(0.7495416372469643)
+    assert 0.0 <= totals["wilson_low"] <= totals["ac_success"] <= totals["wilson_high"] <= 1.0
+    assert totals["first_pass_rate"] == pytest.approx(3 / 7)
+    assert totals["unknown"] == 0
+    assert [
+        task["task_id"]
+        for task in totals["tasks"]
+        if task["experiment"] == "a" and task["arm"] == "A" and task["model"] == "m"
+    ] == ["t1", "t2"]
+
+    rc = main(
+        [
+            "summarize",
+            "--records",
+            str(tmp_path / "records.jsonl"),
+            "--out-json",
+            str(tmp_path / "cli.json"),
+            "--out-md",
+            str(tmp_path / "cli.md"),
+        ]
+    )
+    assert rc == 0
+    cli = json.loads((tmp_path / "cli.json").read_text(encoding="utf-8"))
+    assert [(row["experiment"], row["arm"], row["model"]) for row in cli["groups"]] == identities
+    markdown = _markdown_rows((tmp_path / "cli.md").read_text(encoding="utf-8"))
+    assert [row["experiment"] + "/" + row["arm"] + "/" + row["model"] for row in markdown] == [
+        "a//m",
+        "a/A/m",
+        "a/A/z",
+        "a/B/m",
+        "b/A/m",
+    ]
+    assert markdown[1]["ac_success"].startswith("0.333333")
+    assert markdown[0]["cost_per_success"] != ""
