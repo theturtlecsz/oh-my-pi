@@ -16,13 +16,9 @@ const SECTION_DOCS = [
 
 const OPEN_IDS = [
 	"L-RT-01",
-	"L-RT-02",
-	"L-RT-03",
-	"L-RT-04",
 	"L-RB-01",
 	"L-RB-02",
 	"L-RB-03",
-	"L-CB-03",
 	"L-FL-03",
 	"L-FL-04",
 ];
@@ -187,7 +183,11 @@ describe("unattended lockdown report - index", () => {
 		}
 
 		expect(indexRows.filter(r => r.Status.startsWith("applied:")).map(r => `${r.ID}=${r.Status}`)).toEqual([
+			"L-RT-02=applied: OMP-532-s04",
+			"L-RT-03=applied: OMP-532-s01, OMP-532-s02, OMP-532-s06",
+			"L-RT-04=applied: OMP-532-s03",
 			"L-RT-05=applied: OMP-396-s02",
+			"L-CB-03=applied: OMP-532-s05",
 		]);
 
 		expect(indexRows.filter(r => r.Status === "decided: OMP-404").map(r => r.ID)).toEqual([

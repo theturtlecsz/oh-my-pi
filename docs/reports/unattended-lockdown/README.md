@@ -47,23 +47,23 @@ Status is derived from each section row: `applied: <ref>` when the row carries a
 | ID | Section | Upstream divergence | Status |
 | --- | --- | --- | --- |
 | L-RT-01 | [Runtime Defaults](./runtime-defaults.md) | adds | open |
-| L-RT-02 | [Runtime Defaults](./runtime-defaults.md) | adds | open |
-| L-RT-03 | [Runtime Defaults](./runtime-defaults.md) | adds | open |
-| L-RT-04 | [Runtime Defaults](./runtime-defaults.md) | adds | open |
+| L-RT-02 | [Runtime Defaults](./runtime-defaults.md) | adds | applied: OMP-532-s04 |
+| L-RT-03 | [Runtime Defaults](./runtime-defaults.md) | adds | applied: OMP-532-s01, OMP-532-s02, OMP-532-s06 |
+| L-RT-04 | [Runtime Defaults](./runtime-defaults.md) | adds | applied: OMP-532-s03 |
 | L-RT-05 | [Runtime Defaults](./runtime-defaults.md) | modified | applied: OMP-396-s02 |
 | L-RB-01 | [Robomp](./robomp.md) | new | open |
 | L-RB-02 | [Robomp](./robomp.md) | new | open |
 | L-RB-03 | [Robomp](./robomp.md) | none | open |
 | L-CB-01 | [Child Budgets](./child-budgets.md) | adds | decided: OMP-404 |
 | L-CB-02 | [Child Budgets](./child-budgets.md) | adds | decided: OMP-404 |
-| L-CB-03 | [Child Budgets](./child-budgets.md) | adds | open |
+| L-CB-03 | [Child Budgets](./child-budgets.md) | adds | applied: OMP-532-s05 |
 | L-CB-04 | [Child Budgets](./child-budgets.md) | adds | decided: OMP-404 |
 | L-FL-01 | [Flood](./flood.md) | none | decided: OMP-402 |
 | L-FL-02 | [Flood](./flood.md) | none | decided: OMP-404 |
 | L-FL-03 | [Flood](./flood.md) | none | open |
 | L-FL-04 | [Flood](./flood.md) | none | open |
 
-Tallies: 6 applied/decided — L-RT-05 applied (OMP-396-s02); decided OMP-404 (L-CB-01, L-CB-02, L-CB-04, L-FL-02) and OMP-402 (L-FL-01). 10 open — L-RT-01..04, L-RB-01..03, L-CB-03, L-FL-03, L-FL-04.
+Tallies: 10 applied/decided — L-RT-02, L-RT-03, L-RT-04, L-RT-05, L-CB-03 applied; decided OMP-404 (L-CB-01, L-CB-02, L-CB-04, L-FL-02) and OMP-402 (L-FL-01). 6 open — L-RT-01, L-RB-01..03, L-FL-03, L-FL-04.
 
 ## Ties to Q4
 
@@ -78,12 +78,8 @@ Every lock here traces its upstream divergence to [the fork inventory](../../ups
 Nothing is applied before OMP-399-s07.
 
 - [ ] L-RT-01
-- [ ] L-RT-02
-- [ ] L-RT-03
-- [ ] L-RT-04
 - [ ] L-RB-01
 - [ ] L-RB-02
 - [ ] L-RB-03
-- [ ] L-CB-03
 - [ ] L-FL-03
 - [ ] L-FL-04

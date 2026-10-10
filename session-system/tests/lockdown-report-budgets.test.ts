@@ -55,13 +55,14 @@ describe("unattended lockdown report - child budgets", () => {
 		}
 	});
 
-	test("divergence is adds for all rows", async () => {
+	test("divergence is adds for all rows, with applied ref on L-CB-03", async () => {
 		const md = await Bun.file(reportPath).text();
 		const rows = parseLockRows(md);
 
 		for (const row of rows) {
-			expect(row["Upstream divergence"].trim()).toBe("adds");
+			expect(row["Upstream divergence"].trim().startsWith("adds")).toBe(true);
 		}
+		expect(rows[2]["Upstream divergence"].trim()).toBe("adds (applied: OMP-532-s05)");
 	});
 
 	test("decided suffix is on L-CB-01, 02, 04 only and L-CB-03 carries no decided marker", async () => {
