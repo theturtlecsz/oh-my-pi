@@ -482,7 +482,25 @@ class ProjectStoreMixin:
         refs: Iterable[dict[str, str]] = (),
         repositories: Iterable[dict[str, object]] = (),
     ) -> None:
-        """Write the project's purpose and replace-as-possible its profile rows."""
+        """Write the project's purpose and replace-as-possible its profile rows.
+
+        Persistence and replacement semantics under least privilege (migration 0030):
+        - purpose: replaced on omp_work.project_records; updated_at is bumped.
+        - goals: append-only by position. omp_work_app has SELECT and INSERT privileges
+          (no UPDATE, DELETE is revoked). Goals at existing positions are preserved
+          unchanged (ON CONFLICT DO NOTHING). New positions (higher indices) are inserted.
+          Removed positions are not deleted.
+        - questions: upserted by question text. If a question already exists, its
+          resolved state is preserved (DO UPDATE SET resolved = project_questions.resolved).
+          Removed questions are not deleted.
+        - refs: append-only by (kind, ref). omp_work_app has SELECT and INSERT privileges
+          (no UPDATE, DELETE is revoked). Existing references preserve their title
+          (ON CONFLICT DO NOTHING). New references are inserted. Removed references are
+          not deleted.
+        - repositories: upserted by repository_id. Existing links update default_branch,
+          protected_branches, and automation_ci_secret_free. Removed repositories are
+          not deleted.
+        """
         with self._transaction(workspace_id, actor_id) as cur:
             self._require_project(cur, workspace_id, project_id)
             cur.execute(
@@ -503,6 +521,8 @@ class ProjectStoreMixin:
                     (purpose, workspace_id, project_id),
                 )
             for position, goal in enumerate(goals):
+                # omp_work_app has SELECT, INSERT only (no UPDATE, DELETE revoked).
+                # Existing positions are preserved; new positions are appended.
                 cur.execute(
                     "INSERT INTO omp_work.project_goals(workspace_id, project_id, position, goal)"
                     " VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
@@ -517,6 +537,8 @@ class ProjectStoreMixin:
                     (workspace_id, project_id, question),
                 )
             for ref in refs:
+                # omp_work_app has SELECT, INSERT only (no UPDATE, DELETE revoked).
+                # Existing (kind, ref) rows preserve title; new refs are appended.
                 cur.execute(
                     "INSERT INTO omp_work.project_refs(workspace_id, project_id, kind, ref, title)"
                     " VALUES (%s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
