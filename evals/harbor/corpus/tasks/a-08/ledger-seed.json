@@ -1,0 +1,23 @@
+{
+  "project": {
+    "project_id": "00000000-0000-7000-8000-0000000000b1",
+    "name": "The Bookends",
+    "kind": "surface"
+  },
+  "items": [
+    {
+      "key": "OMP-1",
+      "work_id": "00000000-0000-7000-8000-000000000001",
+      "revision_id": "00000000-0000-7000-8000-000000000010",
+      "revision_number": 1,
+      "title": "Let WorkClient.tree name the Media Discovery world",
+      "description": "Our work backend now projects items from more than one world, but `WorkClient.tree` always returns the default projection. I need `tree` to accept an optional world name so I can ask for the Media Discovery projection. When the world is named, the request must carry it as a `world` query parameter on the tree path; when it is omitted, the request must stay exactly as it is today with no query string.",
+      "scope": "initial/scope",
+      "acceptance_criteria": [
+        "tree() with no argument requests the tree path with no query string",
+        "tree({ world: \"media-discovery\" }) requests the tree path with the world query parameter"
+      ],
+      "state": "IN_PROGRESS"
+    }
+  ]
+}

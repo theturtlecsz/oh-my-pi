@@ -379,6 +379,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
     verify_parser = subparsers.add_parser("verify")
     verify_parser.add_argument("--manifest", required=True, help="Path to manifest JSON")
+    freeze_parser = subparsers.add_parser("freeze")
+    freeze_parser.add_argument("--batch", nargs="+", action="extend", required=True, help="Batch JSON file paths")
+    freeze_parser.add_argument("--base-commit", required=True, help="Base commit SHA")
+    freeze_parser.add_argument("--repo", required=True, help="Repository root path")
+    freeze_parser.add_argument("--out", required=True, help="Output manifest JSON path")
     args = parser.parse_args(argv)
     if args.command == "verify":
         drift = verify(args.manifest)
@@ -386,6 +391,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             for item in drift:
                 sys.stderr.write(f"{item}\n")
             return 1
+        return 0
+    if args.command == "freeze":
+        from .corpus_build import gradeable
+
+        batches: list[Path] = [Path(b) for b in args.batch]
+        for b in batches:
+            loaded = load_batch(b)
+            for t in loaded:
+                task_id = t["task_id"]
+                fixture_dir = _resolve_fixture_dir(t["fixture"], task_id, base_path=b.parent)
+                result = gradeable(fixture_dir, repo=args.repo, commit=args.base_commit)
+                if not result.get("ok"):
+                    sys.stderr.write(f"task not gradeable: {task_id}\n")
+                    return 1
+
+        manifest = freeze(batches, base_commit=args.base_commit)
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return 0
     return 2
 

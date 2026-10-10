@@ -1,0 +1,21 @@
+diff --git a/packages/utils/src/version.ts b/packages/utils/src/version.ts
+index 15088117ea..ed2f1a7a67 100644
+--- a/packages/utils/src/version.ts
++++ b/packages/utils/src/version.ts
+@@ -1,4 +1,5 @@
+ const DIGITS = /^\d+$/;
++const LEADING_ZEROS = /^0+/;
+ 
+ /**
+  * Compare two version strings.
+@@ -65,8 +66,8 @@ function compareNumericParts(a: string[], b: string[]): number {
+ 
+ /** Exact integer comparison of digit strings, avoiding float overflow. */
+ function compareDigits(a: string, b: string): number {
+-	const na = a.replace(/^0+/, "") || "0";
+-	const nb = b.replace(/^0+/, "") || "0";
++	const na = a.replace(LEADING_ZEROS, "") || "0";
++	const nb = b.replace(LEADING_ZEROS, "") || "0";
+ 	if (na.length !== nb.length) return na.length < nb.length ? -1 : 1;
+ 	if (na < nb) return -1;
+ 	if (na > nb) return 1;

@@ -293,11 +293,21 @@ def add_parser(subcommands: argparse._SubParsersAction[argparse.ArgumentParser])
     serve_parser.add_argument("--config", required=True, type=Path)
     serve_parser.add_argument("--port", type=int, default=54323)
     serve_parser.add_argument("--upstream", default="http://127.0.0.1:54322")
+    probe_parser = commands.add_parser("probe")
+    probe_parser.add_argument("--base-url", required=True)
+    probe_parser.add_argument("--config", required=True, type=Path)
+    probe_parser.add_argument("--out", required=True, type=Path)
+    probe_parser.add_argument("--bearer-file", type=Path)
 
 
 def run(args: argparse.Namespace) -> int:
     """Run ``ingress serve``. The gate always binds loopback."""
-    if getattr(args, "ingress_command", None) != "serve":
+    command = getattr(args, "ingress_command", None)
+    if command == "probe":
+        from .client_ingress_probe import run_cli
+
+        return run_cli(args)
+    if command != "serve":
         return 2
     try:
         config = load_ingress_config(args.config)

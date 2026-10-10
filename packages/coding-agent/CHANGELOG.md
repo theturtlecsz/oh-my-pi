@@ -4,6 +4,7 @@
 
 ### Added
 
+- `before_agent_start` handlers can return `block`/`reason` to refuse a prompt before any provider call.
 - Added an opt-in Jev classifier for auto thinking effort.
 - Added an opt-in Jev unexpected-stop classifier with a configurable threshold.
 - Added an opt-in Jev judge for hypothesis tournaments with a `{A, B, tie}` choice, kept alongside the chat judge as a second family for bias checks.
@@ -27,6 +28,7 @@
 
 ### Fixed
 
+- `omp -p` reports a blocked prompt on stderr and exits 1.
 - Fixed a daemon request sent right after a broker shutdown failing with 'Daemon broker connection closed'.
 - Startup summary no longer stalls on huge entries.
 - HTML transcript exports show raw HTML in messages as text instead of rendering it (scripts and event handlers no longer run in the viewer).
@@ -52,6 +54,7 @@
 - Work Ledger mutations whose response was lost now report the landed result instead of an error, never re-send the command, and report an unknown outcome only after the retry window.
 - Fixed Julia kernel startup failing on a cold package depot: the prelude now loads its HTTP client on the first `tool.*` call instead of while the kernel starts, so the interpreter's initial startup no longer times out.
 - Fixed computer screenshots, session-less vibe worker artifacts, and worker stderr captures piling up in the system temp directory; each is now removed when its run or worker lifetime ends, including after a hard kill.
+- Video frame files and browser-recording frames are created in the system temp directory.
 
 ## [18.4.6] - 2026-10-01
 

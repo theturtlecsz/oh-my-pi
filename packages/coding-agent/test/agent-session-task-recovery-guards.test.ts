@@ -34,7 +34,7 @@ afterEach(async () => {
 });
 
 async function createRecoveryFixture(boundary: RevocationBoundary) {
-	const temp = TempDir.createSync("task-result-guards-");
+	const temp = TempDir.createSync("@task-result-guards-");
 	const auth = createInMemoryAuthStorage();
 	auth.keys.setRuntime("anthropic", "test-key");
 	const manager = SessionManager.create(temp.path(), temp.path());

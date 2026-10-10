@@ -1,0 +1,23 @@
+{
+  "project": {
+    "project_id": "00000000-0000-7000-8000-0000000000b1",
+    "name": "The Bookends",
+    "kind": "surface"
+  },
+  "items": [
+    {
+      "key": "OMP-1",
+      "work_id": "00000000-0000-7000-8000-000000000001",
+      "revision_id": "00000000-0000-7000-8000-000000000010",
+      "revision_number": 1,
+      "title": "Repair core-dump suppression in the CI TS test runner",
+      "description": "A regression landed in our CI TS test runner. Spawned chunks are no longer running with core dumps disabled, so a crashing chunk can fill the disk again. Restore the wrapper so every spawned test chunk runs with its core-dump limit disabled, keeps its PID for the watchdog, and still reports the chunk's own exit code.",
+      "scope": "initial/scope",
+      "acceptance_criteria": [
+        "each spawned chunk reports zero as both its soft and hard core-dump limit",
+        "a chunk's failing exit code is still reported through the wrapper"
+      ],
+      "state": "IN_PROGRESS"
+    }
+  ]
+}

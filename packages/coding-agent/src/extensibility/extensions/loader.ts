@@ -594,6 +594,12 @@ export interface DiscoverExtensionPathOptions {
 	ambient?: boolean;
 	/** Include ambient hook factories. Disable for read-only catalog commands. */
 	includeAmbientHooks?: boolean;
+	/**
+	 * Trust level of the project at `cwd`. `false` skips project-level native
+	 * items (`.omp/extensions` files and project `.omp/settings.json`
+	 * `extensions` entries). Omit to keep upstream behavior.
+	 */
+	projectTrusted?: boolean;
 }
 
 export async function discoverExtensionPaths(
@@ -636,8 +642,16 @@ export async function discoverExtensionPaths(
 			...loadOptions,
 			providers: ["native"],
 		});
+		let skippedProject = 0;
 		for (const ext of discovered.items) {
+			if (options.projectTrusted === false && ext.level === "project") {
+				skippedProject++;
+				continue;
+			}
 			addPath(ext.path);
+		}
+		if (skippedProject > 0) {
+			logger.debug("Skipped project extension paths in untrusted project", { count: skippedProject });
 		}
 	}
 

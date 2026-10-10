@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import get_args
@@ -25,6 +27,7 @@ from omp_work.contracts.v1.recovery import CloseoutState
 from omp_work.jobs.store import (
     JobError,
     NativeJobStore,
+    OperationOutcome,
     drain_worker,
     project_trial,
     record_usage,
@@ -32,8 +35,12 @@ from omp_work.jobs.store import (
 )
 from omp_work.v1.canonical import sha256
 from native_jobs_support import native_jobs  # noqa: F401  (fixture)
-from test_research_contract import _plan_and_finalize, _trial_payload
-from test_workflow_service import _command
+from test_research_contract import (
+    _plan_and_finalize,
+    _register_component,
+    _trial_payload,
+)
+from test_workflow_service import _command, _grant
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1",
@@ -589,6 +596,95 @@ def test_run_operation_refuses_another_workspaces_operation(native_jobs) -> None
     assert effects == ["ran"]
 
 
+def test_run_operation_serialises_concurrent_first_calls(native_jobs) -> None:
+    """Two first calls with one operation id: one applies, the other replays.
+
+    Without the per-operation advisory lock both callers missed the row, both
+    ran the effect, and the loser aborted on the operations primary key instead
+    of replaying the committed result.
+    """
+    store = _store(native_jobs)
+    operation_id = f"op-race-{uuid4()}"
+    request = {"reason": "stop"}
+    barrier = threading.Barrier(2)
+    effects: list[str] = []
+    lock = threading.Lock()
+
+    def once(_index: int) -> OperationOutcome:
+        def apply() -> dict[str, object]:
+            with lock:
+                effects.append("ran")
+            return {"status": "applied"}
+
+        with store.transaction(native_jobs.workspace_id, native_jobs.actor_id) as cur:
+            barrier.wait(timeout=30)
+            return store.run_operation(
+                cur, operation_id, native_jobs.workspace_id, "job_cancel", request, apply
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(once, range(2)))
+    assert sorted(outcome.state for outcome in outcomes) == ["applied", "replayed"]
+    assert effects == ["ran"]
+    replayed = next(outcome for outcome in outcomes if outcome.state == "replayed")
+    assert replayed.result == {"status": "applied"}
+
+
+def test_register_worker_refuses_worker_id_owned_by_another_workspace(native_jobs) -> None:
+    """A worker id is global: a second workspace cannot claim one already held.
+
+    The lookup must be by worker_id alone because ``omp_jobs.workers.worker_id``
+    is the global primary key. A per-workspace lookup misses a foreign owner and
+    leaks a raw UniqueViolation from the insert.
+    """
+    store = _store(native_jobs)
+    component = native_jobs.components["worker"]
+    register_worker(
+        store,
+        operation_id=str(uuid4()),
+        workspace_id=native_jobs.workspace_id,
+        actor_id=native_jobs.actor_id,
+        worker_id="worker-global",
+        component_sha256=component,
+        capabilities=["compute.gpu"],
+        capacity=1,
+    )
+    other = uuid4()
+    _grant(native_jobs.service, other)
+    with psycopg.connect(
+        **native_jobs.service.config.connection_kwargs("postgres")
+    ) as conn:
+        conn.execute(
+            "INSERT INTO omp_control.workspaces(workspace_id) VALUES (%s)"
+            " ON CONFLICT DO NOTHING",
+            (other,),
+        )
+    other_component = _register_component(
+        native_jobs.service,
+        other,
+        "worker",
+        name=f"global-{uuid4()}",
+        capabilities=("compute.gpu",),
+    )
+    with pytest.raises(JobError) as refused:
+        register_worker(
+            store,
+            operation_id=str(uuid4()),
+            workspace_id=other,
+            actor_id=native_jobs.actor_id,
+            worker_id="worker-global",
+            component_sha256=other_component,
+            capabilities=["compute.gpu"],
+            capacity=1,
+        )
+    assert refused.value.code == "job_worker_unavailable"
+    assert any("another workspace" in item for item in refused.value.diagnostics)
+    with store.transaction(other, native_jobs.actor_id) as cur:
+        assert store.worker_view(cur, other, "worker-global") is None
+    with store.transaction(native_jobs.workspace_id, native_jobs.actor_id) as cur:
+        assert store.worker_view(cur, native_jobs.workspace_id, "worker-global") is not None
+
+
 def test_append_event_stays_inside_the_native_workspace(native_jobs) -> None:
     """Events land only on a native job in the caller's workspace."""
     _insert_native_job(native_jobs, job_id="events-home")
@@ -627,6 +723,37 @@ def test_append_event_stays_inside_the_native_workspace(native_jobs) -> None:
         written = {row["job_id"] for row in cur.fetchall()}
     assert seq == 1
     assert written == {"events-home"}
+
+
+def test_append_event_concurrent_sequences_without_race(native_jobs) -> None:
+    """Concurrent transactions on one job serialize on the job row without sequence collisions."""
+    import concurrent.futures
+
+    _insert_native_job(native_jobs, job_id="events-concurrent")
+    store = _store(native_jobs)
+
+    def append_one(i: int) -> int:
+        with store.transaction(native_jobs.workspace_id, native_jobs.actor_id) as cur:
+            return store.append_event(
+                cur,
+                workspace_id=native_jobs.workspace_id,
+                job_id="events-concurrent",
+                kind=f"event-{i}",
+                actor=f"worker-{i}",
+            )
+
+    count = 10
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        seqs = list(executor.map(append_one, range(count)))
+
+    assert sorted(seqs) == list(range(1, count + 1))
+    with store.transaction(native_jobs.workspace_id, native_jobs.actor_id) as cur:
+        cur.execute(
+            "SELECT seq, kind FROM omp_jobs.job_events WHERE job_id='events-concurrent' ORDER BY seq"
+        )
+        rows = cur.fetchall()
+    assert [row["seq"] for row in rows] == list(range(1, count + 1))
+    assert len(rows) == count
 
 
 def test_worker_handshake_does_not_replay_across_workspaces(native_jobs) -> None:

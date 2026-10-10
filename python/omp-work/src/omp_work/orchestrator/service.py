@@ -96,6 +96,8 @@ _POST_KINDS = frozenset(
     }
 )
 _TERMINAL_RULES = frozenset({"terminal-needs-basis", "terminal-with-basis"})
+# An orchestrator.json without an "operations" key runs the real stage operations.
+_DEFAULT_OPERATIONS = "omp_work.orchestrator.operations:register"
 _Run = Callable[["StageContext"], "Outcome"]
 _REGISTRY: dict[str, _Run] = {}
 
@@ -235,7 +237,7 @@ def load_config(path: Path | None = None, ops: OperationsConfig | None = None) -
     data = json.loads(source.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise OrchestratorError("invalid_request")
-    operations = data.get("operations") or []
+    operations = data.get("operations", [_DEFAULT_OPERATIONS]) or []
     if not isinstance(operations, list):
         raise OrchestratorError("invalid_request")
 
@@ -920,14 +922,23 @@ class OrchestratorHandler:
         if outcome is not None:
             self._finish_recorded(job, step_index, outcome)
             return Settlement(outcome="succeeded", receipts=[])
-        self.record(
-            step_index,
-            {
-                "kind": "recovery",
-                "rule_id": "lease-recovery",
-                "idempotency_key": f"recovery:{self.mission_id}:{step_index}",
-            },
-        )
+        # One recovery step per faulted stage. A second observe of the same
+        # step replays the stage and does not write another recovery row.
+        if not any(
+            int(step.get("step_index", -1)) == step_index and step.get("kind") == "recovery"
+            for step in steps
+        ):
+            stage = _stage_for(steps, step_index)
+            self.record(
+                step_index,
+                {
+                    "kind": "recovery",
+                    "rule_id": "lease-recovery",
+                    "stage": stage,
+                    "resume": "recovery",
+                    "idempotency_key": f"recovery:{self.mission_id}:{step_index}",
+                },
+            )
         return self._dispatch(job, recovering=True)
 
     def steps(self) -> list[dict[str, Any]]:
@@ -1161,6 +1172,8 @@ class OrchestratorHandler:
         }
         if chosen.decision is not None:
             body["decision_id"] = str(chosen.decision.decision_id)
+        if chosen.kind == "retry":
+            body["resume"] = "retry"
         if chosen.kind in {"advance", "retry", "repair", "reroute", "reschedule"} and chosen.next_stage is not None:
             body["next_job"] = _stage_job(self.mission_id, step_index + 1)
         if chosen.kind == "pause" and chosen.decision is not None:

@@ -1,0 +1,1 @@
+The owner flow prints a designation message that I must sign and give back to the designate step. When I sign exactly what the command printed, designate says the signature is not valid. Make what the command prints directly signable.

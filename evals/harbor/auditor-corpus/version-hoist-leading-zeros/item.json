@@ -1,0 +1,10 @@
+{
+  "item_id": "version-hoist-leading-zeros",
+  "category": "false_positive_bait",
+  "task": "Hoist the leading-zero strip regex into a shared constant; behavior must not change.",
+  "acceptance_criteria": [
+    "compareVersions results are identical before and after the refactor"
+  ],
+  "defects": [],
+  "exposing_test": null
+}

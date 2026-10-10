@@ -1,0 +1,24 @@
+{
+  "project": {
+    "project_id": "00000000-0000-7000-8000-0000000000b1",
+    "name": "The Bookends",
+    "kind": "surface"
+  },
+  "items": [
+    {
+      "key": "OMP-1",
+      "work_id": "00000000-0000-7000-8000-000000000001",
+      "revision_id": "00000000-0000-7000-8000-000000000010",
+      "revision_number": 1,
+      "title": "Break stats ingest-order birth-time ties by path",
+      "description": "Per-session attribution in `omp stats` flips when two session files are created in the same kernel clock tick. The ingest order sorts files by tier and birth time, but when those tie it falls back to the directory listing position, which is unrelated to creation order, so a fork can land before its parent and claim entries it copied. Session files are named `<timestamp>_<id>.jsonl`, so the file path is the creation order. Break the tie by path instead, so a fork created in the same tick stays behind its parent and the parent keeps ownership. The existing tier order must not change.",
+      "scope": "initial/scope",
+      "acceptance_criteria": [
+        "the parent keeps ownership of copied entries when the parent was created first",
+        "the parent keeps ownership of copied entries when the fork was created first",
+        "files created in the same clock tick order by path, not by directory listing position"
+      ],
+      "state": "IN_PROGRESS"
+    }
+  ]
+}

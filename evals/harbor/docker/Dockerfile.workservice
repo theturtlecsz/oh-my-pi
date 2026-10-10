@@ -30,6 +30,7 @@ COPY evals/harbor/docker/workservice-entrypoint.sh /opt/harbor/workservice-entry
 COPY evals/harbor/src/omp_harbor_eval/ledger_seed.py /opt/harbor/ledger_seed.py
 COPY evals/harbor/fixtures/f1/ledger-seed.json /opt/harbor/seeds/f1/ledger-seed.json
 COPY evals/harbor/fixtures/f2/ledger-seed.json /opt/harbor/seeds/f2/ledger-seed.json
+COPY evals/harbor/corpus/tasks /opt/harbor/seeds/corpus
 
 RUN python3 -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip setuptools wheel \

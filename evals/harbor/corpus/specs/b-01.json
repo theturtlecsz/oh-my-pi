@@ -1,0 +1,14 @@
+{
+  "task_id": "b-01",
+  "category": "security_concurrency",
+  "title": "Stop guard install misreads systemd unit files",
+  "source_commit": "dd0ead6bf8c5e8d90d77ef66292249ea17889935",
+  "runner": "pytest",
+  "test_target": "python/omp-work/tests/test_stop_guard_killmode.py",
+  "source_paths": ["python/omp-work/src/omp_work/operations/stop.py"],
+  "instruction": "The agent-stop guard installer checks each systemd unit for a KillMode that would let child processes survive a stop. Two cases go wrong. First, when a unit file cannot be read, the installer acts as if the file were empty and installs the guard anyway. Second, a KillMode line split over several lines with a trailing backslash is not understood, so a unit that really uses KillMode=process is treated as safe. Make the installer read units the way systemd does, and make it fail loudly instead of writing anything when a file cannot be read.",
+  "acceptance_criteria": [
+    "A unit file or drop-in that cannot be read stops the install with an error and writes no files.",
+    "A KillMode setting that is continued over several physical lines is detected like a one-line setting."
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "item_id": "format-bytes-scope",
+  "category": "cross_file_interface",
+  "task": "formatBytes must keep its gigabyte unit contract for values at or above 1 GiB.",
+  "acceptance_criteria": [
+    "formatBytes(2 * 1024 ** 3) renders a GB unit suffix"
+  ],
+  "defects": [
+    {
+      "path": "packages/utils/src/format.ts",
+      "line_start": 58,
+      "line_end": null,
+      "severity": "MEDIUM"
+    }
+  ],
+  "exposing_test": null
+}

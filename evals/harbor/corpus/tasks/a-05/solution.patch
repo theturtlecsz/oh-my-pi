@@ -1,0 +1,553 @@
+diff --git a/packages/coding-agent/src/autoresearch/index.ts b/packages/coding-agent/src/autoresearch/index.ts
+index 043562c93e..155a98ad81 100644
+--- a/packages/coding-agent/src/autoresearch/index.ts
++++ b/packages/coding-agent/src/autoresearch/index.ts
+@@ -19,6 +19,7 @@ import {
+ 	findBestKeptMetric,
+ 	reconstructControlState,
+ } from "./state";
++import { importManagedResults } from "./managed-import";
+ import { openAutoresearchStorage, openAutoresearchStorageIfExists, type RunRow, type SessionRow } from "./storage";
+ import { createHypothesisTournamentTool } from "./tools/hypothesis-tournament";
+ import { createInitExperimentTool } from "./tools/init-experiment";
+@@ -130,8 +131,42 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
+ 	api.registerTool(createUpdateNotesTool({ dashboard, getRuntime, pi: api }));
+ 	api.registerTool(createHypothesisTournamentTool({ dashboard, getRuntime, pi: api }));
+ 
++	const importManaged = async (
++		ctx: ExtensionContext,
++		runtime: AutoresearchRuntime,
++		fileArg: string,
++	): Promise<void> => {
++		if (fileArg.length === 0) {
++			ctx.ui.notify("import-managed requires a results file.", "error");
++			return;
++		}
++		const filePath = path.isAbsolute(fileArg) ? fileArg : path.resolve(ctx.cwd, fileArg);
++		let text: string;
++		try {
++			text = fs.readFileSync(filePath, "utf8");
++		} catch (err) {
++			ctx.ui.notify(`Failed to read managed results: ${err instanceof Error ? err.message : String(err)}`, "error");
++			return;
++		}
++		const currentBranch = await tryReadBranch(ctx.cwd);
++		const storage = await openAutoresearchStorageIfExists(ctx.cwd);
++		const session = storage?.getActiveSessionForBranch(currentBranch) ?? null;
++		if (!storage || !session) {
++			ctx.ui.notify("No active autoresearch session.", "error");
++			return;
++		}
++		const outcome = importManagedResults(storage, session.id, text);
++		const refreshed = storage.getSessionById(session.id) ?? session;
++		runtime.state = buildExperimentState(refreshed, storage.listLoggedRuns(refreshed.id));
++		dashboard.updateWidget(ctx, runtime);
++		ctx.ui.notify(
++			`imported ${outcome.imported}, rejected ${outcome.rejected}, incompatible ${outcome.incompatible}, skipped ${outcome.skipped}`,
++			"info",
++		);
++	};
++
+ 	api.registerCommand("autoresearch", {
+-		description: "Toggle builtin autoresearch mode, or pass off / clear, or a goal message.",
++		description: "Toggle builtin autoresearch mode, or pass off / clear / import-managed, or a goal message.",
+ 		getArgumentCompletions(argumentPrefix: string): AutocompleteItem[] | null {
+ 			if (argumentPrefix.includes(" ")) return null;
+ 			const normalized = argumentPrefix.trim().toLowerCase();
+@@ -143,6 +178,11 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
+ 					value: "clear",
+ 					description: "Reset worktree to baseline and close the active session",
+ 				},
++				{
++					label: "import-managed",
++					value: "import-managed",
++					description: "Import managed results as unverified runs",
++				},
+ 			];
+ 			const filtered = completions.filter(item => item.label.startsWith(normalized));
+ 			return filtered.length > 0 ? filtered : null;
+@@ -177,6 +217,12 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
+ 				return;
+ 			}
+ 
++			if (trimmed === "import-managed" || trimmed.startsWith("import-managed ")) {
++				const fileArg = trimmed === "import-managed" ? "" : trimmed.slice("import-managed ".length).trim();
++				await importManaged(ctx, runtime, fileArg);
++				return;
++			}
++
+ 			const goalArg = trimmed.length > 0 ? trimmed : null;
+ 			const branchResult = await ensureAutoresearchBranch(api, ctx.cwd, goalArg ?? runtime.goal);
+ 			if (!branchResult.ok) {
+diff --git a/packages/coding-agent/src/autoresearch/managed-import.ts b/packages/coding-agent/src/autoresearch/managed-import.ts
+new file mode 100644
+index 0000000000..a36e381a3c
+--- /dev/null
++++ b/packages/coding-agent/src/autoresearch/managed-import.ts
+@@ -0,0 +1,165 @@
++import type { ExperimentStatus, NumericMetricMap } from "@oh-my-pi/pi-tui/tools/autoresearch";
++import { AutoresearchStorage, type SessionRow } from "./storage";
++
++const MANAGED_FORMAT = "omp-managed-result.v1";
++
++const MANAGED_KEYS = [
++	"format",
++	"trial_id",
++	"campaign_id",
++	"receipt_sha256",
++	"candidate_digest",
++	"verdict",
++	"primary_metric",
++	"direction",
++	"metrics",
++	"description",
++] as const;
++
++const VERDICT_STATUS = {
++	qualified: "keep",
++	candidate_failed: "crash",
++	evaluator_failed: "checks_failed",
++} as const;
++
++const RECEIPT_SHA256 = /^[0-9a-fA-F]{64}$/;
++
++export interface ParsedManagedResult {
++	trialId: string;
++	campaignId: string;
++	receiptSha256: string;
++	candidateDigest: string;
++	status: ExperimentStatus;
++	description: string;
++	metric: number;
++	metrics: NumericMetricMap;
++}
++
++export interface ParsedManagedResults {
++	accepted: ParsedManagedResult[];
++	rejected: number;
++	incompatible: number;
++}
++
++export interface ImportManagedResultsCounts {
++	imported: number;
++	rejected: number;
++	incompatible: number;
++	skipped: number;
++}
++
++/** Read omp-managed-result.v1 JSONL. Blank lines are ignored. */
++export function parseManagedResults(text: string, session: SessionRow): ParsedManagedResults {
++	const accepted: ParsedManagedResult[] = [];
++	let rejected = 0;
++	let incompatible = 0;
++	for (const rawLine of text.split(/\r?\n/)) {
++		const line = rawLine.trim();
++		if (line.length === 0) continue;
++		const outcome = classifyLine(line, session);
++		if (outcome === "rejected") rejected += 1;
++		else if (outcome === "incompatible") incompatible += 1;
++		else accepted.push(outcome);
++	}
++	return { accepted, rejected, incompatible };
++}
++
++/**
++ * Log each accepted line as a flagged current-segment run.
++ * A trial id already stored for the session, including one imported earlier in this call, is skipped.
++ */
++export function importManagedResults(
++	storage: AutoresearchStorage,
++	sessionId: number,
++	text: string,
++): ImportManagedResultsCounts {
++	const session = storage.getSessionById(sessionId);
++	if (!session) throw new Error(`Session ${sessionId} not found`);
++	const parsed = parseManagedResults(text, session);
++	const known = new Set(storage.listManagedTrialIds(sessionId));
++	let imported = 0;
++	let skipped = 0;
++	const loggedAt = Date.now();
++	for (const line of parsed.accepted) {
++		if (known.has(line.trialId)) {
++			skipped += 1;
++			continue;
++		}
++		storage.insertImportedRun({
++			sessionId,
++			segment: session.currentSegment,
++			status: line.status,
++			description: line.description,
++			metric: line.metric,
++			metrics: line.metrics,
++			trialId: line.trialId,
++			receiptSha256: line.receiptSha256,
++			loggedAt,
++		});
++		known.add(line.trialId);
++		imported += 1;
++	}
++	return {
++		imported,
++		rejected: parsed.rejected,
++		incompatible: parsed.incompatible,
++		skipped,
++	};
++}
++
++function classifyLine(line: string, session: SessionRow): ParsedManagedResult | "rejected" | "incompatible" {
++	let parsed: unknown;
++	try {
++		parsed = JSON.parse(line) as unknown;
++	} catch {
++		return "rejected";
++	}
++	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return "rejected";
++	const record = parsed as Record<string, unknown>;
++	if (!hasExactKeys(record)) return "rejected";
++	if (record.format !== MANAGED_FORMAT) return "rejected";
++	if (typeof record.trial_id !== "string" || record.trial_id.length === 0) return "rejected";
++	if (typeof record.campaign_id !== "string") return "rejected";
++	if (typeof record.candidate_digest !== "string") return "rejected";
++	if (typeof record.description !== "string") return "rejected";
++	if (typeof record.receipt_sha256 !== "string" || !RECEIPT_SHA256.test(record.receipt_sha256)) return "rejected";
++	if (typeof record.verdict !== "string" || !Object.hasOwn(VERDICT_STATUS, record.verdict)) return "rejected";
++	if (typeof record.primary_metric !== "string") return "rejected";
++	if (typeof record.direction !== "string") return "rejected";
++	const metrics = parseMetrics(record.metrics, record.primary_metric);
++	if (!metrics) return "rejected";
++	const metric = metrics[record.primary_metric];
++	if (metric === undefined) return "rejected";
++	if (record.primary_metric !== session.primaryMetric || record.direction !== session.direction) {
++		return "incompatible";
++	}
++	const verdict = record.verdict as keyof typeof VERDICT_STATUS;
++	return {
++		trialId: record.trial_id,
++		campaignId: record.campaign_id,
++		receiptSha256: record.receipt_sha256,
++		candidateDigest: record.candidate_digest,
++		status: VERDICT_STATUS[verdict],
++		description: record.description,
++		metric,
++		metrics,
++	};
++}
++
++function hasExactKeys(record: Record<string, unknown>): boolean {
++	const keys = Object.keys(record);
++	if (keys.length !== MANAGED_KEYS.length) return false;
++	return MANAGED_KEYS.every(key => Object.hasOwn(record, key));
++}
++
++function parseMetrics(value: unknown, primaryMetric: string): NumericMetricMap | null {
++	if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
++	const metrics: NumericMetricMap = {};
++	for (const [key, metric] of Object.entries(value)) {
++		if (key === "__proto__" || key === "constructor" || key === "prototype") return null;
++		if (typeof metric !== "number" || !Number.isFinite(metric)) return null;
++		metrics[key] = metric;
++	}
++	if (!Object.hasOwn(metrics, primaryMetric)) return null;
++	return metrics;
++}
+diff --git a/packages/coding-agent/src/autoresearch/state.ts b/packages/coding-agent/src/autoresearch/state.ts
+index 00112e1431..f20f59e680 100644
+--- a/packages/coding-agent/src/autoresearch/state.ts
++++ b/packages/coding-agent/src/autoresearch/state.ts
+@@ -68,13 +68,15 @@ export function cloneExperimentState(state: ExperimentState): ExperimentState {
+ }
+ 
+ function cloneResult(result: ExperimentResult): ExperimentResult {
+-	return {
++	const cloned: ExperimentResult = {
+ 		...result,
+ 		metrics: { ...result.metrics },
+ 		asi: result.asi ? structuredClone(result.asi) : undefined,
+ 		modifiedPaths: [...result.modifiedPaths],
+ 		scopeDeviations: [...result.scopeDeviations],
+ 	};
++	if (result.provenance) cloned.provenance = { ...result.provenance };
++	return cloned;
+ }
+ 
+ export function findBestKeptMetric(
+@@ -167,6 +169,13 @@ export function buildExperimentState(session: SessionRow, loggedRuns: RunRow[]):
+ 			flagged: run.flagged,
+ 			flaggedReason: run.flaggedReason,
+ 		};
++		if (run.managedTrialId !== null && run.managedReceiptSha256 !== null) {
++			result.provenance = {
++				mode: "imported",
++				trialId: run.managedTrialId,
++				receiptSha256: run.managedReceiptSha256,
++			};
++		}
+ 		state.results.push(result);
+ 		if (run.segment === state.currentSegment) {
+ 			registerSecondaryMetrics(state.secondaryMetrics, result.metrics);
+diff --git a/packages/coding-agent/src/autoresearch/storage.ts b/packages/coding-agent/src/autoresearch/storage.ts
+index c89216faf7..3c0214562e 100644
+--- a/packages/coding-agent/src/autoresearch/storage.ts
++++ b/packages/coding-agent/src/autoresearch/storage.ts
+@@ -68,6 +68,8 @@ export interface RunRow {
+ 	flaggedReason: string | null;
+ 	loggedAt: number | null;
+ 	abandonedAt: number | null;
++	managedTrialId: string | null;
++	managedReceiptSha256: string | null;
+ }
+ 
+ export interface OpenSessionParams {
+@@ -137,6 +139,18 @@ export interface MarkRunLoggedParams {
+ 	loggedAt: number;
+ }
+ 
++export interface InsertImportedRunParams {
++	sessionId: number;
++	segment: number;
++	status: ExperimentStatus;
++	description: string;
++	metric: number;
++	metrics: NumericMetricMap;
++	trialId: string;
++	receiptSha256: string;
++	loggedAt: number;
++}
++
+ type SessionDbRow = {
+ 	id: number;
+ 	name: string;
+@@ -187,9 +201,11 @@ type RunDbRow = {
+ 	flagged_reason: string | null;
+ 	logged_at: number | null;
+ 	abandoned_at: number | null;
++	managed_trial_id: string | null;
++	managed_receipt_sha256: string | null;
+ };
+ 
+-const SCHEMA_VERSION = 1;
++const SCHEMA_VERSION = 2;
+ 
+ const SCHEMA_SQL = `
+ PRAGMA journal_mode=WAL;
+@@ -245,7 +261,9 @@ CREATE TABLE IF NOT EXISTS runs (
+ 	flagged INTEGER NOT NULL DEFAULT 0,
+ 	flagged_reason TEXT,
+ 	logged_at INTEGER,
+-	abandoned_at INTEGER
++	abandoned_at INTEGER,
++	managed_trial_id TEXT,
++	managed_receipt_sha256 TEXT
+ );
+ 
+ CREATE INDEX IF NOT EXISTS runs_session_segment_idx ON runs(session_id, segment);
+@@ -265,6 +283,7 @@ export class AutoresearchStorage {
+ 		// Install the busy handler BEFORE any lock-taking statement. See #2421.
+ 		this.#db.run("PRAGMA busy_timeout = 5000");
+ 		this.#db.run(SCHEMA_SQL);
++		this.#ensureManagedRunColumns();
+ 		const versionRow = this.#db.query("PRAGMA user_version").get() as { user_version: number } | null;
+ 		const currentVersion = versionRow?.user_version ?? 0;
+ 		if (currentVersion < SCHEMA_VERSION) {
+@@ -502,6 +521,39 @@ export class AutoresearchStorage {
+ 		return this.getRunByIdRequired(runId);
+ 	}
+ 
++	insertImportedRun(params: InsertImportedRunParams): RunRow {
++		const stmt = this.#db.prepare<{ id: number }, SQLQueryBindings[]>(
++			`INSERT INTO runs (
++				session_id, segment, command, started_at, log_path,
++				status, description, metric, metrics_json,
++				flagged, flagged_reason, logged_at,
++				managed_trial_id, managed_receipt_sha256
++			) VALUES (?, ?, 'import-managed', ?, 'import-managed', ?, ?, ?, ?, 1, 'imported-unverified', ?, ?, ?)
++			RETURNING id`,
++		);
++		const row = stmt.get(
++			params.sessionId,
++			params.segment,
++			params.loggedAt,
++			params.status,
++			params.description,
++			params.metric,
++			JSON.stringify(params.metrics),
++			params.loggedAt,
++			params.trialId,
++			params.receiptSha256,
++		);
++		if (!row) throw new Error("Failed to insert imported run");
++		return this.getRunByIdRequired(row.id);
++	}
++
++	listManagedTrialIds(sessionId: number): string[] {
++		const stmt = this.#db.prepare<{ managed_trial_id: string }, [number]>(
++			"SELECT managed_trial_id FROM runs WHERE session_id = ? AND managed_trial_id IS NOT NULL",
++		);
++		return stmt.all(sessionId).map(row => row.managed_trial_id);
++	}
++
+ 	abandonPendingRuns(sessionId: number): number {
+ 		const beforeRow = this.#db
+ 			.prepare<{ n: number }, [number]>(
+@@ -547,6 +599,12 @@ export class AutoresearchStorage {
+ 		);
+ 		return stmt.all(sessionId).map(rowToRun);
+ 	}
++
++	/** v1 databases predate these columns. ADD COLUMN keeps every existing row. */
++	#ensureManagedRunColumns(): void {
++		ensureColumn(this.#db, "managed_trial_id");
++		ensureColumn(this.#db, "managed_receipt_sha256");
++	}
+ }
+ 
+ const storageCache = new Map<string, AutoresearchStorage>();
+@@ -654,9 +712,17 @@ function rowToRun(row: RunDbRow): RunRow {
+ 		flaggedReason: row.flagged_reason,
+ 		loggedAt: row.logged_at,
+ 		abandonedAt: row.abandoned_at,
++		managedTrialId: row.managed_trial_id,
++		managedReceiptSha256: row.managed_receipt_sha256,
+ 	};
+ }
+ 
++function ensureColumn(db: Database, column: string): void {
++	const columns = db.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
++	if (columns.some(col => col.name === column)) return;
++	db.run(`ALTER TABLE runs ADD COLUMN ${column} TEXT`);
++}
++
+ function parseStatus(value: string | null): ExperimentStatus | null {
+ 	if (value === "keep" || value === "discard" || value === "crash" || value === "checks_failed") return value;
+ 	return null;
+diff --git a/packages/tui/src/apps/autoresearch-dashboard.ts b/packages/tui/src/apps/autoresearch-dashboard.ts
+index dbd3874079..903fe5db17 100644
+--- a/packages/tui/src/apps/autoresearch-dashboard.ts
++++ b/packages/tui/src/apps/autoresearch-dashboard.ts
+@@ -13,6 +13,7 @@ import {
+ 	findBaselineSecondary,
+ 	formatElapsed,
+ 	isBetter,
++	provenanceLabel,
+ } from "./autoresearch-data";
+ import { formatNum, type ExperimentResult, type ExperimentState } from "../tools/autoresearch";
+ import type { TspSpan, TspTableColumn, TspText } from "@oh-my-pi/pi-wire";
+@@ -255,9 +256,15 @@ function describeTitle(runtime: AutoresearchDashboardRuntime): TspSpan[] {
+ 	const spans = [span(state.name ? `autoresearch: ${replaceTabs(state.name)}` : "autoresearch", "accent")];
+ 	const status = renderModeStatus(runtime, state);
+ 	if (status) spans.push(span(` · ${status}`, "muted"));
++	if (showUnmanagedLegacy(state)) spans.push(span(" · unmanaged (legacy)", "muted"));
+ 	return spans;
+ }
+ 
++/** True when the current segment has no managed import. */
++function showUnmanagedLegacy(state: ExperimentState): boolean {
++	return !currentResults(state.results, state.currentSegment).some(result => result.provenance?.mode === "imported");
++}
++
+ /** Widget shown while the very first run is in flight. */
+ function describeRunningOnly(runtime: AutoresearchDashboardRuntime, state: ExperimentState): NativeNode {
+ 	const children: NativeNode[] = [
+@@ -450,6 +457,7 @@ function describeDashboard(runtime: AutoresearchDashboardRuntime, maxRows: numbe
+ 			priority: 1,
+ 		})),
+ 		{ id: "status", head: [span("status", "muted")], priority: 4 },
++		{ id: "src", head: [span("src", "muted")], truncate: "end", priority: 3 },
+ 		{ id: "description", head: [span("description", "muted")], truncate: "end", grow: 1, priority: 2 },
+ 	];
+ 	const indexed = state.results
+@@ -463,6 +471,7 @@ function describeDashboard(runtime: AutoresearchDashboardRuntime, maxRows: numbe
+ 			commit: [span(result.commit || "-", "accent")],
+ 			metric: [span(formatNum(result.metric, state.metricUnit), token)],
+ 			status: [span(result.status, token)],
++			src: [span(provenanceLabel(result), "muted")],
+ 			description: [span(replaceTabs(result.description), "muted")],
+ 		};
+ 		state.secondaryMetrics.forEach((metric, metricIndex) => {
+@@ -544,7 +553,9 @@ function shouldShowDashboard(runtime: AutoresearchDashboardRuntime, state: Exper
+ function renderExpandedHeader(runtime: AutoresearchDashboardRuntime, width: number, theme: Theme): string {
+ 	const state = runtime.state;
+ 	const status = renderModeStatus(runtime, state);
+-	const label = state.name ? ` autoresearch: ${replaceTabs(state.name)} ` : " autoresearch ";
++	const name = state.name ? `autoresearch: ${replaceTabs(state.name)}` : "autoresearch";
++	const legacy = showUnmanagedLegacy(state) ? " unmanaged (legacy)" : "";
++	const label = ` ${name}${legacy} `;
+ 	const hint = theme.fg(
+ 		"dim",
+ 		` ${formatKeyHint("ctrl+x")} collapse  ${formatKeyHint("ctrl+shift+x")} overlay${status ? `  ${status}` : ""} `,
+@@ -734,13 +745,14 @@ export function renderDashboardLines(
+ }
+ 
+ function experimentColumns(state: ExperimentState, width: number): TableColumn[] {
+-	const fixed = 4 + 10 + 12 + 11 * state.secondaryMetrics.length + 14;
++	const fixed = 4 + 10 + 12 + 11 * state.secondaryMetrics.length + 14 + 19;
+ 	return [
+ 		{ width: 4, align: "left", overflow: "truncate" },
+ 		{ width: 10, align: "left", overflow: "truncate" },
+ 		{ width: 12, align: "left", overflow: "truncate" },
+ 		...state.secondaryMetrics.map((): TableColumn => ({ width: 11, align: "left", overflow: "truncate" })),
+ 		{ width: 14, align: "left", overflow: "truncate" },
++		{ width: 19, align: "left", overflow: "truncate" },
+ 		{ width: Math.max(8, width - fixed), align: "left", overflow: "truncate", minWidth: 8 },
+ 	];
+ }
+@@ -758,6 +770,7 @@ function renderTableHeader(
+ 		{ text: state.metricName, style: text => theme.fg("warning", text) },
+ 		...state.secondaryMetrics.map((metric): TableCell => ({ text: truncateToWidth(metric.name, 10), style: muted })),
+ 		{ text: "status", style: muted },
++		{ text: "src", style: muted },
+ 		{ text: "description", style: muted },
+ 	];
+ 	return truncateToWidth(renderTableRow(cells, columns, width, { gap: "" }), width);
+@@ -785,6 +798,7 @@ function renderResultRow(
+ 			),
+ 		})),
+ 		{ text: result.status, style: statusStyle },
++		{ text: provenanceLabel(result), style: text => theme.fg("muted", text) },
+ 		{ text: replaceTabs(result.description), style: text => theme.fg("muted", text) },
+ 	];
+ 	return truncateToWidth(renderTableRow(cells, columns, width, { gap: "" }), width);
+@@ -856,7 +870,9 @@ function findBestResult(state: ExperimentState): { index: number; result: Experi
+ 	let best: { index: number; result: ExperimentResult } | null = null;
+ 	for (let index = 0; index < state.results.length; index += 1) {
+ 		const result = state.results[index];
+-		if (result.segment !== state.currentSegment || result.status !== "keep" || result.metric <= 0) continue;
++		if (result.segment !== state.currentSegment || result.status !== "keep" || result.flagged || result.metric <= 0) {
++			continue;
++		}
+ 		if (!best || isBetter(result.metric, best.result.metric, state.bestDirection)) {
+ 			best = { index, result };
+ 		}
+diff --git a/packages/tui/src/apps/autoresearch-data.ts b/packages/tui/src/apps/autoresearch-data.ts
+index b753b3c64b..743f2797af 100644
+--- a/packages/tui/src/apps/autoresearch-data.ts
++++ b/packages/tui/src/apps/autoresearch-data.ts
+@@ -21,6 +21,11 @@ export function currentResults(results: ExperimentResult[], segment: number): Ex
+ 	return results.filter(result => result.segment === segment);
+ }
+ 
++/** Label a run's source. Managed imports stay unverified on this side. */
++export function provenanceLabel(result: ExperimentResult): "imported-unverified" | "unmanaged" {
++	return result.provenance?.mode === "imported" ? "imported-unverified" : "unmanaged";
++}
++
+ /** Find the first unflagged kept experiment in a segment. */
+ export function findBaselineResult(results: ExperimentResult[], segment: number): ExperimentResult | null {
+ 	return currentResults(results, segment).find(result => result.status === "keep" && !result.flagged) ?? null;
+diff --git a/packages/tui/src/tools/autoresearch.ts b/packages/tui/src/tools/autoresearch.ts
+index ec9db95971..5b746e118b 100644
+--- a/packages/tui/src/tools/autoresearch.ts
++++ b/packages/tui/src/tools/autoresearch.ts
+@@ -52,6 +52,12 @@ export interface ExperimentResult {
+ 	justification: string | null;
+ 	flagged: boolean;
+ 	flaggedReason: string | null;
++	/** Set for a managed-results import. Absent means an unmanaged (legacy) run. */
++	provenance?: {
++		mode: "imported";
++		trialId: string;
++		receiptSha256: string;
++	};
+ }
+ 
+ /** Current experiment baseline, history, and scope. */

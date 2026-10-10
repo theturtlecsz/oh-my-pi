@@ -1,0 +1,23 @@
+{
+  "project": {
+    "project_id": "00000000-0000-7000-8000-0000000000b1",
+    "name": "The Bookends",
+    "kind": "surface"
+  },
+  "items": [
+    {
+      "key": "OMP-1",
+      "work_id": "00000000-0000-7000-8000-000000000001",
+      "revision_id": "00000000-0000-7000-8000-000000000010",
+      "revision_number": 1,
+      "title": "Any directory that fakes a git pointer is treated as a trusted project",
+      "description": "Project trust follows linked git worktrees: a worktree of a trusted repository counts as trusted. A directory I made by hand, with a .git file that only points at a trusted repository or at a worktree admin directory of it, is also treated as trusted, so it can run project config and extensions without a prompt. Only genuine linked worktrees may inherit trust. Also, a trusted-projects file with a wrong format marker should not be read as a trust list.",
+      "scope": "initial/scope",
+      "acceptance_criteria": [
+        "A directory with a spoofed gitdir pointer, or one that borrows another worktree's admin directory, is not trusted.",
+        "A trusted-projects file whose format marker is not the supported number is ignored."
+      ],
+      "state": "IN_PROGRESS"
+    }
+  ]
+}

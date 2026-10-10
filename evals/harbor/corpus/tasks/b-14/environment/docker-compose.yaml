@@ -1,0 +1,71 @@
+# Zero-spend isolated Harbor environment.
+#
+# Qualified by `python -m omp_harbor_eval.isolation topology/compose.yaml`.
+# The worker shares the workservice network namespace, so its loopback reaches
+# the service; it holds no docker socket, shares no volume with the service or
+# the verifier, and carries no secret-bearing environment. The verifier reads
+# sealed evidence read-only and never joins the worker's network namespace.
+name: omp-harbor-zero-spend
+
+services:
+  workservice:
+    image: omp-workservice:dev
+    command: ["bash", "/opt/harbor/workservice-entrypoint.sh"]
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    environment:
+      OMP_SERVICE_BIND_HOST: 127.0.0.1
+      OMP_SERVICE_BIND_PORT: "8080"
+      OMP_HARBOR_LEDGER_SEED: /opt/harbor/seeds/f2/ledger-seed.json
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ${HOME}/.local/state/omp/harbor-fixtures:/run/omp/supplied:ro
+
+  worker:
+    image: omp-agent:dev
+    command: ["sleep", "infinity"]
+    cap_drop:
+      - ALL
+    cap_add: []
+    network_mode: service:workservice
+    working_dir: /workspace
+    environment:
+      HOME: /home/agent
+      OMP_WORKSERVICE_URL: http://127.0.0.1:8080
+      OMP_SCRIPTED_MODEL_URL: http://127.0.0.1:9090/v1
+    volumes:
+      - worker_workspace:/workspace
+      - worker_home:/home/agent
+    depends_on:
+      - workservice
+
+  verifier:
+    image: omp-verifier:dev
+    cap_drop:
+      - ALL
+    cap_add: []
+    network_mode: none
+    environment:
+      OMP_EVIDENCE_DIR: /evidence
+    volumes:
+      - evidence:/evidence:ro
+      - grader:/opt/grader
+
+  main:
+    image: omp-agent:dev
+    cap_drop:
+      - ALL
+    cap_add: []
+
+volumes:
+  pg_data: {}
+  evidence: {}
+  grader: {}
+  worker_workspace: {}
+  worker_home: {}

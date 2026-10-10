@@ -1,0 +1,24 @@
+{
+  "project": {
+    "project_id": "00000000-0000-7000-8000-0000000000b1",
+    "name": "The Bookends",
+    "kind": "surface"
+  },
+  "items": [
+    {
+      "key": "OMP-1",
+      "work_id": "00000000-0000-7000-8000-000000000001",
+      "revision_id": "00000000-0000-7000-8000-000000000010",
+      "revision_number": 1,
+      "title": "Host reconnect to the collab relay drops guests when the relay refuses it",
+      "description": "When a collab host reconnects after a drop, the client resets the room and drains its send queue as soon as the socket opens. The relay refuses a duplicate host a moment later, so the guest list is lost and the queued backlog goes into a socket that is already doomed. Hold the reconnect open as provisional until the relay has had a chance to refuse it. If the relay accepts it, reset the room before any frame is dispatched.",
+      "scope": "initial/scope",
+      "acceptance_criteria": [
+        "A refused reconnect leaves the room state and the send queue untouched.",
+        "The first relay message confirms the reconnect and the room reset happens before that message is dispatched.",
+        "relay-client exports HOST_RECLAIM_CONFIRM_MS, the time in milliseconds that a reclaim stays provisional."
+      ],
+      "state": "IN_PROGRESS"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "item_id": "incoming-json-serial-order",
+  "category": "concurrency",
+  "task": "concurrent nextChunk pulls on one IncomingString cursor must be served in call order.",
+  "acceptance_criteria": [
+    "two pending nextChunk calls resolve in the order they were issued"
+  ],
+  "defects": [
+    {
+      "path": "packages/utils/src/incoming-json.ts",
+      "line_start": 709,
+      "line_end": null,
+      "severity": "HIGH"
+    }
+  ],
+  "exposing_test": {
+    "runner": "bun",
+    "target": "packages/utils/test/incoming-json.test.ts"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "id": "b-11",
+  "scored_experiment": "repair",
+  "seed_patch": "seed.patch",
+  "solution_patch": "solution.patch",
+  "independent_tests": [
+    {
+      "runner": "bun",
+      "target": "packages/coding-agent/test/extensibility/custom-commands/review.test.ts",
+      "files": [
+        "independent/review.test.ts"
+      ]
+    }
+  ],
+  "scenario": "scenario.json",
+  "rules": [
+    {
+      "type": "independent_tests_pass"
+    }
+  ]
+}

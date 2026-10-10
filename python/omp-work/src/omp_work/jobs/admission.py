@@ -706,7 +706,10 @@ def _claimable(
         return False
     if not set(_json_list(job["required_capabilities"])) <= held:
         return False
-    if store.cancelled_ancestor(cur, workspace_id, str(job["job_id"])) is not None:
+    try:
+        if store.cancelled_ancestor(cur, workspace_id, str(job["job_id"])) is not None:
+            return False
+    except JobError:
         return False
     trial_id = job["trial_id"]
     if trial_id is None:

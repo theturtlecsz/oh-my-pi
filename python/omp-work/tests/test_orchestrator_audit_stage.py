@@ -23,6 +23,7 @@ from psycopg.rows import dict_row
 import pytest
 
 from omp_work.orchestrator import operations, service
+from omp_work.orchestrator import worker_sandbox
 from omp_work.orchestrator.service import (
     LeaseClaim,
     OrchestratorHandler,
@@ -752,3 +753,135 @@ def test_audit_stage_missing_evaluate_stage_fails_named(
     assert outcome.outcome == "failed"
     assert outcome.data.get("code") == "evaluate_missing"
     assert commands_called == []
+
+
+@pytest.mark.parametrize("stop", ["lease_dead", "sandbox_refused"])
+def test_audit_stage_stopped_launch_does_not_retry(
+    service, tmp_path: Path, monkeypatch, stop: str
+) -> None:
+    """Lease loss or sandbox refusal cancels one launch and returns crashed."""
+    world, worker, work_id = _open(service, tmp_path / stop, monkeypatch)
+    _tick_to_push(world, worker)
+    calls = []
+
+    def stopped_sandbox(ctx, argv, worktree, **kwargs):
+        calls.append(kwargs["identity"])
+        if stop == "sandbox_refused":
+            raise worker_sandbox.WorkerSandboxRefused("identity_not_allowed")
+        return None
+
+    monkeypatch.setattr(operations, "_sandbox", stopped_sandbox)
+    worker.tick()
+
+    audit = _outcomes(world, "audit")[-1]
+    assert audit["outcome"] == "crashed"
+    assert audit["data"]["code"] == (
+        "lease_dead" if stop == "lease_dead" else "identity_not_allowed"
+    )
+    assert calls == ["verifier"]
+    attempt, = _attempts(world, work_id)
+    assert attempt["launch_count"] == attempt["cancelled_launch_count"] == 1
+    assert attempt["accepted_report_count"] == 0
+    done = [s for s in _steps(world) if s.get("kind") == "external_done"]
+    assert any(
+        s.get("external_ref") == f"verifier:{attempt['attempt_id']}:1"
+        and s.get("ref") == "crashed"
+        for s in done
+    )
+
+
+@pytest.mark.parametrize("verdict_file", ["pass", "malformed", "non_mapping"])
+def test_audit_stage_nonzero_with_verdict_does_not_retry(
+    service, tmp_path: Path, monkeypatch, verdict_file: str
+) -> None:
+    """A verdict file keeps the acceptance path after a nonzero exit."""
+    world, worker, work_id = _open(service, tmp_path / verdict_file, monkeypatch)
+    _tick_to_push(world, worker)
+    real_sandbox = operations._sandbox
+
+    def nonzero_sandbox(ctx, argv, worktree, **kwargs):
+        assert real_sandbox(ctx, argv, worktree, **kwargs) == 0
+        if verdict_file != "pass":
+            (worktree / ".omp" / "verdict.json").write_text(
+                "{" if verdict_file == "malformed" else "[]", encoding="utf-8"
+            )
+        return 7
+
+    monkeypatch.setattr(operations, "_sandbox", nonzero_sandbox)
+    worker.tick()
+
+    audit = _outcomes(world, "audit")[-1]
+    accepted = verdict_file == "pass"
+    assert audit["outcome"] == ("succeeded" if accepted else "failed")
+    assert audit["verdict"] == ("pass" if accepted else "fail")
+    attempt, = _attempts(world, work_id)
+    assert attempt["launch_count"] == 1
+    assert attempt["accepted_report_count"] == int(accepted)
+    assert attempt["cancelled_launch_count"] == int(not accepted)
+
+
+def test_audit_stage_exhaustion_records_failed_verdict_before_pause(
+    service, tmp_path: Path, monkeypatch
+) -> None:
+    """Three crashes exhaust the attempt and the next decision pauses."""
+    world, worker, work_id = _open(
+        service, tmp_path / "exhausted", monkeypatch, verifier_mode="crash"
+    )
+    _tick_to_push(world, worker)
+    worker.tick()
+
+    audit = _outcomes(world, "audit")[-1]
+    assert audit["outcome"] == "failed"
+    assert audit["verdict"] == "fail"
+    assert audit["blocker"] == "auditor_launches_exhausted"
+    attempt, = _attempts(world, work_id)
+    assert attempt["launch_count"] == attempt["cancelled_launch_count"] == 3
+    assert attempt["accepted_report_count"] == 0
+    for n in range(1, 4):
+        assert any(
+            s.get("kind") == "external_done"
+            and s.get("external_ref") == f"verifier:{attempt['attempt_id']}:{n}"
+            and s.get("ref") == "crashed"
+            for s in _steps(world)
+        )
+    worker.tick()
+    pause = _steps(world)[-1]
+    assert pause["kind"] == "pause"
+    assert pause["rule_id"] == "unrecoverable-blocker"
+
+
+def test_audit_stage_recovery_reads_attempt_after_cancellation(
+    service, tmp_path: Path, monkeypatch
+) -> None:
+    """Recovery uses the workflow view when cancellation returns no attempt."""
+    world, worker, work_id = _open(service, tmp_path / "refresh", monkeypatch)
+    _tick_to_push(world, worker)
+    crash_after_command(monkeypatch, "reserve_auditor_launch")
+    with pytest.raises(SimulatedCrash):
+        worker.tick()
+    _expire_lease(world)
+    real_command = StageContext.command
+
+    def without_attempt(self, type, payload, **kwargs):
+        result = real_command(self, type, payload, **kwargs)
+        if type == "cancel_auditor_launch":
+            result = dict(result)
+            result.pop("attempt", None)
+        return result
+
+    monkeypatch.setattr(StageContext, "command", without_attempt)
+    worker.tick()
+
+    audit = _outcomes(world, "audit")[-1]
+    assert audit["outcome"] == "succeeded"
+    assert audit["verdict"] == "pass"
+    attempt, = _attempts(world, work_id)
+    assert attempt["launch_count"] == 2
+    assert attempt["cancelled_launch_count"] == attempt["accepted_report_count"] == 1
+    for n, ref in ((1, "cancelled"), (2, "settled")):
+        assert any(
+            s.get("kind") == "external_done"
+            and s.get("external_ref") == f"verifier:{attempt['attempt_id']}:{n}"
+            and s.get("ref") == ref
+            for s in _steps(world)
+        )

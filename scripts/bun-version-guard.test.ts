@@ -43,6 +43,7 @@ describe("bunVersionMismatch", () => {
 		expect(bunVersionMismatch("1.4.1", "bun@>=1.4.0")).toBeNull();
 		expect(bunVersionMismatch("1.4.5", "bun@^1.4.0")).toBeNull();
 		expect(bunVersionMismatch("1.4.3", "bun@~1.4.0")).toBeNull();
+		expect(bunVersionMismatch("1.4.2", "bun@1.4.2")).toBeNull();
 		expect(bunVersionMismatch("1.4.2", "bun@1.4")).toBeNull();
 		expect(bunVersionMismatch("v1.4.2", "bun@>=1.4")).toBeNull();
 	});

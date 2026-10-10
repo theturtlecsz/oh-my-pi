@@ -1,0 +1,107 @@
+diff --git a/packages/coding-agent/src/capability/types.ts b/packages/coding-agent/src/capability/types.ts
+index 268f4add77..cf2ee9b18c 100644
+--- a/packages/coding-agent/src/capability/types.ts
++++ b/packages/coding-agent/src/capability/types.ts
+@@ -162,13 +162,13 @@ export interface SourceMeta {
+ 	 */
+ 	origin?: string;
+ 	/**
+-	 * Plugin name supplying this item, when the provider tracks one (currently
+-	 * `claude-plugins`, from `ClaudePluginRoot.plugin`). Preferred by
+-	 * `skillNamespace` in `extensibility/skills.ts` over parsing the item's
+-	 * path, since Claude Code's own plugin cache
++	 * Plugin or package name supplying this item, for registry-backed providers
++	 * (`claude-plugins` and `agent-plugins` use the plugin name, `omp-plugins`
++	 * the extension package directory name, `skillshare` the package name).
++	 * Preferred by `skillNamespace` in `extensibility/skills.ts` over parsing
++	 * the item's path, since installed plugin caches
+ 	 * (`~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/skills/...`)
+-	 * puts the version, not the plugin name, in the path segment a
+-	 * marketplace-cache layout would otherwise read.
++	 * put the version, not the plugin name, in the path segment owning `skills/`.
+ 	 */
+ 	pluginName?: string;
+ }
+diff --git a/packages/coding-agent/src/discovery/agent-plugins.ts b/packages/coding-agent/src/discovery/agent-plugins.ts
+index 90c0291391..2a141d5a3f 100644
+--- a/packages/coding-agent/src/discovery/agent-plugins.ts
++++ b/packages/coding-agent/src/discovery/agent-plugins.ts
+@@ -102,7 +102,11 @@ function pluginDataDir(home: string, manifestName: string, instanceKey: string):
+  * deeper descendants are never searched. Invalid skills are skipped with a
+  * warning while the rest keep loading.
+  */
+-async function scanStandardSkills(realRoot: string, level: "user" | "project"): Promise<LoadResult<Skill>> {
++async function scanStandardSkills(
++	realRoot: string,
++	level: "user" | "project",
++	pluginName: string,
++): Promise<LoadResult<Skill>> {
+ 	const items: Skill[] = [];
+ 	const warnings: string[] = [];
+ 
+@@ -186,7 +190,10 @@ async function scanStandardSkills(realRoot: string, level: "user" | "project"):
+ 				content: body,
+ 				frontmatter,
+ 				level,
+-				_source: createSourceMeta(PROVIDER_ID, skillPath, level),
++				// The manifest name, never a path segment: registry installs live
++				// under `<marketplace>/<plugin>/<version>/`, so path-derived
++				// collision namespaces would change on every version bump.
++				_source: createSourceMeta(PROVIDER_ID, skillPath, level, undefined, pluginName),
+ 			});
+ 		}),
+ 	);
+@@ -206,7 +213,7 @@ async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
+ 				// reported once here rather than from every capability loader.
+ 				return { items: [], warnings: [`[agent-plugins] Rejected plugin at ${candidate.path}: ${status.reason}`] };
+ 			}
+-			const scan = await scanStandardSkills(status.realRoot, candidate.level);
++			const scan = await scanStandardSkills(status.realRoot, candidate.level, status.manifest.name);
+ 			return {
+ 				items: scan.items,
+ 				warnings: [...status.warnings, ...(scan.warnings ?? [])].map(
+diff --git a/packages/coding-agent/src/discovery/omp-plugins.ts b/packages/coding-agent/src/discovery/omp-plugins.ts
+index 61ee26433a..c4cee136d8 100644
+--- a/packages/coding-agent/src/discovery/omp-plugins.ts
++++ b/packages/coding-agent/src/discovery/omp-plugins.ts
+@@ -71,6 +71,7 @@ async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
+ 				providerId: PROVIDER_ID,
+ 				level: root.level,
+ 				requireDescription: true,
++				pluginName: root.name,
+ 			}),
+ 		),
+ 	);
+diff --git a/packages/coding-agent/src/discovery/skillshare.ts b/packages/coding-agent/src/discovery/skillshare.ts
+index 12f66b6a74..fdcd1b8b28 100644
+--- a/packages/coding-agent/src/discovery/skillshare.ts
++++ b/packages/coding-agent/src/discovery/skillshare.ts
+@@ -69,7 +69,8 @@ async function loadLockedSkill(
+ 		// Registry content is untrusted: keep `skill://` access inside the unpacked package.
+ 		containRoot: realStoreDir,
+ 		level,
+-		_source: createSourceMeta(SKILLSHARE_PROVIDER_ID, skillPath, level, `skillshare:${id}@${entry.version}`),
++		// Namespace by package name, not by the versioned store path.
++		_source: createSourceMeta(SKILLSHARE_PROVIDER_ID, skillPath, level, `skillshare:${id}@${entry.version}`, name),
+ 	};
+ }
+ 
+diff --git a/packages/coding-agent/src/extensibility/skills.ts b/packages/coding-agent/src/extensibility/skills.ts
+index 7e5aabee54..16629cd899 100644
+--- a/packages/coding-agent/src/extensibility/skills.ts
++++ b/packages/coding-agent/src/extensibility/skills.ts
+@@ -62,10 +62,10 @@ export interface LoadSkillsResult {
+ /**
+  * Namespace a skill takes when its bare name is already claimed by a different
+  * skill. Prefers the provider-supplied plugin identity (`_source.pluginName`,
+- * currently `claude-plugins`) when present, since Claude Code's own plugin
+- * cache layout (`<marketplace>/<plugin>/<version>/skills/...`) puts a version
+- * string, not the plugin name, in the path segment owning `skills/` — path
+- * parsing alone would namespace by version and collide across plugin updates.
++ * set by every registry-backed provider) when present, since installed plugin
++ * caches (`<marketplace>/<plugin>/<version>/skills/...`) put a version string,
++ * not the plugin name, in the path segment owning `skills/` — path parsing
++ * alone would namespace by version and change on every plugin update.
+  * Otherwise derived from the path so every other provider gets one without
+  * plumbing: the directory owning `skills/` (a plugin or package root), else
+  * the directory holding the skill (a custom skills root), else the provider.

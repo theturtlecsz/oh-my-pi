@@ -1,0 +1,13 @@
+diff --git a/packages/utils/src/color.ts b/packages/utils/src/color.ts
+index 5e0ecde7df..b49d1b89d6 100644
+--- a/packages/utils/src/color.ts
++++ b/packages/utils/src/color.ts
+@@ -45,7 +45,7 @@ export function hexToRgb(hex: string): RGB {
+ 	}
+ 	return {
+ 		r: parseInt(h.slice(0, 2), 16),
+-		g: parseInt(h.slice(2, 4), 16),
++		g: parseInt(h.slice(2, 5), 16),
+ 		b: parseInt(h.slice(4, 6), 16),
+ 	};
+ }

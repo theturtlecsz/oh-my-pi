@@ -1,0 +1,21 @@
+{
+  "task_id": "a-02",
+  "category": "multi_file_feature",
+  "title": "Pin the ECC manifest bytes and owner review into the build lock",
+  "source_commit": "229b8baa1e0c66692134cde59945b4642dd9d2bb",
+  "test_target": "session-system/tests/ecc-manifest-pin.test.ts",
+  "runner": "bun",
+  "source_paths": [
+    "session-system/ecc/adapted.lock.json",
+    "session-system/ecc/adapter/emit-lock.ts",
+    "session-system/ecc/adapter/pin.ts",
+    "session-system/ecc/adapter/review.ts",
+    "session-system/ecc/adapter/types.ts"
+  ],
+  "instruction": "The committed ECC build lock records each asset's hash, but it does not tell me whether the manifest it was built from has drifted, and there is no place to record the owner review that approved an update. I need the lock to pin the manifest bytes and, when an update was reviewed, the review record's path and content hash. Verification must recompute the manifest pin and re-read the reviewed record, and it must fail fast when either the manifest or the reviewed record was edited by hand. Add a verify mode to the lock emitter so I can run the check without rewriting the lock.",
+  "acceptance_criteria": [
+    "the committed lock carries a manifest-bytes pin and a null review until one is recorded",
+    "verification fails when the manifest bytes or the reviewed record have drifted",
+    "an emitted review record is validated and a stale pin is reported with both hashes"
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "id": "a-14",
+  "scored_experiment": "repair",
+  "seed_patch": "seed.patch",
+  "solution_patch": "solution.patch",
+  "independent_tests": [
+    {
+      "runner": "pytest",
+      "target": "python/omp-work/tests/test_jobs_migrate_files.py",
+      "files": [
+        "independent/test_jobs_migrate_files.py"
+      ]
+    }
+  ],
+  "scenario": "scenario.json",
+  "rules": [
+    {
+      "type": "independent_tests_pass"
+    }
+  ]
+}

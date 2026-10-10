@@ -1,0 +1,20 @@
+{
+  "item_id": "sanitize-ansi-strip",
+  "category": "security",
+  "task": "sanitizeText must strip ANSI escape sequences, not just control characters.",
+  "acceptance_criteria": [
+    "sanitizeText on an SGR-wrapped string drops the escape codes"
+  ],
+  "defects": [
+    {
+      "path": "packages/utils/src/sanitize-text.ts",
+      "line_start": 35,
+      "line_end": null,
+      "severity": "HIGH"
+    }
+  ],
+  "exposing_test": {
+    "runner": "bun",
+    "target": "packages/utils/test/sanitize-text.test.ts"
+  }
+}

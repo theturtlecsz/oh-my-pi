@@ -1,0 +1,17 @@
+{
+  "task_id": "b-10",
+  "category": "ambiguous_intake",
+  "title": "Cursor turns that stop early are not continued like other providers",
+  "source_commit": "29e54b899a3906a518990fc15c119c18f6d4dff0",
+  "runner": "bun",
+  "test_target": "packages/coding-agent/test/turn-recovery-replay-unsafe.test.ts",
+  "source_paths": [
+    "packages/coding-agent/src/session/turn-recovery.ts"
+  ],
+  "instruction": "With Cursor models, a turn that ends early after tools ran is reported as a plain failure. Other providers get an automatic continuation in the same situation. Cursor should be treated the same way when its stream ends early.",
+  "acceptance_criteria": [
+    "A Cursor stream that ends early is classed as a retriable transport failure like the other providers.",
+    "Replay-unsafe turns are not replayed."
+  ],
+  "withheld_detail": "turnEnded"
+}

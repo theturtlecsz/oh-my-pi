@@ -1,0 +1,20 @@
+{
+  "item_id": "binary-fatal-decoder",
+  "category": "security",
+  "task": "isProbablyBinaryHeader must flag a header that is not valid UTF-8 as binary, even without a NUL byte.",
+  "acceptance_criteria": [
+    "a NUL-free header with an invalid UTF-8 sequence classifies as binary"
+  ],
+  "defects": [
+    {
+      "path": "packages/utils/src/binary.ts",
+      "line_start": 36,
+      "line_end": null,
+      "severity": "HIGH"
+    }
+  ],
+  "exposing_test": {
+    "runner": "bun",
+    "target": "packages/utils/test/binary.test.ts"
+  }
+}

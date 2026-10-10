@@ -1,0 +1,116 @@
+{
+  "tasks": [
+    {
+      "task_id": "b-01",
+      "category": "security_concurrency",
+      "fixture": "evals/harbor/corpus/tasks/b-01",
+      "source_commit": "dd0ead6bf8c5e8d90d77ef66292249ea17889935",
+      "rationale": "Real fix in history, covered by a HEAD test: Stop guard install misreads systemd unit files"
+    },
+    {
+      "task_id": "b-02",
+      "category": "security_concurrency",
+      "fixture": "evals/harbor/corpus/tasks/b-02",
+      "source_commit": "adf27b52c73dcadca321646e556c506c72ae77a6",
+      "rationale": "Real fix in history, covered by a HEAD test: Graph recall slows to a crawl on densely linked memory banks"
+    },
+    {
+      "task_id": "b-03",
+      "category": "security_concurrency",
+      "fixture": "evals/harbor/corpus/tasks/b-03",
+      "source_commit": "62b942d817e22f2bae39cfccfd3d173eaa773cdf",
+      "rationale": "Real fix in history, covered by a HEAD test: A malformed language-server or debugger stream can hang or exhaust the editor"
+    },
+    {
+      "task_id": "b-04",
+      "category": "security_concurrency",
+      "fixture": "evals/harbor/corpus/tasks/b-04",
+      "source_commit": "823dc8e3831a977ad276e64d37927ae554e05f5a",
+      "rationale": "Real fix in history, covered by a HEAD test: Any directory that fakes a git pointer is treated as a trusted project"
+    },
+    {
+      "task_id": "b-05",
+      "category": "resume",
+      "fixture": "evals/harbor/corpus/tasks/b-05",
+      "source_commit": "665a652de4e45ec96f80e7ae28d43baebdd95868",
+      "rationale": "Real fix in history, covered by a HEAD test: A rotated Cursor conversation replays the last user message and loses finished tool work"
+    },
+    {
+      "task_id": "b-06",
+      "category": "resume",
+      "fixture": "evals/harbor/corpus/tasks/b-06",
+      "source_commit": "ebac55867b7f55c017621789b037b9bda79e87ed",
+      "rationale": "Real fix in history, covered by a HEAD test: Host reconnect to the collab relay drops guests when the relay refuses it"
+    },
+    {
+      "task_id": "b-07",
+      "category": "migration",
+      "fixture": "evals/harbor/corpus/tasks/b-07",
+      "source_commit": "b2fff8577568bbecb90ac6d185d2aad897066ae1",
+      "rationale": "Real fix in history, covered by a HEAD test: Plugin skills get new names after every plugin update"
+    },
+    {
+      "task_id": "b-08",
+      "category": "migration",
+      "fixture": "evals/harbor/corpus/tasks/b-08",
+      "source_commit": "a6179d1a4fd514c047f8aa1efadd5df109ddc274",
+      "rationale": "Real fix in history, covered by a HEAD test: Cursor model prices come from a scraped web page instead of the rate card"
+    },
+    {
+      "task_id": "b-09",
+      "category": "ambiguous_intake",
+      "fixture": "evals/harbor/corpus/tasks/b-09",
+      "source_commit": "71845167aff6d5474babf0d49f5720938dfad687",
+      "rationale": "Real fix in history, covered by a HEAD test: The designate message cannot be signed straight from the command output"
+    },
+    {
+      "task_id": "b-10",
+      "category": "ambiguous_intake",
+      "fixture": "evals/harbor/corpus/tasks/b-10",
+      "source_commit": "29e54b899a3906a518990fc15c119c18f6d4dff0",
+      "rationale": "Real fix in history, covered by a HEAD test: Cursor turns that stop early are not continued like other providers"
+    },
+    {
+      "task_id": "b-11",
+      "category": "ambiguous_intake",
+      "fixture": "evals/harbor/corpus/tasks/b-11",
+      "source_commit": "9963762d73ad6436c68e1aefe1b7ff9b5face71e",
+      "rationale": "Real fix in history, covered by a HEAD test: The PR picker of the review command closes when a search fails"
+    },
+    {
+      "task_id": "b-12",
+      "category": "ambiguous_intake",
+      "fixture": "evals/harbor/corpus/tasks/b-12",
+      "source_commit": "8d111ab32ebeca663b7d039b124a217624bdfdd1",
+      "rationale": "Real fix in history, covered by a HEAD test: Enter submits a half finished slash command that needs an argument"
+    },
+    {
+      "task_id": "b-13",
+      "category": "seeded_defect",
+      "fixture": "evals/harbor/corpus/tasks/b-13",
+      "source_commit": "e85ce0813e6ca22d015cd58c49a86cb9e6b5badc",
+      "rationale": "Seeded defect written by hand on top of the covered source: Windows-authored bracket math blocks are no longer recognised"
+    },
+    {
+      "task_id": "b-14",
+      "category": "seeded_defect",
+      "fixture": "evals/harbor/corpus/tasks/b-14",
+      "source_commit": "238f433304d39ad05e8a7f5a6d9890f2238e85fe",
+      "rationale": "Seeded defect written by hand on top of the covered source: The XML reader drops content after a mismatched closing tag"
+    },
+    {
+      "task_id": "f1",
+      "category": "localized_bug",
+      "fixture": "fixtures/f1",
+      "source_commit": "02d39ce0d8ea0d97e61d2b8f48fd8ce912caf1c1",
+      "rationale": "Fixture F1 enters unchanged. The source_commit is the commit that added the fixture, because load_batch needs a non-empty string and the fixture has no fix commit."
+    },
+    {
+      "task_id": "f2",
+      "category": "resume",
+      "fixture": "fixtures/f2",
+      "source_commit": "e569839253ceef664630d158e5abe1a4be6c847f",
+      "rationale": "Fixture F2 enters unchanged. The source_commit is the commit that added the fixture, because load_batch needs a non-empty string and the fixture has no fix commit."
+    }
+  ]
+}

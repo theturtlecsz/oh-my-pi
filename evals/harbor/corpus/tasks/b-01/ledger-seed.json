@@ -1,0 +1,23 @@
+{
+  "project": {
+    "project_id": "00000000-0000-7000-8000-0000000000b1",
+    "name": "The Bookends",
+    "kind": "surface"
+  },
+  "items": [
+    {
+      "key": "OMP-1",
+      "work_id": "00000000-0000-7000-8000-000000000001",
+      "revision_id": "00000000-0000-7000-8000-000000000010",
+      "revision_number": 1,
+      "title": "Stop guard install misreads systemd unit files",
+      "description": "The agent-stop guard installer checks each systemd unit for a KillMode that would let child processes survive a stop. Two cases go wrong. First, when a unit file cannot be read, the installer acts as if the file were empty and installs the guard anyway. Second, a KillMode line split over several lines with a trailing backslash is not understood, so a unit that really uses KillMode=process is treated as safe. Make the installer read units the way systemd does, and make it fail loudly instead of writing anything when a file cannot be read.",
+      "scope": "initial/scope",
+      "acceptance_criteria": [
+        "A unit file or drop-in that cannot be read stops the install with an error and writes no files.",
+        "A KillMode setting that is continued over several physical lines is detected like a one-line setting."
+      ],
+      "state": "IN_PROGRESS"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "task_id": "b-08",
+  "category": "migration",
+  "title": "Cursor model prices come from a scraped web page instead of the rate card",
+  "source_commit": "a6179d1a4fd514c047f8aa1efadd5df109ddc274",
+  "runner": "bun",
+  "test_target": "packages/catalog/test/cursor-discovery.test.ts",
+  "source_paths": [
+    "packages/catalog/src/discovery/cursor.ts",
+    "packages/catalog/src/provider-models/cache-provider-id.ts"
+  ],
+  "instruction": "Cursor model discovery downloads cursor.com's pricing page at run time and parses its table to price each model. The page layout changes without notice, discovery needs the network for prices, and the result can differ from what building the same model from the catalog rules gives. Move to the rate card that the catalog rules already hold: price each lane from the rule data, scale base-class rows by the declared multiplier, fall back to the bundled row, and leave a lane unpriced when nothing covers it. Discovery and model building must agree on every lane.",
+  "acceptance_criteria": [
+    "Discovery makes no pricing request and prices rich lanes from the rule rate card.",
+    "A lane that no rule or bundled row covers stays unpriced, and building a discovered lane never changes its cost."
+  ]
+}

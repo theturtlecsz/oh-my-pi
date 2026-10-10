@@ -1,0 +1,16 @@
+{
+  "task_id": "a-08",
+  "category": "multi_file_feature",
+  "title": "Let WorkClient.tree name the Media Discovery world",
+  "source_commit": "818d03708173d0e95fc4c96fd5b4724b1ea8ae1d",
+  "test_target": "packages/work-client/test/tree-world.test.ts",
+  "runner": "bun",
+  "source_paths": [
+    "packages/work-client/src/index.ts"
+  ],
+  "instruction": "Our work backend now projects items from more than one world, but `WorkClient.tree` always returns the default projection. I need `tree` to accept an optional world name so I can ask for the Media Discovery projection. When the world is named, the request must carry it as a `world` query parameter on the tree path; when it is omitted, the request must stay exactly as it is today with no query string.",
+  "acceptance_criteria": [
+    "tree() with no argument requests the tree path with no query string",
+    "tree({ world: \"media-discovery\" }) requests the tree path with the world query parameter"
+  ]
+}
