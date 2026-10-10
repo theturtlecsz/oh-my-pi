@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omp.dev/contracts/nsi/v1/authority.schema.json",
+  "oneOf": [
+    { "$ref": "#/$defs/AuthorityMatrixRule" },
+    { "$ref": "#/$defs/MutationEnvelope" },
+    { "$ref": "#/$defs/WaiverDefinition" }
+  ],
+  "$defs": {
+    "ActorKind": {
+      "type": "string",
+      "enum": ["owner", "service", "model", "tool", "rule_engine"]
+    },
+    "ActorRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "$ref": "#/$defs/ActorKind" }
+      }
+    },
+    "OwnerRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "type": "string", "const": "owner" }
+      }
+    },
+    "RuleEngineRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "type": "string", "const": "rule_engine" }
+      }
+    },
+    "WaiverPolicy": {
+      "type": "string",
+      "enum": ["never", "owner_with_reason"]
+    },
+    "WaiverDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "run_id", "revision", "premise_id", "dimension_id", "materiality",
+        "waiver_policy", "granted_by", "reason", "decision_id", "created_at"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "run_id": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "premise_id": { "type": "string" },
+        "dimension_id": { "type": "string" },
+        "materiality": { "type": "string", "enum": ["material", "minor"] },
+        "waiver_policy": { "$ref": "#/$defs/WaiverPolicy" },
+        "granted_by": { "$ref": "#/$defs/OwnerRef" },
+        "reason": { "type": "string", "minLength": 1 },
+        "decision_id": { "type": "string" },
+        "created_at": { "type": "string" }
+      }
+    },
+    "AuthorityMatrixRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actor_kind", "allowed_operations"],
+      "properties": {
+        "actor_kind": { "$ref": "#/$defs/ActorKind" },
+        "allowed_operations": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "MutationEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation_id", "run_id", "expected_revision", "actor", "operation", "payload"],
+      "properties": {
+        "operation_id": { "type": "string" },
+        "run_id": { "type": "string" },
+        "expected_revision": { "type": "integer", "minimum": 0 },
+        "actor": { "$ref": "#/$defs/ActorRef" },
+        "operation": { "type": "string" },
+        "payload": { "type": "object", "additionalProperties": false }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "actor": { "properties": { "kind": { "const": "model" } } } } },
+          "then": { "properties": { "operation": { "const": "propose" } } }
+        }
+      ]
+    }
+  }
+}
