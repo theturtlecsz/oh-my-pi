@@ -88,6 +88,13 @@ The script prints a one-line JSON report and exits 0 (on bad arguments it prints
 
 ## Reviewing and applying a pack update
 
+### Hand steps before the review
+
+1. New files. For each `newFiles` path the packs must use: add it (skill-relative) to the asset's manifest `dependencies`, copy the candidate file to `mirror/<path>`, run `bun session-system/ecc/adapter/emit-lock.ts`, then run the check again. The file is then an `unchanged` row. An unused new file stays in `newFiles` and the review; `repin.ts` compares it, never copies it, and moves the pin.
+2. Overlay conflict (`repin.ts` refuses). Update the overlay hashes by hand first, for each id in `overlayConflicts`: copy its candidate primary file (row `path`) to `mirror/`; set the asset's manifest `upstream.sha256` and `upstreamSha256` in `overlays/<id>.json` to the row `toSha256`; fix each `find` block that no longer matches; run `bun session-system/ecc/adapter/emit-lock.ts`; on `adapted sha256 mismatch (expected X, got Y)` set `adaptedSha256` to Y and run it again.
+3. Run the check again: `overlayConflicts` is empty and the other `changed` rows remain. Write the review from this new report; `repin.ts` applies those rows and moves the pin. If the new report has `changed: false`, `repin.ts` refuses (`nothing to re-pin`): `git restore session-system/ecc`, delete the review, stop.
+4. Commit changed `overlays/<id>.json` with `mirror/`, `manifest.json`, `adapted.lock.json`, and the review.
+
 1. Write an `UpdateReview` to `reviews/<candidate commit>.json` relative to the ECC root.
    Set `schemaVersion` to `1`.
    Use `baseCommit` from the report and `candidate.commit` from `candidateCommit`.
