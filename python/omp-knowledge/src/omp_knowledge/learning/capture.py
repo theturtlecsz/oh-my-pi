@@ -16,7 +16,6 @@ from .proposals import create_proposal
 from .record import (
     NativeRecords,
     bounded_capture_records,
-    bounded_work_record,
 )
 from .store import LearningStore, compute_unit_id
 
