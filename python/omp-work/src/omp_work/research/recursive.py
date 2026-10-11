@@ -525,7 +525,8 @@ def admit_study(
     reason = _content_reason(state.studies, state.proposal_history, study)
     if reason:
         return _refuse(state, reason)
-    assert isinstance(now, datetime)
+    if not isinstance(now, datetime):
+        raise AssertionError("admission gate must validate now as a datetime")
     reason = _study_live_reason(state, study, now)
     if reason:
         return _refuse(state, reason)

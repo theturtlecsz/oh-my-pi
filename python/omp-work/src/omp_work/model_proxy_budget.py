@@ -543,7 +543,8 @@ class ModelCallAdmission:
         if usage.get("status") == "replayed":
             raise ModelProxyBudgetError("idempotency_conflict", "usage exists without call receipt")
         if self.project_id is not None and usd > 0:
-            assert self.decision is not None
+            if self.decision is None:
+                raise AssertionError("project spend requires a budget decision")
             self.budget._projects.append_spend_cursor(
                 self._cur,
                 self.workspace_id,
