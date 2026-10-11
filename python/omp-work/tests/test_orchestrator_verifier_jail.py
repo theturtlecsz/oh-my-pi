@@ -154,12 +154,18 @@ def verifier_paths(tmp_path):
 def _run_verifier_probe(paths, probe, **options):
     parent, worktree, _audit, _key = paths
     output = bytearray()
+    ro_dirs = list(options.pop("ro_dirs", ()))
+    for d in (sys.base_prefix, sys.prefix):
+        resolved = str(Path(d).resolve())
+        if not resolved.startswith("/usr") and resolved not in ro_dirs:
+            ro_dirs.append(resolved)
     rc = run_sandboxed(
         [os.path.realpath(sys.executable), "-c", probe],
         Identity("workspace", "project", "mission", "worker", "repository"),
         MemoryRecorder(), worktree,
         {**BASE_ENV, "PYTHONPATH": str(parent), "PYTHONSAFEPATH": "1"},
-        30, root="worker", worktree=worktree, output=output, **options,
+        30, root="worker", worktree=worktree, output=output,
+        ro_dirs=ro_dirs, **options,
     )
     assert rc == 0, output.decode(errors="replace")
     return json.loads(output)

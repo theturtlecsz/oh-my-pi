@@ -322,11 +322,10 @@ def _build_worker_root(config_path: Path, config: dict) -> Path:
     readonly = config.get("worktree_readonly")
     ro_dirs = config.get("ro_dirs") or ()
     audit_dir = config.get("audit_dir")
-    if readonly:
-        for raw in (*ro_dirs, *((audit_dir,) if audit_dir is not None else ())):
-            if not isinstance(raw, str) or not raw.startswith("/") or raw == "/":
-                sys.stderr.write("worker jail: directory bind is not an absolute non-root path\n")
-                sys.exit(1)
+    for raw in (*ro_dirs, *((audit_dir,) if audit_dir is not None else ())):
+        if not isinstance(raw, str) or not raw.startswith("/") or raw == "/":
+            sys.stderr.write("worker jail: directory bind is not an absolute non-root path\n")
+            sys.exit(1)
     _mount("none", "/", None, _MS_REC | _MS_PRIVATE)
     new = config_path.parent / "worker-root"
     new.mkdir(mode=0o755)
@@ -351,6 +350,8 @@ def _build_worker_root(config_path: Path, config: dict) -> Path:
             _bind_rw_dir(audit_dir, new / "work" / ".omp")
     else:
         _bind_rw_dir(worktree, new / "work")
+        for raw in sorted(ro_dirs, key=lambda path: path.count("/")):
+            _rbind_readonly(raw, new / raw.lstrip("/"))
     for raw in config.get("ro_binds") or ():
         if not isinstance(raw, str) or not raw.startswith("/") or raw == "/":
             sys.stderr.write("worker jail: read-only bind is not an absolute file\n")
