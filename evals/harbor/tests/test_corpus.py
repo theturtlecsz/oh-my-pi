@@ -454,3 +454,25 @@ def test_cli_verify(tmp_path: Path) -> None:
     (fdir / "seed.patch").write_text("tampered\n", encoding="utf-8")
     rc_drift = main(["verify", "--manifest", str(manifest_file)])
     assert rc_drift == 1
+
+
+def test_task_sha256_format_and_ordering(tmp_path: Path) -> None:
+    task_dir = tmp_path / "task"
+    task_dir.mkdir()
+    (task_dir / "b.txt").write_bytes(b"hello")
+    (task_dir / "a.txt").write_bytes(b"world!")
+
+    import hashlib
+
+    hasher = hashlib.sha256()
+    hasher.update(b"a.txt\0" + (6).to_bytes(8, "big") + b"world!")
+    hasher.update(b"b.txt\0" + (5).to_bytes(8, "big") + b"hello")
+    expected = hasher.hexdigest()
+
+    assert task_sha256(task_dir) == expected
+
+
+def test_task_sha256_non_directory_raises(tmp_path: Path) -> None:
+    non_dir = tmp_path / "missing"
+    with pytest.raises(ValueError, match="not a directory"):
+        task_sha256(non_dir)
