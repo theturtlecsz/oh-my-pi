@@ -1,4 +1,4 @@
-"""NSI-2 writes using a caller-owned cursor and transaction.
+"""NSI-2 reads and writes using a caller-owned cursor and transaction.
 
 Artifact URIs are immutable byte bindings within a run. Bytes come exclusively
 from the caller; this module never resolves a URI. Callers must roll back on any
@@ -14,10 +14,11 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, Field
 
 from .contracts.nsi.v1 import models
+from .contracts.nsi.v1.validate import content_hash
 
 
 class IntakeRepositoryError(ValueError):
-    """A rejected repository mutation; message is a stable reason code."""
+    """A rejected repository operation; message is a stable reason code."""
 
 
 @dataclass(frozen=True)
@@ -258,3 +259,192 @@ def append_revision(
         if cur.rowcount != 1:
             raise IntakeRepositoryError("stale_revision")
     return revision
+
+
+@dataclass(frozen=True)
+class IntakeRevisionView:
+    revision: int
+    snapshot: models.IntakeSnapshot
+    artifact_bytes: dict[str, bytes]
+    rule_bundle_hash: str
+    schema_hash: str
+    body: IntakeRevisionBody
+
+    @property
+    def claim_set_hash(self) -> str:
+        return revision_hashes(self.snapshot, self.artifact_bytes)[0]
+
+    @property
+    def source_hash(self) -> str:
+        return revision_hashes(self.snapshot, self.artifact_bytes)[1]
+
+
+def revision_hashes(
+    snapshot: models.IntakeSnapshot, artifact_bytes: dict[str, bytes],
+) -> tuple[str, str]:
+    """Hash the persisted claim/source projection, without invented metadata.
+
+    NSI-2 does not store actor kinds, artifact actor/source revision, or dimension
+    applicability. Those cannot participate in a reproducible repository hash.
+    Entity value types, evidence spans, and exact source bytes do participate.
+    """
+    claims = []
+    for claim in snapshot.claims:
+        record = claim.model_dump(exclude={"asserted_by", "admitted_by"})
+        record["evidence"] = sorted(record["evidence"], key=lambda span:
+                                    (span["artifact_id"], span["start_byte"], span["end_byte"]))
+        record["asserted_by"] = claim.asserted_by.id
+        record["admitted_by"] = claim.admitted_by.id if claim.admitted_by else None
+        claims.append(record)
+    sources = [dict(id=artifact.id, uri=artifact.uri, media_type=artifact.media_type,
+                    digest=artifact.content_hash, bytes=artifact_bytes[artifact.id].hex())
+               for artifact in snapshot.artifacts]
+    return content_hash({"claims": claims}), content_hash({"artifacts": sources})
+
+
+def read_revision(
+    cur: Cursor, *, workspace_id: UUID, run_id: str, revision: int,
+) -> IntakeRevisionView:
+    """Read immutable history in the caller transaction, with workspace RLS.
+
+    Missing and invisible revision keys have the same error. Fields absent from
+    NSI-2 storage are represented explicitly: artifact actor is the writing
+    operation (service), source revision is the intake revision, applicability
+    is unrestricted, and claim actor kinds follow origin. Hashes use only the
+    persisted projection, never these reconstructed metadata fields.
+    """
+    key = (workspace_id, run_id, revision)
+
+    def rows(table: str, *, operation_id: str | None = None) -> list[dict]:
+        scope = "revision=%s" if operation_id is None else "operation_id=%s"
+        cur.execute(sql.SQL(
+            "SELECT to_jsonb(t) FROM omp_work.{} t "
+            "WHERE workspace_id=%s AND run_id=%s AND " + scope + " ORDER BY to_jsonb(t)::text"
+        ).format(sql.Identifier("intake_" + table)),
+            key if operation_id is None else (workspace_id, run_id, operation_id))
+        return [row[0] for row in cur.fetchall()]
+
+    revisions = rows("revisions")
+    if not revisions:
+        raise IntakeRepositoryError("revision_not_found")
+    stored = revisions[0]
+    binding_fields = {name: stored[name] for name in
+                      ("contract_hash", "claim_set_hash", "source_hash", "rule_bundle_hash", "schema_hash")}
+    binding = models.Binding(run_id=run_id, revision=revision, **binding_fields)
+    artifacts = rows("artifacts")
+    cur.execute(
+        "SELECT artifact_id,bytes FROM omp_work.intake_artifacts "
+        "WHERE workspace_id=%s AND run_id=%s AND revision=%s", key,
+    )
+    artifact_bytes = dict(cur.fetchall())
+    entities = [models.EntityRef(id=row["entity_id"], type=row["entity_type"])
+                for row in rows("entities")]
+    entity_refs = {entity.id: entity for entity in entities}
+    evidence, premises = rows("claim_evidence"), rows("claim_premises")
+    origin_kinds = dict(owner_statement="owner", policy_rule="rule_engine",
+                        repository_observation="tool", tool_receipt="tool",
+                        model_proposal="model", rule_derivation="rule_engine")
+    claims = []
+    for row in rows("claims"):
+        fields = {name: row[name] for name in
+                  ("category", "predicate_id", "value", "origin", "state", "modality", "polarity", "truth")}
+        fields.update(id=row["claim_id"], subject=entity_refs[row["subject_entity_id"]],
+                      asserted_by=dict(id=row["asserted_by"], kind=origin_kinds[row["origin"]]),
+                      evidence=[{name: span[name] for name in
+                                 ("artifact_id", "start_byte", "end_byte", "quote")
+                                 if span[name] is not None}
+                                for span in sorted(evidence, key=lambda span:
+                                                   (span["artifact_id"], span["start_byte"], span["end_byte"]))
+                                if span["claim_id"] == row["claim_id"]],
+                      premise_ids=[link["premise_id"] for link in premises
+                                   if link["claim_id"] == row["claim_id"]])
+        if row["admitted_by"] is not None:
+            fields["admitted_by"] = dict(id=row["admitted_by"], kind=
+                                        "rule_engine" if row["origin"] in ("policy_rule", "rule_derivation") else "owner")
+        claims.append(models.IntakeClaim.model_validate(fields))
+    predicates, dimensions = [], []
+    for row in rows("ontology"):
+        if row["kind"] == "predicate":
+            predicates.append(models.PredicateDefinition.model_validate(dict(
+                id=row["definition_id"], **{name: row[name] for name in
+                ("title", "subject_types", "object_types", "cardinality", "exclusivity", "transitivity", "authority")})))
+        else:
+            dimensions.append(models.RequirementDimensionDefinition.model_validate(dict(
+                id=row["definition_id"], applicability=dict(entity_types=[], predicate_ids=[]),
+                **{name: row[name] for name in
+                   ("title", "category", "required_premises", "materiality", "waiver_policy")})))
+    snapshot = models.IntakeSnapshot(
+        run_id=run_id, revision=revision, state=stored["state"], entities=entities, claims=claims,
+        ontology=models.IntakeOntology(predicates=predicates, dimensions=dimensions),
+        artifacts=[models.EvidenceArtifact(
+            id=row["artifact_id"], uri=row["uri"], content_hash=row["content_hash"],
+            media_type=row["media_type"], revision=str(revision),
+            actor=models.ActorRef(id=row["operation_id"], kind="service")) for row in artifacts],
+    )
+    issues, issue_claims, question_issues = rows("issues"), rows("issue_claims"), rows("question_issues")
+    conflicts = [models.Conflict(
+        id=row["issue_id"], predicate_id=row["predicate_id"], reason=row["reason"],
+        claim_ids=[link["claim_id"] for link in issue_claims if link["issue_id"] == row["issue_id"]])
+        for row in issues if row["kind"] == "conflict"]
+    gaps = [models.Gap.model_validate(dict(id=row["issue_id"], **{name: row[name] for name in
+            ("dimension_id", "premise_id", "reason", "materiality", "waiver_policy")}))
+            for row in issues if row["kind"] == "gap"]
+    issue_kinds = {row["issue_id"]: row["kind"] for row in issues}
+    questions = [models.ClarificationQuestion(
+        id=row["issue_id"], question=row["question"], category=row["category"],
+        gap_ids=[link["issue_id"] for link in question_issues
+                 if link["question_id"] == row["issue_id"] and issue_kinds[link["issue_id"]] == "gap"],
+        conflict_ids=[link["issue_id"] for link in question_issues
+                      if link["question_id"] == row["issue_id"] and issue_kinds[link["issue_id"]] == "conflict"])
+        for row in issues if row["kind"] == "question"]
+    settled = rows("settled_claims")
+    decisions = [DecisionRecord(
+        decision=models.OwnerDecision(
+            id=row["decision_id"], run_id=run_id, revision=revision,
+            actor=models.OwnerRef(id=row["owner_id"], kind="owner"),
+            **{name: row[name] for name in ("question_id", "answer", "reason", "created_at")}),
+        settled_claim_ids=[link["claim_id"] for link in settled if link["decision_id"] == row["decision_id"]])
+        for row in rows("owner_decisions")]
+    derivation_claims = rows("derivation_claims")
+    derivations = [models.DerivationReceipt(
+        id=row["derivation_id"], **binding.model_dump(), rule_id=row["rule_id"],
+        derived_by=models.RuleEngineRef(id=row["derived_by"], kind="rule_engine"), created_at=row["created_at"],
+        premise_ids=[link["claim_id"] for link in derivation_claims
+                     if link["derivation_id"] == row["derivation_id"] and link["role"] == "premise"],
+        conclusion_ids=[link["claim_id"] for link in derivation_claims
+                        if link["derivation_id"] == row["derivation_id"] and link["role"] == "conclusion"])
+        for row in rows("derivations")]
+    assessments = []
+    # Writes place assessments at their assessed revision. Operation provenance
+    # locates the append that owns them, without leaking later assessments into history.
+    for row in rows("assessments", operation_id=stored["operation_id"]):
+        cur.execute(
+            "SELECT source_hash,claim_set_hash,rule_bundle_hash,schema_hash,contract_hash "
+            "FROM omp_work.intake_revisions WHERE workspace_id=%s AND run_id=%s AND revision=%s",
+            (workspace_id, run_id, row["assessed_revision"]),
+        )
+        assessed = cur.fetchone()
+        if assessed is None:
+            raise IntakeRepositoryError("revision_not_found")
+        assessed_binding = dict(zip(
+            ("source_hash", "claim_set_hash", "rule_bundle_hash", "schema_hash", "contract_hash"), assessed))
+        assessments.append(AssessmentRecord(id=row["assessment_id"], assessment=models.IntakeReadinessAssessment(
+            run_id=run_id, revision=row["assessed_revision"], **assessed_binding,
+            status=row["status"].upper(), assessed_by=models.RuleEngineRef(id=row["assessed_by"], kind="rule_engine"),
+            created_at=row["created_at"], gaps=gaps, conflicts=conflicts,
+            derivation_receipt_ids=[receipt.id for receipt in derivations])))
+    supersessions = {}
+    for row in rows("claim_supersessions"):
+        supersessions.setdefault(row["claim_id"], []).append(row["superseded_claim_id"])
+    body = IntakeRevisionBody(
+        workspace_id=workspace_id, snapshot=snapshot, binding=binding, artifact_bytes=artifact_bytes,
+        conflicts=conflicts, gaps=gaps, questions=questions, decisions=decisions,
+        instructions=[InstructionProvenance.model_validate(dict(id=row["provenance_id"],
+                      **{name: row[name] for name in ("decision_id", "claim_id", "artifact_id", "instruction")}))
+                      for row in rows("instruction_provenances")],
+        criteria=[models.AcceptanceCriterion.model_validate(dict(id=row["criterion_id"],
+                  **{name: row[name] for name in ("requirement_ids", "description", "verification_method", "expected_result")}))
+                  for row in rows("criteria")],
+        assessments=assessments, derivations=derivations, supersessions=supersessions,
+    )
+    return IntakeRevisionView(revision, snapshot, artifact_bytes, binding.rule_bundle_hash, binding.schema_hash, body)

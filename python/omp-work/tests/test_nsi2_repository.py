@@ -16,7 +16,8 @@ from psycopg.types.json import Jsonb
 from pydantic import ValidationError
 
 from omp_work.intake_repository import (
-    IntakeRepositoryError, IntakeRevisionBody, append_revision, lock_revision,
+    IntakeRepositoryError, IntakeRevisionBody, append_revision, lock_revision, read_revision,
+    revision_hashes,
 )
 from test_nsi_schemas import (
     ARTIFACT, ASSESSMENT, BINDING, CLAIM, CONFLICT, CRITERION, DECISION,
@@ -537,3 +538,91 @@ def test_typed_entity_values_store_json_and_qualified_entity_columns(service, wr
                 "SELECT {},value_entity_id,value_entity_type FROM omp_work.{} WHERE {}=%s",
             ).format(sql.Identifier(column), sql.Identifier(table), sql.Identifier(id_column)),
                 (record_id,)).fetchone() == (value, ENTITY["id"], ENTITY["type"])
+
+
+def test_read_history_preserves_bytes_hashes_and_relational_links(service, write_repository):
+    workspace_id, _ = write_repository
+    bodies = []
+    for revision in (0, 1):
+        body = revision_body(workspace_id, revision)
+        # Preserve a noncanonical entity type in both subject and typed values.
+        entity = dict(id=ENTITY["id"], type="custom-service")
+        body["snapshot"]["entities"] = [entity]
+        body["snapshot"]["claims"][0]["subject"] = entity
+        body["snapshot"]["claims"][1]["subject"] = entity
+        body["snapshot"]["claims"][0]["value"] = dict(type="entity", value=entity)
+        body["snapshot"]["claims"][1]["value"] = dict(type="integer", value=revision)
+        # Relational span keys reconstruct byte order, not insertion order.
+        body["snapshot"]["claims"][0]["evidence"].insert(0, dict(
+            artifact_id=ARTIFACT["id"], start_byte=5, end_byte=6))
+        body["decisions"][0]["decision"]["answer"] = dict(type="entity", value=entity)
+        body["criteria"][0]["expected_result"] = dict(type="entity", value=entity)
+        body["snapshot"]["artifacts"][0]["uri"] += f"/{revision}"
+        body["artifact_bytes"][ARTIFACT["id"]] += bytes([revision])
+        parsed = IntakeRevisionBody.model_validate(body)
+        claim_hash, source_hash = revision_hashes(parsed.snapshot, parsed.artifact_bytes)
+        body["binding"].update(claim_set_hash=claim_hash, source_hash=source_hash)
+        bodies.append(IntakeRevisionBody.model_validate(body))
+        with connection(service, workspace_id) as conn, conn.cursor() as cur:
+            append_revision(cur, locked(cur, write_repository, revision - 1), body, operation_id=uuid4())
+            # Read also works before caller commits.
+            assert read_revision(cur, workspace_id=workspace_id, run_id="run-1", revision=revision).artifact_bytes == body["artifact_bytes"]
+    views = []
+    with connection(service, workspace_id, "omp_work_readonly") as conn, conn.cursor() as cur:
+        for revision, original in enumerate(bodies):
+            view = read_revision(cur, workspace_id=workspace_id, run_id="run-1", revision=revision)
+            views.append(view)
+            assert view.revision == revision
+            assert view.artifact_bytes == original.artifact_bytes
+            cur.execute("SELECT claim_set_hash,source_hash FROM omp_work.intake_revisions WHERE revision=%s", (revision,))
+            assert (view.claim_set_hash, view.source_hash) == cur.fetchone()
+            assert view.rule_bundle_hash == original.binding.rule_bundle_hash
+            assert view.schema_hash == original.binding.schema_hash
+            assert view.snapshot.entities == original.snapshot.entities
+            assert view.snapshot.ontology == original.snapshot.ontology
+            claims = {claim.id: claim for claim in view.snapshot.claims}
+            assert claims[CLAIM["id"]].value == original.snapshot.claims[0].value
+            assert claims[CLAIM["id"]].evidence == sorted(
+                original.snapshot.claims[0].evidence, key=lambda span: span.start_byte)
+            assert claims[CLAIM["id"]].premise_ids == ["prior"]
+            assert view.body.decisions[0].settled_claim_ids == [CLAIM["id"]]
+            assert view.body.decisions[0].decision.answer == original.decisions[0].decision.answer
+            assert view.body.criteria == original.criteria
+            assert view.body.instructions == original.instructions
+            assert view.body.questions == original.questions
+            assert view.body.gaps == original.gaps
+            assert set(view.body.conflicts[0].claim_ids) == set(original.conflicts[0].claim_ids)
+            assert view.body.supersessions == original.supersessions
+            assert view.body.derivations[0].premise_ids == ["prior"]
+            assert view.body.derivations[0].conclusion_ids == [CLAIM["id"]]
+            assert view.body.assessments[0].id == f"assessment-{revision}"
+            assessment = view.body.assessments[0].assessment
+            assert assessment.revision == 0
+            assert assessment.claim_set_hash == bodies[0].binding.claim_set_hash
+            assert assessment.derivation_receipt_ids == [view.body.derivations[0].id]
+    assert views[0].claim_set_hash != views[1].claim_set_hash
+    assert views[0].source_hash != views[1].source_hash
+
+
+def test_read_rejects_missing_and_foreign_revision_keys_and_foreign_links(service, write_repository):
+    workspace_id, mission_id = write_repository
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        append_revision(cur, locked(cur, write_repository), revision_body(workspace_id), operation_id=uuid4())
+        for scope in ((workspace_id, "run-1", 1), (workspace_id, "missing", 0), (uuid4(), "run-1", 0)):
+            with pytest.raises(IntakeRepositoryError, match="revision_not_found"):
+                read_revision(cur, workspace_id=scope[0], run_id=scope[1], revision=scope[2])
+    other_workspace = uuid4()
+    _workspace(service, other_workspace)
+    with connection(service, other_workspace) as conn, conn.cursor() as cur:
+        # Supplying the actual owning key still cannot bypass caller's RLS scope.
+        with pytest.raises(IntakeRepositoryError, match="revision_not_found"):
+            read_revision(cur, workspace_id=workspace_id, run_id="run-1", revision=0)
+        with pytest.raises(IntakeRepositoryError, match="stale_revision"):
+            lock_revision(cur, workspace_id=other_workspace, run_id="run-1", expected_revision=-1,
+                          mission_id=mission_id, operation_id=uuid4())
+        # Matching run/revision strings in another workspace cannot qualify a link.
+        with pytest.raises(psycopg.errors.ForeignKeyViolation), conn.transaction():
+            insert(conn, "intake_assessments", dict(
+                workspace_id=other_workspace, run_id="run-1", revision=0, assessed_revision=0,
+                assessment_id="foreign", status="needs_spec", assessed_by="engine",
+                created_at="2026-01-01T00:00:00Z", operation_id=uuid4(), nsi_version="nsi/v1"))
