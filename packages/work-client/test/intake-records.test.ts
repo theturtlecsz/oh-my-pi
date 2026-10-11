@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { WORK_CONTRACT_SHA256, WorkClient } from "../src/index";
 import type {
 	IntakeCommand,
 	IntakeCommandResult,
@@ -212,4 +213,100 @@ test("exported intake command and result unions narrow on the wire type", () => 
 	expect(start.expected_revision).toBe(0);
 	const view = fixture.view as unknown as IntakeRecordView;
 	expect(view.provenance.revision).toBe(0);
+});
+
+const OP_ID = "22222222-2222-4222-8222-222222222222";
+const WS_ID = "33333333-3333-4333-8333-333333333333";
+const RECEIPT = {
+	operation_id: OP_ID,
+	request_id: "r",
+	state: "applied",
+	request_sha256: "a".repeat(64),
+	result_sha256: "b".repeat(64),
+	diagnostics: [],
+};
+
+function recordingClient(reply: unknown): { client: WorkClient; requests: { url: string; init: RequestInit }[] } {
+	const requests: { url: string; init: RequestInit }[] = [];
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		WS_ID,
+		() => "token",
+		async (input, init) => {
+			requests.push({ url: String(input), init: init ?? {} });
+			return Response.json(reply);
+		},
+	);
+	return { client, requests };
+}
+
+const WRITES = [
+	["start_intake", "startIntake"],
+	["register_intake_evidence", "registerIntakeEvidence"],
+	["record_intake_claim", "recordIntakeClaim"],
+	["record_intake_decision", "recordIntakeDecision"],
+	["supersede_intake_claim", "supersedeIntakeClaim"],
+	["record_intake_issue", "recordIntakeIssue"],
+	["link_intake_criterion", "linkIntakeCriterion"],
+	["assess_intake", "assessIntake"],
+] as const;
+
+for (const [type, method] of WRITES) {
+	test(`${method} POSTs the fixture payload untouched under the caller operation id`, async () => {
+		const entry = fixture.commands[type];
+		const { client, requests } = recordingClient({ receipt: RECEIPT, result: entry.result });
+		const payload = entry.envelope.command.payload;
+		const response = await (
+			client[method] as (id: string, p: unknown) => Promise<{ receipt: unknown; result: { type: string } }>
+		)(OP_ID, payload);
+		expect(requests).toHaveLength(1);
+		const [{ url, init }] = requests;
+		expect(url).toBe("http://127.0.0.1:54322/v1/commands");
+		expect(init.method).toBe("POST");
+		const headers = init.headers as Record<string, string>;
+		expect(headers.Authorization).toBe("Bearer token");
+		expect(headers["X-OMP-Workspace-ID"]).toBe(WS_ID);
+		expect(headers["X-OMP-Contract-SHA256"]).toBe(WORK_CONTRACT_SHA256);
+		const sent = JSON.parse(String(init.body)) as {
+			api_version: string;
+			workspace_id: string;
+			operation_id: string;
+			request_id: string;
+			correlation_id: string;
+			command: { type: string; payload: Record<string, unknown> };
+		};
+		expect(sent.api_version).toBe("work.omp.dev/v1");
+		expect(sent.workspace_id).toBe(WS_ID);
+		expect(sent.operation_id).toBe(OP_ID);
+		expect(sent.request_id).toMatch(/^[0-9a-f-]{36}$/);
+		expect(sent.correlation_id).toMatch(/^[0-9a-f-]{36}$/);
+		expect(sent.command).toEqual({ type, payload });
+		expect(sent.command.payload.expected_revision).toBe(payload.expected_revision);
+		if (type === "record_intake_decision") {
+			const instruction = sent.command.payload.instruction as { provenance: { received_at: string } };
+			expect(instruction.provenance.received_at).toBe("2026-10-11T00:00:00+00:00");
+		}
+		expect(response.receipt).toEqual(RECEIPT);
+		expect(response.result.type).toBe(type);
+	});
+}
+
+test("intake reads the record with and without a revision query", async () => {
+	const { client, requests } = recordingClient(fixture.view);
+	await client.intake("run/1");
+	await client.intake("run/1", 2);
+	expect(requests[0].url).toBe(`http://127.0.0.1:54322/v1/workspaces/${WS_ID}/intake/run%2F1`);
+	expect(requests[1].url.endsWith("?revision=2")).toBe(true);
+	const headers = requests[1].init.headers as Record<string, string>;
+	expect(requests[1].init.method).toBe("GET");
+	expect(headers.Authorization).toBe("Bearer token");
+	expect(headers["X-OMP-Workspace-ID"]).toBe(WS_ID);
+	expect(headers["X-OMP-Contract-SHA256"]).toBe(WORK_CONTRACT_SHA256);
+});
+
+test("missionIntake still POSTs request_id and payload to the client route", async () => {
+	const { client, requests } = recordingClient({});
+	await client.missionIntake(OP_ID, { goal: "x" } as never);
+	expect(requests[0].url).toBe(`http://127.0.0.1:54322/v1/workspaces/${WS_ID}/client/mission-intake`);
+	expect(JSON.parse(String(requests[0].init.body))).toEqual({ request_id: OP_ID, payload: { goal: "x" } });
 });
