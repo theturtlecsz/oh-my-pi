@@ -11,8 +11,9 @@ through ``docker_ops`` / ``netns`` with the injectable ``docker`` kwarg, and
 the sidecar stops.
 
 ``OMP_HARBOR_PLAN`` and ``OMP_HARBOR_ARM`` opt into a plan arm: both must be
-set and non-empty, the plan must load, and the arm must be known and
-available — any violation raises ``ValueError`` before the first docker call.
+present and non-empty (a present ``""`` is set, not unset), the plan must
+load, and the arm must be known and available — any violation raises
+``ValueError`` before the first docker call.
 An arm run substitutes ``{instruction}`` and ``{key}`` (the sole
 ``ledger-seed.json`` item key) into the arm command, drives a scenario copy
 with the arm terminal and the plan trial timeout, writes the arm settings
@@ -175,16 +176,21 @@ class _ArmSelection:
 def _arm_selection(instruction: str, task: TaskEnv) -> _ArmSelection | None:
     """Resolve the plan arm for this run, or ``None`` when neither variable is set.
 
-    Both ``OMP_HARBOR_PLAN`` and ``OMP_HARBOR_ARM`` must be set together and
-    non-empty, the plan must load, and the arm must be known and available —
-    every violation raises ``ValueError`` before the first docker call. The
-    scenario is a copy: the fixture scenario is never mutated.
+    A variable is set when its name is present in the environment, including
+    when the value is ``""``. Neither ``OMP_HARBOR_PLAN`` nor ``OMP_HARBOR_ARM``
+    present keeps the unarmed path. One present, or either value empty
+    (both empty, or one empty and the other absent), raises ``ValueError``
+    before the first docker call. When both are non-empty the plan must load
+    and the arm must be known and available — those violations raise the same
+    way. The scenario is a copy: the fixture scenario is never mutated.
     """
 
-    plan_ref = os.environ.get(_PLAN)
-    arm_ref = os.environ.get(_ARM)
-    if not plan_ref and not arm_ref:
+    plan_set = _PLAN in os.environ
+    arm_set = _ARM in os.environ
+    if not plan_set and not arm_set:
         return None
+    plan_ref = os.environ.get(_PLAN, "")
+    arm_ref = os.environ.get(_ARM, "")
     if not plan_ref or not arm_ref:
         raise ValueError(f"{_PLAN} and {_ARM} must be set together and non-empty")
     plan = load_plan(plan_ref)

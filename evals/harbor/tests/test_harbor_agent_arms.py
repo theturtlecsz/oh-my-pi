@@ -324,8 +324,24 @@ def test_unknown_arm_raises_before_any_docker_call(
 
 @pytest.mark.parametrize(
     ("plan_value", "arm_value"),
-    [("plan", None), (None, "A"), ("plan", ""), ("", "A")],
-    ids=["plan-only", "arm-only", "arm-empty", "plan-empty"],
+    [
+        ("plan", None),
+        (None, "A"),
+        ("plan", ""),
+        ("", "A"),
+        ("", ""),
+        ("", None),
+        (None, ""),
+    ],
+    ids=[
+        "plan-only",
+        "arm-only",
+        "arm-empty",
+        "plan-empty",
+        "both-empty",
+        "plan-empty-arm-unset",
+        "plan-unset-arm-empty",
+    ],
 )
 def test_lone_or_empty_arm_env_raises_before_any_docker_call(
     fake_dir: Path,
