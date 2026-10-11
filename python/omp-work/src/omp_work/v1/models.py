@@ -8,6 +8,15 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from omp_work.contracts.nsi.v1.models import (
+    EntityRef as NSIEntityRef,
+    EvidenceArtifact as NSIEvidenceArtifact,
+    EvidenceSpan as NSIEvidenceSpan,
+    IntakeClaim as NSIIntakeClaim,
+    IntakeOntology as NSIIntakeOntology,
+    OwnerDecision as NSIOwnerDecision,
+)
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -2292,6 +2301,67 @@ class RelayOwnerIntentCommand(StrictModel):
     payload: RelayOwnerIntentPayload
 
 
+class IntakeRevisionPayload(StrictModel):
+    run_id: str = Field(min_length=1)
+    expected_revision: int = Field(ge=1)
+
+
+class StartIntakePayload(IntakeRevisionPayload):
+    expected_revision: Literal[0]
+    mission_id: UUID
+    ontology: NSIIntakeOntology
+    entities: tuple[NSIEntityRef, ...]
+
+
+class RegisterIntakeEvidencePayload(IntakeRevisionPayload):
+    artifact: NSIEvidenceArtifact
+    source: IntakeSource
+
+
+class IntakeClaimEvidenceLink(StrictModel):
+    span: NSIEvidenceSpan
+    relation: Literal["supports", "contradicts", "neither"]
+
+    @model_validator(mode="after")
+    def validate_span(self) -> IntakeClaimEvidenceLink:
+        if self.span.end_byte <= self.span.start_byte:
+            raise ValueError("end_byte must be greater than start_byte")
+        return self
+
+
+class RecordIntakeClaimPayload(IntakeRevisionPayload):
+    claim: NSIIntakeClaim
+    evidence_links: tuple[IntakeClaimEvidenceLink, ...]
+
+
+class RecordIntakeDecisionPayload(IntakeRevisionPayload):
+    decision: NSIOwnerDecision
+    claim_ids: tuple[str, ...]
+    instruction: OwnerInstruction
+    superseded_decision_id: str | None = None
+    verified_relay_operation_id: UUID | None = None
+
+
+class StartIntakeCommand(StrictModel):
+    type: Literal["start_intake"]
+    payload: StartIntakePayload
+
+
+class RegisterIntakeEvidenceCommand(StrictModel):
+    type: Literal["register_intake_evidence"]
+    payload: RegisterIntakeEvidencePayload
+
+
+class RecordIntakeClaimCommand(StrictModel):
+    type: Literal["record_intake_claim"]
+    payload: RecordIntakeClaimPayload
+
+
+class RecordIntakeDecisionCommand(StrictModel):
+    type: Literal["record_intake_decision"]
+    payload: RecordIntakeDecisionPayload
+
+
 Command = Annotated[
     CreateWorkBatchCommand
     | CreateSameSessionChildCommand
@@ -2329,6 +2399,10 @@ Command = Annotated[
     | AttestIntakeAdmissionCommand
     | PublishBoundedIntakeCommand
     | AnswerIntakeDecisionCommand
+    | StartIntakeCommand
+    | RegisterIntakeEvidenceCommand
+    | RecordIntakeClaimCommand
+    | RecordIntakeDecisionCommand
     | RegisterResearchArtifactCommand
     | CollectResearchArtifactCommand
     | RegisterResearchSourceCommand
