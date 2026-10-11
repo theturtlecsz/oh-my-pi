@@ -15,7 +15,7 @@ from .capture import NativeEvents, NativeRecords, RunRecord, drain, retry
 from .cleanup import CleanupTarget, NativeCommittedTarget, drain_cleanup
 from .corrections import CorrectionRecord, correct
 from .generation import LessonGenerator, LocalChatGenerator
-from .models import Attribution, Precondition, SourceIdentity
+from .models import Attribution, Lesson, Precondition, SourceIdentity
 from .policy import NativeReceipts
 from .store import LearningStore
 from .uses import record_outcome, record_use, supply
@@ -467,26 +467,35 @@ def main(
                     res_data = client._get(f"/v1/work-items/{args.work_key}/research")
                     campaigns = res_data.get("campaigns", [])
                     # Every campaign on this work must be concluded.
-                    if campaigns and all(
+                    if isinstance(campaigns, list) and campaigns and all(
                         isinstance(campaign, dict)
                         and campaign.get("state") == "concluded"
+                        and isinstance(campaign.get("campaign_id"), str)
+                        and campaign["campaign_id"].strip()
                         for campaign in campaigns
                     ):
+                        concluded_ids = {campaign["campaign_id"] for campaign in campaigns}
                         with active_store.transaction() as conn:
                             rows = conn.execute(
                                 """
-                                SELECT p.procedure_id, pr.source_json
+                                SELECT pr.lesson_json, pr.source_json
                                 FROM procedures p
                                 JOIN proposals pr ON p.procedure_id = pr.procedure_id
-                                WHERE p.status = 'active'
+                                WHERE p.status = 'active' AND pr.status = 'accepted'
                                 """
                             ).fetchall()
                             for r in rows:
                                 try:
-                                    src = json.loads(r["source_json"])
-                                except (json.JSONDecodeError, TypeError):
-                                    src = {}
-                                if isinstance(src, dict) and str(src.get("aggregate_id")) == work_id_str:
+                                    src = SourceIdentity.model_validate_json(r["source_json"])
+                                    lesson = Lesson.model_validate_json(r["lesson_json"])
+                                except ValidationError:
+                                    continue
+                                if (
+                                    src.aggregate_id == work_id_str
+                                    and src.workspace_id == args.workspace
+                                    and all(citation.strip() for citation in lesson.research_campaign_ids)
+                                    and concluded_ids.intersection(lesson.research_campaign_ids)
+                                ):
                                     passed = True
                                     break
             except (WorkError, ValueError, KeyError, OSError, RuntimeError):
