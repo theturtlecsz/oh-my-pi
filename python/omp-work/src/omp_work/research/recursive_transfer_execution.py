@@ -17,9 +17,8 @@ OMP-319-s03-s05-s05:
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 
 from omp_work.operations.artifacts import read_verified_bytes
 from omp_work.research.custody import artifact_path
@@ -30,7 +29,7 @@ from omp_work.research.recursive_transfer_evidence import NativeEvidence
 from omp_work.research.recursive_transfer_execution_evidence import BoundStep, bind_step
 from omp_work.research.recursive_transfer_execution_inputs import ExecutionPayload, PreparedExecution
 from omp_work.research.recursive_transfer_execution_reservation import ReservationLedger
-from omp_work.research.recursive_transfer_freshness import PreparedStep, PreparedTask
+from omp_work.research.recursive_transfer_freshness import PreparedStep
 from omp_work.research.recursive_transfer_methods import FrozenMethod
 
 __all__ = [
@@ -89,8 +88,8 @@ def _load_protocol(native: NativeEvidence, protocol_sha256: str) -> EvaluationPr
 
 def run_arm(
     frozen: FrozenMethod,
-    prepared: PreparedExecution | PreparedTask,
-    payload: ExecutionPayload | Mapping[str, Any],
+    prepared: PreparedExecution,
+    payload: ExecutionPayload,
     native: NativeEvidence,
     ledger: ReservationLedger,
     arm: Literal["baseline", "candidate"] | str,
@@ -127,7 +126,7 @@ def run_arm(
             state=initial_state,
         )
 
-    if getattr(prepared, "reasons", ()):
+    if prepared.reasons:
         return ArmExecution(
             selection=None,
             invocation_count=0,
@@ -137,7 +136,7 @@ def run_arm(
             state=initial_state,
         )
 
-    if not getattr(prepared, "eligible", True):
+    if not prepared.eligible:
         return ArmExecution(
             selection=None,
             invocation_count=0,
@@ -147,13 +146,19 @@ def run_arm(
             state=initial_state,
         )
 
+    if not ledger.comparison_allowed:
+        return ArmExecution(None, 0, (), None, ("comparison_not_allowed",), initial_state)
+
+    if native.operation_id is None or native.request_id is None:
+        return ArmExecution(None, 0, (), None, ("missing_controller_identity",), initial_state)
+
     step_map: dict[str, PreparedStep] = {s.step_id: s for s in prepared.steps}
     admitted_ids: set[str] = set(ledger.newly_admitted_trial_ids)
     verified_ids: list[str] = []
     observations: dict[str, Observation] = {}
     opened_bound_steps: dict[str, BoundStep] = {}
 
-    opened_ids = sorted(payload["opened"] if isinstance(payload, Mapping) else payload.opened)
+    opened_ids = sorted(payload.opened)
 
     # 1. Bind every opened step for this arm before invocation, requiring admitted trial identity.
     for step_id in opened_ids:
@@ -208,19 +213,6 @@ def run_arm(
         opened_bound_steps[step_id] = bound
 
     # 2. Build MethodContext using native controller fields and frozen.result.state
-    req_id = native.request_id
-    arm_suffix = f":{arm}"
-    if req_id is not None:
-        request_id = req_id if req_id.endswith(arm_suffix) else f"{req_id}:{arm}"
-    else:
-        request_id = str(arm)
-
-    if native.operation_id is not None:
-        native_op = str(native.operation_id)
-        op_id = native_op if native_op.endswith(arm_suffix) else f"{native_op}:{arm}"
-    else:
-        op_id = ""
-
     context = MethodContext(
         state=frozen.result.state,
         grant=native.grant,
@@ -232,8 +224,10 @@ def run_arm(
         workspace_id=native.workspace_id,
         actor_id=native.actor_id,
         work_id=native.work_id,
-        operation_id=op_id,
-        request_id=request_id,
+        # Usage writes also key idempotency by operation_id. Both arm writes
+        # need distinct derived identities while retaining native caller scope.
+        operation_id=f"{native.operation_id}:{arm}",
+        request_id=f"{native.request_id}:{arm}",
     )
 
     # 3. Determine protocol and construct GeneratedPolicy
@@ -271,14 +265,9 @@ def run_arm(
         )
 
     # 4. Invoke policy once with validated payload steps/opened and prepared seed/width
-    steps_data = payload["steps"] if isinstance(payload, Mapping) else payload.steps
-    opened_data = set(payload["opened"] if isinstance(payload, Mapping) else payload.opened)
-    seed = getattr(prepared, "seed", 0)
-    width = getattr(prepared, "width", 1)
-
     invocation_count = 1
     try:
-        pick, _ = policy(steps_data, opened_data, seed=seed, width=width)
+        pick, _ = policy(payload.steps, set(payload.opened), seed=prepared.seed, width=prepared.width)
     except Exception as error:
         failures = policy.failures or (str(error),)
         return ArmExecution(

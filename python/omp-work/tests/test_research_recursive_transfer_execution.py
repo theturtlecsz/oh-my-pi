@@ -5,25 +5,20 @@ from __future__ import annotations
 import os
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
-from unittest.mock import Mock, patch
-from uuid import uuid4
 
 import pytest
 
 from native_jobs_support import native_jobs  # noqa: F401
 from omp_work.research import strategy_protocol
-from omp_work.research.recursive_transfer_execution import ArmExecution, run_arm
+from omp_work.research.recursive_transfer_evidence import NativeEvidence
+from omp_work.research.recursive_transfer_execution import run_arm
 from omp_work.research.recursive_transfer_execution_evidence import BoundStep
 from omp_work.research.recursive_transfer_execution_inputs import (
     ExecutionPayload,
     load_payload,
     prepare_execution_cohorts,
 )
-from omp_work.research.recursive_transfer_execution_reservation import (
-    ReservationLedger,
-    reserve_execution,
-)
-from omp_work.research.recursive_transfer_history import Reservation
+from omp_work.research.recursive_transfer_execution_reservation import reserve_execution
 from recursive_transfer_execution_support import build_execution, seal_step
 
 pytestmark = pytest.mark.skipif(
@@ -128,8 +123,6 @@ def test_controller_revocation_blocks_selection(execution):
 
     prepared, payload, ledger = _prepare_and_reserve(execution)
 
-    from omp_work.research.recursive_transfer_evidence import NativeEvidence
-
     # Revoke controller authority by expiring policy window in the past
     past = datetime.now(timezone.utc) - timedelta(days=2)
     revoked_native = NativeEvidence(
@@ -200,7 +193,7 @@ def test_crash_preserves_measured_state_and_produces_no_scored_selection(executi
     assert cand_exec.selection is None
     assert cand_exec.selected_bound_step is None
     assert cand_exec.invocation_count == 1
-    assert len(cand_exec.failures) > 0
+    assert cand_exec.failures == ("crashed",)
     # Usage accounting was measured and preserved on state
     assert len(cand_exec.state.usage) > usage_before
 
@@ -340,3 +333,49 @@ def test_ineligible_prepared_task_never_reaches_policy(execution):
     assert res.invocation_count == 0
     assert res.failures == ("ineligible_confirmation",)
 
+
+def test_comparison_refusal_never_invokes_policy(execution):
+    seal_step(execution, "a", baseline_score=0.6, candidate_score=0.6)
+    seal_step(execution, "a1", baseline_score=0.8, candidate_score=0.8)
+    seal_step(execution, "b", baseline_score=0.7, candidate_score=0.7)
+    prepared, payload, ledger = _prepare_and_reserve(execution)
+
+    result = run_arm(execution.candidate, prepared, payload, execution.native,
+                     replace(ledger, comparison_allowed=False), "candidate")
+
+    assert result.invocation_count == 0
+    assert result.selection is None
+    assert result.selected_bound_step is None
+    assert result.failures == ("comparison_not_allowed",)
+    assert result.state == execution.candidate.result.state
+
+
+@pytest.mark.parametrize("field", ("operation_id", "request_id"))
+def test_missing_controller_identity_is_not_fabricated(execution, monkeypatch, field):
+    seal_step(execution, "a", baseline_score=0.6, candidate_score=0.6)
+    seal_step(execution, "a1", baseline_score=0.8, candidate_score=0.8)
+    seal_step(execution, "b", baseline_score=0.7, candidate_score=0.7)
+    prepared, payload, ledger = _prepare_and_reserve(execution)
+    monkeypatch.setattr(execution.native, field, None)
+
+    result = run_arm(execution.candidate, prepared, payload, execution.native, ledger, "candidate")
+
+    assert result.invocation_count == 0
+    assert result.selection is None
+    assert result.selected_bound_step is None
+    assert result.failures == ("missing_controller_identity",)
+
+
+def test_empty_opened_set_loads_custody_protocol_and_verifies_pick(execution):
+    execution.opened.clear()
+    for step in ("a", "a1", "b"):
+        seal_step(execution, step, baseline_score=0.6, candidate_score=0.6)
+    prepared, payload, ledger = _prepare_and_reserve(execution)
+
+    result = run_arm(execution.candidate, prepared, payload, execution.native, ledger, "candidate")
+
+    assert result.invocation_count == 1
+    assert result.selection in {"a", "b"}
+    assert result.failures == ()
+    assert result.selected_bound_step.metric == 0.6
+    assert result.verified_trial_ids == (str(execution.arms[result.selection][1].trial_id),)
