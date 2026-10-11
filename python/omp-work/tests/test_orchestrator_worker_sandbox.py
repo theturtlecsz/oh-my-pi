@@ -367,7 +367,8 @@ def test_live_checkout_and_outside_worktree_refused(tmp_path: Path, monkeypatch:
     assert missing.value.code == "worktrees_dir_unconfigured"
 
 
-def test_worker_sandbox_locks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.parametrize("identity,proxy_enabled", [("worker", False), ("verifier", False), ("worker", True)])
+def test_worker_sandbox_locks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str], identity: str, proxy_enabled: bool) -> None:
     root = tmp_path / "worktrees"
     root.mkdir()
     monkeypatch.setenv("OMP_WORKTREES_DIR", str(root))
@@ -401,6 +402,17 @@ def test_worker_sandbox_locks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, c
     postgres = OperationsConfig.defaults().port
     service = _WorkServiceStub()
     service.start()
+    model = _WorkServiceStub()
+    model.start()
+    manifest = tmp_path / "worker-manifest.json"
+    manifest.write_text("{}", encoding="utf-8")
+    extra = {
+        "OMP_MODEL_PROXY_URL": f"http://127.0.0.1:{model.port}",
+        "OMP_MODEL_TOKEN": "model-token",
+        "OMP_WORKER_MANIFEST": str(manifest),
+    } if proxy_enabled else {}
+    for name in ("OMP_MODEL_PROXY_URL", "OMP_MODEL_TOKEN", "OMP_WORKER_MANIFEST"):
+        monkeypatch.setenv(name, "inherited-poison")
     blocked = _bind_loopback()
     try:
         reserved = {service.port, int(blocked.getsockname()[1])}
@@ -409,7 +421,7 @@ def test_worker_sandbox_locks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, c
             ports.append(postgres)
         spec = {
             "paths": _probe_paths(plant, agent, sibling, repo, gitdir, real_sock),
-            "allowed": list(_ALLOWED_ENV),
+            "allowed": [*_ALLOWED_ENV, *extra],
             "ports": ports,
             "ro": str(key),
             "pid": os.getpid(),
@@ -420,18 +432,22 @@ def test_worker_sandbox_locks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, c
             worktree=job,
             token=_TOKEN,
             workservice_socket=("127.0.0.1", service.port),
-            identity="worker",
+            identity=identity,
+            model_proxy=("127.0.0.1", model.port) if proxy_enabled else None,
+            model_token="model-token" if proxy_enabled else None,
+            manifest_path=manifest if proxy_enabled else None,
             ro_binds=(key,),
             timeout=45,
         )
     finally:
         service.close()
+        model.close()
         blocked.close()
 
     out, err = capfd.readouterr()
     assert rc == 0, err
     payload = _json_line(out)
-    assert payload["env_keys"] == sorted(_ALLOWED_ENV)
+    assert payload["env_keys"] == sorted([*_ALLOWED_ENV, *extra])
     assert payload["env"] == {
         "PATH": "/usr/bin:/bin",
         "LANG": "C.UTF-8",
@@ -439,6 +455,7 @@ def test_worker_sandbox_locks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, c
         "TZ": "UTC",
         "OMP_TASK_TOKEN": _TOKEN,
         "OMP_WORK_URL": f"http://127.0.0.1:{service.port}",
+        **extra,
     }
     assert payload["readable"] == []
     assert payload["leaks"] == []

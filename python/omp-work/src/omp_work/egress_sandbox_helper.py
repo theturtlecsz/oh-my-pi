@@ -8,7 +8,8 @@ When ``run_sandboxed`` bound an egress gateway or a WorkService relay, the
 worker reaches the network only through loopback listeners the helper owns:
 UDP ``127.0.0.1:53`` forwards to the gateway's policy-controlled name service,
 TCP ``127.0.0.1:3128`` forwards to the gateway proxy socket, and TCP
-``127.0.0.1:<workservice port>`` forwards to the WorkService relay socket. A
+``127.0.0.1:<workservice port>`` forwards to the WorkService relay socket;
+``127.0.0.1:<model port>`` forwards only to the optional dedicated model socket. A
 tmpfs over the socket root hides every other sandbox's sockets, with only this
 sandbox's directory bound back so ``record.sock`` stays reachable.
 
@@ -52,9 +53,19 @@ JAIL_CA_CERT = "/etc/ssl/certs/ca-certificates.crt"
 RESEARCH_HOME = "/home/research"
 RESEARCH_PATH_DEFAULT = "/usr/bin:/bin"
 _RESEARCH_ENV_NAMES = frozenset({"PATH", "LANG", "TERM", "TZ"})
-# Worker profile: the research allowlist plus the task token and WorkService
-# URL. Nothing else (no HOME, proxy, CA, or caller credential) is copied.
-_WORKER_ENV_ORDER = ("PATH", "LANG", "TERM", "TZ", "OMP_TASK_TOKEN", "OMP_WORK_URL")
+# Worker profile: six base names and three explicit worker model/manifest names.
+# Nothing else (no HOME, generic proxy, CA, or provider credential) is copied.
+_WORKER_ENV_ORDER = (
+    "PATH",
+    "LANG",
+    "TERM",
+    "TZ",
+    "OMP_TASK_TOKEN",
+    "OMP_WORK_URL",
+    "OMP_MODEL_PROXY_URL",
+    "OMP_MODEL_TOKEN",
+    "OMP_WORKER_MANIFEST",
+)
 _WORKER_ENV_NAMES = frozenset(_WORKER_ENV_ORDER)
 
 _libc = ctypes.CDLL("libc.so.6", use_errno=True)
@@ -394,6 +405,10 @@ def _setup_relays(config: dict) -> None:
     workservice_port = config.get("workservice_port")
     if ws_sock and workservice_port:
         _serve_tcp_relay(int(workservice_port), ws_sock)
+    model_sock = config.get("model_sock")
+    model_port = config.get("model_port")
+    if model_sock and model_port:
+        _serve_tcp_relay(int(model_port), model_sock)
 
 
 def _proxy_env(worker_env: dict[str, str]) -> None:
@@ -432,7 +447,7 @@ def _research_worker_env(config: dict) -> dict[str, str]:
 
 
 def _worker_profile_env(config: dict) -> dict[str, str]:
-    """Closed worker environment: the six allowed names, and nothing else.
+    """Closed worker environment: six base names and explicit model/manifest names.
 
     PATH defaults to ``/usr/bin:/bin``. HOME, proxy, CA, and LC_* are not set.
     """
@@ -453,7 +468,8 @@ def _worker_env(config: dict, workdir: str | None) -> dict[str, str]:
     (PATH defaults to ``/usr/bin:/bin``), sets HOME, and points the CA variables
     at the certificate inside the jail. Proxy variables match the s07 worker.
     A worker root takes only PATH, LANG, TERM, TZ, OMP_TASK_TOKEN, and
-    OMP_WORK_URL.
+    OMP_WORK_URL, plus explicit OMP_MODEL_PROXY_URL, OMP_MODEL_TOKEN, and
+    OMP_WORKER_MANIFEST when supplied.
     """
     if config.get("root") == "research":
         return _research_worker_env(config)
