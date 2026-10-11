@@ -25,7 +25,7 @@
 +            load = self.provider_load()
 +            event.update(
 +                running_implementers=sum(1 for t, j in jobs.items() if j.get("phase") == "implement"
-+                                         and (t == tid or (j.get("pid") and pid_alive(j["pid"])))),
++                                         and j.get("pid") and pid_alive(j["pid"])),
 +                slots=self.slots, occupied_slots=self.occupied_slots(), test_slots=self.test_slots,
 +                start_gap_sec=float(self.cfg.get("start_gap_sec") or 0),
 +                providers={n: {"max_parallel": int(self.providers[n].get("max_parallel", 1)), "load": load.get(n, 0)}
