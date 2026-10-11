@@ -366,6 +366,37 @@ def test_affirmative_consumption_only(staged_flood, tmp_path, work, affirmative)
 
 
 @pytest.mark.parametrize("work,affirmative", [
+    ("Does not import src/a.ts. Import src/a.ts.", True),
+    ("Cannot import src/a.ts. Read src/a.ts.", True),
+    ("Neither slice imports src/a.ts. Consume src/a.ts.", True),
+    ("It fails to import src/a.ts. Extend src/a.ts.", True),
+    ("Don't import src/a.ts. Import src/a.ts.", True),
+    ("Read src/unrelated.ts. Import src/a.ts.", True),
+    ("Import src/a.ts, then write src/b.ts.", True),
+    ("Instead of writing src/b.ts, import src/a.ts.", True),
+    ("Rather than importing src/a.ts, write src/b.ts.", False),
+    ("Read src/unrelated.ts. src/a.ts stays unchanged.", False),
+    ("Import src/b.ts. src/a.ts stays unchanged.", False),
+])
+def test_clause_bounds(staged_flood, tmp_path, work, affirmative):
+    """Negation stays in its clause; only a following producer token justifies an edge."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path)
+    write_slice(pdir, "ITEM-s01", files=["src/a.ts"])
+    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"],
+                body=f"{work}\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    if affirmative:
+        assert violations == [], f"Consumption should justify edge: {work!r}: {violations}"
+    else:
+        assert violations == [
+            "ITEM-s02: depends_on ITEM-s01 orders the slice only; leave depends_on empty, "
+            "edit a file ITEM-s01 also edits, or name a file or output of ITEM-s01 "
+            "that this slice reads, imports, consumes or extends"
+        ], f"Order-only edge should fail: {work!r}: {violations}"
+
+
+@pytest.mark.parametrize("work,affirmative", [
     ("Consume reports/result.json.", True),
     ("Consume result.json.", False),
     ("Consume reports/result.", False),
