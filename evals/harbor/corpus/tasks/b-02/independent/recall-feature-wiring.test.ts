@@ -7,14 +7,14 @@ import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Mnemopi, type MnemopiOptions } from "@oh-my-pi/pi-mnemopi/core/memory";
+import { Mnemopi, type MnemopiOptions } from "../src/core/memory";
 import {
 	GRAPH_VOICE_MAX_DEPTH,
 	GRAPH_VOICE_MAX_RESULTS,
 	PolyphonicRecallEngine,
 	type VoiceRecallResult,
-} from "@oh-my-pi/pi-mnemopi/core/polyphonic-recall";
-import { VeracityConsolidator } from "@oh-my-pi/pi-mnemopi/core/veracity-consolidation";
+} from "../src/core/polyphonic-recall";
+import { VeracityConsolidator } from "../src/core/veracity-consolidation";
 import { logger } from "@oh-my-pi/pi-utils";
 
 const roots: string[] = [];
