@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -20,7 +20,6 @@ import psycopg
 from omp_work.operations.artifacts import read_verified_bytes
 from omp_work.research.custody import artifact_path
 from omp_work.research.managed import (
-    is_managed_campaign,
     managed_trials,
     verify_managed_trial,
 )
@@ -406,7 +405,7 @@ def read_trial(native: NativeEvidence, trial_id: object) -> TrialEvidence:
                     try:
                         manifest_val = json.loads(manifest_val)
                     except Exception:
-                        pass
+                        manifest_val = None
                 if isinstance(manifest_val, dict) and manifest_val.get("issuer_kind") == "candidate_authored":
                     raise TrialRefused("candidate_authored")
 
