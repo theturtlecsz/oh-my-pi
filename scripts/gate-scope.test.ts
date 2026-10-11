@@ -152,10 +152,34 @@ describe("isSkipSafeTsCheck", () => {
 	});
 });
 
+async function makeTempGitRepo(): Promise<string> {
+	const tempRepo = await makeTempDir("omp-gate-scope-git-");
+	await $`git init -b main`.cwd(tempRepo).quiet();
+	await $`git config user.name "Test"`.cwd(tempRepo).quiet();
+	await $`git config user.email "test@example.com"`.cwd(tempRepo).quiet();
+	return tempRepo;
+}
+
+async function gitCommitAll(cwd: string, message: string): Promise<string> {
+	await $`git add -A`.cwd(cwd).quiet();
+	await $`git commit -m ${message}`.cwd(cwd).quiet();
+	const sha = await $`git rev-parse HEAD`.cwd(cwd).quiet().text();
+	return sha.trim();
+}
+
 describe("changedFiles", () => {
 	test("returns changed files list between base and HEAD", async () => {
-		const files = await changedFiles("HEAD~1", repoRoot);
-		expect(Array.isArray(files)).toBe(true);
+		const tempRepo = await makeTempGitRepo();
+
+		await Bun.write(path.join(tempRepo, "one.txt"), "v1\n");
+		const base = await gitCommitAll(tempRepo, "initial commit");
+
+		await Bun.write(path.join(tempRepo, "one.txt"), "v2\n");
+		await Bun.write(path.join(tempRepo, "two.txt"), "new\n");
+		await gitCommitAll(tempRepo, "second commit");
+
+		const files = await changedFiles(base, tempRepo);
+		expect(files).toEqual(["one.txt", "two.txt"]);
 	});
 
 	test("throws on invalid base", async () => {
@@ -181,13 +205,21 @@ describe("gate-scope CLI", () => {
 	});
 
 	test("CLI writes output to GATE_SCOPE_OUTPUT and prints gate scope lines", async () => {
-		const tempDir = await makeTempDir();
-		const outputFile = path.join(tempDir, "scope_output");
+		const tempRepo = await makeTempGitRepo();
+		const outputFile = path.join(tempRepo, "scope_output");
 
-		const { exitCode, stdout } = await runCliSubprocess({
-			GATE_SCOPE_BASE: "HEAD",
-			GATE_SCOPE_OUTPUT: outputFile,
-		});
+		await Bun.write(path.join(tempRepo, "one.txt"), "v1\n");
+		const base = await gitCommitAll(tempRepo, "initial commit");
+		await Bun.write(path.join(tempRepo, "one.txt"), "v2\n");
+		await gitCommitAll(tempRepo, "second commit");
+
+		const { exitCode, stdout } = await runCliSubprocess(
+			{
+				GATE_SCOPE_BASE: base,
+				GATE_SCOPE_OUTPUT: outputFile,
+			},
+			tempRepo,
+		);
 
 		expect(exitCode).toBe(0);
 		expect(stdout).toContain("gate scope:");
