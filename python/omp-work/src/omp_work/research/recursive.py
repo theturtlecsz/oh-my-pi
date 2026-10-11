@@ -1,8 +1,8 @@
 """Immutable inputs and history for bounded R13 recursive research.
 
-These records do not generate or activate children. A caller grant retains the
-signed authority binding; signature verification and standing-policy coverage
-remain the caller's responsibility. Method identity pins the generator, while
+These records do not generate children. Admission always checks live standing
+authority; artifacts and restored history are never authority. Method identity
+pins the generator, while
 proposal equivalence pins recipe/spec content independently of display names.
 """
 
@@ -10,13 +10,20 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Annotated
 
-from pydantic import AwareDatetime, Field, field_validator, model_validator
+from pydantic import AwareDatetime, Field, ValidationError, field_validator, model_validator
 
 from omp_work.research.accounting import ResourceLimits
+from omp_work.standing_change import (
+    ChangeAuthority, ChangeKind, StandingChangeRefused, authorize_standing_change,
+)
+from omp_work.standing_policy import (
+    ActionRequest, PolicyRefused, RepositoryRecord, StandingPolicy, covers, validate_policy,
+)
 from omp_work.v1 import canonical
 from omp_work.v1.models import StrictModel, hex64
 
@@ -177,7 +184,8 @@ class RecursiveUsage(StrictModel):
 
 
 class RecursionState(StrictModel):
-    studies: tuple[RecursiveStudy, ...] = Field(min_length=1)
+    # Append-only admission history; termination never removes a study.
+    studies: tuple[RecursiveStudy, ...] = ()
     grant: CallerGrant
     proposal_history: tuple[RecursiveProposal, ...] = ()
     usage: tuple[RecursiveUsage, ...] = ()
@@ -185,6 +193,10 @@ class RecursionState(StrictModel):
 
     @model_validator(mode="after")
     def history_bindings(self) -> RecursionState:
+        if not self.studies:
+            if self.proposal_history or self.usage:
+                raise ValueError("proposal/usage references unknown study")
+            return self
         root = self.studies[0]
         if root.parent_id is not None:
             raise ValueError("history must start with its root")
@@ -231,9 +243,11 @@ class RecursionState(StrictModel):
         if now.tzinfo is None:
             raise ValueError("admission time must be aware UTC")
         _utc(now)
-        root = self.studies[0]
         if self.terminal_reason is not None:
             return self.terminal_reason
+        if not self.studies:
+            return None
+        root = self.studies[0]
         if not root.window_start <= now < root.window_end:
             return "outside_window"
         limits = root.limits
@@ -248,3 +262,181 @@ class RecursionState(StrictModel):
         if len(self.studies) - 1 >= root.max_descendants:
             return "max_descendants"
         return None
+
+
+def _within(study: RecursiveStudy, bounds: _WindowCaps) -> bool:
+    return (
+        study.window_start >= bounds.window_start
+        and study.window_end <= bounds.window_end
+        and study.max_depth <= bounds.max_depth
+        and study.max_descendants <= bounds.max_descendants
+        and study.limits.max_wall_clock_seconds <= bounds.limits.max_wall_clock_seconds
+        and study.limits.max_model_tokens <= bounds.limits.max_model_tokens
+        and study.limits.max_usd <= bounds.limits.max_usd
+    )
+
+
+_PINNED_BINDINGS = (
+    "objective", "evaluator_component_sha256", "evaluator_artifact_sha256",
+    "protocol_sha256", "upstream_assets", "method_version", "method_sha256",
+    "lower_researcher_sha256",
+)
+
+
+def _subtree_ids(studies: tuple[RecursiveStudy, ...], study_id: str) -> set[str]:
+    """Ordered admission history retains every descendant, regardless of outcome."""
+    subtree = {study_id}
+    for admitted in studies:
+        if admitted.parent_id in subtree:
+            subtree.add(admitted.study_id)
+    return subtree
+
+
+def _tree_reason(
+    studies: tuple[RecursiveStudy, ...], study: RecursiveStudy, grant: CallerGrant,
+) -> str | None:
+    """Prospective append, used for new admissions and restored history alike."""
+    known = {item.study_id: item for item in studies}
+    if study.study_id in known:
+        return "reused_study_id"
+    if study.parent_id == study.study_id:
+        return "ancestry_cycle"
+    if not _within(study, grant):
+        return "grant_bounds"
+    if study.parent_id is None:
+        if studies:
+            return "second_root"
+        return None if study.depth == 0 else "root_depth"
+    ancestors: list[RecursiveStudy] = []
+    cursor = study.parent_id
+    seen = {study.study_id}
+    while cursor is not None:
+        if cursor in seen:
+            return "ancestry_cycle"
+        seen.add(cursor)
+        ancestor = known.get(cursor)
+        if ancestor is None:
+            return "unadmitted_parent" if not ancestors else "missing_ancestor"
+        ancestors.append(ancestor)
+        cursor = ancestor.parent_id
+    if not studies or ancestors[-1] != studies[0] or ancestors[-1].depth != 0:
+        return "missing_root"
+    if study.depth != ancestors[0].depth + 1:
+        return "parent_depth"
+    for ancestor in ancestors:
+        if study.depth > ancestor.max_depth:
+            return "max_depth"
+        if not _within(study, ancestor):
+            return "ancestor_bounds"
+        if any(getattr(study, field) != getattr(ancestor, field) for field in _PINNED_BINDINGS):
+            return "binding_changed"
+        # Count the entire admitted subtree, including completed/terminated work.
+        # Subtree size includes the ancestor, offsetting the prospective child.
+        if len(_subtree_ids(studies, ancestor.study_id)) > ancestor.max_descendants:
+            return "max_descendants"
+    if len(studies) > grant.max_descendants:
+        return "max_descendants"
+    return None
+
+
+def admit_study(
+    state: RecursionState,
+    study: RecursiveStudy,
+    grant: CallerGrant | None = None,
+    *,
+    policy: StandingPolicy | None = None,
+    authority: ChangeAuthority | None = None,
+    action: ActionRequest | None = None,
+    repositories: Mapping[str, RepositoryRecord] | Sequence[RepositoryRecord] | None = None,
+    now: datetime | None = None,
+) -> RecursionState:
+    """Admit one study or terminate with a reason, retaining all prior history.
+
+    Every call supplies the original signed grant and live authority context.
+    No parent-spec, artifact, standalone-child or snapshot overload exists.
+    """
+    def refuse(reason: str) -> RecursionState:
+        return state.model_copy(update={"terminal_reason": state.terminal_reason or reason})
+
+    if state.terminal_reason is not None:
+        return state
+    if not isinstance(now, datetime) or now.utcoffset() != timedelta(0):
+        return refuse("utc_now_required")
+    if (
+        not isinstance(grant, CallerGrant)
+        or not isinstance(policy, StandingPolicy)
+        or not isinstance(authority, ChangeAuthority)
+        or not isinstance(action, ActionRequest)
+        or not isinstance(repositories, (Mapping, Sequence))
+        or isinstance(repositories, (str, bytes))
+    ):
+        return refuse("authority_context_required")
+    records = repositories.values() if isinstance(repositories, Mapping) else repositories
+    if any(not isinstance(record, RepositoryRecord) for record in records):
+        return refuse("invalid_repositories")
+    try:
+        grant = CallerGrant.model_validate(grant.model_dump())
+        study = RecursiveStudy.model_validate(study.model_dump())
+    except (ValidationError, AttributeError):
+        return refuse("invalid_admission")
+    if grant != state.grant:
+        return refuse("grant_changed")
+    try:
+        authorize_standing_change(ChangeKind.create, authority)
+        validate_policy(policy, repositories)
+        if (
+            str(policy.policy_id) != grant.policy_id
+            or str(policy.decision_id) != grant.decision_id
+            or str(authority.decision_id) != grant.decision_id
+        ):
+            return refuse("authority_binding_mismatch")
+        if (
+            policy.action_class != "spend_beyond_threshold"
+            or policy.money_limit_usd is None
+            or not policy.money_limit_usd.is_finite()
+            or grant.limits.max_usd > policy.money_limit_usd
+            or policy.expires_at is None
+            or policy.expires_at.utcoffset() != timedelta(0)
+            or grant.window_end > policy.expires_at
+        ):
+            return refuse("policy_grant_bounds")
+        if action.amount_usd is None or not action.amount_usd.is_finite():
+            return refuse("invalid_action")
+        if not covers(policy, action, repositories, now):
+            return refuse("policy_not_covered")
+    except (StandingChangeRefused, PolicyRefused) as error:
+        return refuse(error.code)
+    except (ValueError, TypeError, AttributeError, InvalidOperation):
+        return refuse("invalid_authority_context")
+    if not grant.window_start <= now < grant.window_end:
+        return refuse("outside_window")
+    # Revalidate restored snapshots; their records cannot authorize a new call.
+    for index, admitted in enumerate(state.studies):
+        reason = _tree_reason(state.studies[:index], admitted, grant)
+        if reason:
+            return refuse(reason)
+    reason = _tree_reason(state.studies, study, grant)
+    if reason:
+        return refuse(reason)
+    known = {item.study_id: item for item in state.studies}
+    current = study
+    while True:
+        if not current.window_start <= now < current.window_end:
+            return refuse("outside_window")
+        descendants = _subtree_ids(state.studies, current.study_id)
+        usage = [item for item in state.usage if item.study_id in descendants]
+        if (
+            sum(item.compute_seconds for item in usage) >= current.limits.max_wall_clock_seconds
+            or sum(item.tokens for item in usage) >= current.limits.max_model_tokens
+            or sum((item.usd for item in usage), Decimal(0)) >= current.limits.max_usd
+        ):
+            return refuse("quota_exhausted")
+        if current.parent_id is None:
+            break
+        current = known[current.parent_id]
+    try:
+        return RecursionState.model_validate({
+            **state.model_dump(), "studies": (*state.studies, study),
+        })
+    except ValidationError:
+        return refuse("invalid_history")

@@ -1,6 +1,6 @@
 """Immutable recursion bindings, history isolation, and R13 proposal identity."""
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import json
@@ -15,7 +15,10 @@ from omp_work.research.recursive import (
     RecursiveProposal,
     RecursiveStudy,
     RecursiveUsage,
+    admit_study,
 )
+from omp_work.standing_change import ChangeAuthority
+from omp_work.standing_policy import ActionRequest, RepositoryRecord, StandingPolicy
 
 START = datetime(2026, 1, 1, tzinfo=timezone.utc)
 END = START + timedelta(hours=1)
@@ -245,3 +248,320 @@ def test_root_and_descendant_caps_refuse_more_children() -> None:
                        grant=grant())
     with pytest.raises(ValidationError, match="duplicate study ID"):
         RecursionState(studies=(root, root), grant=grant())
+
+
+# All admission paths use the same live context; snapshots contain none of it.
+def live_context() -> dict[str, object]:
+    return {
+        "policy": StandingPolicy(
+            policy_id="spend-policy", action_class="spend_beyond_threshold",
+            money_limit_usd=Decimal(10), expires_at=END, decision_id="decision-1",
+        ),
+        "authority": ChangeAuthority("owner", "decision-1", "owner"),
+        "action": ActionRequest("spend_beyond_threshold", amount_usd=Decimal(10)),
+        "repositories": {"repo": RepositoryRecord("repo", "main")},
+        "now": START,
+    }
+
+
+def admit(state: RecursionState, candidate: RecursiveStudy, **context: object) -> RecursionState:
+    return admit_study(state, candidate, state.grant, **{**live_context(), **context})
+
+
+def admitted_root(**overrides: object) -> RecursionState:
+    return admit(RecursionState(grant=grant()), RecursiveStudy.model_validate(study_payload(**overrides)))
+
+
+def assert_refusal(before: RecursionState, after: RecursionState, reason: str) -> None:
+    assert after.terminal_reason == reason
+    assert after.studies == before.studies
+    assert after.proposal_history == before.proposal_history
+    assert after.usage == before.usage
+    restored = RecursionState.model_validate_json(after.model_dump_json())
+    assert restored.terminal_reason == reason
+    assert admit(restored, child(study_id="fallback")) == restored
+
+
+def test_admit_root_child_and_restored_child_with_live_authority() -> None:
+    state = admitted_root()
+    assert state.terminal_reason is None
+    assert [item.study_id for item in state.studies] == ["root"]
+    restored = RecursionState.model_validate_json(state.model_dump_json())
+    result = admit(restored, child())
+    assert result.terminal_reason is None
+    assert [(item.study_id, item.parent_id, item.depth) for item in result.studies] == [
+        ("root", None, 0), ("child", "root", 1),
+    ]
+    assert state.studies == restored.studies
+
+
+@pytest.mark.parametrize("field", ["grant", "policy", "authority", "action", "repositories", "now"])
+@pytest.mark.parametrize("has_root", [False, True])
+def test_every_admission_requires_live_context(field: str, has_root: bool) -> None:
+    state = admitted_root() if has_root else RecursionState(grant=grant())
+    state = RecursionState.model_validate_json(state.model_dump_json())
+    context = {**live_context(), "grant": state.grant, field: None}
+    result = admit_study(state, child() if has_root else RecursiveStudy.model_validate(study_payload()), **context)
+    assert_refusal(state, result, "utc_now_required" if field == "now" else "authority_context_required")
+
+
+@pytest.mark.parametrize("authority,reason", [
+    (ChangeAuthority("task-agent", "decision-1", "owner"), "worker_not_permitted"),
+    (ChangeAuthority("automation", "decision-1", "owner"), "worker_not_permitted"),
+    (ChangeAuthority("unknown", "decision-1", "owner"), "unknown_actor"),
+    (ChangeAuthority("owner", None, "owner"), "decision_required"),
+    (ChangeAuthority("owner", "decision-1", "client"), "owner_signature_required"),
+    (ChangeAuthority("owner", "other", "owner"), "authority_binding_mismatch"),
+])
+def test_original_grant_requires_owner_authority(authority: ChangeAuthority, reason: str) -> None:
+    state = admitted_root()
+    assert_refusal(state, admit(state, child(), authority=authority), reason)
+
+
+@pytest.mark.parametrize("changes,reason", [
+    ({"decision_id": None}, "missing_decision"),
+    ({"decision_id": "other"}, "authority_binding_mismatch"),
+    ({"policy_id": "other"}, "authority_binding_mismatch"),
+    ({"action_class": "not-tier2"}, "not_tier2"),
+    ({"money_limit_usd": None}, "missing_bound"),
+    ({"money_limit_usd": Decimal(0)}, "money_limit"),
+    ({"money_limit_usd": Decimal(9)}, "policy_grant_bounds"),
+    ({"money_limit_usd": Decimal("Infinity")}, "policy_grant_bounds"),
+    ({"money_limit_usd": Decimal("NaN")}, "invalid_authority_context"),
+    ({"expires_at": None}, "policy_grant_bounds"),
+    ({"expires_at": END - timedelta(seconds=1)}, "policy_grant_bounds"),
+    ({"expires_at": END.replace(tzinfo=None)}, "policy_grant_bounds"),
+    ({"repositories": ("missing",)}, "unknown_repository"),
+])
+def test_live_policy_cannot_be_replaced_or_exceeded(changes: dict, reason: str) -> None:
+    state = admitted_root()
+    policy = replace(live_context()["policy"], **changes)
+    assert_refusal(state, admit(state, child(), policy=policy), reason)
+
+
+@pytest.mark.parametrize("action,reason", [
+    (ActionRequest("network_access", destination="example.org"), "invalid_action"),
+    (ActionRequest("network_access", amount_usd=Decimal(1)), "policy_not_covered"),
+    (ActionRequest("spend_beyond_threshold", amount_usd=Decimal(11)), "policy_not_covered"),
+    (ActionRequest("spend_beyond_threshold", amount_usd=Decimal(-1)), "policy_not_covered"),
+    (ActionRequest("spend_beyond_threshold", amount_usd=Decimal("NaN")), "invalid_action"),
+])
+def test_action_must_be_covered(action: ActionRequest, reason: str) -> None:
+    state = admitted_root()
+    assert_refusal(state, admit(state, child(), action=action), reason)
+
+
+@pytest.mark.parametrize("now,reason", [
+    (START.replace(tzinfo=None), "utc_now_required"),
+    (START.astimezone(timezone(timedelta(hours=1))), "utc_now_required"),
+    (START - timedelta(microseconds=1), "outside_window"),
+    (END, "policy_not_covered"),
+])
+def test_admission_checks_utc_and_half_open_window(now: datetime, reason: str) -> None:
+    state = admitted_root()
+    assert_refusal(state, admit(state, child(), now=now), reason)
+
+
+def test_window_end_refused_even_when_policy_outlives_grant() -> None:
+    state = admitted_root()
+    policy = replace(live_context()["policy"], expires_at=END + timedelta(hours=1))
+    assert_refusal(state, admit(state, child(), policy=policy, now=END), "outside_window")
+    assert admit(state, child(), now=END - timedelta(microseconds=1)).terminal_reason is None
+    assert_refusal(state, admit(state, child(window_start=START + timedelta(seconds=1))), "outside_window")
+
+
+@pytest.mark.parametrize("changes", [
+    {"caller_id": "other"}, {"signature_sha256": "9" * 64},
+    {"policy_id": "other"}, {"decision_id": "other"},
+    {"max_depth": 3}, {"max_descendants": 3},
+    {"limits": ResourceLimits(101, 1000, Decimal(10))},
+    {"limits": ResourceLimits(100, 1001, Decimal(10))},
+    {"limits": ResourceLimits(100, 1000, Decimal(11))},
+    {"window_start": START - timedelta(seconds=1)},
+    {"window_end": END + timedelta(seconds=1)},
+])
+def test_grant_identity_and_signed_bounds_cannot_change(changes: dict) -> None:
+    state = admitted_root()
+    result = admit_study(state, child(), grant(**changes), **live_context())
+    assert_refusal(state, result, "grant_changed")
+
+
+@pytest.mark.parametrize("changes", [
+    {"max_depth": 3}, {"max_descendants": 3},
+    {"limits": ResourceLimits(101, 1000, Decimal(10))},
+    {"limits": ResourceLimits(100, 1001, Decimal(10))},
+    {"limits": ResourceLimits(100, 1000, Decimal(11))},
+    {"window_start": START - timedelta(seconds=1)},
+    {"window_end": END + timedelta(seconds=1)},
+])
+def test_study_cannot_enlarge_grant_bounds(changes: dict) -> None:
+    state = admitted_root()
+    assert_refusal(state, admit(state, child(**changes)), "grant_bounds")
+
+
+@pytest.mark.parametrize("field,value", [
+    ("objective", "Different objective"), ("method_version", "r13.v2"),
+    ("method_sha256", "9" * 64), ("lower_researcher_sha256", "9" * 64),
+    ("evaluator_component_sha256", "9" * 64), ("evaluator_artifact_sha256", "9" * 64),
+    ("protocol_sha256", "9" * 64),
+    ("upstream_assets", [{"identity": "strategy.v2", "content_sha256": "f" * 64}]),
+    ("upstream_assets", [{"identity": "strategy.v1", "content_sha256": "9" * 64}]),
+])
+def test_child_cannot_replace_pinned_bindings(field: str, value: object) -> None:
+    state = admitted_root()
+    assert_refusal(state, admit(state, child(**{field: value})), "binding_changed")
+
+
+@pytest.mark.parametrize("changes,reason", [
+    ({"study_id": "root"}, "reused_study_id"),
+    ({"parent_id": "unadmitted"}, "unadmitted_parent"),
+    ({"parent_id": "child"}, "ancestry_cycle"),
+    ({"depth": 2}, "parent_depth"),
+])
+def test_child_requires_admitted_parent_and_exact_depth(changes: dict, reason: str) -> None:
+    state = admitted_root()
+    assert_refusal(state, admit(state, child(**changes)), reason)
+
+
+def test_standalone_child_has_no_parent_or_inherited_authority() -> None:
+    state = RecursionState(grant=grant())
+    assert_refusal(state, admit(state, child()), "unadmitted_parent")
+    assert_refusal(state, admit_study(state, child(), state.grant), "utc_now_required")
+
+
+def test_second_root_cannot_bypass_single_descendant_cap() -> None:
+    state = admitted_root(max_descendants=1)
+    state = admit(state, child(max_descendants=1))
+    assert state.terminal_reason is None
+    second = RecursiveStudy.model_validate(study_payload(study_id="second-root", max_descendants=1))
+    assert_refusal(state, admit(state, second), "second_root")
+
+
+def test_siblings_and_renamed_ids_count_all_admitted_history() -> None:
+    state = admit(admitted_root(max_descendants=1), child(max_descendants=1))
+    # Completion has no removal transition: usage and proposals remain in history.
+    state = RecursionState.model_validate({
+        **state.model_dump(), "proposal_history": (proposal(study_id="child"),),
+        "usage": (RecursiveUsage(study_id="child", compute_seconds=1, tokens=1, usd=1),),
+    })
+    sibling = child(study_id="renamed", max_descendants=1,
+                    dev=[{"task_id": "fresh-dev", "content_sha256": "6" * 64}],
+                    confirmation=[{"task_id": "fresh-confirm", "content_sha256": "7" * 64}])
+    assert_refusal(state, admit(state, sibling), "max_descendants")
+
+
+@pytest.mark.parametrize("changes", [
+    {"max_descendants": 2}, {"max_depth": 2},
+    {"window_start": START}, {"window_end": END},
+    {"limits": LIMITS},
+])
+def test_child_cannot_enlarge_narrowed_ancestor(changes: dict) -> None:
+    state = admit(RecursionState(grant=grant()), RecursiveStudy.model_validate(study_payload(
+        max_depth=1, max_descendants=1, window_start=START + timedelta(seconds=1),
+        window_end=END - timedelta(seconds=1), limits=ResourceLimits(50, 500, Decimal(5)),
+    )), now=START + timedelta(seconds=1))
+    candidate = child(**{
+        "max_depth": 1, "max_descendants": 1,
+        "window_start": START + timedelta(seconds=1), "window_end": END - timedelta(seconds=1),
+        "limits": ResourceLimits(50, 500, Decimal(5)), **changes,
+    })
+    assert_refusal(state, admit(state, candidate, now=START + timedelta(seconds=1)), "ancestor_bounds")
+
+
+def test_parent_descendant_cap_counts_grandchildren_without_using_sibling_budget() -> None:
+    state = admit(admitted_root(), child(max_descendants=0))
+    grandchild = child(study_id="grandchild", parent_id="child", depth=2, max_descendants=0,
+                       dev=[{"task_id": "fresh-dev", "content_sha256": "6" * 64}],
+                       confirmation=[{"task_id": "fresh-confirm", "content_sha256": "7" * 64}])
+    assert_refusal(state, admit(state, grandchild), "max_descendants")
+
+
+@pytest.mark.parametrize("corruption,reason", [
+    ({"parent_id": "missing"}, "unadmitted_parent"),
+    ({"parent_id": "child"}, "ancestry_cycle"),
+    ({"depth": 2}, "parent_depth"),
+])
+def test_corrupt_restored_ancestry_cannot_authorize_child(corruption: dict, reason: str) -> None:
+    state = admitted_root().model_copy(update={"studies": (
+        RecursiveStudy.model_validate(study_payload()), child().model_copy(update=corruption),
+    )})
+    result = admit(state, child(study_id="new", parent_id="child", depth=2))
+    assert result.terminal_reason == reason
+    assert result.studies == state.studies
+
+
+def test_invalid_explicit_root_depth_refused_without_admitting_history() -> None:
+    state = RecursionState(grant=grant())
+    invalid = RecursiveStudy.model_validate(study_payload()).model_copy(update={"depth": 1})
+    assert_refusal(state, admit(state, invalid), "invalid_admission")
+
+
+def grandchild(**overrides: object) -> RecursiveStudy:
+    return child(**{
+        "study_id": "grandchild", "parent_id": "child", "depth": 2,
+        "dev": [{"task_id": "fresh-dev", "content_sha256": "6" * 64}],
+        "confirmation": [{"task_id": "fresh-confirm", "content_sha256": "7" * 64}],
+        **overrides,
+    })
+
+
+def test_complete_ancestry_admits_grandchild_but_root_counts_whole_tree() -> None:
+    state = admit(admit(admitted_root(), child()), grandchild())
+    assert state.terminal_reason is None
+    assert [item.depth for item in state.studies] == [0, 1, 2]
+    sibling = child(study_id="sibling",
+                    dev=[{"task_id": "sibling-dev", "content_sha256": "8" * 64}],
+                    confirmation=[{"task_id": "sibling-confirm", "content_sha256": "9" * 64}])
+    assert_refusal(state, admit(state, sibling), "max_descendants")
+
+
+def test_depth_must_obey_parent_cap_even_when_grant_allows_more() -> None:
+    state = admit(admitted_root(), child(max_depth=1))
+    assert_refusal(state, admit(state, grandchild()), "max_depth")
+
+
+@pytest.mark.parametrize("usage", [
+    {"compute_seconds": 50, "tokens": 0, "usd": 0},
+    {"compute_seconds": 0, "tokens": 500, "usd": 0},
+    {"compute_seconds": 0, "tokens": 0, "usd": 5},
+])
+def test_narrowed_parent_quota_terminates_admission_at_equality(usage: dict) -> None:
+    limits = ResourceLimits(50, 500, Decimal(5))
+    state = admit(admitted_root(), child(limits=limits))
+    state = RecursionState.model_validate({
+        **state.model_dump(), "usage": (RecursiveUsage(study_id="child", **usage),),
+    })
+    assert_refusal(state, admit(state, grandchild(limits=limits)), "quota_exhausted")
+
+
+def test_completed_child_window_does_not_block_sibling_but_still_counts() -> None:
+    state = admit(admitted_root(), child(window_end=START + timedelta(seconds=1)))
+    sibling = child(study_id="sibling",
+                    dev=[{"task_id": "sibling-dev", "content_sha256": "6" * 64}],
+                    confirmation=[{"task_id": "sibling-confirm", "content_sha256": "7" * 64}])
+    result = admit(state, sibling, now=START + timedelta(seconds=2))
+    assert result.terminal_reason is None
+    assert [item.study_id for item in result.studies] == ["root", "child", "sibling"]
+    assert_refusal(state, admit(state, grandchild(window_end=START + timedelta(seconds=1)),
+                                now=START + timedelta(seconds=2)), "outside_window")
+
+
+@pytest.mark.parametrize("context,reason", [
+    ({"repositories": "repo"}, "authority_context_required"),
+    ({"repositories": {"repo": "not a repository"}}, "invalid_repositories"),
+    ({"policy": {"policy_id": "spend-policy"}}, "authority_context_required"),
+    ({"authority": {"answered_by_kind": "owner"}}, "authority_context_required"),
+    ({"action": {"amount_usd": 10}}, "authority_context_required"),
+])
+def test_invalid_context_cannot_be_authorized_by_artifact_shape(context: dict, reason: str) -> None:
+    state = admitted_root()
+    assert_refusal(state, admit(state, child(), **context), reason)
+
+
+def test_reused_cohort_refusal_retains_proposals_and_usage() -> None:
+    state = RecursionState.model_validate({
+        **admitted_root().model_dump(), "proposal_history": (proposal(),),
+        "usage": (RecursiveUsage(study_id="root", compute_seconds=1, tokens=1, usd=1),),
+    })
+    reused = child(dev=[{"task_id": "dev-1", "content_sha256": "4" * 64}])
+    assert_refusal(state, admit(state, reused), "invalid_history")
