@@ -182,6 +182,7 @@ def load_payload(
     if not steps_raw:
         raise PayloadValidationError("steps mapping cannot be empty")
 
+    children_by_step: dict[str, set[str]] = {}
     for step_id, node in steps_raw.items():
         if not isinstance(step_id, str) or not step_id:
             raise PayloadValidationError(
@@ -226,6 +227,36 @@ def load_payload(
                     raise PayloadValidationError(
                         f"step {step_id!r} child {child!r} not found in steps tree"
                     )
+                if child == step_id:
+                    raise PayloadValidationError(
+                        f"step {step_id!r} cannot have itself as child"
+                    )
+        children_by_step[step_id] = set(children or ())
+
+    # All nodes and references are validated before following either edge direction.
+    for step_id, node in steps_raw.items():
+        parent_id = node.get("parent_id")
+        if parent_id is not None and step_id not in children_by_step[parent_id]:
+            raise PayloadValidationError(
+                f"step {step_id!r} not listed in parent {parent_id!r} children"
+            )
+        for child in children_by_step[step_id]:
+            if steps_raw[child].get("parent_id") != step_id:
+                raise PayloadValidationError(
+                    f"step {child!r} parent_id does not match parent {step_id!r} children"
+                )
+
+    # Iterative ancestry traversal covers disconnected cycles and arbitrarily deep trees.
+    checked: set[str] = set()
+    for step_id in steps_raw:
+        ancestors: set[str] = set()
+        cursor: str | None = step_id
+        while cursor is not None and cursor not in checked:
+            if cursor in ancestors:
+                raise PayloadValidationError(f"steps tree contains parent cycle at {cursor!r}")
+            ancestors.add(cursor)
+            cursor = steps_raw[cursor].get("parent_id")
+        checked.update(ancestors)
 
     opened_raw = raw_payload.get("opened", ())
     if opened_raw is None:

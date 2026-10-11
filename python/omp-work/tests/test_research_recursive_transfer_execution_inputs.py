@@ -443,6 +443,74 @@ def test_tree_validation_errors(native_jobs, evidence):
     assert "child 'nonexistent' not found in steps tree" in str(exc.value)
 
 
+@pytest.mark.parametrize(
+    "steps, expected_err",
+    [
+        pytest.param(
+            {
+                "root": {"parent_id": None, "children": []},
+                "a": {"parent_id": "b", "children": ["b"]},
+                "b": {"parent_id": "a", "children": ["a"]},
+            },
+            "cycle",
+            id="disconnected-parent-cycle",
+        ),
+        pytest.param(
+            {"root": {"parent_id": None, "children": ["root"]}},
+            "cannot have itself as child",
+            id="self-child",
+        ),
+        pytest.param(
+            {
+                "root": {"parent_id": None, "children": ["child"]},
+                "child": {"parent_id": None, "children": []},
+            },
+            "parent_id does not match",
+            id="child-disagrees-with-parent",
+        ),
+        pytest.param(
+            {
+                "root": {"parent_id": None, "children": []},
+                "child": {"parent_id": "root", "children": []},
+            },
+            "not listed in parent",
+            id="parent-omits-child",
+        ),
+    ],
+)
+def test_invalid_topology_refuses_before_policy_input(native_jobs, evidence, steps, expected_err):
+    """Custody-backed cycles and contradictory edges never become policy input."""
+    native = _native(native_jobs)
+    cohort = make_cohort(
+        native_jobs, evidence, payload={"steps": steps, "opened": ["root"]}
+    )
+    prep, = prepare_execution_cohorts((cohort,), native, ())
+
+    with pytest.raises(PayloadValidationError, match=expected_err):
+        load_payload(prep, native)
+
+
+def test_deep_tree_loads_without_recursion_limit(native_jobs, evidence):
+    """A valid deep ancestry chain remains available to policies without RecursionError."""
+    ids = ["root"] + [f"step-{i}" for i in range(1100)]
+    steps = {
+        step: {
+            "parent_id": ids[i - 1] if i else None,
+            "children": ids[i + 1:i + 2],
+        }
+        for i, step in reversed(list(enumerate(ids)))
+    }
+    native = _native(native_jobs)
+    cohort = make_cohort(
+        native_jobs, evidence, payload={"steps": steps, "opened": ["root"]}
+    )
+    prep, = prepare_execution_cohorts((cohort,), native, ())
+
+    loaded = load_payload(prep, native)
+    assert loaded.steps == steps
+    assert loaded.opened == frozenset({"root"})
+
+
 def test_execution_payload_mapping_interface():
     """ExecutionPayload adheres to Mapping protocol and equality rules."""
     steps = {"root": {"parent_id": None, "children": []}}
