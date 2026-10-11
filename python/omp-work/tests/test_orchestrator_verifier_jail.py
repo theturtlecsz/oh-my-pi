@@ -17,6 +17,14 @@ from omp_work.egress_policy import Identity, MemoryRecorder
 
 from omp_work.egress_sandbox import SandboxUnavailable, _mount_config, run_sandboxed
 from omp_work.egress_sandbox_helper import _worker_profile_env
+from test_orchestrator_worker_sandbox import (
+    _ALLOWED_ENV,
+    _TOKEN,
+    _WorkServiceStub,
+    _git,
+    _json_line,
+    _plant,
+)
 
 
 BASE_ENV = {
@@ -352,3 +360,316 @@ def test_verifier_rejects_audit_symlink_before_runtime_discovery(verifier_launch
     assert exc.value.code == "audit_dir_not_allowed"
     discovery.assert_not_called()
     spy.assert_not_called()
+
+
+_VERIFIER_PROBE = r"""
+import json, os, subprocess, time, urllib.request
+from pathlib import Path
+spec = json.loads(SPEC)
+
+def readable(path):
+    try:
+        if os.path.isdir(path):
+            os.listdir(path)
+            return True
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return False
+    try:
+        os.read(fd, 1)
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+    return True
+
+def proc_read(path):
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return "denied"
+    try:
+        os.read(fd, 1)
+    except OSError:
+        return "denied"
+    finally:
+        os.close(fd)
+    return "read"
+
+def append_result(path):
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND)
+    except OSError:
+        return "denied"
+    try:
+        os.write(fd, b"x")
+    except OSError:
+        return "denied"
+    finally:
+        os.close(fd)
+    return "wrote"
+
+import omp_work
+git = subprocess.run(
+    ["git", "-C", "/work", "rev-parse", "HEAD"],
+    capture_output=True, text=True,
+)
+gitdir = Path(Path("/work/.git").read_text(encoding="utf-8").split(":", 1)[1].strip())
+if not gitdir.is_absolute():
+    gitdir = Path("/work") / gitdir
+gitdir = gitdir.resolve()
+commondir = Path((gitdir / "commondir").read_text(encoding="utf-8").strip())
+if not commondir.is_absolute():
+    commondir = (gitdir / commondir).resolve()
+else:
+    commondir = commondir.resolve()
+worktrees = commondir / "worktrees"
+under = gitdir.is_relative_to(worktrees) and gitdir != worktrees
+report = Path("/work/.omp/audit-report.txt")
+report.write_text("verified\n", encoding="utf-8")
+key = spec["key"]
+try:
+    key_text = Path(key).read_text(encoding="utf-8")
+except OSError as exc:
+    key_text = "error:" + type(exc).__name__
+body = ""
+for _ in range(5):
+    try:
+        with urllib.request.urlopen(os.environ["OMP_WORK_URL"], timeout=2) as resp:
+            body = resp.read().decode()
+        break
+    except Exception as exc:
+        body = "error:" + type(exc).__name__
+        time.sleep(0.2)
+print(json.dumps({
+    "omp_file": omp_work.__file__,
+    "sentinel": getattr(omp_work, "SENTINEL", None),
+    "head": git.stdout.strip(),
+    "git_rc": git.returncode,
+    "git_err": git.stderr,
+    "gitdir": str(gitdir),
+    "commondir": str(commondir),
+    "gitdir_under_worktrees": under,
+    "append": {
+        "readme": append_result("/work/README"),
+        "head": append_result(str(gitdir / "HEAD")),
+        "config": append_result(str(commondir / "config")),
+    },
+    "audit": report.read_text(encoding="utf-8"),
+    "readable": [path for path in spec["paths"] if readable(path)],
+    "proc_environ": proc_read("/proc/" + str(spec["pid"]) + "/environ"),
+    "proc_mem": proc_read("/proc/" + str(spec["pid"]) + "/mem"),
+    "ws": body,
+    "key_text": key_text,
+    "key_append": append_result(key),
+    "env_keys": sorted(os.environ),
+    "env": {name: os.environ.get(name) for name in spec["allowed"]},
+}))
+"""
+
+
+_WORKER_PROBE = r"""
+import json, os
+from pathlib import Path
+spec = json.loads(SPEC)
+Path("/work/worker-wrote.txt").write_text("written\n", encoding="utf-8")
+print(json.dumps({
+    "env_keys": sorted(os.environ),
+    "env": {name: os.environ.get(name) for name in spec["allowed"]},
+    "wrote": Path("/work/worker-wrote.txt").read_text(encoding="utf-8"),
+    "gitdir": os.path.lexists(spec["gitdir"]),
+    "package_parent": os.path.lexists(spec["package_parent"]),
+}))
+"""
+
+
+@pytest.fixture
+def linked_namespace(namespace_support, tmp_path, monkeypatch):
+    root = tmp_path / "worktrees"
+    root.mkdir()
+    monkeypatch.setenv("OMP_WORKTREES_DIR", str(root))
+    repo = root / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "README").write_text("readme\n", encoding="utf-8")
+    _git(repo, "add", "README")
+    _git(repo, "commit", "-q", "-m", "init")
+    job = root / "job"
+    sibling = root / "sibling"
+    _git(repo, "worktree", "add", "--quiet", str(job))
+    _git(repo, "worktree", "add", "--quiet", str(sibling))
+    (sibling / "SECRET").write_text("sibling-secret\n", encoding="utf-8")
+    (job / ".omp").mkdir()
+    sentinel = job / "omp_work"
+    sentinel.mkdir()
+    (sentinel / "__init__.py").write_text("SENTINEL = 'planted'\\n", encoding="utf-8")
+    gitdir = Path((job / ".git").read_text(encoding="utf-8").split(":", 1)[1].strip())
+    if not gitdir.is_absolute():
+        gitdir = job / gitdir
+    gitdir = gitdir.resolve()
+    commondir = Path((gitdir / "commondir").read_text(encoding="utf-8").strip())
+    if not commondir.is_absolute():
+        commondir = gitdir / commondir
+    commondir = commondir.resolve()
+    plant = tmp_path / "plant-home"
+    agent = _plant(plant)
+    key = tmp_path / "verifier.key"
+    key.write_text("verifier-key\n", encoding="utf-8")
+    hidden = [str(sibling), str(sibling / "SECRET"), str(Path.home()), str(plant), str(agent)]
+    hidden.extend(str(path) for path in plant.rglob("*"))
+    return {
+        "job": job,
+        "gitdir": gitdir,
+        "commondir": commondir,
+        "key": key,
+        "sentinel": sentinel / "__init__.py",
+        "hidden": hidden,
+        "package_parent": Path(omp_work.__file__).resolve().parent.parent,
+    }
+
+
+def _run_namespace(job, argv, service, capfd, **options):
+    try:
+        rc = worker_sandbox.run_worker(
+            argv,
+            worktree=job,
+            token=_TOKEN,
+            workservice_socket=("127.0.0.1", service.port),
+            timeout=60,
+            **options,
+        )
+    except Exception as exc:
+        out, err = capfd.readouterr()
+        raise AssertionError(f"{exc}\n{out}\n{err}") from exc
+    out, err = capfd.readouterr()
+    return rc, out, err
+
+
+def test_verifier_namespace_trusts_installed_runtime(linked_namespace, capfd) -> None:
+    job = linked_namespace["job"]
+    gitdir = linked_namespace["gitdir"]
+    commondir = linked_namespace["commondir"]
+    key = linked_namespace["key"]
+    host_head = subprocess.check_output(
+        ["git", "-C", str(job), "rev-parse", "HEAD"], text=True,
+    ).strip()
+    before = {
+        "readme": (job / "README").read_bytes(),
+        "head": (gitdir / "HEAD").read_bytes(),
+        "config": (commondir / "config").read_bytes(),
+        "key": key.read_bytes(),
+    }
+    spec = {
+        "paths": linked_namespace["hidden"],
+        "allowed": [*_ALLOWED_ENV, "PYTHONPATH", "PYTHONSAFEPATH"],
+        "key": str(key),
+        "pid": os.getpid(),
+    }
+    code = _VERIFIER_PROBE.replace("SPEC", json.dumps(json.dumps(spec)))
+    service = _WorkServiceStub()
+    service.start()
+    try:
+        rc, out, err = _run_namespace(
+            job,
+            [os.path.realpath(sys.executable), "-c", code],
+            service,
+            capfd,
+            identity="verifier",
+            ro_binds=(key,),
+        )
+    finally:
+        service.close()
+
+    assert rc == 0, out + "\n" + err
+    payload = _json_line(out + "\n" + err)
+    omp_file = Path(payload["omp_file"])
+    assert omp_file.is_absolute()
+    assert not str(omp_file).startswith("/work")
+    assert omp_file.resolve() != linked_namespace["sentinel"].resolve()
+    assert payload["sentinel"] is None
+    assert omp_file.resolve() == Path(omp_work.__file__).resolve()
+    assert payload["git_rc"] == 0, payload["git_err"]
+    assert payload["head"] == host_head
+    assert Path(payload["gitdir"]) == gitdir
+    assert Path(payload["commondir"]) == commondir
+    assert payload["gitdir_under_worktrees"] is True
+    assert gitdir.is_relative_to(commondir / "worktrees")
+    assert gitdir != commondir / "worktrees"
+    assert payload["append"] == {"readme": "denied", "head": "denied", "config": "denied"}
+    assert (job / "README").read_bytes() == before["readme"]
+    assert (gitdir / "HEAD").read_bytes() == before["head"]
+    assert (commondir / "config").read_bytes() == before["config"]
+    assert (job / ".omp" / "audit-report.txt").read_text(encoding="utf-8") == "verified\n"
+    assert payload["audit"] == "verified\n"
+    assert payload["readable"] == []
+    assert payload["proc_environ"] == "denied"
+    assert payload["proc_mem"] == "denied"
+    assert payload["ws"] == "ws-ok"
+    assert payload["key_text"] == "verifier-key\n"
+    assert payload["key_append"] == "denied"
+    assert key.read_bytes() == before["key"]
+    assert payload["env_keys"] == sorted([*_ALLOWED_ENV, "PYTHONPATH", "PYTHONSAFEPATH"])
+    assert payload["env"]["PATH"] == "/usr/bin:/bin"
+    assert payload["env"]["LANG"] == "C.UTF-8"
+    assert payload["env"]["TERM"] == "dumb"
+    assert payload["env"]["TZ"] == "UTC"
+    assert payload["env"]["OMP_TASK_TOKEN"] == _TOKEN
+    assert payload["env"]["OMP_WORK_URL"] == f"http://127.0.0.1:{service.port}"
+    assert payload["env"]["PYTHONSAFEPATH"] == "1"
+    assert "/work" not in payload["env"]["PYTHONPATH"]
+    assert str(job) not in payload["env"]["PYTHONPATH"]
+
+
+def test_worker_namespace_hides_git_and_runtime(linked_namespace, capfd) -> None:
+    job = linked_namespace["job"]
+    spec = {
+        "allowed": list(_ALLOWED_ENV),
+        "gitdir": str(linked_namespace["gitdir"]),
+        "package_parent": str(linked_namespace["package_parent"]),
+    }
+    code = _WORKER_PROBE.replace("SPEC", json.dumps(json.dumps(spec)))
+    service = _WorkServiceStub()
+    service.start()
+    try:
+        rc, out, err = _run_namespace(
+            job,
+            [os.path.realpath(sys.executable), "-c", code],
+            service,
+            capfd,
+            identity="worker",
+            ro_binds=(linked_namespace["key"],),
+        )
+    finally:
+        service.close()
+
+    assert rc == 0, out + "\n" + err
+    payload = _json_line(out + "\n" + err)
+    assert payload["env_keys"] == sorted(_ALLOWED_ENV)
+    assert set(payload["env"]) == set(_ALLOWED_ENV)
+    assert "PYTHONPATH" not in payload["env_keys"]
+    assert "PYTHONSAFEPATH" not in payload["env_keys"]
+    assert payload["wrote"] == "written\n"
+    assert (job / "worker-wrote.txt").read_text(encoding="utf-8") == "written\n"
+    assert payload["gitdir"] is False
+    assert payload["package_parent"] is False
+
+
+@pytest.mark.parametrize("argv", [
+    ["/usr/bin/true"],
+    ["/usr/bin/python3", "-c", "import json,sys; sys.exit(0)"],
+])
+def test_verifier_namespace_entrypoint_exits_zero(linked_namespace, capfd, argv) -> None:
+    service = _WorkServiceStub()
+    service.start()
+    try:
+        rc, out, err = _run_namespace(
+            linked_namespace["job"],
+            argv,
+            service,
+            capfd,
+            identity="verifier",
+            ro_binds=(linked_namespace["key"],),
+        )
+    finally:
+        service.close()
+    assert rc == 0, out + "\n" + err

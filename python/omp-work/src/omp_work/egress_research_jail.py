@@ -313,6 +313,46 @@ def _bind_ro_file(source: str, target: Path) -> None:
     _remount_readonly(destination)
 
 
+def _mounts_under(new: Path) -> set[str]:
+    """Mount points strictly inside ``new``, as absolute paths."""
+    prefix = os.path.normpath(str(new)) + "/"
+    return {
+        os.path.normpath(point)
+        for point, _options in _iter_mountinfo()
+        if point.startswith(prefix)
+    }
+
+
+def _path_is_mount(path: Path) -> bool:
+    wanted = os.path.normpath(str(path))
+    return any(os.path.normpath(point) == wanted for point, _options in _iter_mountinfo())
+
+
+def _covered_by_mount(path: str, mounts: set[str]) -> bool:
+    return any(path == mount or path.startswith(mount + "/") for mount in mounts)
+
+
+def _ro_bind_parent_dirs(new: Path, host_path: str) -> list[Path]:
+    """Create tmpfs parents of an absolute bind. The mount point itself is excluded.
+
+    Parents stay writable until every read-only bind exists, then the caller
+    makes them traverse-only. Creating a child needs a writable parent, and
+    chmod of a directory that is already a mount would change the host source.
+    The jail's own ``/tmp`` is not one of these parents.
+    """
+    mounts = _mounts_under(new)
+    current = new
+    parents: list[Path] = []
+    for part in Path(host_path).parts[1:-1]:
+        current = current / part
+        norm = os.path.normpath(str(current))
+        if current == new / "tmp" or _covered_by_mount(norm, mounts):
+            continue
+        current.mkdir(mode=0o755, exist_ok=True)
+        parents.append(current)
+    return parents
+
+
 def _build_worker_root(config_path: Path, config: dict) -> Path:
     """Worker jail with explicit read-only mounts and an optional audit overlay."""
     worktree = config.get("worktree")
@@ -344,8 +384,20 @@ def _build_worker_root(config_path: Path, config: dict) -> Path:
     os.chmod(tmp, 0o1777)  # nosec B103 - sticky world-writable /tmp is the POSIX contract inside the jail
     if readonly:
         _rbind_readonly(worktree, new / "work")
+        parents: list[Path] = []
         for raw in sorted(ro_dirs, key=lambda path: path.count("/")):
+            parents.extend(_ro_bind_parent_dirs(new, raw))
             _rbind_readonly(raw, new / raw.lstrip("/"))
+        # Without a real root mount this tree belongs to the caller. Locking it
+        # would make that tree undeletable and would not hide anything.
+        if _path_is_mount(new):
+            mounts = _mounts_under(new)
+            for directory in parents:
+                norm = os.path.normpath(str(directory))
+                if directory == new / "tmp" or _covered_by_mount(norm, mounts):
+                    continue
+                # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+                os.chmod(directory, 0o111)  # nosec B103 - traverse-only so the worker cannot list host parents
         if audit_dir is not None:
             _bind_rw_dir(audit_dir, new / "work" / ".omp")
     else:
