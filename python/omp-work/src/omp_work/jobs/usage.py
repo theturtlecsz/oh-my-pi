@@ -23,7 +23,44 @@ from omp_work.v1.canonical import sha256
 
 _VALID_MEASUREMENTS = frozenset({"measured", "estimated", "unknown"})
 
-__all__ = ["record_usage"]
+__all__ = ["record_usage", "validate_usage_counts"]
+
+
+def validate_usage_counts(
+    measurement: str,
+    input_tokens: int | None,
+    output_tokens: int | None,
+    cache_tokens: int | None,
+) -> int:
+    """Validate usage measurement/counts at accounting boundaries; return total."""
+    if not isinstance(measurement, str) or measurement not in _VALID_MEASUREMENTS:
+        raise JobError(
+            "invalid_request",
+            ("measurement must be measured, estimated, or unknown",),
+        )
+
+    for token_name, count in (
+        ("input_tokens", input_tokens),
+        ("output_tokens", output_tokens),
+        ("cache_tokens", cache_tokens),
+    ):
+        if count is not None and (
+            isinstance(count, bool) or not isinstance(count, int) or count < 0
+        ):
+            raise JobError(
+                "invalid_request",
+                (f"{token_name} must be an integer >= 0 or None",),
+            )
+
+    if measurement == "unknown" and any(
+        c is not None for c in (input_tokens, output_tokens, cache_tokens)
+    ):
+        raise JobError(
+            "invalid_request",
+            ("unknown measurement requires all token counts to be None",),
+        )
+
+    return sum(c for c in (input_tokens, output_tokens, cache_tokens) if c is not None)
 
 
 def record_usage(
@@ -97,32 +134,7 @@ def record_usage(
     ):
         raise JobError("invalid_request", ("price_version must be a string or None",))
 
-    if measurement not in _VALID_MEASUREMENTS:
-        raise JobError(
-            "invalid_request",
-            ("measurement must be measured, estimated, or unknown",),
-        )
-
-    for token_name, count in (
-        ("input_tokens", input_tokens),
-        ("output_tokens", output_tokens),
-        ("cache_tokens", cache_tokens),
-    ):
-        if count is not None and (
-            isinstance(count, bool) or not isinstance(count, int) or count < 0
-        ):
-            raise JobError(
-                "invalid_request",
-                (f"{token_name} must be an integer >= 0 or None",),
-            )
-
-    if measurement == "unknown" and any(
-        c is not None for c in (input_tokens, output_tokens, cache_tokens)
-    ):
-        raise JobError(
-            "invalid_request",
-            ("unknown measurement requires all token counts to be None",),
-        )
+    validate_usage_counts(measurement, input_tokens, output_tokens, cache_tokens)
 
     price_str: str | None
     price_val: Decimal | None

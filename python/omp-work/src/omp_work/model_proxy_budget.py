@@ -45,7 +45,7 @@ import psycopg
 
 from omp_work.jobs.budget import item_budget, item_spend, root_work_id
 from omp_work.jobs.store import JobError, NativeJobStore
-from omp_work.jobs.usage import record_usage
+from omp_work.jobs.usage import record_usage, validate_usage_counts
 from omp_work.model_proxy_upstream import Prepared
 from omp_work.operations.config import OperationsConfig
 from omp_work.project_store import ProjectAuthorityRefused, ProjectStoreMixin
@@ -567,52 +567,74 @@ class ModelCallAdmission:
                 raise ModelProxyBudgetError(
                     "already_settled", "admission is already settled or closed"
                 )
-            usd = _nonneg_decimal("actual_usd", actual_usd)
-            counted = _token_sum(input_tokens, output_tokens, cache_tokens)
-            payload = {
-                "actual_usd": _decimal_text(usd), "input_tokens": input_tokens,
-                "output_tokens": output_tokens, "cache_tokens": cache_tokens,
-                "measurement": measurement, "model": model or self.prepared.route.model,
-                "price_version": price_version,
-            }
-            if self._state.receipt is not None:
-                if self._state.receipt["settlement"] != payload:
-                    raise ModelProxyBudgetError("idempotency_conflict", "settlement payload changed")
-                return {**self._state.receipt["result"], "actual_usd": usd}
 
-            captured = self._state.unresolved
-            if captured is not None:
-                if captured.payload != canonical_json(payload):
+            def build_payload() -> tuple[Decimal, int, str]:
+                usd = _nonneg_decimal("actual_usd", actual_usd)
+                counted = validate_usage_counts(
+                    measurement, input_tokens, output_tokens, cache_tokens,
+                )
+                settled_model = self.prepared.route.model if model is None else model
+                if not isinstance(settled_model, str) or not settled_model:
+                    raise JobError("invalid_request", ("model is required",))
+                if price_version is not None and (
+                    not isinstance(price_version, str) or not price_version
+                ):
+                    raise JobError("invalid_request", ("price_version must be a string or None",))
+                payload = {
+                    "actual_usd": _decimal_text(usd), "input_tokens": input_tokens,
+                    "output_tokens": output_tokens, "cache_tokens": cache_tokens,
+                    "measurement": measurement, "model": settled_model,
+                    "price_version": price_version,
+                }
+                return usd, counted, canonical_json(payload)
+
+            # Completed or unresolved accounting may only replay its captured
+            # payload. Malformed retries conflict; they never trigger fallback.
+            if self._state.receipt is not None or self._state.unresolved is not None:
+                try:
+                    usd, _, payload = build_payload()
+                except Exception as error:
+                    raise ModelProxyBudgetError(
+                        "idempotency_conflict", "settlement payload changed",
+                    ) from error
+                if self._state.receipt is not None:
+                    if canonical_json(self._state.receipt["settlement"]) != payload:
+                        raise ModelProxyBudgetError("idempotency_conflict", "settlement payload changed")
+                    return {**self._state.receipt["result"], "actual_usd": usd}
+                if self._state.unresolved.payload != payload:
                     raise ModelProxyBudgetError("idempotency_conflict", "settlement payload changed")
                 return self._resolve()
 
-            if usd > self.max_usd:
-                raise ModelProxyBudgetError(
-                    "usage_exceeds_admission",
-                    f"actual USD {usd} exceeds admitted bound {self.max_usd}",
-                )
-            if counted > self.max_tokens:
-                raise ModelProxyBudgetError(
-                    "usage_exceeds_admission",
-                    f"actual tokens {counted} exceed admitted bound {self.max_tokens}",
-                )
-
-            captured = _Settlement(canonical_json(payload), self.decision)
+            captured: _Settlement | None = None
             write_error: BaseException | None = None
             try:
+                bound = self._admitted_bound_payload()
+                bound["actual_usd"] = _decimal_text(self.max_usd)
+                bound_settlement = _Settlement(canonical_json(bound), self.decision)
+                captured = bound_settlement
                 # Admission locks predate this savepoint. Explicit rollback
                 # confirms that only settlement effects were discarded; unlike
                 # transaction context cleanup, rollback errors cannot be ignored.
                 with self._cur.connection.transaction(savepoint_name="model_call_settlement"):
                     try:
+                        usd, counted, payload = build_payload()
+                        if usd > self.max_usd:
+                            raise ModelProxyBudgetError(
+                                "usage_exceeds_admission",
+                                f"actual USD {usd} exceeds admitted bound {self.max_usd}",
+                            )
+                        if counted > self.max_tokens:
+                            raise ModelProxyBudgetError(
+                                "usage_exceeds_admission",
+                                f"actual tokens {counted} exceed admitted bound {self.max_tokens}",
+                            )
+                        captured = _Settlement(payload, self.decision)
                         receipt = self._persist(self._cur, captured)
                     except BaseException as error:
                         self._cur.execute("ROLLBACK TO SAVEPOINT model_call_settlement")
                         write_error = error
                 if write_error is not None:
-                    bound = self._admitted_bound_payload()
-                    bound["actual_usd"] = _decimal_text(self.max_usd)
-                    captured = _Settlement(canonical_json(bound), self.decision)
+                    captured = bound_settlement
                     self._state.unresolved = captured
                     with self._cur.connection.transaction():
                         receipt = self._persist(self._cur, captured)
@@ -1169,21 +1191,6 @@ def _require_prepared(prepared: object) -> None:
         or prepared.max_output_tokens < 0
     ):
         raise ModelProxyBudgetError("invalid_request", "prepared token bounds are invalid")
-
-
-def _token_sum(
-    input_tokens: int | None, output_tokens: int | None, cache_tokens: int | None
-) -> int:
-    total = 0
-    for value in (input_tokens, output_tokens, cache_tokens):
-        if value is None:
-            continue
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            raise ModelProxyBudgetError(
-                "invalid_request", "token counts must be integers >= 0 or None"
-            )
-        total += value
-    return total
 
 
 def _as_uuid(name: str, value: UUID | str | None) -> UUID | None:

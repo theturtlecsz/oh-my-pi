@@ -834,7 +834,12 @@ def test_admission_identity_and_bounds_cannot_redirect_settlement(admission_cont
         with pytest.raises(ModelProxyBudgetError) as exc:
             admission.settle(actual_usd="2")
         assert exc.value.code == "usage_exceeds_admission"
-        admission.settle(actual_usd="1")
+        assert admission.closed and admission.settled
+        bound = admission._admitted_bound_payload()
+        admission.settle(**bound)
+        with pytest.raises(ModelProxyBudgetError) as retry:
+            admission.settle(actual_usd="1")
+        assert retry.value.code == "idempotency_conflict"
     with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
         cur.execute(
             "SELECT work_id, request_id, price_usd FROM omp_jobs.usage_events WHERE workspace_id=%s",
@@ -1058,7 +1063,9 @@ def test_completed_call_refuses_changed_intent(admission_context, change):
 @pytest.mark.parametrize("changed", [
     {"actual_usd": "1.5"}, {"actual_usd": "3"}, {"input_tokens": 151}, {"input_tokens": 11}, {"output_tokens": 6},
     {"cache_tokens": 1}, {"model": "other"}, {"measurement": "estimated"},
-    {"price_version": "other"},
+    {"price_version": "other"}, {"actual_usd": "invalid"}, {"actual_usd": "NaN"},
+    {"input_tokens": True}, {"output_tokens": -1}, {"measurement": []},
+    {"measurement": "unknown"}, {"price_version": ""}, {"model": object()},
 ])
 def test_settlement_replay_refuses_changed_usage(admission_context, changed):
     """Receipt payload conflicts preserve original ledgers and result."""
@@ -1067,13 +1074,127 @@ def test_settlement_replay_refuses_changed_usage(admission_context, changed):
     payload = dict(actual_usd="1", input_tokens=10, output_tokens=5, cache_tokens=0)
     with _admit(ctx, _prepared("2"), **kw) as admission:
         first = admission.settle(**payload)
+    durable = _accounting_snapshot(ctx)
     replay = _admit(ctx, _prepared("2"), **kw)
     assert replay.settled and replay.closed
     with pytest.raises(ModelProxyBudgetError) as exc:
         replay.settle(**(payload | changed))
     assert exc.value.code == "idempotency_conflict"
     assert replay.settle(**payload) == first
+    assert _accounting_snapshot(ctx) == durable
     assert _admission_counts(ctx) == (1, 1, 1, 2)
+
+
+@pytest.mark.parametrize("changed, code", [
+    ({"actual_usd": "invalid"}, "invalid_request"),
+    ({"actual_usd": True}, "invalid_request"),
+    ({"actual_usd": "NaN"}, "invalid_request"),
+    ({"actual_usd": "Infinity"}, "invalid_request"),
+    ({"actual_usd": "-1"}, "invalid_request"),
+    ({"actual_usd": "3"}, "usage_exceeds_admission"),
+    ({"cache_tokens": 136}, "usage_exceeds_admission"),
+    ({"input_tokens": True}, "invalid_request"),
+    ({"output_tokens": -1}, "invalid_request"),
+    ({"cache_tokens": 1.5}, "invalid_request"),
+    ({"measurement": "bad"}, "invalid_request"),
+    ({"measurement": []}, "invalid_request"),
+    ({"measurement": "unknown", "input_tokens": 0, "output_tokens": None, "cache_tokens": None}, "invalid_request"),
+    ({"measurement": "unknown", "input_tokens": None, "output_tokens": 0, "cache_tokens": None}, "invalid_request"),
+    ({"measurement": "unknown", "input_tokens": None, "output_tokens": None, "cache_tokens": 0}, "invalid_request"),
+    ({"price_version": ""}, "invalid_request"),
+    ({"model": object()}, "invalid_request"),
+    ({"price_version": {"metadata": object()}}, "invalid_request"),
+])
+def test_invalid_consumed_usage_charges_prepared_bound(admission_context, monkeypatch, changed, code):
+    """Invalid consumed usage charges Prepared capacity before surfacing its error."""
+    ctx = admission_context
+    prepared = _prepared("2")
+    admission = _admit(ctx, prepared)
+    recorded = []
+
+    def observe_record(*args, **kwargs):
+        recorded.append(kwargs)
+        return record_usage(*args, **kwargs)
+
+    monkeypatch.setattr(budget_module, "record_usage", observe_record)
+    try:
+        with pytest.raises(ModelProxyBudgetError) as exc:
+            with admission:
+                admission.settle(**(dict(
+                    actual_usd="1", input_tokens=10, output_tokens=5, cache_tokens=0,
+                    model="caller-model", price_version="caller-price",
+                ) | changed))
+        assert exc.value.code == code
+        assert admission.closed and admission.settled
+        # Bad measurement/counts never reach record_usage, even before rollback.
+        assert len(recorded) == 1
+        assert recorded[0]["measurement"] == "estimated"
+        spend, usage, outbox, operations = _accounting_snapshot(ctx)
+        assert len(spend) == len(usage) == len(outbox) == 1
+        assert spend[0]["amount_usd"] == usage[0]["price_usd"] == prepared.max_usd
+        assert usage[0]["input_tokens"] == prepared.max_input_tokens
+        assert usage[0]["output_tokens"] == prepared.max_output_tokens
+        assert usage[0]["cache_tokens"] == 0
+        assert usage[0]["model"] == prepared.route.model
+        assert usage[0]["price_version"] == prepared.route.price_version
+        receipt = next(row["result"] for row in operations if row["kind"] == "model_call_receipt")
+        assert receipt["settlement"] == admission._admitted_bound_payload() | {"actual_usd": "2"}
+        assert _admission_counts(ctx) == (1, 1, 1, 2)
+    finally:
+        monkeypatch.setattr(budget_module, "record_usage", record_usage)
+        if admission.closed and not admission.settled:
+            admission._resolve()
+        elif not admission.closed:
+            admission.abort()
+
+
+def test_payload_serialization_failure_charges_bound(admission_context, monkeypatch):
+    """A fresh serialization error cannot escape to zero-accounting context abort."""
+    ctx = admission_context
+    serialize = budget_module.canonical_json
+    admission = _admit(ctx, _prepared("2"))
+    failed = False
+
+    def fail_fresh_payload(value):
+        nonlocal failed
+        if isinstance(value, dict) and value.get("actual_usd") == "1" and not failed:
+            failed = True
+            raise TypeError("settlement metadata cannot serialize")
+        return serialize(value)
+
+    monkeypatch.setattr(budget_module, "canonical_json", fail_fresh_payload)
+    try:
+        with pytest.raises(TypeError, match="settlement metadata cannot serialize"):
+            with admission:
+                admission.settle(actual_usd="1", input_tokens=10)
+        assert failed and admission.closed and admission.settled
+        assert _admission_counts(ctx) == (1, 1, 1, 2)
+        assert _accounting_snapshot(ctx)[1][0]["price_usd"] == Decimal(2)
+    finally:
+        monkeypatch.setattr(budget_module, "canonical_json", serialize)
+        if admission.closed and not admission.settled:
+            admission._resolve()
+        elif not admission.closed:
+            admission.abort()
+
+
+@pytest.mark.parametrize("measurement, counts", [
+    ("measured", (10, None, 2)),
+    ("estimated", (None, 5, None)),
+    ("unknown", (None, None, None)),
+])
+def test_partial_valid_counts_settle_without_relabeling(admission_context, measurement, counts):
+    """Partial counts stay partial; only wholly absent counts permit unknown usage."""
+    ctx = admission_context
+    with _admit(ctx, _prepared("2")) as admission:
+        admission.settle(
+            actual_usd="1", input_tokens=counts[0], output_tokens=counts[1],
+            cache_tokens=counts[2], measurement=measurement,
+        )
+    spend, usage, _, _ = _accounting_snapshot(ctx)
+    assert spend[0]["amount_usd"] == usage[0]["price_usd"] == Decimal(1)
+    assert tuple(usage[0][key] for key in ("input_tokens", "output_tokens", "cache_tokens")) == counts
+    assert usage[0]["measurement"] == measurement
 
 
 @pytest.mark.parametrize("change", ["stop", "policy_expiry"])
@@ -1255,9 +1376,13 @@ def test_failed_settlement_reconciles_durable_accounting(admission_context, monk
         expected = before if fault == "rollback-before-commit" else tuple(n + d for n, d in zip(before, (1, 1, 1, 2)))
         assert _admission_counts(ctx) == expected
 
-        with pytest.raises(ModelProxyBudgetError) as changed:
-            admission.settle(**(payload | {"actual_usd": "3"}))
-        assert changed.value.code == "idempotency_conflict"
+        durable = _accounting_snapshot(ctx)
+        for changed_usage in ({"actual_usd": "3"}, {"actual_usd": "NaN"}, {"measurement": []}):
+            with pytest.raises(ModelProxyBudgetError) as changed:
+                admission.settle(**(payload | changed_usage))
+            assert changed.value.code == "idempotency_conflict"
+            assert _accounting_snapshot(ctx) == durable
+            assert admission.closed and not admission.settled
         with pytest.raises(RuntimeError, match=fault):
             admission.settle(**payload)
         assert _admission_counts(ctx) == expected
