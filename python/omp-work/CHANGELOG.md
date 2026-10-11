@@ -4,6 +4,8 @@
 
 ### Added
 
+- Versioned NSI-1 intake schemas and authority matrix distinguish model proposals, rule-engine readiness, and owner ratification/publication while preserving bounded intake compatibility (OMP-521).
+
 - `omp-work projects trusted-paths` writes the trusted folder list to `~/.omp/agent/trusted-projects.json` (OMP-532, L-RT-03).
 - Missions run intake→signed merge.
 - Mission events, resumable event cursors, and signed push subscriptions, including OMP-406 alerts and daily digests (`omp-work events push`).
