@@ -7,6 +7,7 @@ failure, including deferred constraint failures at commit.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 from uuid import UUID
 
 from psycopg import Cursor, sql
@@ -51,6 +52,15 @@ class InstructionProvenance(_Record):
     instruction: str
 
 
+class EvidenceLinkRecord(_Record):
+    claim_id: str
+    artifact_id: str
+    start_byte: int
+    end_byte: int
+    quote: str | None = None
+    relation: Literal["supports", "contradicts", "neither"]
+
+
 class IntakeRevisionBody(_Record):
     """Storage envelope around unchanged NSI/v1 records.
 
@@ -61,6 +71,7 @@ class IntakeRevisionBody(_Record):
     snapshot: models.IntakeSnapshot
     binding: models.Binding
     artifact_bytes: dict[str, bytes]
+    evidence_links: list[EvidenceLinkRecord] = Field(default_factory=list)
     conflicts: list[models.Conflict] = Field(default_factory=list)
     gaps: list[models.Gap] = Field(default_factory=list)
     questions: list[models.ClarificationQuestion] = Field(default_factory=list)
@@ -191,7 +202,8 @@ def append_revision(
     })
     for artifact in snapshot.artifacts:
         put("artifacts", artifact_id=artifact.id, bytes=body.artifact_bytes[artifact.id],
-            uri=artifact.uri, media_type=artifact.media_type, content_hash=artifact.content_hash)
+            uri=artifact.uri, media_type=artifact.media_type, content_hash=artifact.content_hash,
+            source_revision=artifact.revision, source_actor=Jsonb(artifact.actor.model_dump()))
     for kind, definitions in (("predicate", snapshot.ontology.predicates),
                               ("dimension", snapshot.ontology.dimensions)):
         for definition in definitions:
@@ -204,10 +216,16 @@ def append_revision(
             predicate_id=claim.predicate_id, origin=claim.origin, state=claim.state,
             modality=claim.modality, polarity=claim.polarity, truth=claim.truth,
             asserted_by=claim.asserted_by.id, admitted_by=claim.admitted_by.id if claim.admitted_by else None,
+            asserted_kind=claim.asserted_by.kind,
+            admitted_kind=claim.admitted_by.kind if claim.admitted_by else None,
             **value_fields(claim.value, "value"))
+    relations = {(link.claim_id, link.artifact_id, link.start_byte, link.end_byte): link.relation
+                 for link in body.evidence_links}
     for claim in snapshot.claims:
         for evidence in claim.evidence:
-            put("claim_evidence", claim_id=claim.id, **evidence.model_dump())
+            put("claim_evidence", claim_id=claim.id, **evidence.model_dump(),
+                relation=relations.get((claim.id, evidence.artifact_id, evidence.start_byte,
+                                        evidence.end_byte), "neither"))
         for premise in claim.premise_ids:
             put("claim_premises", claim_id=claim.id, premise_id=premise)
     for claim_id, superseded_ids in body.supersessions.items():
@@ -307,11 +325,10 @@ def read_revision(
 ) -> IntakeRevisionView:
     """Read immutable history in the caller transaction, with workspace RLS.
 
-    Missing and invisible revision keys have the same error. Fields absent from
-    NSI-2 storage are represented explicitly: artifact actor is the writing
-    operation (service), source revision is the intake revision, applicability
-    is unrestricted, and claim actor kinds follow origin. Hashes use only the
-    persisted projection, never these reconstructed metadata fields.
+    Missing and invisible revision keys have the same error. Legacy NULL
+    provenance falls back to the writing operation (service), storage revision,
+    and origin-derived claim actor kinds. Applicability is unrestricted.
+    Hashes exclude actor kinds, source revision, and evidence relation.
     """
     key = (workspace_id, run_id, revision)
 
@@ -349,7 +366,8 @@ def read_revision(
         fields = {name: row[name] for name in
                   ("category", "predicate_id", "value", "origin", "state", "modality", "polarity", "truth")}
         fields.update(id=row["claim_id"], subject=entity_refs[row["subject_entity_id"]],
-                      asserted_by=dict(id=row["asserted_by"], kind=origin_kinds[row["origin"]]),
+                      asserted_by=dict(id=row["asserted_by"], kind=row["asserted_kind"]
+                                       if row["asserted_kind"] is not None else origin_kinds[row["origin"]]),
                       evidence=[{name: span[name] for name in
                                  ("artifact_id", "start_byte", "end_byte", "quote")
                                  if span[name] is not None}
@@ -360,6 +378,7 @@ def read_revision(
                                    if link["claim_id"] == row["claim_id"]])
         if row["admitted_by"] is not None:
             fields["admitted_by"] = dict(id=row["admitted_by"], kind=
+                                        row["admitted_kind"] if row["admitted_kind"] is not None else
                                         "rule_engine" if row["origin"] in ("policy_rule", "rule_derivation") else "owner")
         claims.append(models.IntakeClaim.model_validate(fields))
     predicates, dimensions = [], []
@@ -378,8 +397,11 @@ def read_revision(
         ontology=models.IntakeOntology(predicates=predicates, dimensions=dimensions),
         artifacts=[models.EvidenceArtifact(
             id=row["artifact_id"], uri=row["uri"], content_hash=row["content_hash"],
-            media_type=row["media_type"], revision=str(revision),
-            actor=models.ActorRef(id=row["operation_id"], kind="service")) for row in artifacts],
+            media_type=row["media_type"], revision=row["source_revision"]
+            if row["source_revision"] is not None else str(revision),
+            actor=models.ActorRef.model_validate(row["source_actor"])
+            if row["source_actor"] is not None else
+            models.ActorRef(id=row["operation_id"], kind="service")) for row in artifacts],
     )
     issues, issue_claims, question_issues = rows("issues"), rows("issue_claims"), rows("question_issues")
     conflicts = [models.Conflict(
@@ -438,6 +460,9 @@ def read_revision(
         supersessions.setdefault(row["claim_id"], []).append(row["superseded_claim_id"])
     body = IntakeRevisionBody(
         workspace_id=workspace_id, snapshot=snapshot, binding=binding, artifact_bytes=artifact_bytes,
+        evidence_links=[EvidenceLinkRecord.model_validate({name: row[name] for name in
+                        ("claim_id", "artifact_id", "start_byte", "end_byte", "quote", "relation")})
+                        for row in evidence],
         conflicts=conflicts, gaps=gaps, questions=questions, decisions=decisions,
         instructions=[InstructionProvenance.model_validate(dict(id=row["provenance_id"],
                       **{name: row[name] for name in ("decision_id", "claim_id", "artifact_id", "instruction")}))
