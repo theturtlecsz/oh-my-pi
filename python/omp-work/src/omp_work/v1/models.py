@@ -1198,7 +1198,11 @@ class ResearchRole(StrEnum):
 
 
 ResearchCapability = Annotated[
-    str, Field(pattern=r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$", max_length=128)
+    str,
+    Field(
+        pattern=r"^(?:[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+|(?:location|instrument):[a-z][a-z0-9_]*)$",
+        max_length=128,
+    ),
 ]
 Sha256Hex = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 

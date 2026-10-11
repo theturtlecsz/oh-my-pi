@@ -10225,7 +10225,7 @@
               "default": [],
               "items": {
                 "maxLength": 128,
-                "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$",
+                "pattern": "^(?:[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+|(?:location|instrument):[a-z][a-z0-9_]*)$",
                 "type": "string"
               },
               "title": "Capabilities",
@@ -21513,7 +21513,7 @@
               "default": [],
               "items": {
                 "maxLength": 128,
-                "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$",
+                "pattern": "^(?:[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+|(?:location|instrument):[a-z][a-z0-9_]*)$",
                 "type": "string"
               },
               "title": "Capabilities",
@@ -23771,7 +23771,7 @@
               "default": [],
               "items": {
                 "maxLength": 128,
-                "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$",
+                "pattern": "^(?:[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+|(?:location|instrument):[a-z][a-z0-9_]*)$",
                 "type": "string"
               },
               "title": "Capabilities",
@@ -25587,7 +25587,7 @@
               "default": [],
               "items": {
                 "maxLength": 128,
-                "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$",
+                "pattern": "^(?:[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+|(?:location|instrument):[a-z][a-z0-9_]*)$",
                 "type": "string"
               },
               "title": "Capabilities",
@@ -33306,7 +33306,7 @@
               "default": [],
               "items": {
                 "maxLength": 128,
-                "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$",
+                "pattern": "^(?:[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+|(?:location|instrument):[a-z][a-z0-9_]*)$",
                 "type": "string"
               },
               "title": "Capabilities",
