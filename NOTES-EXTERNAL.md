@@ -616,3 +616,88 @@ python3 ~/flood/flood.py mark-done OMP-405-s08 --ref <omp-webui SHA>:<drill outp
 ```
 
 Done when the drill file shows: `stopped` true and `flood.service` and `continuous-admit.service` inactive within 30 s of Stop from the WebUI, with no process left in those units; a start skipped while stopped; the omp prompt refused while stopped; the units running only after the owner release and the following start; the WebUI client scopes `work.client`, `work.read`, and `work.stop`; no Grok Bot step in the transcript.
+
+
+# OMP-583: task gate timing qualification
+
+Status: implementation tested; **20+ successful post-change task runs not yet measured**.
+No flood script, service, state, or other worktree was changed. The task permits
+focused test files only, so this session did not run the gate or generate sample
+gate workloads. Timing acceptance remains open until the operator measures real
+task runs after this change reaches local main.
+
+## Bottleneck and change
+
+OMP-344-s05's measurement after `2026-10-10T23:06:32Z` reported 24 successful
+task runs, median 548 s and p90 609 s. Its 21 single-run logs averaged 269 s for
+the initial `bun run test`, then 274–320 s for the parallel check group. The
+largest checks in that group were Work Ledger integration (273 s), unit tests
+(157 s), and installed qualification (138 s). Python-only tasks already skipped
+`ts-check`, but still ran 202 workspace TS/Rust chunks before those checks.
+
+`scripts/ci-test-ts.ts` now applies the existing `scripts/gate-scope.ts` selector
+to workspace TS tests in `local`/`local-ts` mode only with `--task-scope` and
+`FLOOD_PHASE=test`. Both are required: the phase alone is inherited by runner
+subprocesses inside existing script tests, whose full command plans must remain
+unchanged. The external gate needs the following operator edit. A
+skip-safe Python/docs task keeps the Rust command; the separately scheduled
+session-system check and all Python, installed-runtime, smoke, provenance,
+inventory, and applicable lint checks remain in the gate. Schema JSON, robomp
+web, TS, mixed, unknown, empty, and failed-diff cases keep the full TS plan.
+
+Pre-batch (`FLOOD_PHASE=gate`), manual runs, and CI bucket modes keep their full
+TS command plans. No pre-batch or CI check was removed or scoped by this change.
+The new command-plan tests run through `test:scripts`, including CI's existing
+script-test step. Existing tests were not edited.
+
+A read-only replay of the available post-restart histories and single-run logs
+found 30 successful runs with complete suite/parallel timings: observed median
+570 s; projected median 351 s after subtracting the initial suite time only
+where the log says `gate scope: skip ts-check`. This projection excludes failed
+runs and appended retry logs. It assumes unchanged remaining-check timings and
+ignores the retained Rust command's overhead; it is not post-change evidence.
+
+## Operator measurement after merge
+
+After local main includes OMP-583, edit only the task-phase suite assignment in
+`~/flood/oh-my-pi-test.sh` (inside its `FLOOD_PHASE=test` branch):
+
+```diff
+-    suite=(bun scripts/ci-test-ts.ts local --skip-session-system)
++    suite=(bun scripts/ci-test-ts.ts local --skip-session-system --task-scope)
+```
+
+Keep every pre-batch assignment and subsequent check unchanged. Replace the gate
+file atomically, as its existing header requires; do not edit its inode while a
+gate is running. This external edit was not applied in this session.
+
+Record an activation timestamp `T` after both changes are active. Let normal
+flood tasks run; do not generate load or count focused unit tests as gate runs.
+Read the flood-state snapshot using the OMP-344-s05 method below. Count only
+successful test histories whose start (`at - secs`) is after `T`, and keep
+failed runs out of the median and p90. Wait for at least 20 successful runs.
+
+```bash
+T=<activation-UTC-timestamp>
+jq -r --arg t "$T" '
+  .tasks | to_entries[] | .value.history[]? |
+  select(.phase == "test" and .secs and .ok == true and
+    ((.at | fromdateiso8601) - .secs > ($t | fromdateiso8601))) |
+  .secs
+' ~/flood/flood-state.json | sort -n | awk '
+  { a[NR] = $1 }
+  END {
+    if (NR < 20) { print "pending: successful n=" NR; exit 1 }
+    m = a[int((NR+1)/2)]
+    print "successful n=" NR, "median=" m, "p90=" a[int(NR*0.9+0.5)]
+    exit (m >= 420)
+  }'
+```
+
+Confirm qualifying Python-only logs contain `gate: skipped by scope: workspace
+TypeScript tests`, while a fresh pre-batch log contains the full workspace TS
+suite plus every existing CI check. Use `flood.py teststats` or the same history
+snapshot for the separate failed-run count. Record the actual sample count,
+median, p90, activation timestamp, and pre-batch evidence in the operator's
+existing OMP-344/OMP-583 evidence location. Mark timing acceptance met only when
+the successful median is below 420 s. No such result is claimed here.
