@@ -17,23 +17,27 @@ OMP-319-s03-s05-s05:
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, replace
 from typing import Literal
 
 from omp_work.operations.artifacts import read_verified_bytes
+from omp_work.research.accounting import matched_resources
 from omp_work.research.custody import artifact_path
 from omp_work.research.receipt import EvaluationProtocol, load_protocol
 from omp_work.research.recursive import RecursionState
-from omp_work.research.recursive_method import GeneratedPolicy, MethodContext, Observation
+from omp_work.research.recursive_method import GeneratedPolicy, MethodContext, Observation, validate_frozen_method
 from omp_work.research.recursive_transfer_evidence import NativeEvidence
 from omp_work.research.recursive_transfer_execution_evidence import BoundStep, bind_step
-from omp_work.research.recursive_transfer_execution_inputs import ExecutionPayload, PreparedExecution
-from omp_work.research.recursive_transfer_execution_reservation import ReservationLedger
+from omp_work.research.recursive_transfer_execution_inputs import ExecutionPayload, PreparedExecution, load_payload
+from omp_work.research.recursive_transfer_execution_reservation import ReservationLedger, reserve_execution, settle_execution
 from omp_work.research.recursive_transfer_freshness import PreparedStep
 from omp_work.research.recursive_transfer_methods import FrozenMethod
 
 __all__ = [
     "ArmExecution",
+    "TaskExecution",
+    "execute_task",
     "run_arm",
 ]
 
@@ -48,6 +52,36 @@ class ArmExecution:
     selected_bound_step: BoundStep | None
     failures: tuple[str, ...]
     state: RecursionState
+    source_sha256: str | None = None
+    bundle_sha256: str | None = None
+
+    @property
+    def trial_id(self) -> str | None:
+        return self.selected_bound_step.evidence.trial_id if self.selected_bound_step else None
+
+    @property
+    def job_id(self) -> str | None:
+        return self.selected_bound_step.evidence.job_id if self.selected_bound_step else None
+
+    @property
+    def campaign_id(self) -> str | None:
+        return self.selected_bound_step.evidence.campaign_id if self.selected_bound_step else None
+
+    @property
+    def receipt_id(self) -> str | None:
+        return self.selected_bound_step.evidence.receipt_id if self.selected_bound_step else None
+
+    @property
+    def receipt_sha256(self) -> str | None:
+        return self.selected_bound_step.evidence.receipt_sha256 if self.selected_bound_step else None
+
+    @property
+    def tar_sha256(self) -> str | None:
+        return self.selected_bound_step.evidence.candidate_digest if self.selected_bound_step else None
+
+    @property
+    def output_sha256(self) -> str | None:
+        return self.selected_bound_step.evidence.output_sha256 if self.selected_bound_step else None
 
     @property
     def selected_step(self) -> BoundStep | None:
@@ -60,6 +94,90 @@ class ArmExecution:
     @property
     def policy_state(self) -> RecursionState:
         return self.state
+
+
+@dataclass(frozen=True)
+class TaskExecution:
+    """Task comparison, accounting, and independently bound arm provenance."""
+
+    phase: Literal["development", "confirmation"]
+    domain: str
+    protocol_sha256: str
+    metric: str
+    direction: Literal["higher", "lower"]
+    task_id: str | None
+    content_sha256: str | None
+    status: Literal["ineligible", "inconclusive", "compared"]
+    delta: float | None
+    selections: dict[str, str | None]
+    denominator: int
+    failures: tuple[str, ...]
+    baseline: ArmExecution
+    candidate: ArmExecution
+    ok: bool
+
+
+def execute_task(
+    baseline: FrozenMethod, candidate: FrozenMethod,
+    prepared: PreparedExecution, native: NativeEvidence,
+) -> TaskExecution:
+    """Compare fresh, verified arms and settle every admitted attempt on all exits."""
+    arms = {
+        name: ArmExecution(None, 0, (), None, (), frozen.result.state,
+                           frozen.result.source_sha256, frozen.result.artifact_sha256)
+        for name, frozen in (("baseline", baseline), ("candidate", candidate))
+    }
+    failures: list[str] = []
+    ledger: ReservationLedger | None = None
+    denominator = 0
+    delta: float | None = None
+    ok = False
+    try:
+        # Validate both frozen methods before consuming any holdout or trial.
+        for frozen in (baseline, candidate):
+            validate_frozen_method(frozen.result, frozen.study)
+            if frozen.study.protocol_sha256 != prepared.protocol_sha256:
+                raise ValueError("protocol_changed")
+        protocol = _load_protocol(native, prepared.protocol_sha256)
+        spec = next(metric for metric in protocol.metrics if metric.name == protocol.primary)
+        if prepared.metric != protocol.primary:
+            raise ValueError("metric_mismatch")
+        if prepared.direction != spec.direction:
+            raise ValueError("direction_mismatch")
+        ledger = reserve_execution(native, prepared)
+        failures.extend(ledger.reservation.reasons)
+        payload = load_payload(prepared, native)
+        for name, frozen in (("baseline", baseline), ("candidate", candidate)):
+            result = run_arm(frozen, prepared, payload, native, ledger, name)
+            arms[name] = replace(result, source_sha256=frozen.result.source_sha256,
+                                 bundle_sha256=frozen.result.artifact_sha256)
+            failures.extend(result.failures)
+        base = arms["baseline"].selected_bound_step
+        cand = arms["candidate"].selected_bound_step
+        if not failures and ledger.comparison_allowed and base is not None and cand is not None:
+            if matched_resources(base.envelope, cand.envelope) != "matched":
+                raise ValueError("resource_mismatch")
+            base_value = base.evidence.receipt.metrics[protocol.primary]
+            cand_value = cand.evidence.receipt.metrics[protocol.primary]
+            measured = float(cand_value - base_value if spec.direction == "higher" else base_value - cand_value)
+            if not math.isfinite(measured):
+                raise ValueError("nonfinite_delta")
+            delta = measured
+            ok = True
+    except Exception as error:
+        failures.append(str(error))
+    finally:
+        if ledger is not None:
+            verified_ids = (*arms["baseline"].verified_trial_ids, *arms["candidate"].verified_trial_ids)
+            denominator = settle_execution(native, ledger, verified_ids, ok).denominator
+    calls = sum(arm.invocation_count for arm in arms.values())
+    status = "ineligible" if calls == 0 else "inconclusive" if delta is None else "compared"
+    return TaskExecution(
+        prepared.phase, prepared.domain, prepared.protocol_sha256, prepared.metric,
+        prepared.direction, prepared.task_id, prepared.content_sha256, status, delta,
+        {name: arm.selection for name, arm in arms.items()}, denominator,
+        tuple(dict.fromkeys(failures)), arms["baseline"], arms["candidate"], ok,
+    )
 
 
 def _load_protocol(native: NativeEvidence, protocol_sha256: str) -> EvaluationProtocol:

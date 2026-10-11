@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -9,9 +10,9 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from native_jobs_support import native_jobs  # noqa: F401
-from omp_work.research import strategy_protocol
+from omp_work.research import recursive_transfer_execution_evidence, strategy_protocol
 from omp_work.research.recursive_transfer_evidence import NativeEvidence
-from omp_work.research.recursive_transfer_execution import run_arm
+from omp_work.research.recursive_transfer_execution import execute_task, run_arm
 from omp_work.research.recursive_transfer_execution_evidence import BoundStep
 from omp_work.research.recursive_transfer_execution_inputs import (
     ExecutionPayload,
@@ -19,7 +20,9 @@ from omp_work.research.recursive_transfer_execution_inputs import (
     prepare_execution_cohorts,
 )
 from omp_work.research.recursive_transfer_execution_reservation import reserve_execution
+from omp_work.v1.canonical import sha256
 from recursive_transfer_execution_support import build_execution, seal_step
+from recursive_transfer_support import register_task_dataset
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1",
@@ -379,3 +382,159 @@ def test_empty_opened_set_loads_custody_protocol_and_verifies_pick(execution):
     assert result.failures == ()
     assert result.selected_bound_step.metric == 0.6
     assert result.verified_trial_ids == (str(execution.arms[result.selection][1].trial_id),)
+
+
+def _prepare_task(execution):
+    prepared, = prepare_execution_cohorts(
+        (execution.cohort(),), execution.native, (execution.baseline.study, execution.candidate.study),
+    )
+    assert prepared.eligible, prepared.reasons
+    return prepared
+
+
+def _assert_settled(execution):
+    history = execution.native.history.snapshot()
+    trial_ids = {str(arm.trial_id) for pair in execution.arms.values() for arm in pair}
+    assert trial_ids <= set(history["successes"]) | set(history["failures"])
+
+
+@pytest.mark.parametrize("direction,base,cand,delta", (
+    ("higher", 0.7, 0.8, 0.1), ("lower", 0.7, 0.8, -0.1),
+    ("lower", 0.8, 0.7, 0.1), ("higher", 0.8, 0.7, -0.1),
+    ("higher", 0.7, 0.7, 0.0),
+))
+def test_task_scores_receipts_and_settles_final_result(native_jobs, monkeypatch, direction, base, cand, delta):
+    execution = build_execution(native_jobs, direction=direction)
+    for step in execution.steps:
+        execution.steps[step]["metric"] = -999
+        seal_step(execution, step, baseline_score=0.6 if step == "a" else base,
+                  candidate_score=0.6 if step == "a" else cand)
+    prepared = _prepare_task(execution)
+    read_ids = []
+    read_trial = recursive_transfer_execution_evidence.read_trial
+
+    def tracked_read(native, trial_id):
+        read_ids.append(str(trial_id))
+        return read_trial(native, trial_id)
+
+    monkeypatch.setattr(recursive_transfer_execution_evidence, "read_trial", tracked_read)
+    result = execute_task(execution.baseline, execution.candidate, prepared, execution.native)
+    assert result.status == "compared" and result.ok
+    assert result.delta == pytest.approx(delta)
+    assert result.selections == {"baseline": "b", "candidate": "a1"}
+    assert result.denominator == 6 and result.failures == ()
+    assert (result.phase, result.domain, result.protocol_sha256, result.metric, result.direction,
+            result.task_id, result.content_sha256) == (
+        prepared.phase, prepared.domain, prepared.protocol_sha256, prepared.metric, prepared.direction,
+        prepared.task_id, prepared.content_sha256,
+    )
+    for arm, frozen, sealed in ((result.baseline, execution.baseline, execution.arms["b"][0]),
+                                (result.candidate, execution.candidate, execution.arms["a1"][1])):
+        assert arm.trial_id in read_ids
+        assert (arm.trial_id, arm.job_id, arm.campaign_id, arm.receipt_sha256,
+                arm.tar_sha256, arm.output_sha256) == (
+            str(sealed.trial_id), sealed.job_id, str(sealed.campaign_id), sealed.receipt_sha256,
+            sealed.candidate_digest, sealed.receipt.output_sha256,
+        )
+        assert arm.source_sha256 == frozen.result.source_sha256
+        assert arm.bundle_sha256 == frozen.result.artifact_sha256
+        assert len({arm.source_sha256, arm.bundle_sha256, arm.tar_sha256}) == 3
+    _assert_settled(execution)
+    before = execution.native.history.snapshot()
+    retry = execute_task(execution.baseline, execution.candidate, prepared, execution.native)
+    assert retry.denominator == 0 and retry.delta is None and not retry.ok
+    assert retry.status == "ineligible"
+    assert execution.native.history.snapshot()["successes"] == before["successes"]
+
+
+@pytest.mark.parametrize("failure", ("opened_source", "resources", "missing_resources", "crash", "malformed", "partial", "zero"))
+def test_failed_tasks_settle_without_comparison(execution, monkeypatch, failure):
+    for step in execution.steps:
+        seal_step(execution, step,
+                  candidate_source=b"# changed opened source\n" if failure == "opened_source" and step == "a" else None,
+                  candidate_resources={"cpu": 2} if failure == "resources" else None)
+    prepared = _prepare_task(execution)
+    if failure == "missing_resources":
+        with execution.native.store.transaction(execution.native.workspace_id, execution.native.actor_id) as cur:
+            cur.execute("UPDATE omp_jobs.jobs SET resources=resources - 'gpu' WHERE workspace_id=%s AND job_id=%s",
+                        (execution.native.workspace_id, execution.arms["a1"][1].job_id))
+    elif failure == "crash":
+        def crash(*args, **kwargs):
+            raise RuntimeError("candidate_simulation_crash")
+        monkeypatch.setattr(strategy_protocol, "run_candidate", crash)
+    elif failure == "malformed":
+        payload = {"steps": execution.steps, "opened": [{}]}
+        dataset = register_task_dataset(execution.native_jobs, prepared.task_id, payload)
+        prepared = replace(prepared, dataset_id=dataset, content_sha256=sha256(payload))
+    elif failure in ("partial", "zero"):
+        pairs = (execution.arms["a"],) if failure == "partial" else execution.arms.values()
+        for pair in pairs:
+            for arm in pair:
+                execution.native.history.record_failure(arm.trial_id)
+    result = execute_task(execution.baseline, execution.candidate, prepared, execution.native)
+    assert result.delta is None and not result.ok
+    assert result.failures
+    assert result.status == ("inconclusive" if failure in ("resources", "missing_resources", "crash", "opened_source") else "ineligible")
+    assert result.denominator == (4 if failure == "partial" else 0 if failure == "zero" else 6)
+    expected_reason = {
+        "opened_source": "changed_source", "resources": "resource_mismatch",
+        "missing_resources": "missing_job_resource_axis", "crash": "crashed",
+    }.get(failure)
+    if expected_reason:
+        assert expected_reason in result.failures
+    if failure == "crash":
+        assert result.baseline.invocation_count == result.candidate.invocation_count == 1
+        assert len(result.candidate.state.usage) > len(execution.candidate.result.state.usage)
+    _assert_settled(execution)
+    assert execution.native.history.snapshot()["successes"] == []
+
+
+@pytest.mark.parametrize("field,value,reason", (
+    ("metric", "forged", "metric_mismatch"),
+    ("direction", "lower", "direction_mismatch"),
+    ("protocol_sha256", "f" * 64, "protocol_changed"),
+))
+def test_prepared_protocol_mismatch_does_not_reserve(execution, field, value, reason):
+    for step in execution.steps:
+        seal_step(execution, step)
+    prepared = replace(_prepare_task(execution), **{field: value})
+    before = execution.native.history.snapshot()
+    result = execute_task(execution.baseline, execution.candidate, prepared, execution.native)
+    assert result.failures == (reason,)
+    assert result.delta is None and result.denominator == 0 and not result.ok
+    assert execution.native.history.snapshot() == before
+
+
+def test_changed_frozen_method_is_rejected_before_reservation(execution):
+    for step in execution.steps:
+        seal_step(execution, step)
+    prepared = _prepare_task(execution)
+    object.__setattr__(execution.candidate, "result",
+                       replace(execution.candidate.result, source_bytes=b"# forged source\n"))
+    before = execution.native.history.snapshot()
+    result = execute_task(execution.baseline, execution.candidate, prepared, execution.native)
+    assert result.failures == ("changed_source",)
+    assert result.status == "ineligible" and result.denominator == 0 and not result.ok
+    assert execution.native.history.snapshot() == before
+
+
+def test_missing_receipt_metric_cannot_score_or_win(execution, monkeypatch):
+    for step in execution.steps:
+        seal_step(execution, step)
+    prepared = _prepare_task(execution)
+    read_trial = recursive_transfer_execution_evidence.read_trial
+
+    def missing_metric(native, trial_id):
+        evidence = read_trial(native, trial_id)
+        if str(trial_id) == str(execution.arms["a1"][1].trial_id):
+            receipt = evidence.receipt.model_copy(update={"metrics": {}})
+            return replace(evidence, receipt=receipt,
+                           receipt_sha256=hashlib.sha256(receipt.receipt_bytes()).hexdigest())
+        return evidence
+
+    monkeypatch.setattr(recursive_transfer_execution_evidence, "read_trial", missing_metric)
+    result = execute_task(execution.baseline, execution.candidate, prepared, execution.native)
+    assert result.status == "inconclusive" and not result.ok and result.delta is None
+    assert result.failures == ("missing_metric",) and result.denominator == 6
+    _assert_settled(execution)
+    assert execution.native.history.snapshot()["successes"] == []
