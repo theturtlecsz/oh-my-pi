@@ -2,6 +2,7 @@
 
 import json
 from copy import deepcopy
+from decimal import Decimal
 from types import MappingProxyType
 
 import pytest
@@ -306,6 +307,47 @@ def test_malformed_nested_snapshot_and_list_are_refused_despite_ids():
     with pytest.raises(AuthorityRefusal):
         _admit(mixed)
     assert mixed[0] is CLAIM
+
+
+def test_nested_non_wire_values_are_refused_without_coercion():
+    typed_claim = models.IntakeClaim.model_validate(CLAIM)
+    snap = _snapshot()
+    snap["claims"] = [typed_claim]
+    with pytest.raises(AuthorityRefusal):
+        _admit(snap)
+    assert snap["claims"][0] is typed_claim
+
+    decimal_claim = {**CLAIM, "value": {"type": "number", "value": Decimal("1.25")}}
+    with pytest.raises(AuthorityRefusal):
+        _admit(decimal_claim)
+    snap = _snapshot()
+    snap["claims"] = [decimal_claim]
+    original = deepcopy(snap)
+    with pytest.raises(AuthorityRefusal):
+        _admit(snap)
+    assert snap == original
+    assert isinstance(snap["claims"][0]["value"]["value"], Decimal)
+
+    number = {"type": "number", "value": Decimal("1.25")}
+    with pytest.raises(AuthorityRefusal):
+        _admit(number)
+    assert isinstance(number["value"], Decimal)
+
+    claim = {**CLAIM, "subject": models.EntityRef.model_validate(ENTITY)}
+    with pytest.raises(AuthorityRefusal):
+        _admit(claim)
+    contract = {
+        **CONTRACT,
+        "requirements": [models.RequirementClause.model_validate(CONTRACT["requirements"][0])],
+    }
+    with pytest.raises(AuthorityRefusal):
+        _admit(contract)
+    ontology = {
+        "predicates": [models.PredicateDefinition.model_validate(PREDICATE)],
+        "dimensions": [DIMENSION],
+    }
+    with pytest.raises(AuthorityRefusal):
+        _admit(ontology)
 
 
 def test_typed_models_are_refused_until_the_next_slice():
