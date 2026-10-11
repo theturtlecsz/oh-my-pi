@@ -458,6 +458,26 @@ def _wait_sandboxed(
             continue
 
 
+def _mount_config(
+    *,
+    worktree_readonly: bool = False,
+    ro_dirs: Sequence[str | Path] = (),
+    audit_dir: str | Path | None = None,
+    verifier_runtime: bool = False,
+) -> dict[str, object]:
+    """Serialize explicit verifier mount and runtime options for the helper."""
+    config: dict[str, object] = {}
+    if worktree_readonly:
+        config["worktree_readonly"] = True
+    if ro_dirs:
+        config["ro_dirs"] = [str(item) for item in ro_dirs]
+    if audit_dir is not None:
+        config["audit_dir"] = str(audit_dir)
+    if verifier_runtime:
+        config["verifier_runtime"] = True
+    return config
+
+
 def _run_sandbox_body(
     argv: Sequence[str],
     identity: Identity,
@@ -475,6 +495,11 @@ def _run_sandbox_body(
     cancel: threading.Event | None = None,
     output: bytearray | None = None,
     model_proxy: tuple[str, int] | None = None,
+    *,
+    worktree_readonly: bool = False,
+    ro_dirs: Sequence[str | Path] = (),
+    audit_dir: str | Path | None = None,
+    verifier_runtime: bool = False,
 ) -> int:
     """Shared sandbox body. ``root`` names the worker profile in config.json."""
     if model_proxy is not None:
@@ -637,6 +662,14 @@ def _run_sandbox_body(
             config["worktree"] = str(worktree)
         if ro_binds:
             config["ro_binds"] = [str(item) for item in ro_binds]
+        config.update(
+            _mount_config(
+                worktree_readonly=worktree_readonly,
+                ro_dirs=ro_dirs,
+                audit_dir=audit_dir,
+                verifier_runtime=verifier_runtime,
+            )
+        )
         config_path.write_text(json.dumps(config), encoding="utf-8")
 
         helper_cmd = [
@@ -728,6 +761,11 @@ def run_sandboxed(
     cancel: threading.Event | None = None,
     output: bytearray | None = None,
     model_proxy: tuple[str, int] | None = None,
+    *,
+    worktree_readonly: bool = False,
+    ro_dirs: Sequence[str | Path] = (),
+    audit_dir: str | Path | None = None,
+    verifier_runtime: bool = False,
 ) -> int:
     """Run argv inside an isolated egress sandbox.
 
@@ -764,6 +802,10 @@ def run_sandboxed(
         cancel=cancel,
         output=output,
         model_proxy=model_proxy,
+        worktree_readonly=worktree_readonly,
+        ro_dirs=ro_dirs,
+        audit_dir=audit_dir,
+        verifier_runtime=verifier_runtime,
     )
 
 
