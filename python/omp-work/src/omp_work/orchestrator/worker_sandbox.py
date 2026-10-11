@@ -36,7 +36,8 @@ class WorkerSandboxRefused(RuntimeError):
 
     ``code`` is ``identity_not_allowed``, ``worktrees_dir_unconfigured``,
     ``worktree_not_allowed``, ``live_checkout``, ``ro_bind_not_allowed``,
-    ``workservice_not_allowed``, or ``model_proxy_not_allowed``.
+    ``workservice_not_allowed``, ``model_proxy_not_allowed``,
+    ``commondir_not_allowed``, or ``audit_dir_not_allowed``.
     """
 
     code: str
@@ -93,6 +94,35 @@ def _ro_bind(path: str | Path) -> str:
     if not raw.is_absolute() or raw.is_dir() or not raw.is_file():
         raise WorkerSandboxRefused("ro_bind_not_allowed")
     return str(raw)
+
+
+def _verifier_git_dirs(worktree: Path) -> tuple[Path, Path]:
+    """Validate Git metadata before exposing it to a verifier."""
+    try:
+        text = (worktree / ".git").read_text(encoding="utf-8").split(":", 1)[1].strip()
+        if not text:
+            raise WorkerSandboxRefused("commondir_not_allowed")
+        gitdir = Path(text)
+        if not gitdir.is_absolute():
+            gitdir = worktree / gitdir
+        gitdir = gitdir.resolve()
+        text = (gitdir / "commondir").read_text(encoding="utf-8").strip()
+        if not text:
+            raise WorkerSandboxRefused("commondir_not_allowed")
+        commondir = Path(text)
+        if not commondir.is_absolute():
+            commondir = gitdir / commondir
+        commondir = commondir.resolve()
+    except (OSError, UnicodeError, IndexError):
+        raise WorkerSandboxRefused("commondir_not_allowed") from None
+    worktrees = commondir / "worktrees"
+    if (
+        any(path == Path("/") or path.parent == Path("/") for path in (commondir, gitdir))
+        or not gitdir.is_relative_to(worktrees)
+        or gitdir == worktrees
+    ):
+        raise WorkerSandboxRefused("commondir_not_allowed")
+    return commondir, gitdir
 
 
 def _workservice(value: object) -> tuple[str, int]:
@@ -153,6 +183,14 @@ def run_worker(
         raise WorkerSandboxRefused("model_proxy_not_allowed")
     root = _worktrees_dir()
     linked = _linked_worktree(worktree, root)
+    audit_dir = None
+    if identity == "verifier":
+        commondir, gitdir = _verifier_git_dirs(linked)
+        audit = linked / ".omp"
+        if audit.is_symlink() or (audit.exists() and not audit.is_dir()):
+            raise WorkerSandboxRefused("audit_dir_not_allowed")
+        if audit.is_dir():
+            audit_dir = audit
     binds = tuple(_ro_bind(item) for item in ro_binds)
     host, port = _workservice(workservice_socket)
     if model_proxy is not None:
@@ -196,4 +234,9 @@ def run_worker(
         ro_binds=binds,
         worktree=linked,
         model_proxy=model_proxy,
+        **(
+            {"worktree_readonly": True, "ro_dirs": (commondir, gitdir), "audit_dir": audit_dir}
+            if audit_dir is not None
+            else {}
+        ),
     )
