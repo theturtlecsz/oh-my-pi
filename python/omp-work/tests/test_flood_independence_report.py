@@ -143,7 +143,7 @@ def test_qualifiers_sorted_once_with_canonical_independence(evidence):
         evidence.plan(f"p{i}")
     evidence.starts(running=4)
     code, report = evidence.run()
-    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    assert code == 0 and report["status"] == "ok" and report["error"] is None
     assert report["plans"] == [dict(id=f"p{i}", attempt=1, code_sha256=SHA,
         slices=3, roots=2, implementer_slices=3, implementer_roots=2) for i in range(10)]
     assert report["plan_count"] == 10 and report["independent_plan_count"] == 10
@@ -371,8 +371,9 @@ def test_pass_without_start_is_absent_beside_ten_qualifiers(evidence):
         evidence.plan(f"p{i}")
     evidence.tasks["legacy"] = dict(slices=["absent"], planned_at=AFTER,
         history=[dict(phase="plan-review", attempt=1, verdict="PASS")])
+    evidence.starts(running=4)
     code, report = evidence.run()
-    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    assert code == 0 and report["status"] == "ok" and report["error"] is None
     assert report["plan_count"] == 10
     assert "legacy" not in [plan["id"] for plan in report["plans"]]
 
@@ -518,3 +519,85 @@ def test_canonical_files_ignore_parked_twins(evidence):
     code, report = evidence.run()
     assert code == 2 and report["error"] is None
     assert report["plans"][0]["roots"] == 2 and report["independent_plan_count"] == 1
+
+
+@pytest.mark.parametrize("providers", [
+    {"alpha": {"load": 0, "max_parallel": 2}},
+    {"alpha": {"load": 2, "max_parallel": 2}},
+])
+def test_full_uniform_slots_prove_cap_and_take_precedence_over_providers(evidence, providers):
+    for i in range(10):
+        evidence.plan(f"p{i}")
+    evidence.starts(running=2, slots=2, occupied_slots=2, providers=providers)
+    code, report = evidence.run()
+    assert code == 0 and report["status"] == "ok"
+    assert report["verdicts"] == {"plans": "met", "starts": "met"}
+    assert report["cap"] == dict(proven=True, kind="slots", value=2, evidence=[
+        dict(id="unfinished", attempt=i, slots=2, occupied_slots=2, providers=providers) for i in range(10)])
+
+
+def test_all_uniform_providers_full_prove_cap_with_free_slots(evidence):
+    providers = {"alpha": {"load": 2, "max_parallel": 2}, "beta": {"load": 11, "max_parallel": 10}}
+    evidence.starts(running=3, providers=providers)
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "pending"
+    assert report["verdicts"]["starts"] == "met"
+    assert report["cap"] == dict(proven=True, kind="providers", value={"alpha": 2, "beta": 10}, evidence=[
+        dict(id="unfinished", attempt=i, **(START_METRICS | {"providers": providers})) for i in range(10)])
+
+
+@pytest.mark.parametrize("fields,running", [
+    ({"providers": {"alpha": {"load": 2, "max_parallel": 2}, "beta": {"load": 0, "max_parallel": 10}}}, 2),
+    ({"slots": 8, "occupied_slots": 2}, 2),
+    ({}, 3),
+])
+def test_spare_capacity_cannot_excuse_baseline_even_with_config_cap(evidence, fields, running):
+    for i in range(10):
+        evidence.plan(f"p{i}")
+    (evidence.directory / "flood.json").write_text('{"slots": 1}')
+    evidence.starts(running=running, **fields)
+    code, report = evidence.run()
+    assert code == 1 and report["status"] == "unmet" and report["error"] is None
+    assert report["median"] == running and report["cap"]["proven"] is False
+    assert report["verdicts"] == {"plans": "met", "starts": "unmet"}
+
+
+@pytest.mark.parametrize("fields,change", [
+    ({"slots": 2, "occupied_slots": 3}, {"slots": 3}),
+    ({"slots": 2, "occupied_slots": 2}, {"occupied_slots": 1}),
+    ({"slots": 0, "occupied_slots": 0, "providers": {}}, {}),
+    ({"providers": {"": {"load": 2, "max_parallel": 2}}}, {}),
+    ({"providers": {"alpha": {"load": 2, "max_parallel": 2}}},
+     {"providers": {"beta": {"load": 2, "max_parallel": 2}}}),
+    ({"providers": {"alpha": {"load": 2, "max_parallel": 2}}},
+     {"providers": {"alpha": {"load": 1, "max_parallel": 2}}}),
+])
+def test_cap_requires_uniform_capacity_and_every_event_saturated(evidence, fields, change):
+    evidence.starts(running=2, **fields)
+    evidence.tasks["unfinished"]["history"][-1].update(change)
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "pending"
+    assert report["cap"]["proven"] is False and report["cap"]["kind"] is None
+    assert report["cap"]["value"] is None and len(report["cap"]["evidence"]) == 10
+    assert report["verdicts"]["starts"] == "unmet"
+
+
+def test_half_independent_plans_with_ten_good_starts_is_unmet(evidence):
+    for i in range(10):
+        evidence.plan(f"p{i}", roots=2 if i < 5 else 1)
+    evidence.starts(running=4)
+    code, report = evidence.run()
+    assert code == 1 and report["status"] == "unmet"
+    assert report["plan_count"] == 10 and report["independent_plan_count"] == 5
+    assert report["verdicts"] == {"plans": "unmet", "starts": "met"}
+
+
+def test_hard_error_overrides_met_verdicts_without_losing_counts(evidence):
+    for i in range(10):
+        evidence.plan(f"p{i}")
+    evidence.starts(running=4)
+    evidence.tasks["broken"] = {"history": None}
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "failure" and "malformed" in report["error"]
+    assert report["plan_count"] == report["start_count"] == 10
+    assert report["verdicts"] == {"plans": "met", "starts": "met"}

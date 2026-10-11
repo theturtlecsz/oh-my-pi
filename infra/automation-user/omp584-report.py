@@ -20,7 +20,22 @@ def integer(value: object) -> bool:
 
 
 def cap_proof(starts: list[dict]) -> dict:
-    return {"proven": False, "kind": None, "value": None, "evidence": []}
+    proof = {"proven": False, "kind": None, "value": None, "evidence": starts}
+    if not starts:
+        return proof
+    slots = starts[0]["slots"]
+    if slots >= 1 and all(event["slots"] == slots and event["occupied_slots"] >= slots for event in starts):
+        proof.update(proven=True, kind="slots", value=slots)
+    else:
+        providers = starts[0]["providers"]
+        if providers and all(name.strip() for name in providers) and all(
+            event["providers"].keys() == providers.keys()
+            and all(limits["load"] >= limits["max_parallel"] for limits in event["providers"].values())
+            for event in starts
+        ):
+            proof.update(proven=True, kind="providers",
+                         value={name: limits["max_parallel"] for name, limits in providers.items()})
+    return proof
 
 
 def validate_matched_start(event: dict) -> None:
@@ -100,6 +115,7 @@ def report(flood_dir: Path, rollout_path: Path) -> tuple[dict, int]:
         return event["at"] > rollout["activated_at"] and event["code_sha256"] == rollout["flood_sha256"]
 
     has_malformed_start = False
+    cap_events = []
     if valid_rollout and valid_state:
         for task_id, task in state["tasks"].items():
             try:
@@ -122,6 +138,9 @@ def report(flood_dir: Path, rollout_path: Path) -> tuple[dict, int]:
                                         "running_implementers": event["running_implementers"],
                                         "code_sha256": event["code_sha256"],
                                     })
+                                    cap_events.append({"id": task_id, "attempt": event.get("attempt"),
+                                        "slots": event["slots"], "occupied_slots": event["occupied_slots"],
+                                        "providers": event["providers"]})
                                 except Exception as exc:
                                     has_malformed_start = True
                                     raise
@@ -189,19 +208,25 @@ def report(flood_dir: Path, rollout_path: Path) -> tuple[dict, int]:
         result["median"] = None
     elif result["starts"]:
         result["median"] = statistics.median(e["running_implementers"] for e in result["starts"])
-    result["cap"] = cap_proof([])
+    result["cap"] = cap_proof(cap_events) if not has_malformed_start else cap_proof([])
     if result["start_count"] < 10:
         result["verdicts"]["starts"] = "pending"
     elif result["median"] is not None and result["median"] > BASELINE:
         result["verdicts"]["starts"] = "met"
     elif result["median"] is not None and result["median"] <= BASELINE:
-        result["verdicts"]["starts"] = "unmet"
+        result["verdicts"]["starts"] = "met" if result["cap"]["proven"] else "unmet"
     else:
         result["verdicts"]["starts"] = "pending"
     if errors:
         result.update(status="failure", error="; ".join(errors))
         return result, 2
-    return result, 2
+    if result["plan_count"] < 10 or result["start_count"] < 10:
+        return result, 2
+    if all(verdict == "met" for verdict in result["verdicts"].values()):
+        result["status"] = "ok"
+        return result, 0
+    result["status"] = "unmet"
+    return result, 1
 
 
 def main() -> int:
