@@ -102,15 +102,15 @@
       "task_id": "f1",
       "category": "localized_bug",
       "fixture": "fixtures/f1",
-      "source_commit": "02d39ce0d8ea0d97e61d2b8f48fd8ce912caf1c1",
-      "rationale": "Fixture F1 enters unchanged. The source_commit is the commit that added the fixture, because load_batch needs a non-empty string and the fixture has no fix commit."
+      "source_commit": null,
+      "rationale": "Fixture F1 enters unchanged; it has no source fix commit."
     },
     {
       "task_id": "f2",
       "category": "resume",
       "fixture": "fixtures/f2",
-      "source_commit": "e569839253ceef664630d158e5abe1a4be6c847f",
-      "rationale": "Fixture F2 enters unchanged. The source_commit is the commit that added the fixture, because load_batch needs a non-empty string and the fixture has no fix commit."
+      "source_commit": null,
+      "rationale": "Fixture F2 enters unchanged; it has no source fix commit."
     }
   ]
 }
