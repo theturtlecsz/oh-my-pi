@@ -3,6 +3,7 @@
 Wire dicts, exported models, and mixes of the two share one strict boundary.
 """
 
+import hashlib
 import json
 from copy import deepcopy
 from decimal import Decimal
@@ -729,6 +730,34 @@ def _owner_predicate():
     })
 
 
+def _repository_context(source=b"abcdefghijkl"):
+    artifact = models.EvidenceArtifact.model_validate({
+        **ARTIFACT,
+        "uri": "repo:///requirements.txt",
+        "content_hash": hashlib.sha256(source).hexdigest(),
+    })
+    return {
+        "artifacts": {artifact.id: artifact},
+        "repository_sources": {(artifact.uri, artifact.revision): source},
+    }
+
+
+def _observation(origin="repository_observation"):
+    return models.IntakeClaim.model_validate({
+        **CLAIM,
+        "origin": origin,
+        "asserted_by": {"id": "tool-1", "kind": "tool"},
+        "evidence": [SPAN],
+    })
+
+
+def _evidence_predicates():
+    predicate = models.PredicateDefinition.model_validate({
+        **PREDICATE, "id": CLAIM["predicate_id"], "authority": ["tool", "model", "owner"],
+    })
+    return {predicate.id: predicate}
+
+
 def test_typed_claim_bypass_refuses_owner_premise():
     # Construct real typed model proposal, admitted/truth true/evidence present/rule-engine admission
     predicate = _owner_predicate()
@@ -752,7 +781,7 @@ def test_typed_claim_bypass_refuses_owner_premise():
 
     # check_claim_authority proves rejection before admitting or adding to premise_truth inputs
     with pytest.raises(AuthorityRefusal):
-        check_claim_authority(typed_model_proposal, rule_engine_actor, predicates=predicates)
+        check_claim_authority(typed_model_proposal, rule_engine_actor, predicates=predicates, **_repository_context())
 
     # Even with owner admission, model_proposal cannot become admitted evidence for an owner-only predicate
     owner_admitted = typed_model_proposal.model_copy(
@@ -760,7 +789,7 @@ def test_typed_claim_bypass_refuses_owner_premise():
     )
     owner_actor = models.ActorRef(id="owner-1", kind="owner")
     with pytest.raises(AuthorityRefusal):
-        check_claim_authority(owner_admitted, owner_actor, predicates=predicates)
+        check_claim_authority(owner_admitted, owner_actor, predicates=predicates, **_repository_context())
 
 
 def test_authorized_owner_statement_admission():
@@ -977,3 +1006,107 @@ def test_unsupported_dictionary_authority_fields_and_wire_validation():
     # OwnerRef model cannot masquerade as ActorRef parameter
     with pytest.raises(AuthorityRefusal):
         check_claim_authority(owner_claim, models.OwnerRef(id="owner-1", kind="owner"), predicates=wire_predicates)
+
+
+@pytest.mark.parametrize("origin", ["repository_observation", "tool_receipt"])
+def test_observations_require_tool_assertion_and_grounded_evidence(origin):
+    claim = _observation(origin)
+    actor = claim.asserted_by
+    context = _repository_context()
+    check_claim_authority(claim, actor, predicates=_evidence_predicates(), **context)
+    with pytest.raises(AuthorityRefusal):
+        check_claim_authority(claim.model_copy(update={"evidence": []}), actor,
+                              predicates=_evidence_predicates(), **context)
+    forged_actor = models.ActorRef(id="model-1", kind="model")
+    with pytest.raises(AuthorityRefusal):
+        check_claim_authority(claim.model_copy(update={"asserted_by": forged_actor}), forged_actor,
+                              predicates=_evidence_predicates(), **context)
+
+
+@pytest.mark.parametrize("origin,kind", [("model_proposal", "model"), ("owner_statement", "owner")])
+def test_rule_engine_admission_requires_grounding_even_for_model_proposals(origin, kind):
+    engine = models.ActorRef(id="engine-1", kind="rule_engine")
+    claim = _observation().model_copy(update={
+        "origin": origin, "asserted_by": models.ActorRef(id="asserting-1", kind=kind),
+        "state": "admitted", "truth": "true", "admitted_by": engine,
+    })
+    context = _repository_context()
+    check_claim_authority(claim, engine, predicates=_evidence_predicates(), **context)
+    with pytest.raises(AuthorityRefusal):
+        check_claim_authority(claim.model_copy(update={"evidence": []}), engine,
+                              predicates=_evidence_predicates(), **context)
+
+
+@pytest.mark.parametrize("failure", [
+    "artifacts_absent", "sources_absent", "nonexistent_artifact", "absent_source",
+    "wrong_revision", "wrong_hash", "nonrepository_uri", "non_tool_provenance", "artifact_id_mismatch",
+])
+def test_evidence_refuses_unresolved_or_forged_repository_provenance(failure):
+    claim = _observation()
+    context = _repository_context()
+    artifact = context["artifacts"][SPAN["artifact_id"]]
+    if failure == "artifacts_absent":
+        del context["artifacts"]
+    elif failure == "sources_absent":
+        del context["repository_sources"]
+    elif failure == "nonexistent_artifact":
+        claim = claim.model_copy(update={"evidence": [models.EvidenceSpan.model_validate({
+            **SPAN, "artifact_id": "nonexistent",
+        })]})
+    elif failure == "absent_source":
+        context["repository_sources"] = {}
+    else:
+        updates = {
+            "wrong_revision": {"revision": "other-revision"},
+            "wrong_hash": {"content_hash": "0" * 64},
+            "nonrepository_uri": {"uri": "https://example.com/untrusted"},
+            "non_tool_provenance": {"actor": models.ActorRef(id="model-1", kind="model")},
+            "artifact_id_mismatch": {"id": "other-artifact"},
+        }
+        context["artifacts"][artifact.id] = artifact.model_copy(update=updates[failure])
+    with pytest.raises(AuthorityRefusal):
+        check_claim_authority(claim, claim.asserted_by, predicates=_evidence_predicates(), **context)
+
+
+@pytest.mark.parametrize("start,end,quote", [
+    (999999, 1000011, "abcdefghijkl"),
+    (0, 12, "wrong quote!"),
+    (0, 0, None),
+    (8, 4, None),
+    (0, 13, None),
+    (-1, 4, None),
+])
+def test_evidence_refuses_forged_quotes_and_empty_reversed_or_out_of_bounds_spans(start, end, quote):
+    span = models.EvidenceSpan.model_validate(SPAN).model_copy(update={"start_byte": start, "end_byte": end})
+    if quote is not None:
+        span = span.model_copy(update={"quote": quote})
+    claim = _observation().model_copy(update={"evidence": [span]})
+    with pytest.raises(AuthorityRefusal):
+        check_claim_authority(claim, claim.asserted_by, predicates=_evidence_predicates(), **_repository_context())
+
+
+@pytest.mark.parametrize("start,end,quote,accepted", [
+    (1, 7, "é🙂", True),
+    (3, 8, "🙂z", True),
+    (1, 3, "é", True),
+    (1, 3, "é🙂", False),
+    (7, 9, None, False),
+])
+def test_utf8_evidence_bounds_and_quotes_use_repository_bytes(start, end, quote, accepted):
+    source = "aé🙂z".encode("utf-8")
+    span = models.EvidenceSpan(artifact_id=SPAN["artifact_id"], start_byte=start, end_byte=end)
+    if quote is not None:
+        span = span.model_copy(update={"quote": quote})
+    claim = _observation().model_copy(update={"evidence": [span]})
+    context = _repository_context(source)
+    if accepted:
+        check_claim_authority(claim, claim.asserted_by, predicates=_evidence_predicates(), **context)
+    else:
+        with pytest.raises(AuthorityRefusal):
+            check_claim_authority(claim, claim.asserted_by, predicates=_evidence_predicates(), **context)
+
+
+def test_every_span_requires_grounding_including_optional_proposal_evidence():
+    claim = models.IntakeClaim.model_validate({**CLAIM, "evidence": [SPAN, {**SPAN, "artifact_id": "missing"}]})
+    with pytest.raises(AuthorityRefusal):
+        check_claim_authority(claim, claim.asserted_by, predicates=_evidence_predicates(), **_repository_context())
