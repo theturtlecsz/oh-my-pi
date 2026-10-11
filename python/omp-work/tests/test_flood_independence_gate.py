@@ -426,6 +426,34 @@ def test_filenames_do_not_exempt_order_only_edges(staged_flood, tmp_path, path):
     assert any("ITEM-s02: depends_on ITEM-s01 orders the slice only" in v for v in violations)
 
 
+@pytest.mark.parametrize("producer_path,consumer_path,outputs,work,passes", [
+    ("src/a.ts", "src/approval-widget.ts", [], "Implement widget.", False),
+    ("python/omp-work/src/omp_work/contracts/v1/approval.json", "src/b.ts", [],
+     "Implement consumer.", False),
+    ("src/a.ts", "src/b.ts", ["reports/result.json"], "Consume reports/result.json.", True),
+    ("src/a.ts", "src/b.ts", ["reports/result.json"], "Consume result.json.", False),
+    ("src/a.ts", "src/b.ts", ["artifact_token"], "Consume artifact_token.", True),
+    ("src/a.ts", "src/b.ts", ["artifact_token"], "Consume artifact.", False),
+])
+def test_filename_and_output_tokens(staged_flood, tmp_path, producer_path, consumer_path,
+                                    outputs, work, passes):
+    """Approval filenames cannot exempt edges; outputs require their whole declared token."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path)
+    write_slice(pdir, "ITEM-s01", files=[producer_path], outputs=outputs)
+    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=[consumer_path],
+                body=f"{work}\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    if passes:
+        assert violations == []
+    else:
+        assert violations == [
+            "ITEM-s02: depends_on ITEM-s01 orders the slice only; leave depends_on empty, "
+            "edit a file ITEM-s01 also edits, or name a file or output of ITEM-s01 "
+            "that this slice reads, imports, consumes or extends"
+        ]
+
+
 def test_owner_and_changelog_cases_pass(staged_flood, tmp_path):
     mod, _, _ = staged_flood
 
@@ -549,11 +577,15 @@ def test_check_plan_cli_uses_the_gate_and_manual_promote_blocks_invalid(staged_f
     invalid = subprocess.run([sys.executable, str(flood_py), "check-plan", "ITEM", "--config", str(cfg)],
                              capture_output=True, text=True)
     assert invalid.returncode == 1, f"check-plan should fail on an order-only plan:\n{invalid.stdout}\n{invalid.stderr}"
-    assert "orders the slice only" in invalid.stdout
+    expected = ("ITEM-s02: depends_on ITEM-s01 orders the slice only; leave depends_on empty, "
+                "edit a file ITEM-s01 also edits, or name a file or output of ITEM-s01 "
+                "that this slice reads, imports, consumes or extends")
+    assert expected in invalid.stdout
 
     promote = subprocess.run([sys.executable, str(flood_py), "promote", "ITEM", "--config", str(cfg)],
                              capture_output=True, text=True)
     assert promote.returncode != 0, f"manual promote must refuse an invalid plan:\n{promote.stdout}\n{promote.stderr}"
+    assert expected in promote.stdout
     assert not (tmp_path / "tasks" / "ITEM-s01.md").exists(), "nothing may be promoted on an invalid plan"
 
     (pdir / "ITEM-s02.md").unlink()
