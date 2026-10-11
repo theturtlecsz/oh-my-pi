@@ -384,6 +384,12 @@ def _build_worker_root(config_path: Path, config: dict) -> Path:
     os.chmod(tmp, 0o1777)  # nosec B103 - sticky world-writable /tmp is the POSIX contract inside the jail
     if readonly:
         _rbind_readonly(worktree, new / "work")
+        if config.get("verifier_runtime"):
+            # Managed Python installs keep the executable and standard library
+            # outside /usr. Package import roots alone cannot start that runtime.
+            prefix = Path(sys.base_prefix).resolve()
+            if not prefix.is_relative_to("/usr") and str(prefix) not in ro_dirs:
+                ro_dirs = (*ro_dirs, str(prefix))
         parents: list[Path] = []
         for raw in sorted(ro_dirs, key=lambda path: path.count("/")):
             parents.extend(_ro_bind_parent_dirs(new, raw))

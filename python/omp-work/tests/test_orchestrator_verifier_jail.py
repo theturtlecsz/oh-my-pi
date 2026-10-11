@@ -462,6 +462,7 @@ print(json.dumps({
     "ws": body,
     "key_text": key_text,
     "key_append": append_result(key),
+    "runtime_append": append_result(spec["executable"]),
     "env_keys": sorted(os.environ),
     "env": {name: os.environ.get(name) for name in spec["allowed"]},
 }))
@@ -564,6 +565,7 @@ def test_verifier_namespace_trusts_installed_runtime(linked_namespace, capfd) ->
         "allowed": [*_ALLOWED_ENV, "PYTHONPATH", "PYTHONSAFEPATH"],
         "key": str(key),
         "pid": os.getpid(),
+        "executable": os.path.realpath(sys.executable),
     }
     code = _VERIFIER_PROBE.replace("SPEC", json.dumps(json.dumps(spec)))
     service = _WorkServiceStub()
@@ -607,6 +609,7 @@ def test_verifier_namespace_trusts_installed_runtime(linked_namespace, capfd) ->
     assert payload["ws"] == "ws-ok"
     assert payload["key_text"] == "verifier-key\n"
     assert payload["key_append"] == "denied"
+    assert payload["runtime_append"] == "denied"
     assert key.read_bytes() == before["key"]
     assert payload["env_keys"] == sorted([*_ALLOWED_ENV, "PYTHONPATH", "PYTHONSAFEPATH"])
     assert payload["env"]["PATH"] == "/usr/bin:/bin"
@@ -622,6 +625,18 @@ def test_verifier_namespace_trusts_installed_runtime(linked_namespace, capfd) ->
 
 def test_worker_namespace_hides_git_and_runtime(linked_namespace, capfd) -> None:
     job = linked_namespace["job"]
+    executable = os.path.realpath(sys.executable)
+    runtime_files = []
+    if not Path(sys.base_prefix).resolve().is_relative_to("/usr"):
+        # The worker exposes only caller-named files, even for managed Python.
+        # Discover the stdlib files this probe imports without exposing a tree.
+        runtime_files = json.loads(subprocess.check_output([
+            executable, "-I", "-c",
+            "import json, pathlib, sys; print(json.dumps(sorted({"
+            "m.__file__ for m in sys.modules.values() if getattr(m, '__file__', None)"
+            " and pathlib.Path(m.__file__).is_file()})))",
+        ], text=True))
+        runtime_files.append(executable)
     spec = {
         "allowed": list(_ALLOWED_ENV),
         "gitdir": str(linked_namespace["gitdir"]),
@@ -633,11 +648,11 @@ def test_worker_namespace_hides_git_and_runtime(linked_namespace, capfd) -> None
     try:
         rc, out, err = _run_namespace(
             job,
-            [os.path.realpath(sys.executable), "-c", code],
+            [executable, "-c", code],
             service,
             capfd,
             identity="worker",
-            ro_binds=(linked_namespace["key"],),
+            ro_binds=(linked_namespace["key"], *runtime_files),
         )
     finally:
         service.close()
