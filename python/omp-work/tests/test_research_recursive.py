@@ -19,6 +19,7 @@ from omp_work.research.recursive import (
     RecursiveUsage,
     admit_proposal,
     admit_study,
+    record_usage,
     terminate,
 )
 from omp_work.standing_change import ChangeAuthority
@@ -1196,3 +1197,284 @@ def test_baseline_recipe_and_spec_must_be_explicit(kind: str) -> None:
     for field in ("recipe", "spec"):
         with pytest.raises(ValidationError, match=field):
             model.model_validate({key: value for key, value in payload.items() if key != field})
+
+
+# ==============================================================================
+# OMP-319-s01-s05: Resource transitions, record_usage, and shared admission gates
+# ==============================================================================
+
+@pytest.mark.parametrize("axis,equality_delta,exceeded_delta", [
+    ("compute_seconds", {"compute_seconds": 100.0}, {"compute_seconds": 100.1}),
+    ("tokens", {"tokens": 1000}, {"tokens": 1001}),
+    ("usd", {"usd": Decimal("10.0")}, {"usd": Decimal("10.01")}),
+])
+def test_record_usage_independent_axis_exhaustion_and_equality(
+    axis: str, equality_delta: dict, exceeded_delta: dict,
+) -> None:
+    # Root has LIMITS: compute=100, tokens=1000, usd=10
+    state = admitted_root()
+    # Below cap: state remains unterminated
+    below = {k: v / 2 if k != "tokens" else v // 2 for k, v in equality_delta.items()}
+    sub_state = record_usage(state, "root", **below)
+    assert sub_state.terminal_reason is None
+    assert len(sub_state.usage) == 1
+
+    # Exact equality: terminates with quota_exhausted and retains crossing event
+    eq_state = record_usage(state, "root", **equality_delta)
+    assert eq_state.terminal_reason == "quota_exhausted"
+    assert len(eq_state.usage) == 1
+    assert eq_state.refuse_reason(START) == "quota_exhausted"
+
+    # Strictly exceeded: terminates with quota_exhausted and retains crossing event
+    exc_state = record_usage(state, "root", **exceeded_delta)
+    assert exc_state.terminal_reason == "quota_exhausted"
+    assert len(exc_state.usage) == 1
+    assert exc_state.refuse_reason(START) == "quota_exhausted"
+
+
+def test_record_usage_crossing_usage_retained_across_transitions() -> None:
+    state = admitted_root()
+    # Spend $6 of $10 cap on root
+    state = record_usage(state, "root", usd=Decimal("6.00"))
+    assert state.terminal_reason is None
+    assert len(state.usage) == 1
+    assert state.usage[0].usd == Decimal("6.00")
+
+    # Spend another $5: total becomes $11 >= $10 root cap -> quota_exhausted
+    state = record_usage(state, "root", usd=Decimal("5.00"))
+    assert state.terminal_reason == "quota_exhausted"
+    assert len(state.usage) == 2
+    assert state.usage[0].usd == Decimal("6.00")
+    assert state.usage[1].usd == Decimal("5.00")
+    assert sum(item.usd for item in state.usage) == Decimal("11.00")
+
+
+@pytest.mark.parametrize("invalid_kwargs", [
+    {"compute_seconds": -1},
+    {"compute_seconds": float("inf")},
+    {"compute_seconds": float("nan")},
+    {"compute_seconds": True},
+    {"tokens": -1},
+    {"tokens": True},
+    {"tokens": 1.5},
+    {"usd": -1},
+    {"usd": Decimal("-0.01")},
+    {"usd": Decimal("NaN")},
+    {"usd": Decimal("Inf")},
+    {"usd": 0.05},  # float rejected: Decimal USD, no float conversion
+    {"usd": 1.0},   # float rejected: Decimal USD, no float conversion
+    {"usd": True},
+    {"study_id": "missing_study"},
+    {"study_id": ""},
+    {"study_id": "   "},
+])
+def test_record_usage_negative_nonfinite_and_float_usd_refused(invalid_kwargs: dict) -> None:
+    state = admitted_root()
+    base = {"study_id": "root", "compute_seconds": 0.0, "tokens": 0, "usd": Decimal("0")}
+    kwargs = {**base, **invalid_kwargs}
+    with pytest.raises(ValueError):
+        record_usage(state, **kwargs)
+    # State usage remains completely unmodified
+    assert state.usage == ()
+
+
+def test_root_spent_budget_refuses_narrowed_child_and_its_proposal() -> None:
+    # Root has cap $10. Spend $6 on root.
+    state = admitted_root()
+    state = record_usage(state, "root", usd=Decimal("6.00"))
+    assert state.terminal_reason is None
+
+    # Scenario 1: Attempting to admit a $1-cap child is refused with quota_exhausted
+    narrowed_limits = ResourceLimits(100, 1000, Decimal("1.00"))
+    child_1 = child(study_id="child-1", limits=narrowed_limits)
+    refused_child_state = admit(state, child_1)
+    assert_refusal(state, refused_child_state, "quota_exhausted")
+
+    # Scenario 2: If child with $1 cap was admitted BEFORE the spend:
+    pre_state = admit(admitted_root(), child(study_id="child-1", limits=narrowed_limits))
+    assert pre_state.terminal_reason is None
+    pre_state = record_usage(pre_state, "root", usd=Decimal("6.00"))
+    # Proposal for that child is refused with quota_exhausted
+    prop = proposal(study_id="child-1", recipe={"min_metric": 0.6})
+    refused_prop_state = admit_prop(pre_state, prop)
+    assert_refusal(pre_state, refused_prop_state, "quota_exhausted")
+
+    # Root can still admit a study with cap $8 (or $10) and root's own proposals
+    child_8 = child(study_id="child-8", limits=ResourceLimits(100, 1000, Decimal("8.00")))
+    admitted_child_state = admit(state, child_8)
+    assert admitted_child_state.terminal_reason is None
+    assert "child-8" in {s.study_id for s in admitted_child_state.studies}
+
+    root_prop = proposal(study_id="root", recipe={"min_metric": 0.6})
+    admitted_root_prop = admit_prop(state, root_prop)
+    assert admitted_root_prop.terminal_reason is None
+
+
+def test_exhausted_ancestor_refuses_child() -> None:
+    # Root ($10 cap) -> Parent ($5 cap).
+    parent_limits = ResourceLimits(100, 1000, Decimal("5.00"))
+    state = admit(admitted_root(), child(study_id="parent", limits=parent_limits))
+    assert state.terminal_reason is None
+
+    # Record $5 spend: parent envelope is exhausted
+    state = record_usage(state, "parent", usd=Decimal("5.00"))
+    assert state.terminal_reason == "quota_exhausted"
+
+    # Parent attempting to admit a grandchild (even with $1 cap) is refused
+    grandchild_limits = ResourceLimits(100, 1000, Decimal("1.00"))
+    gc = child(
+        study_id="grandchild", parent_id="parent", depth=2,
+        limits=grandchild_limits,
+        dev=[{"task_id": "gc-dev", "content_sha256": "8" * 64}],
+        confirmation=[{"task_id": "gc-confirm", "content_sha256": "9" * 64}],
+    )
+    refused = admit(state, gc)
+    assert refused.terminal_reason == "quota_exhausted"
+
+
+def test_second_root_and_renamed_ids_cannot_reset_usage() -> None:
+    state = admitted_root()
+    state = record_usage(state, "root", usd=Decimal("6.00"))
+    assert state.terminal_reason is None
+
+    # Second root is refused
+    second = RecursiveStudy.model_validate(study_payload(study_id="root-2"))
+    assert_refusal(state, admit(state, second), "second_root")
+
+    # Recording usage for fake / renamed IDs cannot reset or evade admitted tracking
+    with pytest.raises(ValueError, match="not an admitted study"):
+        record_usage(state, "fake-root-id", usd=Decimal("1.00"))
+
+    # Legitimate child with $8 cap still inherits tree-cumulative spend ($6)
+    child_8 = child(study_id="child-8", limits=ResourceLimits(100, 1000, Decimal("8.00")))
+    state = admit(state, child_8)
+    assert state.terminal_reason is None
+
+    # Recording $2 more on child-8 hits the $8 cap (6 + 2 = 8 >= 8) -> quota_exhausted
+    state = record_usage(state, "child-8", usd=Decimal("2.00"))
+    assert state.terminal_reason == "quota_exhausted"
+
+
+def test_tmp_path_reload_retains_exhaustion_descendants_duplicates_and_isolation(tmp_path: Path) -> None:
+    state = admit(admitted_root(), child())
+    state = admit_prop(state, proposal(study_id="root", recipe={"min_metric": 0.6}))
+    state = record_usage(state, "root", compute_seconds=100.0)  # exact compute limit equality
+    assert state.terminal_reason == "quota_exhausted"
+    assert len(state.studies) == 2
+    assert len(state.proposal_history) == 1
+    assert len(state.usage) == 1
+
+    snapshot = tmp_path / "state.json"
+    snapshot.write_text(state.model_dump_json())
+    restored = RecursionState.model_validate_json(snapshot.read_text())
+
+    # Retains exhaustion
+    assert restored == state
+    assert restored.terminal_reason == "quota_exhausted"
+    assert restored.refuse_reason(START) == "quota_exhausted"
+
+    # Retains descendants
+    assert len(restored.studies) == 2
+    assert [s.study_id for s in restored.studies] == ["root", "child"]
+
+    # Retains duplicates
+    assert admit_prop(restored, proposal(study_id="root", recipe={"min_metric": 0.6})) == restored
+
+    # Retains isolation: cohort reuse is rejected
+    reused = child(
+        study_id="child-reused",
+        dev=[{"task_id": "root-dev-reuse", "content_sha256": "1" * 64}],
+        confirmation=[{"task_id": "root-confirm-reuse", "content_sha256": "7" * 64}],
+    )
+    assert admit(restored, reused) == restored
+
+
+def test_integrated_r13_min_metric_admission_to_reload_scenario(tmp_path: Path) -> None:
+    # 1. Admit root with R13 min_metric = 0.5
+    root_study = RecursiveStudy.model_validate(study_payload(recipe={"min_metric": 0.5}))
+    state = admit(RecursionState(grant=grant()), root_study)
+    assert state.terminal_reason is None
+    assert len(state.studies) == 1
+
+    # 2. Admit proposal for root with min_metric = 0.6
+    prop1 = proposal(study_id="root", proposal_id="prop-root-1", recipe={"min_metric": 0.6})
+    state = admit_prop(state, prop1)
+    assert state.terminal_reason is None
+    assert len(state.proposal_history) == 1
+
+    # 3. Admit child study with distinct min_metric = 0.7 and narrowed limits
+    child_limits = ResourceLimits(50, 500, Decimal("5.00"))
+    child_study = child(
+        study_id="child-1", parent_id="root", depth=1,
+        recipe={"min_metric": 0.7}, limits=child_limits,
+    )
+    state = admit(state, child_study)
+    assert state.terminal_reason is None
+    assert len(state.studies) == 2
+
+    # 4. Admit proposal for child with distinct min_metric = 0.8
+    prop2 = proposal(study_id="child-1", proposal_id="prop-child-1", recipe={"min_metric": 0.8})
+    state = admit_prop(state, prop2)
+    assert state.terminal_reason is None
+    assert len(state.proposal_history) == 2
+
+    # 5. Record usage below caps
+    state = record_usage(state, "root", compute_seconds=10.0, tokens=100, usd=Decimal("1.00"))
+    state = record_usage(state, "child-1", compute_seconds=15.0, tokens=150, usd=Decimal("1.50"))
+    assert state.terminal_reason is None
+    assert len(state.usage) == 2
+
+    # 6. Snapshot and reload via real tmp_path
+    snapshot = tmp_path / "integrated_state.json"
+    snapshot.write_text(state.model_dump_json())
+    restored = RecursionState.model_validate_json(snapshot.read_text())
+    assert restored == state
+    assert restored.terminal_reason is None
+
+    # 7. Fresh external authority check allows another distinct proposal (min_metric = 0.9)
+    prop3 = proposal(study_id="child-1", proposal_id="prop-child-2", recipe={"min_metric": 0.9})
+    restored = admit_prop(restored, prop3)
+    assert restored.terminal_reason is None
+    assert len(restored.proposal_history) == 3
+
+    # 8. Record crossing usage on child: compute 25.0 brings total compute to 10 + 15 + 25 = 50 >= 50
+    terminated = record_usage(restored, "child-1", compute_seconds=25.0)
+    assert terminated.terminal_reason == "quota_exhausted"
+    assert len(terminated.usage) == 3
+    assert terminated.refuse_reason(START) == "quota_exhausted"
+
+    # 9. All subsequent admissions blocked
+    blocked_prop = proposal(study_id="child-1", proposal_id="prop-child-3", recipe={"min_metric": 1.0})
+    assert admit_prop(terminated, blocked_prop) == terminated
+
+
+def test_four_reported_bypasses_explicit_reproduction() -> None:
+    # [P1] Standalone admission bypasses authority
+    # Reproduced: admit_study without authority or known ancestry
+    raw_state = RecursionState(grant=grant())
+    assert_refusal(raw_state, admit_study(raw_state, child(), grant()), "utc_now_required")
+    assert_refusal(raw_state, admit(raw_state, child(parent_id="unknown-parent")), "unadmitted_parent")
+
+    # [P1] New root IDs bypass descendant cap
+    # Reproduced: second root accepting children under max_descendants=1
+    state1 = admitted_root(max_descendants=1)
+    state1 = admit(state1, child(max_descendants=1))
+    second = RecursiveStudy.model_validate(study_payload(study_id="second-root", max_descendants=1))
+    assert_refusal(state1, admit(state1, second), "second_root")
+
+    # [P1] Narrowed child budgets do not gate admission
+    # Reproduced: $6 spent under $10 root cap, then admitted $1-cap child and its proposal
+    state2 = admitted_root()
+    state2 = record_usage(state2, "root", usd=Decimal("6.00"))
+    child_1usd = child(study_id="narrow-1", limits=ResourceLimits(100, 1000, Decimal("1.00")))
+    assert_refusal(state2, admit(state2, child_1usd), "quota_exhausted")
+
+    # [P1] Empty cohorts bypass confirmation isolation
+    # Reproduced: child admission with dev digest equal to parent confirm digest
+    state3 = admitted_root()
+    reused_cohort_child = child(
+        study_id="reused-cohort",
+        dev=[{"task_id": "root-confirm-task", "content_sha256": "2" * 64}],
+        confirmation=[{"task_id": "new-confirm-task", "content_sha256": "9" * 64}],
+    )
+    assert_refusal(state3, admit(state3, reused_cohort_child), "cohort_reused")

@@ -266,10 +266,16 @@ class RecursionState(StrictModel):
         if not root.window_start <= now < root.window_end:
             return "outside_window"
         limits = root.limits
+        total_compute = sum(item.compute_seconds for item in self.usage)
+        total_tokens = sum(item.tokens for item in self.usage)
+        total_usd = sum((item.usd for item in self.usage), Decimal(0))
         if (
-            sum(item.compute_seconds for item in self.usage) >= limits.max_wall_clock_seconds
-            or sum(item.tokens for item in self.usage) >= limits.max_model_tokens
-            or sum((item.usd for item in self.usage), Decimal(0)) >= limits.max_usd
+            total_compute >= limits.max_wall_clock_seconds
+            or total_tokens >= limits.max_model_tokens
+            or total_usd >= limits.max_usd
+            or total_compute >= self.grant.limits.max_wall_clock_seconds
+            or total_tokens >= self.grant.limits.max_model_tokens
+            or total_usd >= self.grant.limits.max_usd
         ):
             return "quota_exhausted"
         if root.max_depth == 0:
@@ -444,23 +450,34 @@ def _admission_gate(
 
 
 def _study_live_reason(state: RecursionState, study: RecursiveStudy, now: datetime) -> str | None:
-    """Half-open window and tree-cumulative quota gate from a study to the root."""
+    """Half-open window and tree-cumulative quota gate across candidate, ancestors, and grant."""
     known = {item.study_id: item for item in state.studies}
-    current = study
-    while True:
+    total_compute = sum(item.compute_seconds for item in state.usage)
+    total_tokens = sum(item.tokens for item in state.usage)
+    total_usd = sum((item.usd for item in state.usage), Decimal(0))
+
+    current: RecursiveStudy | None = study
+    while current is not None:
         if not current.window_start <= now < current.window_end:
             return "outside_window"
-        descendants = _subtree_ids(state.studies, current.study_id)
-        usage = [item for item in state.usage if item.study_id in descendants]
         if (
-            sum(item.compute_seconds for item in usage) >= current.limits.max_wall_clock_seconds
-            or sum(item.tokens for item in usage) >= current.limits.max_model_tokens
-            or sum((item.usd for item in usage), Decimal(0)) >= current.limits.max_usd
+            total_compute >= current.limits.max_wall_clock_seconds
+            or total_tokens >= current.limits.max_model_tokens
+            or total_usd >= current.limits.max_usd
         ):
             return "quota_exhausted"
         if current.parent_id is None:
-            return None
-        current = known[current.parent_id]
+            break
+        current = known.get(current.parent_id)
+
+    if (
+        total_compute >= state.grant.limits.max_wall_clock_seconds
+        or total_tokens >= state.grant.limits.max_model_tokens
+        or total_usd >= state.grant.limits.max_usd
+    ):
+        return "quota_exhausted"
+
+    return None
 
 
 def admit_study(
@@ -613,3 +630,110 @@ def admit_proposal(
         })
     except ValidationError:
         return _refuse(state, "invalid_history")
+
+
+def record_usage(
+    state: RecursionState,
+    study_id: str | RecursiveUsage | None = None,
+    compute_seconds: float | int = 0,
+    tokens: int = 0,
+    usd: Decimal | int = Decimal(0),
+    *,
+    delta: RecursiveUsage | None = None,
+    usage: RecursiveUsage | None = None,
+) -> RecursionState:
+    """Record a finite nonnegative resource delta, terminating on quota exhaustion.
+
+    Retains the crossing event in state.usage; USD values must be Decimal without
+    float conversion. Quota comparison compares tree-cumulative usage against
+    applicable envelopes (grant, target study, and every ancestor).
+    """
+    if usage is not None:
+        target = usage
+    elif delta is not None:
+        target = delta
+    elif isinstance(study_id, RecursiveUsage):
+        target = study_id
+    elif isinstance(study_id, str):
+        target = None
+    else:
+        raise ValueError("study_id must be a nonempty string or RecursiveUsage")
+
+    if target is not None:
+        s_id = target.study_id
+        c_sec = target.compute_seconds
+        tok = target.tokens
+        u = target.usd
+    else:
+        s_id = study_id
+        c_sec = compute_seconds
+        tok = tokens
+        u = usd
+
+    if not isinstance(s_id, str) or not s_id.strip():
+        raise ValueError("study_id must be a nonempty string")
+
+    known = {s.study_id: s for s in state.studies}
+    if s_id not in known:
+        raise ValueError(f"study {s_id!r} is not an admitted study")
+
+    if isinstance(c_sec, bool) or not isinstance(c_sec, (int, float)):
+        raise ValueError("compute_seconds must be a finite number")
+    if not math.isfinite(c_sec):
+        raise ValueError("compute_seconds must be finite")
+    if c_sec < 0:
+        raise ValueError("compute_seconds must be nonnegative")
+    c_sec = float(c_sec)
+
+    if isinstance(tok, bool) or not isinstance(tok, int):
+        raise ValueError("tokens must be an integer")
+    if tok < 0:
+        raise ValueError("tokens must be nonnegative")
+
+    if isinstance(u, float):
+        raise ValueError("USD must be Decimal; float conversion not permitted")
+    if isinstance(u, bool) or not isinstance(u, (Decimal, int)):
+        raise ValueError("USD must be Decimal")
+    if isinstance(u, int):
+        u = Decimal(u)
+    if not u.is_finite():
+        raise ValueError("USD must be finite")
+    if u < 0:
+        raise ValueError("USD must be nonnegative")
+
+    event = RecursiveUsage(
+        study_id=s_id,
+        compute_seconds=c_sec,
+        tokens=tok,
+        usd=u,
+    )
+    new_usage = (*state.usage, event)
+
+    total_compute = sum(item.compute_seconds for item in new_usage)
+    total_tokens = sum(item.tokens for item in new_usage)
+    total_usd = sum((item.usd for item in new_usage), Decimal(0))
+
+    target_study = known[s_id]
+    applicable_limits = [state.grant.limits, target_study.limits]
+    cursor = target_study.parent_id
+    while cursor is not None:
+        ancestor = known[cursor]
+        applicable_limits.append(ancestor.limits)
+        cursor = ancestor.parent_id
+
+    exhausted = any(
+        total_compute >= lim.max_wall_clock_seconds
+        or total_tokens >= lim.max_model_tokens
+        or total_usd >= lim.max_usd
+        for lim in applicable_limits
+    )
+
+    terminal_reason = state.terminal_reason or ("quota_exhausted" if exhausted else None)
+
+    return RecursionState(
+        studies=state.studies,
+        grant=state.grant,
+        proposal_history=state.proposal_history,
+        usage=new_usage,
+        terminal_reason=terminal_reason,
+    )
