@@ -309,6 +309,34 @@ def create_app(
                 status_code=error.status,
             )
 
+    @app.get("/v1/workspaces/{workspace_id}/intake/{run_id}")
+    def intake(
+        request: Request,
+        workspace_id: UUID,
+        run_id: str,
+        revision: int | None = Query(default=None),
+    ) -> JSONResponse:
+        try:
+            _require_contract(request, service_digest)
+            principal = _principal(request, capabilities_dir)
+            if revision is not None and revision < 1:
+                raise WorkError("invalid_request", status=400)
+            return JSONResponse(
+                service.read_intake(principal, workspace_id, run_id, revision)
+            )
+        except WorkError as error:
+            return JSONResponse(
+                {
+                    "error": {
+                        "code": error.code,
+                        "request_id": None,
+                        "correlation_id": None,
+                        "diagnostics": list(error.diagnostics[:8]),
+                    }
+                },
+                status_code=error.status,
+            )
+
     @app.get("/v1/workspaces/{workspace_id}/decisions")
     def decisions(
         request: Request,

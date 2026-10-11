@@ -15,6 +15,7 @@ from ..project_store import ProjectNotFound
 from .api_models import (
     DecisionsPage,
     EventSubscriptionsPage,
+    IntakeRecordView,
     MissionEventsPage,
     StopStatusView,
 )
@@ -623,6 +624,45 @@ class WorkService:
                 status=statuses.get(error.code, 409),
                 diagnostics=error.diagnostics,
             ) from error
+
+    def read_intake(
+        self,
+        principal: Principal,
+        workspace_id: UUID,
+        run_id: str,
+        revision: int | None = None,
+    ) -> dict[str, object]:
+        if (
+            workspace_id not in principal.workspaces
+            or "work.read" not in principal.scopes
+        ):
+            raise WorkError("forbidden", status=403)
+        value = run_id if revision is None else f"{run_id}@{revision}"
+        try:
+            raw = self._store.read(
+                workspace_id,
+                principal.actor_id,
+                "intake",
+                value,
+            )
+        except WorkStoreError as error:
+            statuses = {
+                "invalid_request": 400,
+                "forbidden": 403,
+                "artifact_unavailable": 503,
+                "stale_evidence": 409,
+                "unavailable": 503,
+            }
+            raise WorkError(
+                error.code,
+                status=statuses.get(error.code, 409),
+                diagnostics=error.diagnostics,
+            ) from error
+        try:
+            view = IntakeRecordView.model_validate(raw)
+        except ValidationError as error:
+            raise WorkError("invalid_request", status=400) from error
+        return view.model_dump(mode="json")
 
     def revision(
         self,

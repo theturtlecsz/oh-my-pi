@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import uuid
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,7 @@ from harbor.models.agent.context import AgentContext
 
 from omp_harbor_eval.evidence import load_evidence
 from omp_harbor_eval.harbor_agent import OmpRpcAgent, worker_settings_yml
+from omp_harbor_eval.run_plan import load_plan, schedule
 
 TESTS = Path(__file__).resolve().parent
 DOCKER = TESTS / "fake_docker.py"
@@ -42,6 +44,89 @@ F1_WORK = "session-system/extensions/workflow/work.ts"
 F1_HEAD = "\t\t\tconst scope = fields.scope !== undefined ? fields.scope.trim() : previous.scope;"
 
 _F1_FILLER = 1596
+
+
+def test_fleet_plan_schedules_both_repetitions_and_task_scopes() -> None:
+    """Fleet runs every task/model/arm twice, with long-horizon and availability filters."""
+    plan = load_plan(PLAN)
+    trials = schedule(plan)
+    assert plan.manifest is not None
+    tasks = plan.manifest["tasks"]
+    all_ids = set(tasks)
+    long_horizon_ids = {task_id for task_id, task in tasks.items() if task.get("long_horizon") is True}
+    assert long_horizon_ids and long_horizon_ids < all_ids
+
+    assert (plan.max_input_tokens, plan.max_output_tokens, plan.trial_timeout_s) == (2000000, 100000, 3600)
+    assert {experiment.id: experiment.tasks for experiment in plan.experiments} == {
+        "arms": "all",
+        "routing": "all",
+        "long_horizon": "long_horizon",
+    }
+    assert {experiment.id: set(experiment.arms) for experiment in plan.experiments} == {
+        "arms": set("ABCDEFG"), "routing": {"F"}, "long_horizon": {"F"},
+    }
+    for experiment in plan.experiments:
+        assert experiment.repetitions == 2
+        assert all(model.thinking == "high" for model in experiment.models)
+
+    repetitions = defaultdict(Counter)
+    for trial in trials:
+        assert trial.repetition in (1, 2)
+        assert trial.model.thinking == "high"
+        key = (trial.experiment_id, trial.task_id, trial.arm_id, trial.model.provider, trial.model.id)
+        repetitions[key][trial.repetition] += 1
+    expected_keys = {
+        (experiment.id, task_id, arm_id, model.provider, model.id)
+        for experiment in plan.experiments
+        for task_id in (long_horizon_ids if experiment.id == "long_horizon" else all_ids)
+        for arm_id in experiment.arms
+        for model in experiment.models
+    }
+    assert set(repetitions) == expected_keys
+    assert all(counts == Counter({1: 1, 2: 1}) for counts in repetitions.values())
+
+    for experiment_id, expected_ids in (
+        ("arms", all_ids), ("routing", all_ids), ("long_horizon", long_horizon_ids)
+    ):
+        assert {trial.task_id for trial in trials if trial.experiment_id == experiment_id} == expected_ids
+
+    available = [trial for trial in trials if trial.status == "available"]
+    assert sum(trial.experiment_id == "routing" for trial in available) == 180
+    arm_counts = Counter(trial.arm_id for trial in available if trial.experiment_id == "arms")
+    assert {arm_id: arm_counts[arm_id] for arm_id in "ABCDEFG"} == {
+        "A": 60, "B": 60, "C": 0, "D": 0, "E": 0, "F": 60, "G": 0,
+    }
+    long_horizon_count = sum(trial.experiment_id == "long_horizon" for trial in available)
+    assert long_horizon_count == 4 * len(long_horizon_ids)
+    assert long_horizon_count >= 24
+
+    assert set(plan.arms_by_id) == set("ABCDEFG")
+    for arm_id in ("A", "B"):
+        arm = plan.arms_by_id[arm_id]
+        assert arm.status == "available"
+        assert arm.command == "{instruction}"
+        assert arm.to_dict()["terminal"] == {"agent_end": True}
+        assert "extension-module:work-now" in arm.settings["disabledExtensions"]
+    assert plan.arms_by_id["B"].settings["modelRoles"]["plan"] == "kimi-code/k3-256k"
+
+    execute_terminal = {"pointer": "/execution/grant/state", "in": ["completed", "stopped", "canceled"]}
+    reasons = {
+        "C": "no intake/approved plan mechanism",
+        "D": "no self-review mechanism",
+        "E": "no independent audit mechanism",
+        "G": "no typed contained harness mechanism",
+    }
+    for arm_id in ("F", "C", "D", "E", "G"):
+        arm = plan.arms_by_id[arm_id]
+        assert arm.command == "/execute {key}"
+        assert arm.to_dict()["terminal"] == execute_terminal
+        assert arm.status == ("available" if arm_id == "F" else "unavailable")
+        if arm_id in reasons:
+            assert arm.reason == reasons[arm_id]
+    for trial in trials:
+        assert trial.status == ("unavailable" if trial.arm_id in reasons else "available")
+        if trial.arm_id in reasons:
+            assert trial.reason == reasons[trial.arm_id]
 
 
 class FakeEnv:

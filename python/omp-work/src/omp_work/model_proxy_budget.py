@@ -11,10 +11,16 @@ nothing and happens before any upstream send.
 
 Every instance in the process shares one serialization gate (a module-level
 lock) so two in-process admissions cannot interleave their lock acquisition and
-accounting; the gate is acquired before the first database lock and released
-when the admission settles or aborts. Cross-process exclusion is the database
-lock itself. Completed receipts are checked before authorization so retries can
-replay after cancellation or stop without another upstream call.
+accounting. Each acquisition installs one lifecycle owner token. The token is
+the only owner of that hold: transaction cleanup, gate release, and the
+accounting settled flag are separate, and ``Lock.locked()`` is not an ownership
+test. Owner transitions are serialized. Cleanup of the cursor and connection
+finishes before that token releases the gate once. Admission refusal, completed
+receipt replay, settlement, abort, and context exit all go through the owner.
+A consumed exit stack is not a live transaction. Cross-process exclusion is the
+database lock itself. Completed receipts are checked before authorization so
+retries can replay after cancellation or stop without another upstream call.
+Failed-commit reconciliation is a later slice and is not a public method.
 """
 
 from __future__ import annotations
@@ -46,13 +52,120 @@ __all__ = [
     "ModelCallAdmission",
     "ModelProxyBudget",
     "ModelProxyBudgetError",
+    "acquire_captured_locks",
+    "lock_captured_identity",
 ]
 
 # One gate for every ModelProxyBudget in the process. Held from the first
-# database lock through settlement so an in-process admission cannot be
-# interleaved. Reentrancy is deliberately absent: an admission nested inside
-# another admission would deadlock against its own held budget locks anyway.
-_GATE = threading.Lock()
+# database lock through transaction cleanup so an in-process admission cannot
+# be interleaved. The owner token, not Lock.locked(), is the hold. Reentrancy
+# is deliberately absent: an admission nested inside another admission would
+# deadlock against its own held budget locks anyway.
+class _ProcessGate:
+    lock = threading.Lock()
+    transition = threading.Lock()
+    owner: object | None = None
+
+
+def _acquire_process_gate(token: object) -> None:
+    """Install ``token`` as the gate owner. Transitions are serialized."""
+    _ProcessGate.lock.acquire()
+    try:
+        with _ProcessGate.transition:
+            if _ProcessGate.owner is not None:
+                raise RuntimeError("process gate acquired without an owner transition")
+            _ProcessGate.owner = token
+    except BaseException:
+        _ProcessGate.lock.release()
+        raise
+
+
+def _release_process_gate(token: object) -> None:
+    """Release the gate only when ``token`` still owns it. A stale token no-ops."""
+    with _ProcessGate.transition:
+        if _ProcessGate.owner is not token:
+            return
+        _ProcessGate.lock.release()
+        _ProcessGate.owner = None
+
+
+class _OneShotExitStack(contextlib.ExitStack):
+    """Exit stack that cannot be entered again after it has been consumed."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.consumed = False
+
+    def enter_context(self, cm: contextlib.AbstractContextManager[Any]) -> Any:
+        if self.consumed:
+            raise RuntimeError("consumed ExitStack cannot be reused as a live transaction")
+        return super().enter_context(cm)
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: object,
+    ) -> bool:
+        if self.consumed:
+            return False
+        self.consumed = True
+        return bool(super().__exit__(exc_type, exc, tb))
+
+
+class _LifecycleOwner:
+    """One acquisition's gate token and its one transaction stack.
+
+    Transaction cleanup, gate release, and accounting settlement are separate.
+    Only this token can release the gate it acquired, and only once.
+    """
+
+    def __init__(self, token: object, stack: _OneShotExitStack) -> None:
+        self.token = token
+        self.stack = stack
+        self._mu = threading.Lock()
+        self._claimed = False
+
+    @classmethod
+    def acquire(cls) -> _LifecycleOwner:
+        token = object()
+        _acquire_process_gate(token)
+        return cls(token, _OneShotExitStack())
+
+    def claim(self) -> bool:
+        """Serialize the close transition. The first caller owns cleanup."""
+        with self._mu:
+            if self._claimed:
+                return False
+            self._claimed = True
+            return True
+
+    def consume(self, error: BaseException | None = None) -> bool:
+        """Finish the database transaction once.
+
+        A consumed stack is not a live transaction: calling this again does not
+        commit or roll back a second time. The gate is not released here.
+        """
+        stack = self.stack
+        if stack.consumed:
+            return False
+        if error is None:
+            stack.close()
+        else:
+            stack.__exit__(type(error), error, error.__traceback__)
+        return True
+
+    def release(self) -> None:
+        _release_process_gate(self.token)
+
+    def complete(self, error: BaseException | None = None) -> bool:
+        """Clean up the transaction, then release this token's gate once."""
+        if not self.claim():
+            return False
+        try:
+            return self.consume(error)
+        finally:
+            self.release()
 
 
 class ModelProxyBudgetError(Exception):
@@ -77,6 +190,35 @@ class ModelProxyBudget:
         self._config = config
         self._jobs = jobs if jobs is not None else NativeJobStore(config)
         self._projects = projects if projects is not None else PostgresWorkStore(config)
+
+    def lock_captured_identity(
+        self,
+        cur: psycopg.Cursor[dict[str, Any]],
+        workspace_id: UUID | str,
+        receipt_id: str,
+        project_id: UUID | str | None = None,
+        mission_id: UUID | str | None = None,
+        root_work_id: UUID | str | None = None,
+        work_id: UUID | str | None = None,
+        job_id: str | None = None,
+        *,
+        projects: ProjectStoreMixin | None = None,
+    ) -> None:
+        """Acquire all spend and identity locks for a captured admission identity."""
+        lock_captured_identity(
+            cur,
+            workspace_id,
+            receipt_id,
+            project_id=project_id,
+            mission_id=mission_id,
+            root_work_id=root_work_id,
+            work_id=work_id,
+            job_id=job_id,
+            projects=projects if projects is not None else self._projects,
+        )
+
+    acquire_captured_locks = lock_captured_identity
+    acquire_locks = lock_captured_identity
 
     def admit(
         self,
@@ -169,10 +311,9 @@ class ModelProxyBudget:
         # Capture complete intent without request headers or credentials.
         receipt_request = {"workspace_id": str(workspace_uuid), "fingerprint": fingerprint}
 
-        _GATE.acquire()
-        transaction = contextlib.ExitStack()
+        owner = _LifecycleOwner.acquire()
         try:
-            cur = transaction.enter_context(
+            cur = owner.stack.enter_context(
                 self._jobs.transaction(workspace_uuid, actor_uuid)
             )
 
@@ -193,7 +334,7 @@ class ModelProxyBudget:
                 except JobError as refused:
                     raise ModelProxyBudgetError(refused.code) from refused
                 admission = ModelCallAdmission(
-                    budget=self, _transaction=transaction, _cur=cur,
+                    budget=self, _transaction=owner.stack, _owner=owner, _cur=cur,
                     workspace_id=workspace_uuid, actor_id=actor_uuid, work_id=work_uuid,
                     root_work_id=UUID(str(receipt["root_work_id"])),
                     project_id=project_uuid, mission_id=mission_uuid,
@@ -202,11 +343,14 @@ class ModelProxyBudget:
                     prepared=prepared, decision=None, _identity=identity,
                     _receipt_request=canonical_json(receipt_request),
                 )
-                # Commit the read transaction before releasing the gate.
-                transaction.close()
+                # Commit the read transaction, then release this owner once.
+                admission._state.closed = True
+                if not owner.complete():
+                    raise ModelProxyBudgetError(
+                        "already_settled", "admission is already settled or closed"
+                    )
                 admission._state.receipt = receipt
-                admission._state.closed = admission._state.settled = True
-                _GATE.release()
+                admission._state.settled = True
                 return admission
 
             # Refuse before budget locks. A waiter blocked later is checked
@@ -226,27 +370,26 @@ class ModelProxyBudget:
                     )
                 project_uuid = UUID(str(mission_row["project_id"]))
 
+            budget_work_id = work_uuid
+            root_before: UUID | None = None
+            if job_id is not None:
+                root_before = root_work_id(cur, workspace_uuid, job_id)
+                if root_before is not None:
+                    budget_work_id = root_before
+
+            self.lock_captured_identity(
+                cur,
+                workspace_uuid,
+                receipt_id,
+                project_id=project_uuid,
+                mission_id=mission_uuid,
+                root_work_id=budget_work_id,
+                work_id=work_uuid,
+                job_id=job_id,
+            )
+
             decision: SpendDecision | None = None
             if project_uuid is not None:
-                cur.execute(
-                    "SELECT project_id FROM omp_work.projects"
-                    " WHERE workspace_id=%s AND project_id=%s FOR UPDATE",
-                    (workspace_uuid, project_uuid),
-                )
-                if cur.fetchone() is None:
-                    raise ModelProxyBudgetError(
-                        "project_not_found", f"no project with id {project_uuid}"
-                    )
-                if mission_uuid is not None:
-                    cur.execute(
-                        "SELECT mission_id FROM omp_work.project_missions"
-                        " WHERE workspace_id=%s AND project_id=%s AND mission_id=%s FOR UPDATE",
-                        (workspace_uuid, project_uuid, mission_uuid),
-                    )
-                    if cur.fetchone() is None:
-                        raise ModelProxyBudgetError(
-                            "mission_not_found", f"no mission with id {mission_uuid}"
-                        )
                 # Locks the mission budget then the project budget, in the
                 # existing spend order, and pins them until settlement.
                 try:
@@ -261,24 +404,6 @@ class ModelProxyBudget:
                     )
                 except ProjectAuthorityRefused as refused:
                     raise ModelProxyBudgetError(refused.code, str(refused)) from refused
-
-            budget_work_id = work_uuid
-            root_before: UUID | None = None
-            if job_id is not None:
-                root_before = root_work_id(cur, workspace_uuid, job_id)
-                if root_before is not None:
-                    budget_work_id = root_before
-
-            # Shared advisory locks, taken before the job row so a job lock is
-            # never held while waiting for them.
-            cur.execute(
-                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                (f"omp_work.item_budget:{workspace_uuid}:{budget_work_id}",),
-            )
-            cur.execute(
-                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                (f"omp_work.task_budget:{workspace_uuid}:{work_uuid}",),
-            )
 
             _revalidate(
                 cur,
@@ -296,7 +421,8 @@ class ModelProxyBudget:
 
             return ModelCallAdmission(
                 budget=self,
-                _transaction=transaction,
+                _transaction=owner.stack,
+                _owner=owner,
                 _cur=cur,
                 workspace_id=workspace_uuid,
                 actor_id=actor_uuid,
@@ -316,10 +442,7 @@ class ModelProxyBudget:
                 _receipt_request=canonical_json(receipt_request),
             )
         except BaseException as error:
-            try:
-                transaction.__exit__(type(error), error, error.__traceback__)
-            finally:
-                _GATE.release()
+            owner.complete(error)
             raise
 
 
@@ -335,7 +458,8 @@ class ModelCallAdmission:
     """Immutable admitted identity; transaction holds locks until settlement."""
 
     budget: ModelProxyBudget
-    _transaction: contextlib.ExitStack
+    _transaction: _OneShotExitStack
+    _owner: _LifecycleOwner = field(repr=False)
     _cur: psycopg.Cursor[dict[str, Any]]
     workspace_id: UUID
     actor_id: UUID
@@ -441,19 +565,31 @@ class ModelCallAdmission:
 
         try:
             # Created AFTER admission locks: rolling back settlement cannot drop them.
+            # A consumed stack is not a live transaction and cannot commit again.
+            if self._owner.stack.consumed:
+                raise ModelProxyBudgetError(
+                    "already_settled", "admission is already settled or closed"
+                )
             with self._cur.connection.transaction():
                 receipt = self.budget._jobs.run_operation(
                     self._cur, f"model_call:receipt:{self._identity}", self.workspace_id,
                     "model_call_receipt", json.loads(self._receipt_request), apply,
                 ).result
-            self._close()
-            self._state.receipt = receipt
-            self._state.settled = True
+            # Cleanup finishes before the gate release inside _close. Settled is
+            # recorded only after that live commit. A failed commit stays closed
+            # and unsettled; reconciling it is not this slice.
+            committed = self._close()
         except BaseException as error:
             self._close(error)
             if isinstance(error, JobError):
                 raise ModelProxyBudgetError(error.code) from error
             raise
+        if not committed:
+            raise ModelProxyBudgetError(
+                "already_settled", "admission is already settled or closed"
+            )
+        self._state.receipt = receipt
+        self._state.settled = True
         return {**receipt["result"], "actual_usd": usd}
 
     def settle_unmeasurable_failure(
@@ -531,7 +667,8 @@ class ModelCallAdmission:
         if usage.get("status") == "replayed":
             raise ModelProxyBudgetError("idempotency_conflict", "usage exists without call receipt")
         if self.project_id is not None and usd > 0:
-            assert self.decision is not None
+            if self.decision is None:
+                raise AssertionError("project spend requires a budget decision")
             self.budget._projects.append_spend_cursor(
                 self._cur,
                 self.workspace_id,
@@ -546,17 +683,144 @@ class ModelCallAdmission:
     def _spend_record_id(self) -> UUID:
         return UUID(bytes=bytes.fromhex(self._identity[:32]))
 
-    def _close(self, error: BaseException | None = None) -> None:
-        if self.closed:
-            return
+    def _close(self, error: BaseException | None = None) -> bool:
+        """Finish this owner's transaction, then release its gate once.
+
+        A repeated call, including abort or context exit after another owner
+        holds the gate, does not release that later hold.
+        """
+        claimed = self._owner.claim()
         self._state.closed = True
+        if not claimed:
+            return False
         try:
-            if error is None:
-                self._transaction.close()
-            else:
-                self._transaction.__exit__(type(error), error, error.__traceback__)
+            return self._owner.consume(error)
         finally:
-            _GATE.release()
+            self._owner.release()
+
+
+class _LockHelper(ProjectStoreMixin):
+    """Fallback mixin instance for locking mission and budget rows."""
+
+
+_DEFAULT_PROJECT_LOCKS = _LockHelper()
+
+
+def _lock_job(
+    cur: psycopg.Cursor[dict[str, Any]],
+    workspace_id: UUID,
+    job_id: str | None,
+) -> None:
+    """Lock the job row FOR UPDATE if a job is present."""
+    if job_id is None:
+        return
+    cur.execute(
+        "SELECT job_id FROM omp_jobs.jobs WHERE workspace_id=%s AND job_id=%s FOR UPDATE",
+        (workspace_id, job_id),
+    )
+    if cur.fetchone() is None:
+        raise ModelProxyBudgetError("job_fence_stale", f"job {job_id} not found")
+
+
+def lock_captured_identity(
+    cur: psycopg.Cursor[dict[str, Any]],
+    workspace_id: UUID | str,
+    receipt_id: str,
+    project_id: UUID | str | None = None,
+    mission_id: UUID | str | None = None,
+    root_work_id: UUID | str | None = None,
+    work_id: UUID | str | None = None,
+    job_id: str | None = None,
+    *,
+    projects: ProjectStoreMixin | None = None,
+) -> None:
+    """Acquire all spend and identity locks for a captured admission identity.
+
+    Locks in order:
+    1. Receipt operation advisory lock
+    2. Project and mission rows (FOR UPDATE)
+    3. Mission budget then project budget rows (FOR UPDATE, via ProjectStoreMixin)
+    4. Captured root-item and task advisory locks
+    5. Job row if present (FOR UPDATE)
+
+    This helper does not authorize spend or validate stop/cap/lease status,
+    so it can be reused across admission and settlement.
+    """
+    if isinstance(workspace_id, ProjectStoreMixin):
+        projects = workspace_id
+        workspace_id = receipt_id
+        receipt_id = str(project_id)
+        project_id = mission_id
+        mission_id = root_work_id
+        root_work_id = work_id
+        work_id = job_id
+        job_id = None
+
+    workspace_uuid = _as_uuid("workspace_id", workspace_id)
+    cur.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended('omp_jobs.operation:' || %s, 0))",
+        (receipt_id,),
+    )
+
+    project_uuid = _as_uuid("project_id", project_id)
+    mission_uuid = _as_uuid("mission_id", mission_id)
+
+    if project_uuid is None and mission_uuid is not None:
+        cur.execute(
+            "SELECT project_id FROM omp_work.project_missions"
+            " WHERE workspace_id=%s AND mission_id=%s",
+            (workspace_uuid, mission_uuid),
+        )
+        mission_row = cur.fetchone()
+        if mission_row is None:
+            raise ModelProxyBudgetError(
+                "mission_not_found", f"no mission with id {mission_uuid}"
+            )
+        project_uuid = UUID(str(mission_row["project_id"]))
+
+    projects_helper = projects if projects is not None else _DEFAULT_PROJECT_LOCKS
+
+    if project_uuid is not None:
+        cur.execute(
+            "SELECT project_id FROM omp_work.projects"
+            " WHERE workspace_id=%s AND project_id=%s FOR UPDATE",
+            (workspace_uuid, project_uuid),
+        )
+        if cur.fetchone() is None:
+            raise ModelProxyBudgetError(
+                "project_not_found", f"no project with id {project_uuid}"
+            )
+        if mission_uuid is not None:
+            projects_helper._lock_mission(cur, workspace_uuid, project_uuid, mission_uuid)
+            if cur.fetchone() is None:
+                raise ModelProxyBudgetError(
+                    "mission_not_found", f"no mission with id {mission_uuid}"
+                )
+            projects_helper._load_budget_locked(cur, workspace_uuid, project_uuid, mission_uuid)
+        projects_helper._load_budget_locked(cur, workspace_uuid, project_uuid, None)
+
+    task_uuid = _as_uuid("work_id", work_id)
+    root_uuid = _as_uuid("root_work_id", root_work_id)
+    if task_uuid is None:
+        if root_uuid is None:
+            raise ModelProxyBudgetError("invalid_request", "work_id is required")
+        task_uuid = root_uuid
+    if root_uuid is None:
+        root_uuid = task_uuid
+
+    cur.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+        (f"omp_work.item_budget:{workspace_uuid}:{root_uuid}",),
+    )
+    cur.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+        (f"omp_work.task_budget:{workspace_uuid}:{task_uuid}",),
+    )
+
+    _lock_job(cur, workspace_uuid, job_id)
+
+
+acquire_captured_locks = lock_captured_identity
 
 
 def _decimal_text(value: Decimal) -> str:
@@ -583,14 +847,6 @@ def _revalidate(
     transaction ``now()``, so a lease that expired while waiting is refused. The
     root work item is re-read and must match the one the advisory lock keyed.
     """
-    if job_id is not None:
-        # Finish the final potentially blocking lock before evaluating stop or
-        # lease. PostgreSQL may evaluate SELECT projections before FOR UPDATE waits.
-        cur.execute(
-            "SELECT job_id FROM omp_jobs.jobs WHERE workspace_id=%s AND job_id=%s FOR UPDATE",
-            (workspace_id, job_id),
-        )
-        cur.fetchone()
     _refuse_if_stopped(cur, workspace_id)
     if job_id is None:
         return

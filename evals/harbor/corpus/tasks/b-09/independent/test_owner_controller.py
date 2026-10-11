@@ -4,6 +4,7 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
+from typing import cast
 from uuid import UUID
 
 import pytest
@@ -16,8 +17,12 @@ from omp_work.v1.owner_controller import (
 )
 from omp_work.v1.owner_signature import NAMESPACE
 
+_SSH_KEYGEN = shutil.which("ssh-keygen")
+if _SSH_KEYGEN is not None:
+    _SSH_KEYGEN = str(Path(_SSH_KEYGEN).resolve())
+
 pytestmark = pytest.mark.skipif(
-    shutil.which("ssh-keygen") is None,
+    _SSH_KEYGEN is None,
     reason="ssh-keygen is not installed",
 )
 
@@ -34,7 +39,7 @@ _EXPECTED_MESSAGE = (
 def _generate_key(tmp_path: Path, name: str) -> Path:
     key = tmp_path / name
     subprocess.run(
-        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+        [cast(str, _SSH_KEYGEN), "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
         check=True,
         capture_output=True,
     )
@@ -50,7 +55,7 @@ def _allowed_signers(directory: Path, public_key: Path) -> Path:
 
 def _sign(key: Path, message: bytes, *, namespace: str = NAMESPACE) -> str:
     completed = subprocess.run(
-        ["ssh-keygen", "-Y", "sign", "-f", str(key), "-n", namespace],
+        [cast(str, _SSH_KEYGEN), "-Y", "sign", "-f", str(key), "-n", namespace],
         input=message,
         capture_output=True,
         check=True,
@@ -62,8 +67,9 @@ def test_message_bytes_are_sorted_compact_json() -> None:
     assert designation_message(_WORKSPACE_ID, _CONTROLLER_ID) == _EXPECTED_MESSAGE
 
 
-def test_signed_designation_names_the_controller(tmp_path: Path) -> None:
-    key = _generate_key(tmp_path, "owner")
+@pytest.mark.parametrize("key_name", ["owner", "owner key; $(false)"])
+def test_signed_designation_names_the_controller(tmp_path: Path, key_name: str) -> None:
+    key = _generate_key(tmp_path, key_name)
     _allowed_signers(tmp_path, Path(f"{key}.pub"))
     signature = _sign(key, designation_message(_WORKSPACE_ID, _CONTROLLER_ID))
 

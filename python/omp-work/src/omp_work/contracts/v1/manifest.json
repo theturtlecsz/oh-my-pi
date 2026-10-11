@@ -1,5 +1,6 @@
 {
   "paths": [
+    "api-schema.json",
     "candidate-hash.json",
     "contract.json",
     "decisions/0001-domain-source-and-security.md",
@@ -24,6 +25,7 @@
     "decisions/0019-client-contract.md",
     "decisions/0020-relayed-stop-release-and-client-oversight.md",
     "decisions/0021-typed-audit-result.md",
+    "decisions/0022-intake-provenance.md",
     "examples.json",
     "manifest.json",
     "research-artifact-hash.json",

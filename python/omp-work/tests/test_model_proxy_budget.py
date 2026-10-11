@@ -23,12 +23,13 @@ from uuid import UUID, uuid4
 import psycopg
 import pytest
 from omp_work.jobs.admission import enqueue_job
-from omp_work.jobs.budget import item_spend
+from omp_work.jobs.budget import item_spend, root_work_id
 from omp_work.jobs.store import JobError, NativeJobStore
 from omp_work.jobs.usage import record_usage
 from omp_work.model_proxy_budget import (
     ModelProxyBudget,
     ModelProxyBudgetError,
+    lock_captured_identity,
 )
 from omp_work.model_proxy_upstream import GEMINI, ModelRoute, Prepared
 from omp_work.operations.jobs_migrate import apply_jobs_migrations
@@ -1101,23 +1102,122 @@ def test_settlement_failure_rolls_back_usage_receipt_and_cancellation(admission_
     assert _admission_counts(ctx)[:2] == (1, 1)
 
 
-def test_process_gate_stays_held_until_settlement_commit(admission_context, monkeypatch):
-    """Another admission cannot enter while settlement writes await transaction commit."""
-    ctx = admission_context
-    other = _item(ctx, "separate commit waiter")
-    transaction = ctx.budget._jobs.transaction
-    committing, allow_commit, waiting, finished = (threading.Event() for _ in range(4))
-    outcomes = []
+def _arm_cleanup_pauses(monkeypatch, jobs):
+    """Pause cursor close, COMMIT, and connection close for one armed transaction.
+
+    Class patches are restored by the monkeypatch fixture. Only the cursor and
+    connection recorded while arming is enabled block, so a disposable count
+    query can run during the pause.
+    """
+    phase = {"stage": None}
+    targets: dict[str, object] = {}
+    enabled = {"on": True}
+    transaction = jobs.transaction
+    cursor_closing, allow_cursor = threading.Event(), threading.Event()
+    committing, allow_commit = threading.Event(), threading.Event()
+    connection_closing, allow_connection = threading.Event(), threading.Event()
+    real_cursor_close = psycopg.Cursor.close
+    real_conn_close = psycopg.Connection.close
+    real_exec = psycopg.Connection._exec_command
+
+    def cursor_close(self):
+        if self is targets.get("cursor") and phase["stage"] == "cleanup":
+            cursor_closing.set()
+            assert allow_cursor.wait(5), "cleanup test did not release cursor close"
+            phase["stage"] = "after-cursor"
+        return real_cursor_close(self)
+
+    def connection_close(self):
+        if self is targets.get("conn") and phase["stage"] in {"after-cursor", "after-commit"}:
+            connection_closing.set()
+            assert allow_connection.wait(5), "cleanup test did not release connection close"
+            phase["stage"] = "done"
+        return real_conn_close(self)
+
+    def exec_command(self, command, *args, **kwargs):
+        if (
+            self is targets.get("conn")
+            and phase["stage"] == "after-cursor"
+            and command == b"COMMIT"
+        ):
+            committing.set()
+            assert allow_commit.wait(5), "cleanup test did not release commit"
+            phase["stage"] = "after-commit"
+        return real_exec(self, command, *args, **kwargs)
+
+    monkeypatch.setattr(psycopg.Cursor, "close", cursor_close)
+    monkeypatch.setattr(psycopg.Connection, "close", connection_close)
+    monkeypatch.setattr(psycopg.Connection, "_exec_command", exec_command)
 
     @contextmanager
-    def held_commit(workspace_id, actor_id):
+    def paused(workspace_id, actor_id):
         with transaction(workspace_id, actor_id) as cur:
+            if enabled["on"]:
+                targets["cursor"] = cur
+                targets["conn"] = cur.connection
+                phase["stage"] = "cleanup"
             yield cur
-            committing.set()
-            assert allow_commit.wait(5), "commit test did not release transaction"
 
-    monkeypatch.setattr(ctx.budget._jobs, "transaction", held_commit)
+    monkeypatch.setattr(jobs, "transaction", paused)
+
+    def release() -> None:
+        allow_cursor.set()
+        allow_commit.set()
+        allow_connection.set()
+
+    def reset() -> None:
+        cursor_closing.clear()
+        allow_cursor.clear()
+        committing.clear()
+        allow_commit.clear()
+        connection_closing.clear()
+        allow_connection.clear()
+        phase["stage"] = None
+        targets.clear()
+
+    return SimpleNamespace(
+        cursor_closing=cursor_closing,
+        allow_cursor=allow_cursor,
+        committing=committing,
+        allow_commit=allow_commit,
+        connection_closing=connection_closing,
+        allow_connection=allow_connection,
+        enabled=enabled,
+        release=release,
+        reset=reset,
+    )
+
+
+def _start_gate_waiter(ctx, work_id, request_id):
+    """Start an unrelated admission that can enter only when the process gate is free."""
+    waiting, finished = threading.Event(), threading.Event()
+    outcomes: list[str] = []
+
+    def waiter():
+        waiting.set()
+        try:
+            with ModelProxyBudget(ctx.service.config).admit(
+                ctx.workspace_id, ctx.actor_id, None, None, work_id,
+                None, None, None, request_id, None, _prepared("1"),
+            ):
+                outcomes.append("admitted")
+        except Exception as exc:
+            outcomes.append(type(exc).__name__)
+        finally:
+            finished.set()
+
+    thread = threading.Thread(target=waiter)
+    thread.start()
+    return thread, waiting, finished, outcomes
+
+
+def test_process_gate_stays_held_until_settlement_commit(admission_context, monkeypatch):
+    """Settlement keeps the gate through commit and cursor/connection cleanup."""
+    ctx = admission_context
+    other = _item(ctx, "separate commit waiter")
+    pauses = _arm_cleanup_pauses(monkeypatch, ctx.budget._jobs)
     admission = _admit(ctx, _prepared("1"))
+    outcomes: list[str] = []
 
     def settle():
         try:
@@ -1126,38 +1226,204 @@ def test_process_gate_stays_held_until_settlement_commit(admission_context, monk
         except Exception as exc:
             outcomes.append(type(exc).__name__)
 
-    def waiter():
-        waiting.set()
+    settlement = threading.Thread(target=settle)
+    second = None
+    try:
+        settlement.start()
+        assert pauses.cursor_closing.wait(5), outcomes
+        assert _admission_counts(ctx) == (0, 0, 0, 0)
+        second, waiting, finished, waiter_outcomes = _start_gate_waiter(
+            ctx, other, "commit-waiter"
+        )
+        assert waiting.wait(2)
+        assert not finished.wait(0.2), "gate released before cursor cleanup"
+        pauses.allow_cursor.set()
+
+        assert pauses.committing.wait(5), outcomes
+        assert _admission_counts(ctx) == (0, 0, 0, 0)
+        assert not finished.wait(0.2), "gate released before commit"
+        pauses.allow_commit.set()
+
+        assert pauses.connection_closing.wait(5), outcomes
+        assert _admission_counts(ctx) == (1, 1, 1, 2)
+        assert not finished.wait(0.2), "gate released before connection cleanup"
+    finally:
+        pauses.release()
+        settlement.join(timeout=7)
+        if second is not None and second.ident is not None:
+            second.join(timeout=7)
+        admission.abort()
+    assert not settlement.is_alive() and second is not None and not second.is_alive()
+    assert sorted(outcomes + waiter_outcomes) == ["admitted", "committed"]
+    assert admission.settled and admission.closed
+    assert _admission_counts(ctx) == (1, 1, 1, 2)
+
+
+def test_abort_and_receipt_replay_release_gate_after_cleanup(admission_context, monkeypatch):
+    """Pre-send abort and receipt replay finish DB cleanup before one gate release."""
+    ctx = admission_context
+    abort_waiter_work = _item(ctx, "abort cleanup waiter")
+    replay_waiter_work = _item(ctx, "replay cleanup waiter")
+    pauses = _arm_cleanup_pauses(monkeypatch, ctx.budget._jobs)
+    admission = _admit(ctx, _prepared("1"), project_id=None, request_id="abort-cleanup")
+    outcomes: list[str] = []
+
+    def abort():
+        try:
+            admission.abort()
+            outcomes.append("aborted")
+        except Exception as exc:
+            outcomes.append(type(exc).__name__)
+
+    worker = threading.Thread(target=abort)
+    waiter = None
+    try:
+        worker.start()
+        assert pauses.cursor_closing.wait(5), outcomes
+        assert _admission_counts(ctx) == (0, 0, 0, 0)
+        waiter, waiting, finished, waiter_outcomes = _start_gate_waiter(
+            ctx, abort_waiter_work, "abort-waiter"
+        )
+        assert waiting.wait(2)
+        assert not finished.wait(0.2), "gate released before abort cursor cleanup"
+        pauses.allow_cursor.set()
+        assert pauses.connection_closing.wait(5), outcomes
+        assert _admission_counts(ctx) == (0, 0, 0, 0)
+        assert not finished.wait(0.2), "gate released before abort connection cleanup"
+    finally:
+        pauses.release()
+        worker.join(timeout=7)
+        if waiter is not None and waiter.ident is not None:
+            waiter.join(timeout=7)
+        admission.abort()
+    assert not worker.is_alive() and waiter is not None and not waiter.is_alive()
+    assert sorted(outcomes + waiter_outcomes) == ["aborted", "admitted"]
+    assert admission.closed and not admission.settled
+    with pytest.raises(ModelProxyBudgetError) as exc:
+        admission.settle(actual_usd="1")
+    assert exc.value.code == "already_settled"
+    admission.abort()
+    assert admission.__exit__(None, None, None) is False
+    assert _admission_counts(ctx) == (0, 0, 0, 0)
+
+    pauses.enabled["on"] = False
+    pauses.reset()
+    payload = dict(actual_usd="1", input_tokens=1)
+    with _admit(ctx, _prepared("1"), request_id="replay-cleanup") as settled:
+        first = settled.settle(**payload)
+    charged = _admission_counts(ctx)
+    assert charged == (1, 1, 1, 2)
+    pauses.enabled["on"] = True
+    pauses.reset()
+    replay_outcomes: list[str] = []
+    replayed: list[object] = []
+
+    def replay():
+        try:
+            found = _admit(ctx, _prepared("1"), request_id="replay-cleanup")
+            replayed.append(found)
+            replay_outcomes.append("replayed" if found.settled else "open")
+        except Exception as exc:
+            replay_outcomes.append(type(exc).__name__)
+
+    worker = threading.Thread(target=replay)
+    waiter = None
+    try:
+        worker.start()
+        assert pauses.cursor_closing.wait(5), replay_outcomes
+        assert _admission_counts(ctx) == charged
+        waiter, waiting, finished, waiter_outcomes = _start_gate_waiter(
+            ctx, replay_waiter_work, "replay-waiter"
+        )
+        assert waiting.wait(2)
+        assert not finished.wait(0.2), "gate released before replay cursor cleanup"
+        pauses.allow_cursor.set()
+        assert pauses.committing.wait(5), replay_outcomes
+        assert _admission_counts(ctx) == charged
+        assert not finished.wait(0.2), "gate released before replay commit"
+        pauses.allow_commit.set()
+        assert pauses.connection_closing.wait(5), replay_outcomes
+        assert _admission_counts(ctx) == charged
+        assert not finished.wait(0.2), "gate released before replay connection cleanup"
+    finally:
+        pauses.release()
+        worker.join(timeout=7)
+        if replayed and not replayed[0].closed:
+            replayed[0].abort()
+        if waiter is not None and waiter.ident is not None:
+            waiter.join(timeout=7)
+    assert not worker.is_alive() and waiter is not None and not waiter.is_alive()
+    assert replay_outcomes == ["replayed"]
+    assert waiter_outcomes == ["admitted"]
+    assert len(replayed) == 1
+    found = replayed[0]
+    assert found.settled and found.closed
+    assert found.settle(**payload) == first
+    assert _admission_counts(ctx) == charged
+
+
+def test_stale_owner_cleanup_cannot_release_another_gate(admission_context):
+    """Repeated cleanup of a finished owner cannot admit a third while a second holds the gate."""
+    ctx = admission_context
+    second_work = _item(ctx, "second gate owner")
+    third_work = _item(ctx, "third gate owner")
+    payload = dict(actual_usd="1", input_tokens=1)
+    first = _admit(ctx, _prepared("1"), request_id="first-owner")
+    first_result = first.settle(**payload)
+    assert first.settled and first.closed
+    charged = _admission_counts(ctx)
+    assert charged == (1, 1, 1, 2)
+
+    def cleanup_first() -> None:
+        first.abort()
+        assert first.__exit__(None, None, None) is False
+        with first:
+            pass
+        assert first.settle(**payload) == first_result
+
+    second = ModelProxyBudget(ctx.service.config).admit(
+        ctx.workspace_id, ctx.actor_id, None, None, second_work,
+        None, None, None, "second-owner", None, _prepared("1"),
+    )
+    assert not second.closed
+    cleanup_first()
+    cleanup_first()
+    assert _admission_counts(ctx) == charged
+
+    started, entered, finished = (threading.Event() for _ in range(3))
+    outcomes: list[str] = []
+
+    def third():
+        started.set()
         try:
             with ModelProxyBudget(ctx.service.config).admit(
-                ctx.workspace_id, ctx.actor_id, None, None, other,
-                None, None, None, "commit-waiter", None, _prepared("1"),
+                ctx.workspace_id, ctx.actor_id, None, None, third_work,
+                None, None, None, "third-owner", None, _prepared("1"),
             ):
+                entered.set()
                 outcomes.append("admitted")
         except Exception as exc:
             outcomes.append(type(exc).__name__)
         finally:
             finished.set()
 
-    settlement = threading.Thread(target=settle)
-    second = threading.Thread(target=waiter)
+    thread = threading.Thread(target=third)
     try:
-        settlement.start()
-        assert committing.wait(3)
-        assert _admission_counts(ctx) == (0, 0, 0, 0)
-        second.start()
-        assert waiting.wait(2)
-        assert not finished.wait(0.2), "gate released before commit"
+        thread.start()
+        assert started.wait(2), outcomes
+        assert not entered.wait(0.2) and not finished.wait(0.2), outcomes
+        cleanup_first()
+        assert not entered.wait(0.2) and not finished.wait(0.2), (
+            "stale cleanup released the second owner's gate"
+        )
+        assert _admission_counts(ctx) == charged
     finally:
-        allow_commit.set()
-        settlement.join(timeout=7)
-        if second.ident is not None:
-            second.join(timeout=7)
-        admission.abort()
-    assert not settlement.is_alive() and not second.is_alive()
-    assert sorted(outcomes) == ["admitted", "committed"]
-    assert admission.settled
-    assert _admission_counts(ctx) == (1, 1, 1, 2)
+        second.abort()
+        thread.join(timeout=7)
+    assert not thread.is_alive()
+    assert second.closed and not second.settled
+    assert outcomes == ["admitted"]
+    assert _admission_counts(ctx) == charged
 
 
 def test_unmeasurable_failure_commits_bound_receipt_once(admission_context):
@@ -1190,3 +1456,232 @@ def test_unmeasurable_failure_commits_bound_receipt_once(admission_context):
             "cache_tokens": 0, "measurement": "estimated", "model": "test-model",
             "price_version": None,
         }
+
+
+def test_lock_captured_identity_independent_transaction_probes(admission_context):
+    """Independent-transaction lock probes prove all keys block until rollback."""
+    ctx = admission_context
+    mission_id = uuid4()
+    ctx.projects.link_mission(
+        ctx.workspace_id,
+        ctx.actor_id,
+        ctx.project_id,
+        mission_id,
+        "probe mission",
+        "running",
+    )
+    ctx.projects.set_spend_budget(
+        ctx.workspace_id,
+        ctx.actor_id,
+        ctx.project_id,
+        mission_id,
+        SpendBudget("mission-budget", Decimal("50000"), Decimal("50000")),
+        ChangeAuthority("owner", uuid4(), "owner"),
+    )
+
+    root_work_id = _item(ctx, "probe root item", _GENEROUS_ITEM)
+    task_work_id = _item(ctx, "probe task item", _GENEROUS_ITEM)
+    assert root_work_id != task_work_id
+
+    job_id = _admitting_job(ctx, work_id=task_work_id)
+    receipt_id = f"probe:receipt:{uuid4()}"
+
+    kwargs = ctx.service.config.connection_kwargs("postgres")
+    holder_conn = psycopg.connect(**kwargs, autocommit=False, row_factory=dict_row)
+    probe_conn = psycopg.connect(**kwargs, autocommit=True, row_factory=dict_row)
+
+    root_item_lock_key = f"omp_work.item_budget:{ctx.workspace_id}:{root_work_id}"
+    task_lock_key = f"omp_work.task_budget:{ctx.workspace_id}:{task_work_id}"
+
+    probes = [
+        (
+            "receipt_operation",
+            "SELECT pg_advisory_lock(hashtextextended('omp_jobs.operation:' || %s, 0))",
+            (receipt_id,),
+            "SELECT pg_advisory_unlock(hashtextextended('omp_jobs.operation:' || %s, 0))",
+            True,
+        ),
+        (
+            "project_row",
+            "SELECT project_id FROM omp_work.projects WHERE workspace_id=%s AND project_id=%s FOR UPDATE",
+            (ctx.workspace_id, ctx.project_id),
+            None,
+            False,
+        ),
+        (
+            "mission_row",
+            "SELECT mission_id FROM omp_work.project_missions WHERE workspace_id=%s AND project_id=%s AND mission_id=%s FOR UPDATE",
+            (ctx.workspace_id, ctx.project_id, mission_id),
+            None,
+            False,
+        ),
+        (
+            "mission_budget",
+            "SELECT budget_id FROM omp_work.spend_budgets WHERE workspace_id=%s AND project_id=%s AND mission_id=%s AND active FOR UPDATE",
+            (ctx.workspace_id, ctx.project_id, mission_id),
+            None,
+            False,
+        ),
+        (
+            "project_budget",
+            "SELECT budget_id FROM omp_work.spend_budgets WHERE workspace_id=%s AND project_id=%s AND mission_id IS NULL AND active FOR UPDATE",
+            (ctx.workspace_id, ctx.project_id),
+            None,
+            False,
+        ),
+        (
+            "root_item_advisory",
+            "SELECT pg_advisory_lock(hashtextextended(%s, 0))",
+            (root_item_lock_key,),
+            "SELECT pg_advisory_unlock(hashtextextended(%s, 0))",
+            True,
+        ),
+        (
+            "task_advisory",
+            "SELECT pg_advisory_lock(hashtextextended(%s, 0))",
+            (task_lock_key,),
+            "SELECT pg_advisory_unlock(hashtextextended(%s, 0))",
+            True,
+        ),
+        (
+            "job_row",
+            "SELECT job_id FROM omp_jobs.jobs WHERE workspace_id=%s AND job_id=%s FOR UPDATE",
+            (ctx.workspace_id, job_id),
+            None,
+            False,
+        ),
+    ]
+
+    try:
+        holder_cur = holder_conn.cursor()
+        lock_captured_identity(
+            holder_cur,
+            workspace_id=ctx.workspace_id,
+            receipt_id=receipt_id,
+            project_id=ctx.project_id,
+            mission_id=mission_id,
+            root_work_id=root_work_id,
+            work_id=task_work_id,
+            job_id=job_id,
+            projects=ctx.projects,
+        )
+
+        probe_conn.execute("SET lock_timeout = '150ms'")
+        for _name, query, args, _unlock, is_advisory in probes:
+            with pytest.raises(psycopg.errors.LockNotAvailable):
+                if is_advisory:
+                    probe_conn.execute(query, args)
+                else:
+                    with probe_conn.transaction():
+                        probe_conn.execute(query, args)
+
+        # Roll back the holder transaction: all locks are released
+        holder_conn.rollback()
+
+        # Each probe must now succeed after rollback
+        for _name, query, args, unlock_query, is_advisory in probes:
+            if is_advisory:
+                probe_conn.execute(query, args)
+                assert unlock_query is not None
+                probe_conn.execute(unlock_query, args)
+            else:
+                with probe_conn.transaction():
+                    row = probe_conn.execute(query, args).fetchone()
+                    assert row is not None
+    finally:
+        holder_conn.close()
+        probe_conn.close()
+
+
+def test_lock_captured_identity_locks_captured_root_not_recomputed(admission_context):
+    """Captured root key, not subsequently recomputed root, is locked."""
+    ctx = admission_context
+    root1 = _item(ctx, "captured root", _GENEROUS_ITEM)
+    root2 = _item(ctx, "recomputed root", _GENEROUS_ITEM)
+    task = _item(ctx, "task item", _GENEROUS_ITEM)
+    assert root1 != root2 != task
+
+    job_parent = _admitting_job(ctx, work_id=root2)
+    job = _admitting_job(ctx, work_id=task, parent_job_id=job_parent)
+
+    receipt_id = f"captured-root-test:{uuid4()}"
+    kwargs = ctx.service.config.connection_kwargs("postgres")
+    holder = psycopg.connect(**kwargs, autocommit=False, row_factory=dict_row)
+    probe = psycopg.connect(**kwargs, autocommit=True)
+    try:
+        probe.execute("SET lock_timeout = '150ms'")
+        holder_cur = holder.cursor()
+        # In the database, the job's currently computed root is root2
+        assert root_work_id(holder_cur, ctx.workspace_id, job) == root2
+
+        # Invoking with captured root_work_id=root1 locks captured root1, not recomputed root2
+        lock_captured_identity(
+            holder_cur,
+            workspace_id=ctx.workspace_id,
+            receipt_id=receipt_id,
+            project_id=ctx.project_id,
+            root_work_id=root1,
+            work_id=task,
+            job_id=job,
+            projects=ctx.projects,
+        )
+
+        # Captured root1 key is locked: competing probe times out
+        key1 = f"omp_work.item_budget:{ctx.workspace_id}:{root1}"
+        with pytest.raises(psycopg.errors.LockNotAvailable):
+            probe.execute("SELECT pg_advisory_lock(hashtextextended(%s, 0))", (key1,))
+
+        # Recomputed root2 key is NOT locked: competing probe succeeds immediately
+        key2 = f"omp_work.item_budget:{ctx.workspace_id}:{root2}"
+        probe.execute("SELECT pg_advisory_lock(hashtextextended(%s, 0))", (key2,))
+        probe.execute("SELECT pg_advisory_unlock(hashtextextended(%s, 0))", (key2,))
+    finally:
+        holder.close()
+        probe.close()
+
+
+def test_lock_captured_identity_runs_after_stop_without_authorizing_spend(admission_context):
+    """Lock-only helper can run after stop without authorizing spend."""
+    ctx = admission_context
+    root_work_id = _item(ctx, "stopped root", _GENEROUS_ITEM)
+    task_work_id = _item(ctx, "stopped task", _GENEROUS_ITEM)
+    job_id = _admitting_job(ctx, work_id=task_work_id)
+    receipt_id = f"stopped:receipt:{uuid4()}"
+
+    _engage_stop(ctx)
+
+    before_counts = _admission_counts(ctx)
+
+    # Calling admit on a stopped workspace is refused
+    with pytest.raises(ModelProxyBudgetError) as exc:
+        _admit(ctx, _prepared("1"), work_id=task_work_id, job_id=job_id, worker_id="worker-1", fence=1)
+    assert exc.value.code == "agent_stop_engaged"
+    assert _admission_counts(ctx) == before_counts
+
+    # The lock-only helper runs and acquires all locks without authorizing spend
+    kwargs = ctx.service.config.connection_kwargs("postgres")
+    holder = psycopg.connect(**kwargs, autocommit=False, row_factory=dict_row)
+    probe = psycopg.connect(**kwargs, autocommit=True)
+    try:
+        cur = holder.cursor()
+        lock_captured_identity(
+            cur,
+            workspace_id=ctx.workspace_id,
+            receipt_id=receipt_id,
+            project_id=ctx.project_id,
+            root_work_id=root_work_id,
+            work_id=task_work_id,
+            job_id=job_id,
+            projects=ctx.projects,
+        )
+        # No spend or usage ledgers were authorized or written
+        assert _admission_counts(ctx) == before_counts
+
+        # Probe that locks are held even after stop
+        probe.execute("SET lock_timeout = '150ms'")
+        key = f"omp_work.item_budget:{ctx.workspace_id}:{root_work_id}"
+        with pytest.raises(psycopg.errors.LockNotAvailable):
+            probe.execute("SELECT pg_advisory_lock(hashtextextended(%s, 0))", (key,))
+    finally:
+        holder.close()
+        probe.close()

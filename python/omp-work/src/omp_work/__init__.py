@@ -34,6 +34,7 @@ _READS = frozenset(
         "GET /v1/workspaces/{workspace_id}/research-datasets/{dataset_id}",
         "GET /v1/workspaces/{workspace_id}/research-datasets/{dataset_id}/projects/{project_id}",
         "GET /v1/workspaces/{workspace_id}/decisions",
+        "GET /v1/workspaces/{workspace_id}/intake/{run_id}",
         "GET /v1/workspaces/{workspace_id}/missions/{mission_id}",
         "GET /v1/workspaces/{workspace_id}/stop",
         "GET /v1/health/live",
@@ -169,6 +170,14 @@ _COMMAND_TYPES = frozenset(
         "delete_event_subscription",
         "advance_event_cursor",
         "relay_owner_intent",
+        "start_intake",
+        "register_intake_evidence",
+        "record_intake_claim",
+        "record_intake_decision",
+        "supersede_intake_claim",
+        "record_intake_issue",
+        "link_intake_criterion",
+        "assess_intake",
     }
 )
 

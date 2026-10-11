@@ -23,14 +23,17 @@ from typing import Any, Protocol, runtime_checkable
 from uuid import UUID
 
 import httpx
-from omp_work.v1.api_models import WorkflowView, WorkItemsPage
+from omp_work.v1.api_models import ResearchView, WorkflowView, WorkItemsPage
 from omp_work.v1.canonical import canonical_json
+from omp_work.v1.models import ResearchDeliverableBinding
 from omp_work.v1.service import WorkError
 
 __all__ = [
     "MAX_KEY_SCAN",
     "NativeRecords",
+    "NativeResearchRecords",
     "bounded_work_record",
+    "research_record_block",
     "resolve_work_key",
     "work_record_block",
 ]
@@ -53,6 +56,8 @@ MAX_CLOSE_ATTEMPTS = 8
 MAX_CLOSE_ATTEMPT_EVENTS = 32
 MAX_CHECKPOINT_DELIVERIES = 8
 MAX_RELATIONS = 32
+MAX_RESEARCH_CAMPAIGNS = 32
+MAX_RESEARCH_REFS = 8
 
 _TRUNCATION_MARKER = " ...[truncated]"
 
@@ -77,6 +82,59 @@ class NativeRecords(Protocol):
     ) -> WorkItemsPage: ...
 
     def workflow(self, key: str) -> WorkflowView: ...
+
+
+@runtime_checkable
+class NativeResearchRecords(NativeRecords, Protocol):
+    """Execution records plus the work item's native research projection."""
+
+    def research(self, key: str) -> ResearchView: ...
+
+
+def research_record_block(view: ResearchView) -> dict[str, Any]:
+    """Render concluded same-work campaigns and bounded candidate references.
+
+    Sort before capping so input order cannot change which evidence is visible.
+    Row omissions are counted; clipped reasons carry the shared text marker.
+    """
+    campaigns = sorted(
+        (
+            campaign for campaign in view.campaigns
+            if campaign.work_id == view.work_id and campaign.state == "concluded"
+        ),
+        key=lambda campaign: campaign.campaign_id,
+    )
+    bindings_by_campaign: dict[UUID, list[ResearchDeliverableBinding]] = {}
+    for binding in view.deliverable_bindings:
+        if binding.work_id == view.work_id:
+            bindings_by_campaign.setdefault(binding.campaign_id, []).append(binding)
+
+    rendered = []
+    for campaign in campaigns[:MAX_RESEARCH_CAMPAIGNS]:
+        bindings = sorted(
+            bindings_by_campaign.get(campaign.campaign_id, ()),
+            key=lambda binding: binding.trial_id,
+        )
+        rendered.append({
+            "campaign_id": str(campaign.campaign_id),
+            "outcome": campaign.outcome,
+            "outcome_reason": _text(campaign.outcome_reason),
+            "deliverable_refs": [
+                {
+                    "trial_id": str(binding.trial_id),
+                    "native_candidate_id": str(binding.native_candidate_id),
+                    "candidate_digest": binding.candidate_digest,
+                    "binding_sha256": binding.binding_sha256,
+                }
+                for binding in bindings[:MAX_RESEARCH_REFS]
+            ],
+            "truncated": {"deliverable_refs": max(0, len(bindings) - MAX_RESEARCH_REFS)},
+        })
+    return {
+        "work_id": str(view.work_id),
+        "campaigns": rendered,
+        "truncated": {"campaigns": max(0, len(campaigns) - MAX_RESEARCH_CAMPAIGNS)},
+    }
 
 
 def _view_mapping(view: ViewInput) -> Mapping[str, Any]:
