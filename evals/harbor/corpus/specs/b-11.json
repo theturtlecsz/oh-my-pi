@@ -1,17 +1,18 @@
 {
   "task_id": "b-11",
   "category": "ambiguous_intake",
-  "title": "The PR picker of the review command closes when a search fails",
-  "source_commit": "9963762d73ad6436c68e1aefe1b7ff9b5face71e",
+  "title": "Root help breaks custom callbacks expecting command constructors",
+  "source_commit": "a572fcb9be4cceee35110387529856c470741e1f",
   "runner": "bun",
-  "test_target": "packages/coding-agent/test/extensibility/custom-commands/review.test.ts",
+  "test_target": "packages/utils/test/cli-help.test.ts",
   "source_paths": [
-    "packages/coding-agent/src/extensibility/custom-commands/bundled/review/index.ts"
+    "packages/utils/src/cli.ts"
   ],
-  "instruction": "In the review command I pick a specific pull request, then search the open pull requests by text. When the GitHub search call fails (for example when it is rate limited), the whole picker ends and I have to start again. After a failed search I want to stay in the picker, see the list I had before, and still be able to choose a pull request.",
+  "instruction": "The lightweight root-help path passes static command metadata to existing custom help callbacks, which expect constructable command classes. Restore that callback contract while keeping ordinary root help lightweight and keeping per-command help scoped to the selected command.",
   "acceptance_criteria": [
-    "A failed search leaves the picker open on the previous list.",
-    "The user can still select a pull request after the failure and the review continues for it."
+    "Existing custom root-help callbacks receive constructable commands.",
+    "Ordinary root help avoids loading command implementations and per-command help loads only its selected command.",
+    "Root help retains supported option and command summaries."
   ],
-  "withheld_detail": "Failed to list open pull requests"
+  "withheld_detail": "--model=<value>"
 }

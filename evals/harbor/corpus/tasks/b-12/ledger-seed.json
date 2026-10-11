@@ -10,12 +10,12 @@
       "work_id": "00000000-0000-7000-8000-000000000001",
       "revision_id": "00000000-0000-7000-8000-000000000010",
       "revision_number": 1,
-      "title": "Enter submits a half finished slash command that needs an argument",
-      "description": "In the prompt editor, when I type /mcp test and the suggestion list is open, pressing Enter sends the command at once and the handler then rejects it because the name is missing. I want Enter to continue into the argument for subcommands that cannot run without one, and to behave as before for the others.",
+      "title": "Windows path qualification accepts incomplete network paths",
+      "description": "Windows path qualification currently accepts network paths containing only separators. Reject these incomplete paths while continuing to recognize supported drive and network path forms, including when checking Windows paths on another platform.",
       "scope": "initial/scope",
       "acceptance_criteria": [
-        "Enter on a fully typed subcommand that needs an argument accepts the suggestion and leaves the editor at the argument.",
-        "Other subcommands still submit on Enter."
+        "Separator-only Windows paths are rejected as incomplete.",
+        "Supported drive and network paths remain recognized across platforms."
       ],
       "state": "IN_PROGRESS"
     }

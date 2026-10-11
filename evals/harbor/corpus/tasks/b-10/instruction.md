@@ -1,1 +1,1 @@
-With Cursor models, a turn that ends early after tools ran is reported as a plain failure. Other providers get an automatic continuation in the same situation. Cursor should be treated the same way when its stream ends early.
+TypeBox-compatible builders enforce string and number constraints locally, but the emitted JSON Schema loses some of them. Downstream validators then accept values that local validation rejects. Preserve the constraints in emitted schemas so both validation paths agree.
