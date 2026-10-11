@@ -96,6 +96,9 @@ def run_continuous_program(directory: str | Path, run: ContinuousRun) -> dict:
     )
     action = ActionRequest(action_class="spend_beyond_threshold", amount_usd=Decimal("1"))
     coordinator.admit_campaign(campaign_id, "machine_learning", run.now, action, gate=accounting)
+    # Names are bound before each try. The handler assigns the refusal, and the
+    # else clause raises, but pylint does not treat that raise as definite.
+    b_refused = None
     try:
         coordinator.admit_campaign("campaign-b", "machine_learning", run.now, action, gate=accounting)
     except ValueError as error:
@@ -161,10 +164,12 @@ def run_continuous_program(directory: str | Path, run: ContinuousRun) -> dict:
         "type": "cancel_research_campaign",
         "payload": {"campaign_id": campaign_id, "work_id": run.work_id, "reason": "stop"},
     })
-    assert status == 200, body
+    if status != 200:
+        raise AssertionError(body)
     for job_id in coordinator.cancel_campaign(campaign_id, "stop"):
         capacity.cancel(str(uuid4()), job_id, "stop")
     cpu_claim = claims["research-cpu"]
+    late_settle_code = None
     try:
         capacity.settle(
             str(uuid4()), "research-cpu", cpu_claim["worker_id"], cpu_claim["fence"],
@@ -179,6 +184,7 @@ def run_continuous_program(directory: str | Path, run: ContinuousRun) -> dict:
         operation_id=str(uuid4()), work_id=run.work_id, job_id="research-cpu",
         request_id="usage-2", wall_clock_seconds=0, tokens=0, usd=Decimal("10"),
     )
+    quota_code = None
     try:
         coordinator.admit_campaign("campaign-c", "machine_learning", run.now, action, gate=accounting)
     except ValueError as error:
