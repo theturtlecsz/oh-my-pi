@@ -27,7 +27,7 @@ def ingest(
     experiment: str,
     model: str,
     attempt: int,
-    repetition: int = 1,
+    repetition: int,
     catalog: Mapping[str, Any] | str | Path | None = None,
     out: str | Path,
     fixtures_root: str | Path | None = None,
@@ -174,6 +174,40 @@ def ingest(
     }
 
     out_path = Path(out)
+    if out_path.exists():
+        for line in out_path.read_text(encoding="utf-8").splitlines():
+            line_str = line.strip()
+            if not line_str:
+                continue
+            try:
+                existing = json.loads(line_str)
+            except Exception:
+                continue
+            if isinstance(existing, dict):
+                existing_key = (
+                    existing.get("experiment"),
+                    existing.get("arm"),
+                    existing.get("model"),
+                    existing.get("task_id"),
+                    existing.get("repetition"),
+                    existing.get("attempt"),
+                )
+                record_key = (
+                    record["experiment"],
+                    record.get("arm"),
+                    record["model"],
+                    record["task_id"],
+                    record["repetition"],
+                    record["attempt"],
+                )
+                if existing_key == record_key:
+                    sys.stderr.write(
+                        "duplicate record: "
+                        f"experiment={record['experiment']} arm={record.get('arm')} model={record['model']} "
+                        f"task_id={record['task_id']} repetition={record['repetition']} attempt={record['attempt']}\n"
+                    )
+                    raise SystemExit(1)
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record) + "\n")
@@ -804,7 +838,7 @@ def main(argv: list[str] | None = None) -> int:
     ingest_parser.add_argument("--experiment", required=True)
     ingest_parser.add_argument("--model", required=True)
     ingest_parser.add_argument("--attempt", type=int, required=True)
-    ingest_parser.add_argument("--repetition", type=int, default=1)
+    ingest_parser.add_argument("--repetition", type=int, required=True)
     ingest_parser.add_argument("--catalog", default=None)
     ingest_parser.add_argument("--out", required=True)
 

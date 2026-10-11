@@ -95,6 +95,19 @@ def sample_catalog(tmp_path: Path) -> Path:
                     },
                 }
             },
+            "zero-cache-model": {
+                "cost": {
+                    "input": 2,
+                    "output": 10,
+                    "cacheRead": 0,
+                }
+            },
+            "no-cache-model": {
+                "cost": {
+                    "input": 2,
+                    "output": 10,
+                }
+            },
         }
     }
     cat_file = tmp_path / "models.json"
@@ -156,6 +169,7 @@ def test_missing_or_incomplete_arm_json(tmp_path: Path, sample_catalog: Path) ->
         experiment="test-exp",
         model="test-provider/exact-model",
         attempt=1,
+        repetition=1,
         catalog=sample_catalog,
         out=out1,
     )
@@ -176,6 +190,7 @@ def test_missing_or_incomplete_arm_json(tmp_path: Path, sample_catalog: Path) ->
         experiment="test-exp",
         model="test-provider/exact-model",
         attempt=1,
+        repetition=1,
         catalog=sample_catalog,
         out=out2,
     )
@@ -196,6 +211,7 @@ def test_missing_or_incomplete_arm_json(tmp_path: Path, sample_catalog: Path) ->
         experiment="test-exp",
         model="test-provider/exact-model",
         attempt=1,
+        repetition=1,
         catalog=sample_catalog,
         out=out3,
     )
@@ -216,6 +232,7 @@ def test_missing_or_incomplete_arm_json(tmp_path: Path, sample_catalog: Path) ->
         experiment="test-exp",
         model="test-provider/exact-model",
         attempt=1,
+        repetition=1,
         catalog=sample_catalog,
         out=out4,
     )
@@ -236,6 +253,7 @@ def test_missing_or_incomplete_arm_json(tmp_path: Path, sample_catalog: Path) ->
         experiment="test-exp",
         model="test-provider/exact-model",
         attempt=1,
+        repetition=1,
         catalog=sample_catalog,
         out=out5,
     )
@@ -281,6 +299,7 @@ def test_two_agent_end_frames_uses_last_only(tmp_path: Path, sample_catalog: Pat
         experiment="test-exp",
         model="test-provider/exact-model",
         attempt=1,
+        repetition=1,
         catalog=sample_catalog,
         out=out,
     )
@@ -313,6 +332,7 @@ def test_no_telemetry_usage_gives_null_tokens_and_cost(tmp_path: Path, sample_ca
         experiment="test-exp",
         model="test-provider/exact-model",
         attempt=1,
+        repetition=1,
         catalog=sample_catalog,
         out=out,
     )
@@ -352,6 +372,7 @@ def test_temp_catalog_pricing_exact_and_upper_bound(tmp_path: Path, sample_catal
         experiment="test-exp",
         model="test-provider/exact-model",
         attempt=1,
+        repetition=1,
         catalog=sample_catalog,
         out=out1,
     )
@@ -374,6 +395,7 @@ def test_temp_catalog_pricing_exact_and_upper_bound(tmp_path: Path, sample_catal
         experiment="test-exp",
         model="test-provider/lc-model",
         attempt=1,
+        repetition=1,
         catalog=sample_catalog,
         out=out2,
     )
@@ -403,6 +425,7 @@ def test_unpriced_model_exits_1_and_appends_no_line(
             experiment="test-exp",
             model="unknown-provider/nonexistent-model",
             attempt=1,
+            repetition=1,
             catalog=sample_catalog,
             out=out_file,
         )
@@ -427,6 +450,8 @@ def test_unpriced_model_exits_1_and_appends_no_line(
         "--model",
         "unknown-provider/nonexistent-model",
         "--attempt",
+        "1",
+        "--repetition",
         "1",
         "--catalog",
         str(sample_catalog),
@@ -488,6 +513,7 @@ def test_turns_interventions_and_latency(tmp_path: Path, sample_catalog: Path) -
         experiment="test-exp",
         model="test-provider/exact-model",
         attempt=1,
+        repetition=1,
         catalog=sample_catalog,
         out=out_file,
     )
@@ -519,6 +545,7 @@ def test_latency_under_two_seconds_or_fewer_than_two_timestamps_is_null(
         experiment="test-exp",
         model="test-provider/exact-model",
         attempt=1,
+        repetition=1,
         catalog=sample_catalog,
         out=tmp_path / "out1.jsonl",
     )
@@ -539,6 +566,7 @@ def test_latency_under_two_seconds_or_fewer_than_two_timestamps_is_null(
         experiment="test-exp",
         model="test-provider/exact-model",
         attempt=1,
+        repetition=1,
         catalog=sample_catalog,
         out=tmp_path / "out2.jsonl",
     )
@@ -613,6 +641,155 @@ def test_cli_ingest_appends_to_existing_file(tmp_path: Path, sample_catalog: Pat
     assert len(lines) == 2
     assert lines[0]["attempt"] == 1
     assert lines[1]["attempt"] == 2
+
+
+def test_cache_read_zero_and_absent(tmp_path: Path, sample_catalog: Path) -> None:
+    fixture = _write_fixture(tmp_path / "fixtures")
+    evidence_dir = tmp_path / "evidence_zero_absent"
+    rpc_rows = [
+        {
+            "direction": "in",
+            "frame": {
+                "type": "agent_end",
+                "telemetry": {"usage": {"inputTokens": 1000, "cachedInputTokens": 1000, "outputTokens": 0}},
+            },
+        },
+    ]
+    sha = _write_base_evidence(
+        evidence_dir,
+        fixture,
+        arm_doc={"plan_id": "p1", "arm": "A"},
+        rpc_rows=rpc_rows,
+    )
+
+    # 1. cacheRead: 0 -> cost 0, cost_basis exact
+    out_zero = tmp_path / "out_zero.jsonl"
+    rec_zero = ingest(
+        evidence_dir,
+        sha,
+        fixture,
+        run_id="run-1",
+        nonce="nonce-1",
+        experiment="test-exp",
+        model="test-provider/zero-cache-model",
+        attempt=1,
+        repetition=1,
+        catalog=sample_catalog,
+        out=out_zero,
+    )
+    assert rec_zero["cost_basis"] == "exact"
+    assert rec_zero["cost_usd"] == "0"
+
+    # 2. cacheRead omitted -> cost uses input price, cost_basis upper_bound
+    out_absent = tmp_path / "out_absent.jsonl"
+    rec_absent = ingest(
+        evidence_dir,
+        sha,
+        fixture,
+        run_id="run-1",
+        nonce="nonce-1",
+        experiment="test-exp",
+        model="test-provider/no-cache-model",
+        attempt=1,
+        repetition=1,
+        catalog=sample_catalog,
+        out=out_absent,
+    )
+    assert rec_absent["cost_basis"] == "upper_bound"
+    # (1000 - 1000) * 2.0 + 1000 * 2.0 + 0 * 10.0 = 2000 / 1_000_000 = 0.002
+    assert rec_absent["cost_usd"] == "0.002"
+
+
+def test_ingest_duplicate_record_exits_1_without_appending(
+    tmp_path: Path, sample_catalog: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fixture = _write_fixture(tmp_path / "fixtures")
+    evidence_dir = tmp_path / "evidence_dup"
+    sha = _write_base_evidence(
+        evidence_dir,
+        fixture,
+        arm_doc={"plan_id": "p1", "arm": "A"},
+    )
+    out_file = tmp_path / "records.jsonl"
+
+    rec1 = ingest(
+        evidence_dir,
+        sha,
+        fixture,
+        run_id="run-1",
+        nonce="nonce-1",
+        experiment="test-exp",
+        model="test-provider/exact-model",
+        attempt=1,
+        repetition=1,
+        catalog=sample_catalog,
+        out=out_file,
+    )
+    assert rec1["repetition"] == 1
+    assert rec1["attempt"] == 1
+    assert len(out_file.read_text(encoding="utf-8").splitlines()) == 1
+
+    with pytest.raises(SystemExit) as exc_info:
+        ingest(
+            evidence_dir,
+            sha,
+            fixture,
+            run_id="run-1",
+            nonce="nonce-1",
+            experiment="test-exp",
+            model="test-provider/exact-model",
+            attempt=1,
+            repetition=1,
+            catalog=sample_catalog,
+            out=out_file,
+        )
+    assert exc_info.value.code == 1
+    assert len(out_file.read_text(encoding="utf-8").splitlines()) == 1
+
+    rc = main([
+        "ingest",
+        "--evidence",
+        str(evidence_dir),
+        "--manifest-sha256",
+        sha,
+        "--fixture",
+        str(fixture.directory),
+        "--run-id",
+        "run-1",
+        "--nonce",
+        "nonce-1",
+        "--experiment",
+        "test-exp",
+        "--model",
+        "test-provider/exact-model",
+        "--attempt",
+        "1",
+        "--repetition",
+        "1",
+        "--catalog",
+        str(sample_catalog),
+        "--out",
+        str(out_file),
+    ])
+    assert rc == 1
+    assert len(out_file.read_text(encoding="utf-8").splitlines()) == 1
+    assert "duplicate record" in capsys.readouterr().err
+
+    rec2 = ingest(
+        evidence_dir,
+        sha,
+        fixture,
+        run_id="run-1",
+        nonce="nonce-1",
+        experiment="test-exp",
+        model="test-provider/exact-model",
+        attempt=1,
+        repetition=2,
+        catalog=sample_catalog,
+        out=out_file,
+    )
+    assert rec2["repetition"] == 2
+    assert len(out_file.read_text(encoding="utf-8").splitlines()) == 2
 
 
 def _record(**overrides: object) -> dict:
