@@ -158,6 +158,7 @@ def _verifier_runtime_roots(worktree: Path) -> tuple[Path, ...]:
     parent = Path(omp_work.__file__).resolve().parent.parent
     if not parent.is_dir():
         raise WorkerSandboxRefused("runtime_not_allowed")
+    worktree = worktree.resolve()
     forbidden = {
         Path("/"),
         Path.home().resolve(),
@@ -170,7 +171,12 @@ def _verifier_runtime_roots(worktree: Path) -> tuple[Path, ...]:
         if not root.is_absolute():
             raise WorkerSandboxRefused("runtime_not_allowed")
         root = root.resolve()
-        if root in forbidden or "/work" in str(root) or str(worktree) in str(root):
+        if (
+            root in forbidden
+            or root.is_relative_to(Path("/work"))
+            or root.is_relative_to(worktree)
+            or worktree.is_relative_to(root)
+        ):
             raise WorkerSandboxRefused("runtime_not_allowed")
         if root.is_dir() and root not in roots:
             roots.append(root)
