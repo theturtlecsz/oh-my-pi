@@ -13,6 +13,7 @@ job so the module-scoped fixture holds no lease or backlog.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from uuid import UUID, uuid4
 
@@ -23,6 +24,7 @@ from psycopg.rows import dict_row
 from native_jobs_support import native_jobs  # noqa: F401  (fixture)
 from omp_work.jobs import JobError, NativeJobStore, enqueue_job
 from omp_work.research.capacity import CapacityRefused, ResearchCapacity
+from omp_work.research.receipt import TrialReceipt
 
 pytest_plugins = ("test_workflow_service",)
 pytestmark = pytest.mark.skipif(
@@ -414,6 +416,103 @@ def test_claim_assigns_adapter_and_direct_jobs_from_shared_headroom(native_jobs)
     finally:
         _cancel_open(native_jobs, gate)
     assert _open_job_ids(native_jobs) == []
+
+
+def _sound_receipt(native_jobs, job_id: str) -> TrialReceipt:
+    return TrialReceipt(
+        trial_id=str(native_jobs.trial_id),
+        campaign_id=str(native_jobs.campaign_id),
+        job_id=job_id,
+        candidate_digest="a" * 64,
+        evaluator_component_sha256="b" * 64,
+        evaluator_artifact_sha256="c" * 64,
+        protocol_sha256="d" * 64,
+        negative_control="rejected",
+        verdict="qualified",
+        metrics={"score": 1.0},
+    )
+
+
+@pytest.mark.parametrize("receipt_as_bytes", [False, True], ids=["model", "bytes"])
+def test_settle_rejects_bad_receipt_then_seals_verified_evidence(
+    native_jobs, receipt_as_bytes: bool,
+) -> None:
+    """Rejected receipts leave a lease admitted; sound receipts seal with its digest.
+
+    Native fence errors still reach the caller without changing job state.
+    Both model serialization and supplied canonical bytes produce evidence
+    persisted under the registered evaluator component.
+    """
+    store = NativeJobStore(native_jobs.service.config)
+    gate = ResearchCapacity(store, native_jobs.workspace_id, native_jobs.actor_id)
+    worker_id = f"cpu-{uuid4()}"
+    gate.register(
+        str(uuid4()), worker_id, native_jobs.components["worker"], ["compute.cpu"], 2,
+    )
+    job_id = f"job-{uuid4()}"
+    evaluator = native_jobs.components["evaluator"]
+    try:
+        _cancel_open(native_jobs, gate)
+        gate.enqueue(
+            str(uuid4()), job_id, UUID(native_jobs.item["work_id"]),
+            ["compute.cpu"], _resources(cpu=1), 30,
+            trial_id=native_jobs.trial_id,
+        )
+        claimed = gate.claim(str(uuid4()), worker_id)
+        assert claimed["job"]["job_id"] == job_id
+        fence = claimed["job"]["fence"]
+        with pytest.raises(CapacityRefused) as rejected:
+            gate.settle(
+                str(uuid4()), job_id, worker_id, fence, "succeeded", b"not-json", evaluator,
+            )
+        assert rejected.value.code == "receipt_rejected"
+        assert _status_rows(native_jobs, [job_id])[job_id]["status"] == "admitted"
+
+        sound = _sound_receipt(native_jobs, job_id)
+        receipt = sound.receipt_bytes() if receipt_as_bytes else sound
+        with pytest.raises(JobError) as stale:
+            gate.settle(
+                str(uuid4()), job_id, worker_id, fence + 1, "succeeded", receipt, evaluator,
+            )
+        assert stale.value.code == "job_fence_stale"
+        assert _status_rows(native_jobs, [job_id])[job_id]["status"] == "admitted"
+
+        operation_id = str(uuid4())
+        result = gate.settle(
+            operation_id, job_id, worker_id, fence, "succeeded", receipt, evaluator,
+        )
+        assert result["operation_id"] == operation_id
+        assert result["status"] == "applied"
+        assert result["job"]["status"] == "sealed"
+        assert result["settlement"] == {
+            "outcome": "succeeded",
+            "worker_id": worker_id,
+            "fence": fence,
+            "receipts": [{
+                "role": "evaluator",
+                "issuer_component_sha256": evaluator,
+                "evidence": {
+                    "id": job_id,
+                    "kind": "receipt",
+                    "content_digest": hashlib.sha256(sound.receipt_bytes()).hexdigest(),
+                    "trust": "verified",
+                },
+            }],
+        }
+        with psycopg.connect(
+            **native_jobs.service.config.connection_kwargs("omp_work_app"),
+            row_factory=dict_row,
+            autocommit=True,
+        ) as conn:
+            row = conn.execute(
+                "SELECT status, settlement FROM omp_jobs.jobs WHERE job_id = %s",
+                (job_id,),
+            ).fetchone()
+        assert row["status"] == "sealed"
+        assert row["settlement"] == result["settlement"]
+        assert _unreleased_reservations(native_jobs, worker_id) == 0
+    finally:
+        _cancel_open(native_jobs, gate)
 
 
 def test_claim_filters_on_capability_not_free_capacity(native_jobs) -> None:
