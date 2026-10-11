@@ -1,10 +1,10 @@
-"""Fail-closed gate that admits only trusted NSI wire as canonical state."""
+"""Fail-closed gate that admits only trusted NSI state as canonical."""
 
 from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from typing import TypeVar
+from typing import NoReturn, TypeVar
 
 from pydantic import ValidationError
 
@@ -29,6 +29,11 @@ def _exported_record_models() -> tuple[type[models.NSIModel], ...]:
 
 # Exported shapes, including snapshots, contracts, ontologies, and id-less receipts.
 _RECORD_MODELS = _exported_record_models()
+_RECORD_MODEL_TYPES = frozenset(_RECORD_MODELS)
+
+
+def _refuse_content() -> NoReturn:
+    raise AuthorityRefusal("markdown and other non-records cannot be canonical state")
 
 
 def _json_wire(value: object) -> bool:
@@ -68,33 +73,91 @@ def _accepts_record(value: dict) -> bool:
 
 
 def _admit_wire(content: object) -> None:
-    # Plain dicts and lists are the wire form. Typed models stay refused until
-    # a later slice, and strings are never parsed. The JSON check covers nested
-    # values; record admission still uses the exported models and their schemas.
+    # ``content`` is plain data. Models are projected before this runs, and
+    # strings are never parsed. The JSON check covers nested values; record
+    # admission still uses the exported models and their schemas.
     if _json_wire(content):
         if type(content) is list:
             if all(type(item) is dict and _accepts_record(item) for item in content):
                 return
         elif type(content) is dict and _accepts_record(content):
             return
-    raise AuthorityRefusal("markdown and other non-records cannot be canonical state")
+    _refuse_content()
+
+
+def _unset_default(model: models.NSIModel, name: str, value: object) -> bool:
+    """True when ``value`` is an unset field default, absent from the wire.
+
+    Schemas reject an explicit null for those fields. A stored value that is
+    not the default stays in the projection, including a later ``__dict__`` write.
+    """
+    if name in model.__pydantic_fields_set__:
+        return False
+    field = type(model).model_fields[name]
+    return not field.is_required() and value is field.default
+
+
+def _project_model(model: models.NSIModel) -> dict[str, object]:
+    """Read one model's stores into plain data.
+
+    ``model_validate`` on an existing instance returns that instance and leaves
+    mutated containers in place. ``model_dump`` omits undeclared ``__dict__``
+    keys and Pydantic extras. Admission reads those stores and keeps every
+    nested value for the strict wire check.
+    """
+    if type(model) not in _RECORD_MODEL_TYPES:
+        _refuse_content()
+    if model.__pydantic_extra__ or model.__pydantic_private__:
+        _refuse_content()
+    declared = type(model).model_fields
+    storage = model.__dict__
+    if any(key not in declared for key in storage):
+        _refuse_content()
+    if any(key not in declared for key in model.__pydantic_fields_set__):
+        _refuse_content()
+    projected: dict[str, object] = {}
+    for key, value in storage.items():
+        if _unset_default(model, key, value):
+            continue
+        projected[key] = _project_stored(value)
+    return projected
+
+
+def _project_stored(value: object) -> object:
+    """Project nested models and JSON containers without dropping stored values.
+
+    Tuples and other non-JSON containers stay as they are. Converting them to
+    lists would turn unchecked storage into wire.
+    """
+    if isinstance(value, models.NSIModel):
+        return _project_model(value)
+    if type(value) is list:
+        return [_project_stored(item) for item in value]
+    if type(value) is dict:
+        return {key: _project_stored(item) for key, item in value.items()}
+    return value
 
 
 def refuse_markdown_canonical_state(content: T, *, context: object = None) -> T:
-    """Return ``content`` unchanged when it is trusted NSI canonical wire.
+    """Return ``content`` unchanged when it is trusted NSI canonical state.
 
     ``context`` is trusted only when it is a nonempty mapping. The mapping is
     not an actor authorization. Omitted, ``None``, and empty mappings refuse
-    even valid records. Accepted values are exported NSI wire objects, including
+    even valid records. Accepted values are exported concrete NSI records,
     snapshots, contracts, ontologies, id-less receipts, and lists of those
-    records. An empty list is an empty record collection. Raw Markdown, prose,
-    bytes, JSON text, typed models, non-JSON values, unknown wrappers, and prose
-    inside a record collection are refused, including when nested inside an
-    otherwise valid record. Declared text and value fields stay data.
+    records. Each may be the model, the matching closed wire dict, or a mix of
+    the two. An empty list is an empty record collection.
+
+    A model is admitted only when its stored fields project to plain data that
+    passes the strict wire models and schemas. Undeclared ``__dict__`` fields,
+    private stores, and Pydantic extras are refused. Raw Markdown, prose, bytes,
+    JSON text, non-JSON values, unknown wrappers, and prose inside a record
+    collection are refused, including when nested inside an otherwise valid
+    record. Declared text and value fields stay data.
     """
     if not isinstance(context, Mapping) or len(context) == 0:
         raise AuthorityRefusal("canonical state requires a trusted context")
-    _admit_wire(content)
+    _admit_wire(_project_stored(content))
     return content
 
 
