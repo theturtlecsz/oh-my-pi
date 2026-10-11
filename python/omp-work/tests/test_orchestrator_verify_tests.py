@@ -151,6 +151,35 @@ def nested_procfs_host() -> None:
         pytest.skip(f"userns procfs mounts unsupported: {probe.stderr.decode(errors='replace')}")
 
 
+def _nested_sandbox_unavailable(error: str) -> None:
+    if (
+        error.startswith("Sandbox unshare probe failed (exit code ")
+        and "unshare: write failed /proc/self/uid_map: Operation not permitted" in error
+    ):
+        pytest.skip(f"nested user namespaces refused inside verifier jail: {error}")
+    pytest.fail(error)
+
+
+@pytest.mark.parametrize("error, refused", [
+    ("Sandbox unshare probe failed (exit code 1): "
+     "unshare: write failed /proc/self/uid_map: Operation not permitted", True),
+    ("Sandbox unshare probe failed (exit code 1): "
+     "unshare: unshare failed: Operation not permitted", False),
+    ("Sandbox unshare probe failed (exit code 1): "
+     "unshare: mount /proc failed: Operation not permitted", False),
+    ("Required sandbox tool 'unshare' not found on PATH", False),
+])
+def test_nested_sandbox_unavailable_skips_only_uid_map_refusal(
+    error: str, refused: bool,
+) -> None:
+    expected = pytest.skip.Exception if refused else pytest.fail.Exception
+    with pytest.raises(expected) as raised:
+        _nested_sandbox_unavailable(error)
+    assert error in str(raised.value)
+    if refused:
+        assert "nested user namespaces" in str(raised.value)
+
+
 # This driver runs inside the outer verifier jail, with the real installed
 # runtime, Git metadata, signing key, audit overlay, and WorkService relay.
 _VERIFIER_DRIVER = r'''
@@ -162,6 +191,7 @@ import sys
 import threading
 import time
 import urllib.request
+from omp_work.egress_sandbox import SandboxUnavailable
 from omp_work.orchestrator.verify_candidate import prepare_candidate
 from omp_work.orchestrator.verify_tests import run_tests
 
@@ -178,7 +208,8 @@ Path("/tmp/outer-secret").write_bytes(b"outer-tmp")
 
 with prepare_candidate(config["task"], Path("/work")) as snapshot:
     assert snapshot.joinpath("payload").read_bytes() == b"frozen-commit-bytes"
-    good = run_tests([python, "-c", r"""
+    try:
+        good = run_tests([python, "-c", r"""
 import os
 from pathlib import Path
 assert Path.cwd() == Path('/work')
@@ -193,6 +224,10 @@ assert Path('/tmp/inner-only').read_bytes() == b'private-tmp'
 os.write(1, b'good-stdout\n')
 os.write(2, b'good-stderr\n')
 """], snapshot, 15)
+    except SandboxUnavailable as error:
+        # Distinguish nested setup refusal from driver/assertion failures.
+        Path("/work/.omp/nested-sandbox-unavailable.txt").write_text(str(error))
+        sys.exit(77)
     assert good.exit_code == 0, good.output
     assert good.output == b"good-stdout\ngood-stderr\n", good.output
     assert not Path("/tmp/inner-only").exists()
@@ -364,6 +399,10 @@ def test_real_nested_verifier_jail_contracts(
         finally:
             service.shutdown()
             thread.join(timeout=3)
+    if exit_code == 77:
+        _nested_sandbox_unavailable(
+            (worktree / ".omp/nested-sandbox-unavailable.txt").read_text()
+        )
     assert exit_code == 0
     assert (worktree / ".omp/audit-report.txt").read_text() == "nested-contracts-passed"
     assert verdict.read_bytes() == b"signer-verdict"
