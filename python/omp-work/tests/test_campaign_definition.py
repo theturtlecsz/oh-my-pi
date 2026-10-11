@@ -296,6 +296,24 @@ def test_malformed_input_rejected(tmp_path: Path, payload: object, match: str) -
         load_definition(path)
 
 
+def test_large_integer_threshold_and_metric_score_without_overflow(tmp_path: Path) -> None:
+    threshold = 10**400
+    _harness(tmp_path, "h.sh", b"harness")
+    path = _write(
+        tmp_path,
+        _definition(criteria=[{"metric": "score", "op": "gte", "threshold": threshold}]),
+    )
+    criteria = load_definition(path).criteria
+
+    assert score_metrics({"score": threshold}, criteria, "completed") == (
+        "supported", "passed 1 criterion"
+    )
+    outcome, reason = score_metrics({"score": threshold - 1}, criteria, "completed")
+    assert outcome == "refuted"
+    assert "metric score failed comparison gte" in reason
+    assert f"{threshold - 1} >= {threshold}" in reason
+
+
 def test_comparator_boundaries() -> None:
     cases = (
         ("gte", 2, 1, True),

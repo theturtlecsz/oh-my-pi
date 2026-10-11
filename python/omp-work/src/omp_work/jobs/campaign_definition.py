@@ -15,7 +15,7 @@ import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypeGuard
 
 from omp_work.v1.models import ResearchDomain
 
@@ -139,12 +139,14 @@ def _nonempty_str(value: object, label: str, *, max_length: int | None = None) -
     return value
 
 
+def _is_finite_number(value: object) -> TypeGuard[int | float]:
+    return not isinstance(value, bool) and (
+        isinstance(value, int) or (isinstance(value, float) and math.isfinite(value))
+    )
+
+
 def _finite_number(value: object, label: str) -> int | float:
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, (int, float))
-        or not math.isfinite(value)
-    ):
+    if not _is_finite_number(value):
         raise ValueError(f"{label} must be a finite number")
     return value
 
@@ -274,11 +276,7 @@ def _observed_number(metrics: Mapping[str, object], metric: str) -> int | float 
     if metric not in metrics:
         return f"missing metric {metric}"
     value = metrics[metric]
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, (int, float))
-        or not math.isfinite(value)
-    ):
+    if not _is_finite_number(value):
         return f"metric {metric} is not a finite number"
     return value
 
