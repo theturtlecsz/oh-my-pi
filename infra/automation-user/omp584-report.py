@@ -141,7 +141,7 @@ def report(flood_dir: Path, rollout_path: Path) -> tuple[dict, int]:
                                     cap_events.append({"id": task_id, "attempt": event.get("attempt"),
                                         "slots": event["slots"], "occupied_slots": event["occupied_slots"],
                                         "providers": event["providers"]})
-                                except Exception as exc:
+                                except Exception:
                                     has_malformed_start = True
                                     raise
                         except Exception as exc:

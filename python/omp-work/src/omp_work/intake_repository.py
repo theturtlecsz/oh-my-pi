@@ -316,11 +316,11 @@ def read_revision(
     key = (workspace_id, run_id, revision)
 
     def rows(table: str, *, operation_id: str | None = None) -> list[dict]:
-        scope = "revision=%s" if operation_id is None else "operation_id=%s"
+        scope = "revision" if operation_id is None else "operation_id"
         cur.execute(sql.SQL(
             "SELECT to_jsonb(t) FROM omp_work.{} t "
-            "WHERE workspace_id=%s AND run_id=%s AND " + scope + " ORDER BY to_jsonb(t)::text"
-        ).format(sql.Identifier("intake_" + table)),
+            "WHERE workspace_id=%s AND run_id=%s AND {}=%s ORDER BY to_jsonb(t)::text"
+        ).format(sql.Identifier("intake_" + table), sql.Identifier(scope)),
             key if operation_id is None else (workspace_id, run_id, operation_id))
         return [row[0] for row in cur.fetchall()]
 
