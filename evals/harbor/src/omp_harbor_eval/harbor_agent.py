@@ -9,6 +9,16 @@ with a pidfile killer and a repository-bundle hook. Every docker argv goes
 through ``docker_ops`` / ``netns`` with the injectable ``docker`` kwarg, and
 ``run`` seals the evidence directory under ``OMP_HARBOR_EVIDENCE_ROOT`` before
 the sidecar stops.
+
+``OMP_HARBOR_PLAN`` and ``OMP_HARBOR_ARM`` opt into a plan arm: both must be
+set and non-empty, the plan must load, and the arm must be known and
+available — any violation raises ``ValueError`` before the first docker call.
+An arm run substitutes ``{instruction}`` and ``{key}`` (the sole
+``ledger-seed.json`` item key) into the arm command, drives a scenario copy
+with the arm terminal and the plan trial timeout, writes the arm settings
+(``modelRoles.audit`` pinned at ``scripted/scripted``) as the worker
+``config.yml``, and seals ``arm.json`` into the evidence before the adapter
+runs.
 """
 
 from __future__ import annotations
@@ -24,6 +34,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import yaml
 from harbor.agents.base import AgentCapabilities, BaseAgent
 from harbor.environments.base import BaseEnvironment
 from harbor.environments.docker.docker import _sanitize_docker_compose_project_name
@@ -41,14 +52,19 @@ from .docker_ops import (
     write_file,
 )
 from .evidence import MANIFEST_NAME, EvidenceWriter
+from .fixtures import Fixture, Scenario
+from .ledger_seed import load_ledger_seed
 from .netns import ExecProbe, model_port, start_model_sidecar, stop_container
+from .run_plan import Arm, Plan, load_plan
 from .scripted_model import models_yml
-from .task_env import load_task
+from .task_env import TaskEnv, load_task
 
 _VARIANT = "OMP_HARBOR_VARIANT"
 _EVIDENCE_ROOT = "OMP_HARBOR_EVIDENCE_ROOT"
 _BEARER = "OMP_HARBOR_BEARER"
 _WORKSPACE_ID = "OMP_HARBOR_WORKSPACE_ID"
+_PLAN = "OMP_HARBOR_PLAN"
+_ARM = "OMP_HARBOR_ARM"
 
 _KNOWN_VARIANTS: tuple[str, ...] = ("known_good", "known_bad")
 _WORKER_SERVICE = "worker"
@@ -57,6 +73,9 @@ _MODELS_PATH = ".omp/agent/models.yml"
 _CONFIG_PATH = ".omp/agent/config.yml"
 _SESSION_DIR = "omp-sessions"
 _BUNDLE_NAME = "worker-repo.bundle"
+_ARM_NAME = "arm.json"
+_LEDGER_SEED = "ledger-seed.json"
+_SCRIPTED_MODEL = "scripted/scripted"
 
 
 def _required(name: str) -> str:
@@ -108,6 +127,87 @@ def worker_settings_yml() -> str:
     """
 
     return "modelRoles:\n  audit: scripted/scripted\n"
+
+
+def _ledger_seed_key(fixture: Fixture) -> str:
+    """The sole item key in the fixture ``ledger-seed.json``.
+
+    An arm command with ``{key}`` names exactly one work item, so a seed with
+    zero or several keys raises before any docker call.
+    """
+
+    seed = load_ledger_seed(fixture.directory / _LEDGER_SEED)
+    keys = [str(item["key"]) for item in seed["items"]]
+    if len(keys) != 1:
+        raise ValueError(f"{_LEDGER_SEED} must carry exactly one item key, found {len(keys)}")
+    return keys[0]
+
+
+def _arm_settings_yml(arm: Arm) -> str:
+    """Arm settings YAML with ``modelRoles.audit`` pinned at the scripted model."""
+
+    settings = dict(arm.settings)
+    roles = settings.get("modelRoles")
+    settings["modelRoles"] = {**roles, "audit": _SCRIPTED_MODEL} if isinstance(roles, dict) else {"audit": _SCRIPTED_MODEL}
+    return yaml.safe_dump(settings, sort_keys=True)
+
+
+class _ArmSelection:
+    """A resolved ``OMP_HARBOR_PLAN``/``OMP_HARBOR_ARM`` pair for one run."""
+
+    def __init__(self, plan: Plan, arm: Arm, scenario: Scenario) -> None:
+        self.plan_id = plan.plan_id
+        self.arm = arm
+        self.scenario = scenario
+        self.settings_yml = _arm_settings_yml(arm)
+        self.settings_sha256 = hashlib.sha256(self.settings_yml.encode("utf-8")).hexdigest()
+
+    def evidence(self) -> dict[str, Any]:
+        return {
+            "plan_id": self.plan_id,
+            "arm": self.arm.id,
+            "command": self.scenario.command,
+            "terminal": self.arm.to_dict()["terminal"],
+            "settings_sha256": self.settings_sha256,
+        }
+
+
+def _arm_selection(instruction: str, task: TaskEnv) -> _ArmSelection | None:
+    """Resolve the plan arm for this run, or ``None`` when neither variable is set.
+
+    Both ``OMP_HARBOR_PLAN`` and ``OMP_HARBOR_ARM`` must be set together and
+    non-empty, the plan must load, and the arm must be known and available —
+    every violation raises ``ValueError`` before the first docker call. The
+    scenario is a copy: the fixture scenario is never mutated.
+    """
+
+    plan_ref = os.environ.get(_PLAN)
+    arm_ref = os.environ.get(_ARM)
+    if not plan_ref and not arm_ref:
+        return None
+    if not plan_ref or not arm_ref:
+        raise ValueError(f"{_PLAN} and {_ARM} must be set together and non-empty")
+    plan = load_plan(plan_ref)
+    arm = plan.arms_by_id.get(arm_ref)
+    if arm is None:
+        raise ValueError(f"plan {plan.plan_id} has no arm {arm_ref!r}")
+    if arm.status != "available":
+        raise ValueError(f"arm {arm.id} is unavailable: {arm.reason}")
+    command = arm.command
+    if "{key}" in command:
+        command = command.replace("{key}", _ledger_seed_key(task.fixture))
+    command = command.replace("{instruction}", instruction)
+    fixture_scenario = task.fixture.scenario
+    scenario = Scenario(
+        command=command,
+        terminal=arm.terminal,
+        model_script=fixture_scenario.model_script,
+        ui_script=fixture_scenario.ui_script,
+        kill_at=fixture_scenario.kill_at,
+        timeout_s=plan.trial_timeout_s,
+        filename=fixture_scenario.filename,
+    )
+    return _ArmSelection(plan, arm, scenario)
 
 
 def _credentials_dir() -> Path:
@@ -225,12 +325,15 @@ class OmpRpcAgent(BaseAgent):
         workspace_id = _required(_WORKSPACE_ID)
 
         task = load_task(environment.environment_dir)
+        selection = _arm_selection(instruction, task)
         session_id = environment.session_id
         project = _sanitize_docker_compose_project_name(session_id)
         worker = compose_container(project, _WORKER_SERVICE, docker=self.docker)
         workservice = compose_container(project, _WORKSERVICE_SERVICE, docker=self.docker)
 
         fixture = task.fixture
+        scenario = selection.scenario if selection is not None else fixture.scenario
+        settings_yml = selection.settings_yml if selection is not None else worker_settings_yml()
         apply_patch(worker, (fixture.directory / fixture.seed_patch).read_bytes(), task.working_dir, docker=self.docker)
         if variant == "known_good":
             apply_patch(
@@ -253,7 +356,7 @@ class OmpRpcAgent(BaseAgent):
             write_file(
                 worker,
                 f"{task.home}/{_CONFIG_PATH}",
-                worker_settings_yml().encode("utf-8"),
+                settings_yml.encode("utf-8"),
                 docker=self.docker,
             )
             stage_worker_environment(
@@ -287,11 +390,13 @@ class OmpRpcAgent(BaseAgent):
                     env=None,
                     probe=ExecProbe(task.workservice_url, bearer, workspace_id, worker, docker=self.docker),
                     evidence=writer,
-                    scenario=fixture.scenario,
+                    scenario=scenario,
                     killer=pid_killer(worker, docker=self.docker),
                     session_reader=lambda path: read_file(worker, path, docker=self.docker),
                     before_seal=_bundle_hook(worker, task.working_dir, staging / _BUNDLE_NAME, self.docker),
                 )
+                if selection is not None:
+                    writer.write_json(_ARM_NAME, selection.evidence())
                 outcome = await asyncio.to_thread(adapter.run)
                 context.metadata = {
                     "evidence_dir": str(evidence_dir),
