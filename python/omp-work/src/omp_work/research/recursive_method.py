@@ -136,6 +136,28 @@ def _bindings(study: recursive.RecursiveStudy, recipe_bytes: bytes, spec_bytes: 
         raise ValueError("lower_researcher_changed")
 
 
+def validate_frozen_method(result: MethodResult, study: recursive.RecursiveStudy) -> str:
+    """Verify frozen bindings and reconstruct only the pinned deterministic source."""
+    _bindings(study, result.recipe_bytes, result.spec_bytes)
+    if result.failures:
+        raise ValueError(result.failures[0])
+    if result.source_bytes is None:
+        raise ValueError("changed_source")
+    # Reconstruct with the existing generator, so forged result bytes cannot
+    # introduce a second executable-code entry point. Never replace the result.
+    source = mechanism.generation_job(json.loads(result.spec_bytes), json.loads(result.recipe_bytes))
+    source_bytes = source.encode("utf-8")
+    if source_bytes != result.source_bytes:
+        raise ValueError("changed_source")
+    if (
+        result.recipe_sha256 != hashlib.sha256(result.recipe_bytes).hexdigest()
+        or result.source_sha256 != hashlib.sha256(source_bytes).hexdigest()
+        or result.artifact_sha256 != package_candidate({SOURCE_PATH: source_bytes})["bundle_sha256"]
+    ):
+        raise ValueError("changed_digest")
+    return source
+
+
 def run_method(
     study: recursive.RecursiveStudy,
     recipe_bytes: bytes,
@@ -279,19 +301,7 @@ class GeneratedPolicy:
         pick = None
         new_seed = seed
         try:
-            _bindings(execution.study, result.recipe_bytes, result.spec_bytes)
-            # Reconstruct with the existing generator, so forged result bytes
-            # cannot introduce a second executable-code entry point.
-            source = mechanism.generation_job(json.loads(result.spec_bytes), json.loads(result.recipe_bytes))
-            source_bytes = source.encode("utf-8")
-            if source_bytes != result.source_bytes:
-                raise ValueError("changed_source")
-            if (
-                result.recipe_sha256 != hashlib.sha256(result.recipe_bytes).hexdigest()
-                or result.source_sha256 != hashlib.sha256(source_bytes).hexdigest()
-                or result.artifact_sha256 != package_candidate({SOURCE_PATH: source_bytes})["bundle_sha256"]
-            ):
-                raise ValueError("changed_digest")
+            source = validate_frozen_method(result, execution.study)
             if hashlib.sha256(self._protocol.protocol_bytes()).hexdigest() != execution.study.protocol_sha256:
                 raise ValueError("protocol_changed")
             snap, opened_copy = strategy_protocol.sanitized_snapshot(steps, opened)
