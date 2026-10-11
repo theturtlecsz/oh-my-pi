@@ -16,6 +16,7 @@ SCRIPT = Path(__file__).resolve().parents[3] / "infra/automation-user/omp584-rep
 CUTOFF = "2026-10-01T00:00:00Z"
 AFTER = "2026-10-01T00:00:01Z"
 SHA = "a" * 64
+START_METRICS = dict(slots=5, occupied_slots=1, providers={"alpha": {"load": 0, "max_parallel": 2}})
 STUB = '''
 def parse_front_matter(text):
     meta = {}
@@ -66,8 +67,9 @@ class Evidence:
         return self.tasks[name]
 
     def starts(self, count=10, running=3, **fields):
-        self.tasks["unfinished"] = {"history": [dict(phase="implement-start", attempt=i, at=AFTER,
-            code_sha256=SHA, running_implementers=running, **fields) for i in range(count)]}
+        metrics = START_METRICS | fields
+        self.tasks["unfinished"] = {"history": [dict(**metrics, phase="implement-start", attempt=i, at=AFTER,
+            code_sha256=SHA, running_implementers=running) for i in range(count)]}
 
     def run(self, write_state=True):
         if write_state:
@@ -75,6 +77,7 @@ class Evidence:
         before = {str(p.relative_to(self.directory)): p.read_bytes() for p in self.directory.rglob("*") if p.is_file()}
         completed = subprocess.run([sys.executable, str(SCRIPT), "--flood-dir", str(self.directory),
             "--rollout", str(self.rollout), "--output", str(self.output)], capture_output=True, text=True)
+        assert "Traceback" not in completed.stderr
         after = {str(p.relative_to(self.directory)): p.read_bytes() for p in self.directory.rglob("*") if p.is_file()}
         assert after == before
         assert {str(p.relative_to(self.directory)) for p in self.directory.rglob("*") if p.is_dir()} == {"tasks"}
@@ -201,8 +204,8 @@ def test_last_pass_attempt_wins_over_retries(evidence):
 
 def test_two_starts_on_one_running_task_both_count(evidence):
     evidence.tasks["running"] = {"history": [
-        dict(phase="implement-start", attempt=1, at=AFTER, code_sha256=SHA, running_implementers=3),
-        dict(phase="implement-start", attempt=2, at=AFTER, code_sha256=SHA, running_implementers=4),
+        dict(**START_METRICS, phase="implement-start", attempt=1, at=AFTER, code_sha256=SHA, running_implementers=3),
+        dict(**START_METRICS, phase="implement-start", attempt=2, at=AFTER, code_sha256=SHA, running_implementers=4),
     ]}
     code, report = evidence.run()
     assert code == 2 and report["status"] == "pending" and report["error"] is None
@@ -243,6 +246,13 @@ def test_string_running_implementers_fails_with_median_null(evidence):
     assert evidence.output.is_file()
 
 
+def test_ten_starts_equal_to_baseline_unmet(evidence):
+    evidence.starts(running=3)
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    assert report["median"] == 3 and report["verdicts"]["starts"] == "unmet"
+
+
 def test_nine_starts_stay_pending(evidence):
     evidence.starts(count=9, running=4)
     code, report = evidence.run()
@@ -274,14 +284,43 @@ def test_matched_event_invalid_types_fail_with_malformed_and_median_null(evidenc
     assert evidence.output.is_file()
 
 
+@pytest.mark.parametrize("field", ["running_implementers", "slots", "occupied_slots", "providers",
+    "provider.load", "provider.max_parallel"])
+def test_missing_matched_metrics_fail_instead_of_certifying_median(evidence, field):
+    evidence.starts(running=4)
+    event = evidence.tasks["unfinished"]["history"][-1]
+    if field.startswith("provider."):
+        event["providers"] = {"alpha": {"load": 0, "max_parallel": 2}}
+        del event["providers"]["alpha"][field.split(".")[1]]
+    else:
+        del event[field]
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "failure"
+    assert "malformed" in report["error"] and field.split(".")[-1] in report["error"]
+    assert report["median"] is None and report["verdicts"]["starts"] == "pending"
+    assert report["start_count"] == 9
+
+
+@pytest.mark.parametrize("attempt", ["2", True, [], {}])
+def test_mixed_attempt_types_write_failure_without_sort_traceback(evidence, attempt):
+    evidence.starts(count=2, running=4)
+    evidence.tasks["unfinished"]["history"][-1]["attempt"] = attempt
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "failure"
+    assert "malformed" in report["error"] and "attempt" in report["error"]
+    assert report["median"] is None
+    assert report["starts"] == [dict(id="unfinished", attempt=0, at=AFTER,
+        running_implementers=4, code_sha256=SHA)]
+
+
 def test_starts_cohort_row_schema_and_sorting(evidence):
     evidence.tasks["t2"] = {"history": [
-        dict(phase="implement-start", attempt=2, at="2026-10-01T00:00:02Z", code_sha256=SHA, running_implementers=3),
-        dict(phase="implement-start", attempt=1, at="2026-10-01T00:00:02Z", code_sha256=SHA, running_implementers=2),
+        dict(**START_METRICS, phase="implement-start", attempt=2, at="2026-10-01T00:00:02Z", code_sha256=SHA, running_implementers=3),
+        dict(**START_METRICS, phase="implement-start", attempt=1, at="2026-10-01T00:00:02Z", code_sha256=SHA, running_implementers=2),
     ]}
     evidence.tasks["t1"] = {"history": [
-        dict(phase="implement-start", attempt=1, at="2026-10-01T00:00:01Z", code_sha256=SHA, running_implementers=4),
-        dict(phase="implement-start", attempt=1, at="2026-10-01T00:00:03Z", code_sha256=SHA, running_implementers=5),
+        dict(**START_METRICS, phase="implement-start", attempt=1, at="2026-10-01T00:00:01Z", code_sha256=SHA, running_implementers=4),
+        dict(**START_METRICS, phase="implement-start", attempt=1, at="2026-10-01T00:00:03Z", code_sha256=SHA, running_implementers=5),
     ]}
     code, report = evidence.run()
     assert code == 2 and report["error"] is None
@@ -310,7 +349,7 @@ def test_start_cutoff_retries_and_median_use_event_counts(evidence):
 @pytest.mark.parametrize("change", [{"at": None}, {"code_sha256": None}, {"running_implementers": True}])
 def test_malformed_implement_start_fails_without_losing_other_counts(evidence, change):
     evidence.starts(running=4)
-    evidence.tasks["unfinished"]["history"].append(dict(phase="implement-start", at=AFTER,
+    evidence.tasks["unfinished"]["history"].append(dict(**START_METRICS, phase="implement-start", at=AFTER,
         code_sha256=SHA, running_implementers=4) | change)
     code, report = evidence.run()
     assert code == 2 and report["status"] == "failure" and report["start_count"] == 10

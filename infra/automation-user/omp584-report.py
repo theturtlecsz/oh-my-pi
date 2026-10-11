@@ -24,21 +24,23 @@ def cap_proof(starts: list[dict]) -> dict:
 
 
 def validate_matched_start(event: dict) -> None:
-    if "running_implementers" not in event or not integer(event["running_implementers"]):
-        raise ValueError("malformed implement-start: running_implementers must be an integer, not boolean")
-    for key in ("slots", "occupied_slots", "load", "max_parallel"):
+    for key in ("running_implementers", "slots", "occupied_slots"):
+        if not integer(event.get(key)):
+            raise ValueError(f"malformed implement-start: {key} must be an integer, not boolean")
+    for key in ("load", "max_parallel"):
         if key in event and not integer(event[key]):
             raise ValueError(f"malformed implement-start: {key} must be an integer, not boolean")
-    if "providers" in event:
-        providers = event["providers"]
-        if not isinstance(providers, dict):
-            raise ValueError("malformed implement-start: providers must be an object")
-        for prov_name, limits in providers.items():
-            if not isinstance(limits, dict):
-                raise ValueError(f"malformed implement-start: provider {prov_name} must be an object")
-            for key in ("load", "max_parallel"):
-                if key in limits and not integer(limits[key]):
-                    raise ValueError(f"malformed implement-start: provider {prov_name} {key} must be an integer, not boolean")
+    providers = event.get("providers")
+    if not isinstance(providers, dict):
+        raise ValueError("malformed implement-start: providers must be an object")
+    for prov_name, limits in providers.items():
+        if not isinstance(limits, dict):
+            raise ValueError(f"malformed implement-start: provider {prov_name} must be an object")
+        for key in ("load", "max_parallel"):
+            if not integer(limits.get(key)):
+                raise ValueError(f"malformed implement-start: provider {prov_name} {key} must be an integer, not boolean")
+    if event.get("attempt") is not None and not integer(event["attempt"]):
+        raise ValueError("malformed implement-start: attempt must be an integer, not boolean")
 
 
 def report(flood_dir: Path, rollout_path: Path) -> tuple[dict, int]:
