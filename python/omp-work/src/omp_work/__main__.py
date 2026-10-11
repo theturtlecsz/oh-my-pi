@@ -6,6 +6,7 @@ import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from uuid import UUID, uuid4
 
 import uvicorn
@@ -299,6 +300,118 @@ def _run_stop_command(args: argparse.Namespace) -> int:
         client.close()
 
 
+def _research_db_flags_partial(args: argparse.Namespace) -> bool:
+    present = (
+        args.config_dir is not None,
+        args.state_dir is not None,
+        args.data_dir is not None,
+        args.db_port is not None,
+    )
+    return any(present) and not all(present)
+
+
+def _research_db_config(args: argparse.Namespace) -> OperationsConfig:
+    if args.config_dir is None:
+        return OperationsConfig.defaults()
+    return OperationsConfig(
+        Path(args.config_dir),
+        Path(args.state_dir),
+        Path(args.data_dir),
+        port=args.db_port,
+    )
+
+
+def _research_client(config_path: Path) -> tuple[WorkClient, UUID]:
+    """Build a WorkClient from client JSON and read actor_id from its bearer.
+
+    The bearer file stays as written: this reads actor_id and leaves token and
+    actor_kind to the existing client authorization path.
+    """
+    document = json.loads(config_path.read_text(encoding="utf-8"))
+    if not isinstance(document, dict):
+        raise ValueError("client config must be a JSON object")
+    missing = [
+        key
+        for key in ("base_url", "workspace_id", "bearer_file")
+        if key not in document
+    ]
+    if missing:
+        raise ValueError(f"client config missing {', '.join(missing)}")
+    bearer_file = Path(str(document["bearer_file"]))
+    client = WorkClient(
+        str(document["base_url"]),
+        UUID(str(document["workspace_id"])),
+        bearer_file,
+    )
+    try:
+        bearer = json.loads(bearer_file.read_text(encoding="utf-8"))
+        if not isinstance(bearer, dict) or "actor_id" not in bearer:
+            raise ValueError("bearer file must contain actor_id")
+        actor_id = UUID(str(bearer["actor_id"]))
+    except (OSError, ValueError, KeyError, TypeError):
+        client.close()
+        raise
+    return client, actor_id
+
+
+def _run_research_command(args: argparse.Namespace) -> int:
+    if _research_db_flags_partial(args):
+        print(
+            "research: --config-dir, --state-dir, --data-dir, and --db-port "
+            "must all be set or all be omitted",
+            file=sys.stderr,
+        )
+        return 2
+
+    from .jobs.campaign_definition import load_definition
+
+    try:
+        definition = load_definition(Path(args.definition))
+    except (OSError, ValueError, TypeError) as error:
+        print(f"research: {error}", file=sys.stderr)
+        return 2
+
+    from .jobs.research_campaign import run_research_campaign
+    from .jobs.store import NativeJobStore
+
+    try:
+        ops = _research_db_config(args)
+        client_config = args.client_config or _default_client_config()
+        client, actor_id = _research_client(Path(client_config))
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        print(f"research: {error}", file=sys.stderr)
+        return 2
+
+    try:
+        store = NativeJobStore(ops)
+        if args.harness_dir is None:
+            with TemporaryDirectory() as temporary:
+                result = run_research_campaign(
+                    client,
+                    store,
+                    args.key,
+                    definition,
+                    harness_dir=Path(temporary),
+                    actor_id=actor_id,
+                )
+        else:
+            result = run_research_campaign(
+                client,
+                store,
+                args.key,
+                definition,
+                harness_dir=Path(args.harness_dir),
+                actor_id=actor_id,
+            )
+    except Exception as error:  # noqa: BLE001 - failure or refusal exits nonzero
+        print(f"research: {error}", file=sys.stderr)
+        return 1
+    finally:
+        client.close()
+    print(json.dumps(result))
+    return 0
+
+
 def _run_drain_command(args: argparse.Namespace) -> int:
     try:
         missions = drain_ops.in_flight(OperationsConfig.defaults())
@@ -320,7 +433,7 @@ def main(argv: list[str] | None = None) -> int | None:
     subcommands = parser.add_subparsers(
         dest="command",
         required=True,
-        metavar="{schema,hash,approve,validate,ops,serve,headroom,stall-check,parallel-admit,budget-alerts,projects,stop,alarms,jobs,owner-key,ingress,orchestrator,drain}",
+        metavar="{schema,hash,approve,validate,ops,serve,headroom,stall-check,parallel-admit,budget-alerts,projects,stop,alarms,jobs,owner-key,ingress,orchestrator,drain,research}",
     )
 
     schema = subcommands.add_parser("schema")
@@ -471,6 +584,18 @@ def main(argv: list[str] | None = None) -> int | None:
     drain_sub = drain.add_subparsers(dest="drain_command", required=True)
     drain_sub.add_parser("check")
 
+    research = subcommands.add_parser("research")
+    research_sub = research.add_subparsers(dest="research_command", required=True)
+    run_parser = research_sub.add_parser("run")
+    run_parser.add_argument("--key", required=True)
+    run_parser.add_argument("--definition", required=True, type=Path)
+    run_parser.add_argument("--client-config", type=Path)
+    run_parser.add_argument("--harness-dir", type=Path)
+    run_parser.add_argument("--config-dir", type=Path)
+    run_parser.add_argument("--state-dir", type=Path)
+    run_parser.add_argument("--data-dir", type=Path)
+    run_parser.add_argument("--db-port", type=int)
+
     args = parser.parse_args(argv)
     if args.command == "alarms":
         if args.client_config is None:
@@ -480,6 +605,8 @@ def main(argv: list[str] | None = None) -> int | None:
         return _run_events_command(args)
     if args.command == "drain":
         return _run_drain_command(args)
+    if args.command == "research":
+        return _run_research_command(args)
     if args.command == "stop":
         return _run_stop_command(args)
     if args.command == "serve":
