@@ -182,6 +182,10 @@ def _sample_model(model: type[BaseModel]) -> dict[str, Any]:
     if model.__name__ == "EvidenceArtifact":
         data["uri"] = "https://example.test/a"
         data["content_hash"] = HEX
+    if model.__name__ == "Conflict":
+        data["claim_ids"] = ["c1", "c2"]
+    if model.__name__ == "AcceptanceCriterion":
+        data["requirement_ids"] = ["req-1"]
     return data
 
 

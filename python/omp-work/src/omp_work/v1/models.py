@@ -9,12 +9,16 @@ from uuid import UUID
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from omp_work.contracts.nsi.v1.models import (
+    AcceptanceCriterion as NSIAcceptanceCriterion,
+    ClarificationQuestion as NSIClarificationQuestion,
+    Conflict as NSIConflict,
     EntityRef as NSIEntityRef,
     EvidenceArtifact as NSIEvidenceArtifact,
     EvidenceSpan as NSIEvidenceSpan,
     IntakeClaim as NSIIntakeClaim,
     IntakeOntology as NSIIntakeOntology,
     OwnerDecision as NSIOwnerDecision,
+    RequirementClause as NSIRequirementClause,
 )
 
 
@@ -2342,6 +2346,26 @@ class RecordIntakeDecisionPayload(IntakeRevisionPayload):
     verified_relay_operation_id: UUID | None = None
 
 
+class SupersedeIntakeClaimPayload(IntakeRevisionPayload):
+    old_claim_id: str = Field(min_length=1)
+    replacement_claim_id: str = Field(min_length=1)
+    decision_id: str = Field(min_length=1)
+
+
+class RecordIntakeIssuePayload(IntakeRevisionPayload):
+    issue: NSIConflict | NSIClarificationQuestion
+    gaps: tuple[str, ...]
+
+
+class LinkIntakeCriterionPayload(IntakeRevisionPayload):
+    criterion: NSIAcceptanceCriterion
+    requirements: tuple[NSIRequirementClause, ...]
+
+
+class AssessIntakePayload(IntakeRevisionPayload):
+    pass
+
+
 class StartIntakeCommand(StrictModel):
     type: Literal["start_intake"]
     payload: StartIntakePayload
@@ -2360,6 +2384,26 @@ class RecordIntakeClaimCommand(StrictModel):
 class RecordIntakeDecisionCommand(StrictModel):
     type: Literal["record_intake_decision"]
     payload: RecordIntakeDecisionPayload
+
+
+class SupersedeIntakeClaimCommand(StrictModel):
+    type: Literal["supersede_intake_claim"]
+    payload: SupersedeIntakeClaimPayload
+
+
+class RecordIntakeIssueCommand(StrictModel):
+    type: Literal["record_intake_issue"]
+    payload: RecordIntakeIssuePayload
+
+
+class LinkIntakeCriterionCommand(StrictModel):
+    type: Literal["link_intake_criterion"]
+    payload: LinkIntakeCriterionPayload
+
+
+class AssessIntakeCommand(StrictModel):
+    type: Literal["assess_intake"]
+    payload: AssessIntakePayload
 
 
 Command = Annotated[
@@ -2403,6 +2447,10 @@ Command = Annotated[
     | RegisterIntakeEvidenceCommand
     | RecordIntakeClaimCommand
     | RecordIntakeDecisionCommand
+    | SupersedeIntakeClaimCommand
+    | RecordIntakeIssueCommand
+    | LinkIntakeCriterionCommand
+    | AssessIntakeCommand
     | RegisterResearchArtifactCommand
     | CollectResearchArtifactCommand
     | RegisterResearchSourceCommand
