@@ -1118,6 +1118,71 @@ def test_utf8_evidence_bounds_and_quotes_use_repository_bytes(start, end, quote,
             check_claim_authority(claim, claim.asserted_by, predicates=_evidence_predicates(), **context)
 
 
+def _owner_artifact_context(source=b"abcdefghijkl"):
+    context = _repository_context(source)
+    artifact = context["artifacts"][SPAN["artifact_id"]]
+    context["artifacts"][artifact.id] = artifact.model_copy(
+        update={"actor": models.ActorRef(id="owner-1", kind="owner")}
+    )
+    return context
+
+
+@pytest.mark.parametrize("origin,kind", [("owner_statement", "owner"), ("model_proposal", "model")])
+def test_owner_evidence_artifact_is_accepted_for_statement_and_proposal(origin, kind):
+    context = _owner_artifact_context()
+    artifact = context["artifacts"][SPAN["artifact_id"]]
+    claim = _observation().model_copy(update={
+        "origin": origin,
+        "asserted_by": models.ActorRef(id=f"{kind}-1", kind=kind),
+    })
+    check_claim_authority(claim, claim.asserted_by, predicates=_evidence_predicates(), **context)
+    assert artifact.actor.kind == "owner"
+    assert artifact.actor.id == "owner-1"
+    assert artifact.id == SPAN["artifact_id"]
+
+
+@pytest.mark.parametrize("origin", ["repository_observation", "tool_receipt"])
+def test_owner_evidence_artifact_is_refused_for_observation_origins(origin):
+    context = _owner_artifact_context()
+    artifact = context["artifacts"][SPAN["artifact_id"]]
+    claim = _observation(origin)
+    assert claim.asserted_by.kind == "tool"
+    with pytest.raises(AuthorityRefusal):
+        check_claim_authority(claim, claim.asserted_by, predicates=_evidence_predicates(), **context)
+    assert artifact.actor.kind == "owner"
+
+
+def test_span_splitting_utf8_bytes_of_ae_emoji_is_refused():
+    source = "aé🙂".encode("utf-8")
+    span = models.EvidenceSpan(artifact_id=SPAN["artifact_id"], start_byte=2, end_byte=4)
+    claim = _observation().model_copy(update={"evidence": [span]})
+    with pytest.raises(AuthorityRefusal, match="evidence span splits UTF-8 bytes"):
+        check_claim_authority(
+            claim, claim.asserted_by, predicates=_evidence_predicates(), **_repository_context(source)
+        )
+
+
+def test_quote_that_is_not_the_span_bytes_is_refused():
+    source = "aé🙂".encode("utf-8")
+    # Same span as the split case: any quote differs from those undecodable bytes.
+    split_quote = models.EvidenceSpan(
+        artifact_id=SPAN["artifact_id"], start_byte=2, end_byte=4, quote="ab",
+    )
+    assert b"ab" != source[2:4]
+    # A decodable span of the same source, with a quote that is not those bytes.
+    misquote = models.EvidenceSpan(
+        artifact_id=SPAN["artifact_id"], start_byte=0, end_byte=3, quote="a",
+    )
+    assert "a".encode("utf-8") != source[0:3]
+    context = _repository_context(source)
+    claim = _observation().model_copy(update={"evidence": [split_quote]})
+    with pytest.raises(AuthorityRefusal, match="evidence span splits UTF-8 bytes"):
+        check_claim_authority(claim, claim.asserted_by, predicates=_evidence_predicates(), **context)
+    claim = _observation().model_copy(update={"evidence": [misquote]})
+    with pytest.raises(AuthorityRefusal, match="evidence quote does not match repository bytes"):
+        check_claim_authority(claim, claim.asserted_by, predicates=_evidence_predicates(), **context)
+
+
 def test_every_span_requires_grounding_including_optional_proposal_evidence():
     claim = models.IntakeClaim.model_validate({**CLAIM, "evidence": [SPAN, {**SPAN, "artifact_id": "missing"}]})
     with pytest.raises(AuthorityRefusal):

@@ -167,6 +167,9 @@ def check_claim_authority(
     refusing schema violations, actor spoofing, missing predicates, unpermitted
     admissions, and model proposals supplying admitted truth. Evidence resolves
     only through caller-supplied repository bytes, never claim-owned content.
+    A matching artifact may name a tool, or an owner on an owner statement or
+    model proposal. Any other kind is refused, and the artifact is not relabeled.
+    A span must decode as UTF-8. A quote, when present, must encode to those bytes.
     """
     projected_claim = _project_concrete_record(claim, models.IntakeClaim)
     projected_actor = _project_concrete_record(actor, models.ActorRef)
@@ -223,7 +226,14 @@ def check_claim_authority(
         if artifact_id not in artifacts:
             raise AuthorityRefusal(f"unresolved evidence artifact: {artifact_id}")
         artifact = _project_concrete_record(artifacts[artifact_id], models.EvidenceArtifact)
-        if artifact["id"] != artifact_id or artifact["actor"]["kind"] != "tool":
+        artifact_kind = artifact["actor"]["kind"]
+        # Owner evidence stays labeled owner. It is not rewritten as a tool.
+        owner_artifact_permitted = (
+            artifact_kind == "owner"
+            and projected_claim["origin"] in ("owner_statement", "model_proposal")
+            and not observation
+        )
+        if artifact["id"] != artifact_id or not (artifact_kind == "tool" or owner_artifact_permitted):
             raise AuthorityRefusal("evidence artifact must match its ID and identify a tool")
         source = repository_sources.get((artifact["uri"], artifact["revision"]))
         if not isinstance(source, bytes):
@@ -233,12 +243,17 @@ def check_claim_authority(
         start, end = span["start_byte"], span["end_byte"]
         if not 0 <= start < end <= len(source):
             raise AuthorityRefusal("evidence span is outside repository byte bounds")
+        span_bytes = source[start:end]
+        try:
+            span_bytes.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise AuthorityRefusal("evidence span splits UTF-8 bytes") from exc
         if "quote" in span:
             try:
                 quote = span["quote"].encode("utf-8")
             except UnicodeEncodeError as exc:
                 raise AuthorityRefusal("evidence quote is not UTF-8") from exc
-            if quote != source[start:end]:
+            if quote != span_bytes:
                 raise AuthorityRefusal("evidence quote does not match repository bytes")
 
 
