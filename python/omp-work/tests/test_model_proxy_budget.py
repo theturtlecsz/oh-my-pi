@@ -1,22 +1,40 @@
-"""Spend and usage can share one caller-owned PostgreSQL transaction."""
+"""Spend and usage can share one caller-owned PostgreSQL transaction.
+
+Also proves model-call admission: a stopped workspace, a stale lease, a wrong
+worker/fence, or a job on the wrong work item is refused before any send; each
+cap (project, item USD/tokens/wall-clock, task) refuses a bound that would
+exceed it; an admission holds the project and item budget locks so a second
+connection cannot pass them; and settling records usage and spend once while an
+abort writes no ledgers and frees the locks.
+"""
 
 from __future__ import annotations
 
 import os
+import threading
+import time
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
+import psycopg
 import pytest
+from omp_work.jobs.admission import enqueue_job
 from omp_work.jobs.store import JobError, NativeJobStore
 from omp_work.jobs.usage import record_usage
+from omp_work.model_proxy_budget import (
+    ModelProxyBudget,
+    ModelProxyBudgetError,
+)
+from omp_work.model_proxy_upstream import GEMINI, ModelRoute, Prepared
 from omp_work.operations.jobs_migrate import apply_jobs_migrations
 from omp_work.project_store import ProjectAuthorityRefused
 from omp_work.spend_budget import SpendBudget
 from omp_work.standing_change import ChangeAuthority
 from omp_work.v1.store import PostgresWorkStore
 from psycopg.errors import CheckViolation
+from psycopg.rows import dict_row
 from test_agent_stop_store import _envelope
 from test_item_budget_alerts import _seed_budget
 from test_workflow_service import OWNER, _create, _grant
@@ -27,6 +45,13 @@ pytestmark = pytest.mark.skipif(
     reason="set OMP_WORK_POSTGRES_INTEGRATION=1",
 )
 NOW = datetime(2026, 10, 11, tzinfo=UTC)
+
+_GENEROUS_ITEM = {
+    "usd": "1000.00",
+    "tokens": 1_000_000,
+    "wall_clock_seconds": 86_400,
+    "max_subagents": 0,
+}
 
 
 @pytest.fixture
@@ -285,3 +310,400 @@ def test_cursor_usage_rejects_invalid_price_before_writing(budget_context):
             _usage(ctx, cur, str(uuid4()), str(uuid4()), "-1")
         assert exc.value.code == "invalid_request"
         assert _counts(ctx, cur) == (0, 0, 0, 0)
+
+
+# --- Model-call admission -------------------------------------------------
+
+# Every ledger an admission may write, as a table the tests can count.
+_ADMISSION_TABLES = (
+    "omp_work.spend_records",
+    "omp_jobs.usage_events",
+    "omp_jobs.outbox",
+    "omp_jobs.operations",
+)
+
+
+def _prepared(max_usd: str, max_input_tokens: int = 100, max_output_tokens: int = 50) -> Prepared:
+    route = ModelRoute(
+        api=GEMINI,
+        model="test-model",
+        origin="https://generativelanguage.googleapis.com",
+        key_file="gemini-key",
+        context_tokens=200_000,
+        max_output_tokens=1000,
+        input_usd=Decimal("1"),
+        output_usd=Decimal("1"),
+        cache_usd=Decimal("1"),
+        price_version="p1",
+    )
+    return Prepared(
+        route=route,
+        url="https://example.test/v1:predict",
+        headers=(("Content-Type", "application/json"),),
+        body=b"{}",
+        max_input_tokens=max_input_tokens,
+        max_output_tokens=max_output_tokens,
+        max_usd=Decimal(max_usd),
+    )
+
+
+def _admitting_job(
+    ctx,
+    *,
+    work_id: UUID | None = None,
+    worker_id: str = "worker-1",
+    fence: int = 1,
+    lease_seconds: int = 60,
+    expired: bool = False,
+    status: str = "admitted",
+    parent_job_id: str | None = None,
+) -> str:
+    job_id = f"job-{uuid4()}"
+    enqueue_job(
+        ctx.jobs,
+        operation_id=str(uuid4()),
+        workspace_id=ctx.workspace_id,
+        actor_id=ctx.actor_id,
+        job_id=job_id,
+        work_id=work_id or ctx.work_id,
+        kind="compute",
+        required_capabilities=["compute.cpu"],
+        resources={"cpu": 1, "memory_mib": 0, "gpu": 0, "model_calls": 0},
+        lease_seconds=lease_seconds,
+        parent_job_id=parent_job_id,
+    )
+    lease = (
+        "clock_timestamp() - interval '10 seconds'"
+        if expired
+        else f"clock_timestamp() + ({lease_seconds} * interval '1 second')"
+    )
+    with psycopg.connect(
+        **ctx.service.config.connection_kwargs("postgres")
+    ) as conn:
+        conn.execute(
+            "UPDATE omp_jobs.jobs SET status=%s, worker_id=%s, fence=%s,"
+            f" lease_expires_at={lease}, updated_at=clock_timestamp()"  # nosec B608 - literal interval expression
+            " WHERE workspace_id=%s AND job_id=%s",
+            (status, worker_id, fence, ctx.workspace_id, job_id),
+        )
+    return job_id
+
+
+def _engage_stop(ctx) -> None:
+    ctx.projects.execute(
+        _envelope(ctx.workspace_id, "engage_stop", "stop model spending"),
+        actor_id=ctx.actor_id,
+        actor_kind="owner",
+        required_scope="work.stop",
+    )
+
+
+def _admission_counts(ctx) -> tuple[int, ...]:
+    counts = []
+    with psycopg.connect(
+        **ctx.service.config.connection_kwargs("omp_work_app"), row_factory=dict_row
+    ) as conn:
+        conn.execute(
+            "SELECT set_config('omp.workspace_id', %s, true),"
+            " set_config('omp.actor_id', %s, true)",
+            (str(ctx.workspace_id), str(ctx.actor_id)),
+        )
+        for table in _ADMISSION_TABLES:
+            row = conn.execute(
+                f"SELECT count(*) AS n FROM {table} WHERE workspace_id=%s",  # nosec B608 - fixed table list
+                (ctx.workspace_id,),
+            ).fetchone()
+            counts.append(row["n"])
+    return tuple(counts)
+
+
+def _admit(ctx, prepared, **kw):
+    return ctx.budget.admit(
+        ctx.workspace_id,
+        ctx.actor_id,
+        kw.pop("project_id", ctx.project_id),
+        kw.pop("mission_id", None),
+        kw.pop("work_id", ctx.work_id),
+        kw.pop("job_id", None),
+        kw.pop("worker_id", None),
+        kw.pop("fence", None),
+        kw.pop("request_id", f"req-{uuid4()}"),
+        kw.pop("task_ceiling_usd", None),
+        prepared,
+        **kw,
+    )
+
+
+def _budget_ctx(service, **budget_kwargs) -> SimpleNamespace:
+    """A workspace with a generous project budget and one base (unbudgeted) item."""
+    apply_jobs_migrations(service.config)
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    # _create seeds the workspace row that the project foreign key needs.
+    item = _create(service, workspace_id, "admission base item")
+    projects = PostgresWorkStore(service.config)
+    project_id = projects.ensure_project(
+        workspace_id, OWNER, f"admit-{uuid4()}", "Admission", "surface"
+    )
+    projects.set_spend_budget(
+        workspace_id,
+        OWNER,
+        project_id,
+        None,
+        SpendBudget("project", Decimal(budget_kwargs.get("ceiling", "100000")),
+                    Decimal(budget_kwargs.get("threshold", "100000"))),
+        ChangeAuthority("owner", uuid4(), "owner"),
+    )
+    return SimpleNamespace(
+        service=service,
+        workspace_id=workspace_id,
+        actor_id=OWNER,
+        project_id=project_id,
+        projects=projects,
+        jobs=NativeJobStore(service.config),
+        budget=ModelProxyBudget(service.config),
+        item=item,
+        work_id=UUID(item["work_id"]),
+    )
+
+
+@pytest.fixture
+def admission_context(service):
+    return _budget_ctx(service)
+
+
+def _item(ctx, title="admitted item", budget=None, **extra) -> UUID:
+    item = _create(ctx.service, ctx.workspace_id, title, **extra)
+    work_id = UUID(item["work_id"])
+    if budget is not None:
+        _seed_budget(
+            ctx,
+            work_id=work_id,
+            revision_id=UUID(item["revision_id"]),
+            budget=budget,
+        )
+    return work_id
+
+
+def test_admission_refuses_stop_before_upstream(admission_context):
+    """An engaged workspace refuses admission and writes no ledger."""
+    ctx = admission_context
+    _engage_stop(ctx)
+    sent = False
+    with pytest.raises(ModelProxyBudgetError) as exc:
+        admission = _admit(ctx, _prepared("1"))
+        sent = True
+        admission.abort()
+    assert exc.value.code == "agent_stop_engaged"
+    assert not sent
+    assert _admission_counts(ctx) == (0, 0, 0, 0)
+    with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
+        assert _counts(ctx, cur) == (0, 0, 0, 0)
+
+
+@pytest.mark.parametrize(
+    "override,code",
+    [
+        ({"expired": True}, "job_fence_stale"),
+        ({"status": "sealed"}, "job_fence_stale"),
+        ({"status": "backlog"}, "job_fence_stale"),
+        ({"fence": 99}, "job_fence_stale"),
+        ({"worker_id": "other-worker"}, "job_fence_stale"),
+    ],
+)
+def test_admission_refuses_bad_lease_or_identity(admission_context, override, code):
+    """An expired lease, a non-admitted job, or a wrong worker/fence is refused.
+
+    The job row is altered to the override; the caller always presents the
+    baseline ``worker-1``/fence 1, so a fence or worker override is a mismatch.
+    """
+    ctx = admission_context
+    job = _admitting_job(ctx, **override)
+    before = _admission_counts(ctx)
+    with pytest.raises(ModelProxyBudgetError) as exc:
+        _admit(ctx, _prepared("1"), job_id=job, worker_id="worker-1", fence=1)
+    assert exc.value.code == code
+    assert _admission_counts(ctx) == before
+
+
+def test_admission_refuses_unknown_job_and_missing_lease_identity(admission_context):
+    """An unknown job id, and a job present without worker/fence, are refused."""
+    ctx = admission_context
+    before = _admission_counts(ctx)
+    with pytest.raises(ModelProxyBudgetError) as exc_missing:
+        _admit(ctx, _prepared("1"), job_id=f"job-{uuid4()}", worker_id="w", fence=1)
+    assert exc_missing.value.code == "job_fence_stale"
+
+    job = _admitting_job(ctx)
+    before = _admission_counts(ctx)
+    with pytest.raises(ModelProxyBudgetError) as exc_invalid:
+        _admit(ctx, _prepared("1"), job_id=job)
+    assert exc_invalid.value.code == "invalid_request"
+
+    assert _admission_counts(ctx) == before
+
+
+def test_admission_refuses_job_on_other_work_item(admission_context):
+    """A live job whose work item is not the caller's is refused."""
+    ctx = admission_context
+    other = _item(ctx, "other work")
+    job = _admitting_job(ctx)  # on ctx.work_id
+    before = _admission_counts(ctx)
+    with pytest.raises(ModelProxyBudgetError) as exc:
+        _admit(
+            ctx,
+            _prepared("1"),
+            work_id=other,
+            job_id=job,
+            worker_id="worker-1",
+            fence=1,
+        )
+    assert exc.value.code == "invalid_request"
+    assert _admission_counts(ctx) == before
+
+
+def test_admission_refuses_project_cap_before_upstream(service):
+    """A bound over the project ceiling is refused and writes no ledger."""
+    ctx = _budget_ctx(service, ceiling="1000", threshold="1000")
+    with pytest.raises(ModelProxyBudgetError) as exc:
+        _admit(ctx, _prepared("1001"))
+    assert exc.value.code == "ceiling_exceeded"
+    assert _admission_counts(ctx) == (0, 0, 0, 0)
+
+
+@pytest.mark.parametrize(
+    "bound,budget",
+    [
+        ("1001", {**_GENEROUS_ITEM, "usd": "1000.00"}),
+        ("10", {**_GENEROUS_ITEM, "usd": "1000.00", "tokens": 100}),
+        ("10", {**_GENEROUS_ITEM, "usd": "1000.00", "wall_clock_seconds": 1}),
+    ],
+)
+def test_admission_refuses_each_item_cap(admission_context, bound, budget):
+    """A USD, token, or wall-clock item cap refuses a bound that exceeds it."""
+    ctx = admission_context
+    work_id = _item(ctx, "capped item", budget)
+    # One admitted job puts the item's job tree on the clock, so the wall-clock
+    # spend is one second older once we wait past a one-second cap.
+    _admitting_job(ctx, work_id=work_id)
+    if budget["wall_clock_seconds"] == 1:
+        time.sleep(1.1)
+    before = _admission_counts(ctx)
+    with pytest.raises(ModelProxyBudgetError) as exc:
+        _admit(ctx, _prepared(bound), work_id=work_id)
+    assert exc.value.code == "item_budget_exceeded"
+    assert _admission_counts(ctx) == before
+
+
+def test_admission_refuses_task_ceiling(admission_context):
+    """A bound over the work item's task USD ceiling is refused."""
+    ctx = admission_context
+    before = _admission_counts(ctx)
+    with pytest.raises(ModelProxyBudgetError) as exc:
+        _admit(ctx, _prepared("101"), task_ceiling_usd="100")
+    assert exc.value.code == "task_ceiling_exceeded"
+    assert _admission_counts(ctx) == before
+
+
+def test_admission_holds_project_lock_against_second_connection(admission_context):
+    """A second connection cannot authorize a spend while an admission holds the lock."""
+    ctx = admission_context
+    admission = _admit(ctx, _prepared("6"))
+    blocked: list[str] = []
+
+    def second() -> None:
+        try:
+            with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
+                _spend(ctx, cur, Decimal(6), uuid4())
+            blocked.append("passed")
+        except Exception as exc:  # noqa: BLE001 - the observed outcome is the assertion
+            blocked.append(type(exc).__name__)
+
+    thread = threading.Thread(target=second)
+    thread.start()
+    time.sleep(0.3)
+    assert thread.is_alive(), "second connection passed a held budget lock"
+    admission.abort()
+    thread.join(timeout=10)
+    assert not thread.is_alive()
+    assert blocked == ["passed"]
+
+
+def test_admission_holds_item_lock_against_second_connection(admission_context):
+    """A second connection cannot pass the held root-item advisory lock."""
+    ctx = admission_context
+    work_id = _item(ctx, "locked item", _GENEROUS_ITEM)
+    parent = _admitting_job(ctx, work_id=work_id)
+    job = _admitting_job(ctx, work_id=work_id, worker_id="w2", fence=2, parent_job_id=parent)
+    admission = _admit(
+        ctx, _prepared("6"), work_id=work_id, job_id=job, worker_id="w2", fence=2
+    )
+
+    key = f"omp_work.item_budget:{ctx.workspace_id}:{work_id}"
+    kwargs = ctx.service.config.connection_kwargs("postgres")
+    admission_pid = int(
+        admission.cursor.execute("SELECT pg_backend_pid() AS pid").fetchone()["pid"]
+    )
+    waiter_conn = psycopg.connect(**kwargs, autocommit=True, row_factory=dict_row)
+    monitor = psycopg.connect(**kwargs, autocommit=True, row_factory=dict_row)
+    thread_result: list[str] = []
+
+    def waiter() -> None:
+        try:
+            waiter_conn.execute(
+                "SELECT pg_advisory_lock(hashtextextended(%s, 0))", (key,)
+            )
+            thread_result.append("acquired")
+        except Exception as exc:  # noqa: BLE001
+            thread_result.append(type(exc).__name__)
+
+    thread = threading.Thread(target=waiter)
+    try:
+        thread.start()
+        deadline = time.time() + 5
+        blocked = False
+        while time.time() < deadline:
+            row = monitor.execute(
+                "SELECT pid FROM pg_stat_activity WHERE %s = ANY(pg_blocking_pids(pid)) LIMIT 1",
+                (admission_pid,),
+            ).fetchone()
+            if row is not None:
+                blocked = True
+                break
+            time.sleep(0.02)
+        assert blocked, "second connection acquired a held item advisory lock"
+        admission.abort()
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+        assert thread_result == ["acquired"]
+    finally:
+        waiter_conn.execute("SELECT pg_advisory_unlock_all()")
+        waiter_conn.close()
+        monitor.close()
+
+
+def test_admission_settle_writes_usage_and_spend_once(admission_context):
+    """Settling records one usage event and one project spend, then frees the locks."""
+    ctx = admission_context
+    admission = _admit(ctx, _prepared("6"), request_id="req-settle", operation_id="op-settle")
+    result = admission.settle(
+        actual_usd=Decimal("6"), input_tokens=10, output_tokens=5, cache_tokens=0
+    )
+    assert result["status"] == "settled"
+    assert result["usage"]["status"] == "applied"
+    assert _admission_counts(ctx)[:2] == (1, 1)
+
+    # The locks are released: a second connection can now authorize a spend.
+    with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
+        decision = _spend(ctx, cur, Decimal(1), uuid4())
+        assert decision.allowed
+
+
+def test_admission_abort_writes_no_ledgers_and_frees_locks(admission_context):
+    """Aborting before a send rolls back, writes nothing, and releases the locks."""
+    ctx = admission_context
+    admission = _admit(ctx, _prepared("6"))
+    admission.abort()
+    assert _admission_counts(ctx) == (0, 0, 0, 0)
+    with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
+        assert _spend(ctx, cur, Decimal(6), uuid4()).allowed
