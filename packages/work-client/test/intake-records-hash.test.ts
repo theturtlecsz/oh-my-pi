@@ -18,11 +18,35 @@ const NUMBERS = SAMPLES.flatMap(value => [value, -value]);
 
 const SCRIPT = `
 import json, sys
+from pydantic import ValidationError
 from omp_work.v1.models import CommandEnvelope
 from omp_work.v1.canonical import command_sha256, sha256
 
 for item in json.load(sys.stdin):
-    envelope = CommandEnvelope.model_validate(item["envelope"])
+    if "omittedEquivalent" in item:
+        # NSI wire schemas reject explicit null even though model defaults dump null.
+        # Prove that boundary, then hash the validated omitted-default equivalent.
+        try:
+            CommandEnvelope.model_validate(item["envelope"])
+        except ValidationError as error:
+            assert "NSI validation at" in str(error), str(error)
+            assert ("None is not of type" in str(error)
+                    or "None is not valid under any of the given schemas" in str(error)), str(error)
+        else:
+            raise AssertionError("explicit null unexpectedly passed NSI wire validation")
+        envelope = CommandEnvelope.model_validate(item["omittedEquivalent"])
+        raw_payload = item["envelope"]["command"]["payload"]
+        dumped_payload = envelope.command.model_dump(mode="json")["payload"]
+        if raw_payload["claim"].get("admitted_by", "omitted") is None:
+            assert dumped_payload["claim"]["admitted_by"] is None
+        for raw_span, dumped_span in zip(raw_payload["claim"]["evidence"], dumped_payload["claim"]["evidence"], strict=True):
+            if raw_span.get("quote", "omitted") is None:
+                assert dumped_span["quote"] is None
+        for raw_link, dumped_link in zip(raw_payload["evidence_links"], dumped_payload["evidence_links"], strict=True):
+            if raw_link["span"].get("quote", "omitted") is None:
+                assert dumped_link["span"]["quote"] is None
+    else:
+        envelope = CommandEnvelope.model_validate(item["envelope"])
     result = item["result"]
     print(command_sha256(envelope))
     print(sha256(result))
@@ -30,7 +54,9 @@ for item in json.load(sys.stdin):
 
 type OracleRow = { command: string; result: string };
 
-async function oracle(cases: { envelope: unknown; result: unknown }[]): Promise<OracleRow[]> {
+async function oracle(
+	cases: { envelope: unknown; result: unknown; omittedEquivalent?: unknown }[],
+): Promise<OracleRow[]> {
 	const child = Bun.spawn(["uv", "run", "--project", pythonProject, "python", "-c", SCRIPT], {
 		stdin: new Blob([JSON.stringify(cases)]),
 		stdout: "pipe",
@@ -65,7 +91,13 @@ function reorderKeys(value: Record<string, unknown>): Record<string, unknown> {
 
 test("intake result and command hashes match Python sha256 and command_sha256", async () => {
 	const fingerprint = JSON.stringify(fixture);
-	const cases: { command: string; kind: string; envelope: Record<string, unknown>; result: unknown }[] = [];
+	const cases: {
+		command: string;
+		kind: string;
+		envelope: Record<string, unknown>;
+		result: unknown;
+		omittedEquivalent?: Record<string, unknown>;
+	}[] = [];
 
 	// 1. Fixture entries, reordered results, and numeric result mutations
 	for (const [command, entry] of Object.entries(fixture.commands)) {
@@ -236,7 +268,38 @@ test("intake result and command hashes match Python sha256 and command_sha256", 
 		result: fixture.commands.record_intake_decision.result,
 	});
 
-	const rows = await oracle(cases.map(({ envelope, result }) => ({ envelope, result })));
+	// Explicit null quote equals omitted default quote
+	const explicitNullQuoteEnv = structuredClone(omittedQuoteEnv);
+	const expQuotePl = (explicitNullQuoteEnv.command as Record<string, unknown>).payload as Record<string, unknown>;
+	const expQuoteClaim = expQuotePl.claim as Record<string, unknown>;
+	(expQuoteClaim.evidence as Record<string, unknown>[])[0]!.quote = null;
+	(expQuotePl.evidence_links as { span: Record<string, unknown> }[])[0]!.span.quote = null;
+	cases.push({
+		command: "record_intake_claim",
+		kind: "default-quote:explicit-null",
+		envelope: explicitNullQuoteEnv,
+		omittedEquivalent: omittedQuoteEnv,
+		result: fixture.commands.record_intake_claim.result,
+	});
+
+	// Explicit null admitted_by equals omitted default admitted_by
+	const explicitNullAdmittedEnv = structuredClone(omittedAdmittedEnv);
+	const expAdmittedPl = (explicitNullAdmittedEnv.command as Record<string, unknown>).payload as Record<
+		string,
+		unknown
+	>;
+	(expAdmittedPl.claim as Record<string, unknown>).admitted_by = null;
+	cases.push({
+		command: "record_intake_claim",
+		kind: "default-admitted-by:explicit-null",
+		envelope: explicitNullAdmittedEnv,
+		omittedEquivalent: omittedAdmittedEnv,
+		result: fixture.commands.record_intake_claim.result,
+	});
+
+	const rows = await oracle(
+		cases.map(({ envelope, result, omittedEquivalent }) => ({ envelope, result, omittedEquivalent })),
+	);
 	expect(rows).toHaveLength(cases.length);
 
 	const fixtureCommandHash = new Map<string, string>();
@@ -282,22 +345,8 @@ test("intake result and command hashes match Python sha256 and command_sha256", 
 	// Source spans omitted default equals explicit [] in fixture
 	expect(intakeCommandSha256(omittedSpansEnv)).toBe(fixtureCommandHash.get("register_intake_evidence") ?? "");
 
-	// Explicit null quote equals omitted default quote
-	const explicitNullQuoteEnv = structuredClone(omittedQuoteEnv);
-	const expQuotePl = (explicitNullQuoteEnv.command as Record<string, unknown>).payload as Record<string, unknown>;
-	const expQuoteClaim = expQuotePl.claim as Record<string, unknown>;
-	(expQuoteClaim.evidence as Record<string, unknown>[])[0]!.quote = null;
-	(expQuotePl.evidence_links as { span: Record<string, unknown> }[])[0]!.span.quote = null;
 	expect(intakeCommandSha256(explicitNullQuoteEnv)).toBe(intakeCommandSha256(omittedQuoteEnv));
 	expect(intakeCommandSha256(omittedQuoteEnv)).not.toBe(fixtureCommandHash.get("record_intake_claim") ?? "");
-
-	// Explicit null admitted_by equals omitted default admitted_by
-	const explicitNullAdmittedEnv = structuredClone(omittedAdmittedEnv);
-	const expAdmittedPl = (explicitNullAdmittedEnv.command as Record<string, unknown>).payload as Record<
-		string,
-		unknown
-	>;
-	(expAdmittedPl.claim as Record<string, unknown>).admitted_by = null;
 	expect(intakeCommandSha256(explicitNullAdmittedEnv)).toBe(intakeCommandSha256(omittedAdmittedEnv));
 	expect(intakeCommandSha256(omittedAdmittedEnv)).not.toBe(fixtureCommandHash.get("record_intake_claim") ?? "");
 
