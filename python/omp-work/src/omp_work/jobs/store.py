@@ -25,18 +25,27 @@ WP5 accounting writes ``omp_jobs.usage_events`` and the file usage ledger
 """
 from __future__ import annotations
 
+import ipaddress
 import json
+import math
+import select
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
+from typing import TypeVar
 from uuid import UUID
 
 import psycopg
+from psycopg import pq
+from psycopg.abc import PQGen
+from psycopg.conninfo import make_conninfo
 from psycopg.errors import UniqueViolation
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
+from psycopg.waiting import Ready, Wait
 
 from omp_work.operations.config import OperationsConfig
 from omp_work.research_ledger import append_ledger_event
@@ -108,25 +117,180 @@ def _bound_operation_request(workspace_id: UUID, request: object) -> object:
     return {"workspace_id": workspace, "request": request}
 
 
+_R = TypeVar("_R")
+
+
+class TransactionDeadlineExceeded(TimeoutError):
+    """Deadline expired; a sent COMMIT may have succeeded without acknowledgement."""
+
+    def __init__(self, *, outcome_uncertain: bool = False) -> None:
+        self.outcome_uncertain = outcome_uncertain
+        super().__init__(
+            "transaction deadline exceeded; commit outcome uncertain"
+            if outcome_uncertain
+            else "transaction deadline exceeded"
+        )
+
+
+def _remaining(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TransactionDeadlineExceeded()
+    return remaining
+
+
+class _DeadlineConnection(psycopg.Connection[dict[str, object]]):
+    """Drive psycopg's nonblocking generators without a background writer."""
+
+    deadline: float
+
+    def wait(self, gen: PQGen[_R], interval: float = 0.1) -> _R:
+        try:
+            _remaining(self.deadline)
+            state = next(gen)
+            while True:
+                remaining = _remaining(self.deadline)
+                fd = self.pgconn.socket
+                readable, writable, _ = select.select(
+                    [fd] if state & Wait.R else [],
+                    [fd] if state & Wait.W else [],
+                    [],
+                    remaining,
+                )
+                _remaining(self.deadline)
+                ready = Ready.NONE
+                if readable:
+                    ready |= Ready.R
+                if writable:
+                    ready |= Ready.W
+                state = gen.send(ready)
+        except StopIteration as done:
+            return done.value
+        finally:
+            gen.close()
+
+
+def _poll(
+    conn: pq.PGconn | pq.PGcancelConn,
+    poll: Callable[[], pq.PollingStatus],
+    deadline: float,
+) -> None:
+    while True:
+        remaining = _remaining(deadline)
+        status = poll()
+        if status == pq.PollingStatus.OK:
+            return
+        if status == pq.PollingStatus.FAILED:
+            raise psycopg.OperationalError(conn.error_message.decode(errors="replace"))
+        fd = conn.socket
+        select.select(
+            [fd] if status == pq.PollingStatus.READING else [],
+            [fd] if status == pq.PollingStatus.WRITING else [],
+            [],
+            remaining,
+        )
+
+
+@contextmanager
+def _deadline_connection(
+    params: dict[str, object],
+    deadline: float,
+) -> Iterator[_DeadlineConnection]:
+    # Reserve part of the *total* allowance for safe cancellation and disposal.
+    # libpq <17 cancel() is blocking, so reject it rather than silently falling back.
+    if pq.version() < 170000:
+        raise RuntimeError("bounded transactions require libpq >= 17")
+    allowance = _remaining(deadline)
+    operation_deadline = deadline - min(0.25, allowance / 4)
+    # DNS resolution inside libpq is synchronous. Internal bounded callers must
+    # use a numeric address (or Unix socket); ordinary callers remain unrestricted.
+    host = str(params["host"])
+    if not host.startswith("/"):
+        params = {**params, "hostaddr": str(ipaddress.ip_address(host))}
+    _remaining(operation_deadline)
+    pgconn = pq.PGconn.connect_start(make_conninfo(**params).encode())
+    conn = None
+    try:
+        _poll(pgconn, pgconn.connect_poll, operation_deadline)
+        pgconn.nonblocking = 1
+        conn = _DeadlineConnection(pgconn, row_factory=dict_row)
+        conn.deadline = operation_deadline
+        yield conn
+    finally:
+        if conn is not None:
+            try:
+                remaining = deadline - time.monotonic()
+                if (
+                    remaining > 0
+                    and pgconn.transaction_status == pq.TransactionStatus.ACTIVE
+                ):
+                    cancel = pgconn.cancel_conn()
+                    try:
+                        cancel.start()
+                        _poll(cancel, cancel.poll, deadline)
+                    finally:
+                        cancel.finish()
+            except (psycopg.Error, TransactionDeadlineExceeded):
+                # Cancellation itself can lose acknowledgement. Disposal still
+                # prevents this client from sending any further SQL or COMMIT.
+                pass
+            finally:
+                conn.close()
+        else:
+            pgconn.finish()
+
+
 class NativeJobStore:
     def __init__(self, config: OperationsConfig) -> None:
         self._config = config
 
     @contextmanager
     def transaction(
-        self, workspace_id: UUID, actor_id: UUID
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        *,
+        deadline: float | None = None,
     ) -> Iterator[psycopg.Cursor[dict[str, object]]]:
-        with psycopg.connect(
-            **self._config.connection_kwargs("omp_work_app"), row_factory=dict_row
-        ) as conn:
-            with conn.transaction():
-                with conn.cursor() as cur:
-                    cur.execute("SET LOCAL search_path = pg_catalog")
-                    cur.execute(
-                        "SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)",
-                        (str(workspace_id), str(actor_id)),
-                    )
-                    yield cur
+        """Run with existing RLS identity, optionally bounded by monotonic time.
+
+        ``deadline`` is an internal absolute ``time.monotonic()`` deadline, not
+        a per-statement timeout. Its finite allowance covers connect, identity
+        setup, SQL/advisory waits, COMMIT acknowledgement and cleanup. Up to
+        min(250ms, one quarter of initial remaining time) is reserved for safe
+        cancellation and immediate libpq disposal. No worker or retry survives
+        expiry. Caller Python code must cooperate: it cannot be preempted, but
+        cannot send SQL or commit after expiry. Numeric hosts/Unix sockets and
+        libpq >=17 are required on this path to avoid blocking DNS/cancellation.
+
+        Lost COMMIT acknowledgement raises with ``outcome_uncertain=True``;
+        disposal does not prove rollback of a COMMIT already sent to PostgreSQL.
+        """
+        if deadline is not None and not math.isfinite(deadline):
+            raise ValueError("transaction deadline must be finite")
+        connection = (
+            psycopg.connect(
+                **self._config.connection_kwargs("omp_work_app"), row_factory=dict_row
+            )
+            if deadline is None
+            else _deadline_connection(
+                self._config.connection_kwargs("omp_work_app"), deadline,
+            )
+        )
+        with connection as conn:
+            committing = False
+            try:
+                with conn.transaction():
+                    with conn.cursor() as cur:
+                        cur.execute("SET LOCAL search_path = pg_catalog")
+                        cur.execute(
+                            "SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)",
+                            (str(workspace_id), str(actor_id)),
+                        )
+                        yield cur
+                    committing = True
+            except TransactionDeadlineExceeded as error:
+                raise TransactionDeadlineExceeded(outcome_uncertain=committing) from error
 
     def run_operation(
         self,
