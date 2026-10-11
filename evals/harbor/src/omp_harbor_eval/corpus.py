@@ -162,7 +162,7 @@ def load_batch(path: str | Path) -> Batch:
             raise ValueError(f"task {task_id}: invalid category {category!r}, must be one of {CATEGORIES}")
 
         source_commit = item["source_commit"]
-        if not isinstance(source_commit, str) or not source_commit.strip():
+        if source_commit is not None and (not isinstance(source_commit, str) or not source_commit.strip()):
             raise ValueError(f"task {task_id}: source_commit must be a non-empty string")
 
         rationale = item["rationale"]
@@ -247,6 +247,13 @@ def freeze(
         if isinstance(batch, (str, Path)):
             batch_identifiers.append(str(batch))
             loaded = load_batch(Path(batch))
+            for task in loaded:
+                resolved = _resolve_fixture_dir(task["fixture"], task["task_id"], base_path=Path(batch).parent)
+                task["fixture"] = (
+                    resolved.relative_to(REPO_ROOT).as_posix()
+                    if resolved.is_relative_to(REPO_ROOT)
+                    else resolved.as_posix()
+                )
             all_tasks.extend(loaded)
         elif isinstance(batch, Mapping) and "tasks" in batch:
             batch_identifiers.append(str(batch.get("name", f"batch_{idx}")))
