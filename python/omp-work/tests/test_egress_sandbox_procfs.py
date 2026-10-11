@@ -14,6 +14,7 @@ import sys
 import pytest
 
 from egress_sandbox_procfs_support import intercept_helper
+from omp_work import egress_sandbox_helper as helper
 from omp_work.egress_policy import Identity, MemoryRecorder
 from omp_work.egress_sandbox import run_sandboxed
 
@@ -144,7 +145,7 @@ def test_shim_drops_caps_without_running_setpriv(
 
     The stand-in setpriv fails like a host whose setpriv needs cap_last_cap: with
     /proc masked it writes ``setpriv: activate capabilities: No such file or
-    directory`` to stderr and exits 127 without touching its log. The payload can
+    directory`` to stderr, logs missing, and exits 127. The payload can
     only succeed with an empty stand-in log when the shim performs the drop itself
     and execs the worker argv instead of setpriv.
     """
@@ -157,19 +158,23 @@ def test_shim_drops_caps_without_running_setpriv(
     standin.write_text(
         "#!/bin/sh\n"
         "if ! cap_last_cap=$(cat /proc/sys/kernel/cap_last_cap 2>/dev/null); then\n"
+        f"    echo missing >> {json.dumps(str(standin_log))}\n"
         "    echo 'setpriv: activate capabilities: No such file or directory' >&2\n"
         "    exit 127\n"
         "fi\n"
-        f"echo setpriv >> {json.dumps(str(standin_log))}\n"
+        f"echo present >> {json.dumps(str(standin_log))}\n"
         "shift 3\n"
         'exec "$@"\n',
         encoding="utf-8",
     )
     standin.chmod(0o755)
     monkeypatch.setenv("PATH", f"{standin_dir}{os.pathsep}{os.environ['PATH']}")
-    assert shutil.which("setpriv", path=os.environ["PATH"]) == str(standin)
+    search_path = str(tmp_path / "shim") + os.pathsep + os.environ["PATH"]
+    assert shutil.which("setpriv", path=search_path) == str(standin)
+    assert helper._executable("setpriv", search_path) == str(standin)
     intercept_helper(monkeypatch, interceptor)
     marker = tmp_path / "payload.json"
+    cap_last_cap = int(Path("/proc/sys/kernel/cap_last_cap").read_text())
     sys_capget = {"x86_64": 125, "aarch64": 90}[platform.machine()]
     code = f'''
 import ctypes, errno, json, os
@@ -182,6 +187,12 @@ class CapData(ctypes.Structure):
 header = CapHeader(0x20080522, 0)
 caps = (CapData * 2)()
 assert libc.syscall(ctypes.c_long({sys_capget}), ctypes.byref(header), ctypes.byref(caps)) == 0
+bounding = []
+for cap in range(64):
+    result = libc.prctl(23, cap, 0, 0, 0)
+    if result == -1:
+        assert ctypes.get_errno() == errno.EINVAL
+    bounding.append(result)
 entries = os.listdir("/proc")
 try:
     Path("/proc/should-not-exist").touch()
@@ -193,7 +204,7 @@ Path({str(marker)!r}).write_text(json.dumps({{
     "entries": entries, "mode": os.stat("/proc").st_mode & 0o777,
     "write_errno": write_errno, "preload": os.environ.get("LD_PRELOAD"),
     "no_new_privs": libc.prctl(39, 0, 0, 0, 0),
-    "bset_raised": [cap for cap in range(64) if libc.prctl(23, cap, 0, 0, 0) == 1],
+    "bounding": bounding,
     "cap_words": [field for word in caps
                   for field in (word.effective, word.permitted, word.inheritable)],
 }}))
@@ -210,6 +221,8 @@ Path({str(marker)!r}).write_text(json.dumps({{
     assert rc == 0, output.decode(errors="replace")
     assert json.loads(marker.read_text()) == {
         "entries": [], "mode": 0o555, "write_errno": errno.EROFS, "preload": None,
-        "no_new_privs": 1, "bset_raised": [], "cap_words": [0, 0, 0, 0, 0, 0],
+        "no_new_privs": 1,
+        "bounding": [0 if cap <= cap_last_cap else -1 for cap in range(64)],
+        "cap_words": [0, 0, 0, 0, 0, 0],
     }
     assert standin_log.read_text(encoding="utf-8") == ""
