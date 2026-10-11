@@ -60,11 +60,16 @@ def test_audit_launch_mounts_resolved_git_metadata(launch, relative_gitdir) -> N
 
     assert run() == 0
     args, kwargs = calls[0]
-    assert kwargs["ro_dirs"] == ((repo / ".git").resolve(), gitdir)
+    assert kwargs["ro_dirs"][:2] == ((repo / ".git").resolve(), gitdir)
     assert kwargs["worktree_readonly"] is True
     assert kwargs["audit_dir"] == audit
-    assert "verifier_runtime" not in kwargs
-    assert set(args[4]) == {"PATH", "LANG", "TERM", "TZ", "OMP_TASK_TOKEN", "OMP_WORK_URL"}
+    assert kwargs["verifier_runtime"] is True
+    assert set(args[4]) == {
+        "PATH", "LANG", "TERM", "TZ", "OMP_TASK_TOKEN", "OMP_WORK_URL",
+        "PYTHONPATH", "PYTHONSAFEPATH",
+    }
+    assert args[4]["PYTHONSAFEPATH"] == "1"
+    assert str(job) not in args[4]["PYTHONPATH"]
 
 
 def test_no_audit_keeps_original_mount_options_and_environment(launch) -> None:
