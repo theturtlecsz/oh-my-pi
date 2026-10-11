@@ -109,7 +109,11 @@ def model_price(
                         has_long_context = True
                         cards.append(rate_lc)
 
-    exact = (not has_long_context) and (not has_time_based)
+    exact = (
+        (not has_long_context)
+        and (not has_time_based)
+        and all("cacheRead" in c and c["cacheRead"] is not None for c in cards)
+    )
 
     card_rates: list[tuple[Decimal, Decimal, Decimal]] = []
     for c in cards:

@@ -10,13 +10,13 @@
       "work_id": "00000000-0000-7000-8000-000000000001",
       "revision_id": "00000000-0000-7000-8000-000000000010",
       "revision_number": 1,
-      "title": "Add the project egress policy store and migration 0033",
-      "description": "Add the project egress policy store and its migration. Migration 0033 owns the project egress policy table and the append-only egress records table, one active policy row per project, with the application role allowed to change only the active flag. The store must insert a new policy version once the change against the active row is authorized, clear the active flag on the row it replaces, load the active policy by compiling it with the active standing policies, and never let a project clone's own files contribute to the compiled policy.",
+      "title": "Restore safe upgrades and project lookup indexes",
+      "description": "After updating, existing work databases reject migration checksums. New databases still need fast mission and history lookups by workspace and project. Please make upgrades work again without changing previously applied schema steps, and ensure both existing and new databases receive the lookup indexes exactly once.",
       "scope": "initial/scope",
       "acceptance_criteria": [
-        "migration 0033 adds the active-per-project egress policy table and the append-only egress records table",
-        "a recorded policy version keeps its registries, remotes, and decision",
-        "loading the policy uses the active row and standing policies, never the project clone's files"
+        "Previously applied project-record migration bytes remain compatible with existing databases.",
+        "Mission and history lookup indexes are introduced once through a new migration.",
+        "Main and jobs migration ledgers remain independently enumerable in ordinal order."
       ],
       "state": "IN_PROGRESS"
     }

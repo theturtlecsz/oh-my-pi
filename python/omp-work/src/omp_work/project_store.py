@@ -23,6 +23,7 @@ import psycopg
 from omp_work.action_tiers import tier_of
 from omp_work.spend_budget import (
     SpendBudget,
+    SpendDecision,
     authorize_spend,
     budget_change_kind,
     effective_budgets,
@@ -1203,44 +1204,74 @@ class ProjectStoreMixin:
         spend appends a spend_records row naming its tier and policy.
         """
         with self._transaction(workspace_id, actor_id) as cur:
-            if read_stop_state(cur, workspace_id)["stopped"]:
-                raise ProjectAuthorityRefused("agent_stop_engaged")
-            self._require_project(cur, workspace_id, project_id)
-            self._lock_mission(cur, workspace_id, project_id, mission_id)
-            mission_budget, _ = self._load_budget_locked(
-                cur, workspace_id, project_id, mission_id
+            decision = self.authorize_spend_cursor(
+                cur, workspace_id, project_id, mission_id, amount_usd, now
             )
-            project_budget, _ = self._load_budget_locked(
-                cur, workspace_id, project_id, None
+            self.append_spend_cursor(
+                cur, workspace_id, project_id, mission_id, amount_usd, decision, uuid4()
             )
-            budgets = effective_budgets(mission_budget, project_budget)
-            spent = self._spent_by_budget(
-                cur, workspace_id, project_id, mission_id, mission_budget, project_budget
-            )
-            decision = authorize_spend(
-                budgets,
-                spent,
+
+    def authorize_spend_cursor(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        project_id: UUID,
+        mission_id: UUID | None,
+        amount_usd: Decimal,
+        now: datetime,
+    ) -> SpendDecision:
+        """Authorize and hold budget locks until the caller's transaction ends."""
+        if read_stop_state(cur, workspace_id)["stopped"]:
+            raise ProjectAuthorityRefused("agent_stop_engaged")
+        self._require_project(cur, workspace_id, project_id)
+        self._lock_mission(cur, workspace_id, project_id, mission_id)
+        mission_budget, _ = self._load_budget_locked(
+            cur, workspace_id, project_id, mission_id
+        )
+        project_budget, _ = self._load_budget_locked(
+            cur, workspace_id, project_id, None
+        )
+        budgets = effective_budgets(mission_budget, project_budget)
+        spent = self._spent_by_budget(
+            cur, workspace_id, project_id, mission_id, mission_budget, project_budget
+        )
+        decision = authorize_spend(
+            budgets,
+            spent,
+            amount_usd,
+            self._spend_policies(cur, workspace_id, project_id),
+            self._project_repos(cur, workspace_id, project_id),
+            now,
+        )
+        if not decision.allowed:
+            raise ProjectAuthorityRefused(decision.code or "spend_refused")
+        return decision
+
+    def append_spend_cursor(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        project_id: UUID,
+        mission_id: UUID | None,
+        amount_usd: Decimal,
+        decision: SpendDecision,
+        record_id: UUID,
+    ) -> None:
+        """Append an authorized spend using the same transaction and held locks."""
+        cur.execute(
+            "INSERT INTO omp_work.spend_records"
+            " (workspace_id, record_id, project_id, mission_id, amount_usd, tier, policy_id)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (
+                workspace_id,
+                record_id,
+                project_id,
+                mission_id,
                 amount_usd,
-                self._spend_policies(cur, workspace_id, project_id),
-                self._project_repos(cur, workspace_id, project_id),
-                now,
-            )
-            if not decision.allowed:
-                raise ProjectAuthorityRefused(decision.code or "spend_refused")
-            cur.execute(
-                "INSERT INTO omp_work.spend_records"
-                " (workspace_id, record_id, project_id, mission_id, amount_usd, tier, policy_id)"
-                " VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                (
-                    workspace_id,
-                    uuid4(),
-                    project_id,
-                    mission_id,
-                    amount_usd,
-                    decision.tier,
-                    _optional_uuid(decision.policy_id),
-                ),
-            )
+                decision.tier,
+                _optional_uuid(decision.policy_id),
+            ),
+        )
 
     def _existing_project_id(
         self, cur: psycopg.Cursor[dict[str, object]], workspace_id: UUID, key: str

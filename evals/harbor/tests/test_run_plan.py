@@ -347,7 +347,7 @@ def test_tmp_catalog_model_price_exact_and_long_context() -> None:
     assert p_lc.output == Decimal("18")
     assert p_lc.exact is False
 
-    # 2. Base only -> exact true
+    # 2. Base only -> exact false
     cat_base = {
         "prov": {
             "m_base": {
@@ -361,7 +361,22 @@ def test_tmp_catalog_model_price_exact_and_long_context() -> None:
     p_base = model_price(cat_base, "prov", "m_base")
     assert p_base.input == Decimal("2")
     assert p_base.output == Decimal("12")
-    assert p_base.exact is True
+    assert p_base.exact is False
+
+    # Card with cacheRead: 0 -> exact true
+    cat_zero_card = {
+        "prov": {
+            "m_zero_card": {
+                "cost": {
+                    "input": 2,
+                    "output": 12,
+                    "cacheRead": 0,
+                }
+            }
+        }
+    }
+    p_zero_card = model_price(cat_zero_card, "prov", "m_zero_card")
+    assert p_zero_card.exact is True
 
     # 3. Exact usd calculation with cache price
     cat_with_cache = {
@@ -405,6 +420,7 @@ def test_boundary_cache_read_zero_vs_absent() -> None:
     }
     p_zero = model_price(cat_zero, "prov", "m_zero")
     assert p_zero.cache_read == Decimal("0")
+    assert p_zero.exact is True
     # All input cached (inp=1000, cached=1000, out=0) -> usd = 0
     val_zero = usd(p_zero, inp=1000, cached=1000, out=0)
     assert val_zero == Decimal("0")
@@ -422,6 +438,7 @@ def test_boundary_cache_read_zero_vs_absent() -> None:
     }
     p_absent = model_price(cat_absent, "prov", "m_absent")
     assert p_absent.cache_read == Decimal("2")
+    assert p_absent.exact is False
     # All input cached (inp=1000, cached=1000, out=0) -> usd = (0 + 1000 * 2 + 0) / 1e6 = 2000 / 1e6
     val_absent = usd(p_absent, inp=1000, cached=1000, out=0)
     assert val_absent == Decimal("2000") / Decimal(1_000_000)
@@ -438,7 +455,7 @@ def test_exact_estimate(tmp_path: Path) -> None:
     cat = {
         "testprov": {
             "m_exact": {
-                "cost": {"input": 2, "output": 12},
+                "cost": {"input": 2, "output": 12, "cacheRead": 0.5},
                 "thinking": {"efforts": ["low"]},
             }
         }

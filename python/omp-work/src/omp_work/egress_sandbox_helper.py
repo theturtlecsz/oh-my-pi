@@ -450,6 +450,7 @@ def _worker_profile_env(config: dict) -> dict[str, str]:
     """Closed worker environment: six base names and explicit model/manifest names.
 
     PATH defaults to ``/usr/bin:/bin``. HOME, proxy, CA, and LC_* are not set.
+    Verifier runtimes also accept non-empty PYTHONPATH and PYTHONSAFEPATH.
     """
     base = config.get("env") or {}
     worker_env: dict[str, str] = {}
@@ -458,6 +459,10 @@ def _worker_profile_env(config: dict) -> dict[str, str]:
             worker_env[name] = str(base[name])
     if "PATH" not in worker_env:
         worker_env["PATH"] = RESEARCH_PATH_DEFAULT
+    if config.get("verifier_runtime"):
+        for name in ("PYTHONPATH", "PYTHONSAFEPATH"):
+            if base.get(name):
+                worker_env[name] = str(base[name])
     return worker_env
 
 

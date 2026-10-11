@@ -8,7 +8,7 @@ import {
 	isProjectPathTrusted,
 	readTrustedProjectPaths,
 	trustedProjectsPath,
-} from "@oh-my-pi/pi-coding-agent/config/project-trust";
+} from "../../src/config/project-trust";
 import { getAgentDir } from "@oh-my-pi/pi-utils";
 
 const roots: string[] = [];

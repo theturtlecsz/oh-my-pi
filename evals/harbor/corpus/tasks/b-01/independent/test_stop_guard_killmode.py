@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -78,7 +79,7 @@ def test_unit_file_killmode_none_overridden(
     unit_file = tmp_path / unit
     unit_file.write_text("[Service]\nKillMode=none\n", encoding="utf-8")
 
-    install_guards([unit], systemd_dir=tmp_path, interval=5)
+    written = install_guards([unit], systemd_dir=tmp_path, interval=5)
     captured = capsys.readouterr()
 
     drop_in_dir = tmp_path / f"{unit}.d"
@@ -205,7 +206,7 @@ def test_late_drop_in_without_killmode_does_not_reject(
     d.mkdir(parents=True, exist_ok=True)
     (d / "zzz-late.conf").write_text("[Service]\nEnvironment=FOO=BAR\n", encoding="utf-8")
 
-    install_guards([u], systemd_dir=tmp_path)
+    written = install_guards([u], systemd_dir=tmp_path)
     assert (d / GUARD_DROP_IN_NAME).is_file()
     assert not (d / KILLMODE_OVERRIDE_DROP_IN_NAME).exists()
 
@@ -410,7 +411,7 @@ def test_killmode_in_non_service_section_ignored(
     unit_file = tmp_path / unit
     unit_file.write_text("[Unit]\nKillMode=process\n[Service]\nExecStart=/bin/true\n", encoding="utf-8")
 
-    install_guards([unit], systemd_dir=tmp_path)
+    written = install_guards([unit], systemd_dir=tmp_path)
     captured = capsys.readouterr()
 
     assert not (tmp_path / f"{unit}.d" / KILLMODE_OVERRIDE_DROP_IN_NAME).exists()

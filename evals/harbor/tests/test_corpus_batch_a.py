@@ -39,6 +39,18 @@ def test_batch_a_has_at_least_three_long_horizon_tasks() -> None:
         assert task["long_horizon"] == (len(task["source_paths"]) >= 4)
 
 
+def test_batch_a_source_paths_exclude_test_files() -> None:
+    for task in _tasks():
+        spec_path = BATCH_PATH.parent.parent / "specs" / f"{task['task_id']}.json"
+        spec = json.loads(spec_path.read_text(encoding="utf-8"))
+        for source_paths in (task["source_paths"], spec["source_paths"]):
+            for source_path in source_paths:
+                basename = Path(source_path).name
+                assert ".test." not in basename, (task["task_id"], source_path)
+                assert not basename.startswith("test_"), (task["task_id"], source_path)
+                assert not basename.endswith("_test.py"), (task["task_id"], source_path)
+
+
 def test_batch_a_seed_deletes_target_and_solution_does_not_add_it() -> None:
     for task in _tasks():
         fixture_dir = Path(task["fixture"])

@@ -6,11 +6,13 @@ delivery, and automatic step_index assignment.
 from __future__ import annotations
 
 import time
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID
 
+import psycopg
 from psycopg.errors import UniqueViolation
 from psycopg.types.json import Jsonb
 
@@ -41,12 +43,15 @@ def record_usage(
     measurement: str,
     price_usd: str | Decimal | None,
     price_version: str | None = None,
+    cur: psycopg.Cursor[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Record one usage event in ``omp_jobs.usage_events`` and ``omp_jobs.outbox``.
 
     Usage ids are stable sha256 hashes of (workspace_id, work_id, job_id, request_id).
     Retries under the same or new operation_id replay without writing duplicates or
     incrementing step_index. Discrepancies on existing usage ids raise idempotency_conflict.
+    A supplied cursor keeps all effects in the caller-owned transaction; this
+    function neither opens a transaction nor commits it.
     """
     if isinstance(workspace_id, str):
         try:
@@ -207,7 +212,9 @@ def record_usage(
             and row.get("measurement") == measurement
         )
 
-    with store.transaction(workspace_id, actor_id) as cur:
+    with (
+        store.transaction(workspace_id, actor_id) if cur is None else nullcontext(cur)
+    ) as cur:
 
         def apply() -> dict[str, object]:
             if job_id is not None:

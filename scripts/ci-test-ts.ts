@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { bunVersionMismatch } from "./bun-version-guard.ts";
+import * as gateScope from "./gate-scope.ts";
 
 type Mode =
 	| "all"
@@ -347,7 +348,7 @@ async function codingAgentTestCommands(bucket: CodingAgentBucket): Promise<TestC
 	return commands;
 }
 
-async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
+async function commandsForMode(mode: Mode, runWorkspaceTs = true): Promise<TestCommand[]> {
 	switch (mode) {
 		case "workspace":
 			return fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 8));
@@ -380,6 +381,9 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 		// this one quiet runner so the whole suite shares one progress stream and
 		// one failure report. Repo script tests remain available via `test:scripts`.
 		case "local-ts":
+			if (!runWorkspaceTs) {
+				return skipSessionSystem ? [] : [sessionSystemTestCommand()];
+			}
 			return [
 				...fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 8, { extraArgs: onlyFailuresArgs })),
 				...nativeAndIntegrationPackages.map(pkg => workspaceTestCommand(pkg, 4, { extraArgs: onlyFailuresArgs })),
@@ -391,8 +395,32 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 		// Rust task, so a single invocation reports TS and Rust together. The Rust
 		// command self-skips when no Rust-affecting files changed (see run-rs-task).
 		case "local":
-			return [...(await commandsForMode("local-ts")), rustTestCommand()];
+			return [...(await commandsForMode("local-ts", runWorkspaceTs)), rustTestCommand()];
 	}
+}
+
+// Only flood's task phase may reuse the changed-path scope. Pre-batch gates,
+// manual runs and CI buckets retain their complete command plans. Keep the
+// session-system check and Rust task separate: TS skip safety does not imply
+// those checks are unrelated to a Python change.
+export async function commandsForGate(
+	mode: Mode,
+	phase: string | undefined,
+	taskScope = false,
+): Promise<TestCommand[]> {
+	let runWorkspaceTs = true;
+	if (taskScope && phase === "test" && (mode === "local" || mode === "local-ts")) {
+		try {
+			const scope = gateScope.selectGateScope(await gateScope.changedFiles("main", repoRoot));
+			runWorkspaceTs = scope["ts-check"].run;
+			if (!runWorkspaceTs) {
+				console.log("gate: skipped by scope: workspace TypeScript tests (all files skip-safe)");
+			}
+		} catch (err) {
+			console.warn(`gate scope: selection failed; workspace TypeScript tests run: ${(err as Error).message}`);
+		}
+	}
+	return commandsForMode(mode, runWorkspaceTs);
 }
 
 // The omp-kata runner pods may inject cloud credentials (`AWS_*`) pod-wide via
@@ -1130,7 +1158,10 @@ if (import.meta.main) {
 
 	const initialHostPackageJson = isDryRun ? null : await readHostPackageJson();
 
-	const requestedCommands = selectShard(await commandsForMode(requestedMode as Mode), Bun.env.OMP_TEST_SHARD);
+	const requestedCommands = selectShard(
+		await commandsForGate(requestedMode as Mode, Bun.env.FLOOD_PHASE, args.includes("--task-scope")),
+		Bun.env.OMP_TEST_SHARD,
+	);
 	const explicitConcurrency = Boolean(Bun.env.OMP_TEST_CONCURRENCY?.trim());
 	// CI defaults to one process at a time, but memory-sized workflow buckets
 	// explicitly opt into bounded process concurrency. Local runs fan out by
