@@ -12,7 +12,7 @@ import pytest
 from native_jobs_support import native_jobs  # noqa: F401
 from omp_work.research.custody import replicate_masquerade
 from omp_work.research.receipt import EvaluationProtocol
-from omp_work.research.recursive_transfer_evidence import ConsumptionHistory, NativeEvidence
+from omp_work.research.recursive_transfer_evidence import NativeEvidence
 from omp_work.research.recursive_transfer_freshness import (
     CohortTask,
     PreparedStep,
@@ -134,6 +134,12 @@ def test_qualified_pair_shares_one_holdout_and_stores_both_trials(native_jobs, b
     prepared = _prepare(native_jobs, bundle, native, baseline.trial_id, candidate.trial_id, task_id="pair-task")
     assert prepared.eligible, prepared.reasons
     step = prepared.steps[0]
+    # Sealed fixture arms share output bytes; independent replicates must not.
+    prepared = replace(
+        prepared,
+        steps=(replace(step, candidate=replace(step.candidate, output_sha256="a" * 64, output_id="a" * 64)),),
+    )
+    step = prepared.steps[0]
 
     reserved = reserve_task(native, prepared)
 
@@ -167,6 +173,11 @@ def test_finish_arm_adds_one_once(native_jobs, bundle):
     history = native.history
     baseline, candidate = bundle.qualified
     prepared = _prepare(native_jobs, bundle, native, baseline.trial_id, candidate.trial_id)
+    step = prepared.steps[0]
+    prepared = replace(
+        prepared,
+        steps=(replace(step, candidate=replace(step.candidate, output_sha256="a" * 64, output_id="a" * 64)),),
+    )
     reserve_task(native, prepared)
     step = prepared.steps[0]
 
@@ -271,7 +282,7 @@ def test_new_trial_or_dataset_label_still_adds_zero(native_jobs, bundle):
     native = _native(native_jobs)
     baseline, candidate = bundle.qualified
     prepared = _prepare(native_jobs, bundle, native, baseline.trial_id, candidate.trial_id, task_id="label-task")
-    assert reserve_task(native, prepared).replicates == 2
+    assert reserve_task(native, prepared).replicates == 1
     holdout = _holdout(prepared)
 
     relabeled = _swap(
@@ -290,7 +301,7 @@ def test_new_trial_or_dataset_label_still_adds_zero(native_jobs, bundle):
 
     fresh = _native(native_jobs)
     original = _prepare(native_jobs, bundle, fresh, baseline.trial_id, candidate.trial_id, task_id="output-task")
-    assert reserve_task(fresh, original).replicates == 2
+    assert reserve_task(fresh, original).replicates == 1
     new_holdout = _prepare(
         native_jobs, bundle, fresh, baseline.trial_id, candidate.trial_id, task_id="output-task-renamed",
     )
@@ -304,6 +315,51 @@ def test_new_trial_or_dataset_label_still_adds_zero(native_jobs, bundle):
     assert "duplicate_output" in reused.reasons
     assert "duplicate_holdout" not in reused.reasons
     assert _holdout(new_holdout) in fresh.history.confirmation_identities
+
+
+@pytest.mark.parametrize(
+    ("kind", "field", "across_steps"),
+    [
+        ("trial", "trial_id", False),
+        ("job", "job_id", False),
+        ("receipt", "receipt_sha256", False),
+        ("output", "output_sha256", False),
+        ("trial", "trial_id", True),
+    ],
+)
+def test_same_reservation_replay_adds_zero(native_jobs, bundle, kind, field, across_steps):
+    native = _native(native_jobs)
+    left, right = bundle.qualified
+    prepared = _prepare(native_jobs, bundle, native, left.trial_id, right.trial_id)
+    source = prepared.steps[0].baseline
+    first = _relabel(source, qualified=True)
+    replay = replace(_relabel(source, qualified=False), **{field: getattr(first, field)})
+    if across_steps:
+        prepared = replace(
+            prepared,
+            steps=(
+                PreparedStep("root", first.trial_id, None, first, None),
+                PreparedStep("child", replay.trial_id, None, replay, None),
+            ),
+        )
+    else:
+        prepared = _swap(prepared, first, replay)
+
+    reserved = reserve_task(native, prepared)
+
+    assert reserved.denominator == 0
+    assert reserved.replicates == 1
+    assert f"duplicate_{kind}" in reserved.reasons
+    assert getattr(first, field) in native.history.snapshot()["duplicates"]
+    assert first.trial_id in native.history.snapshot()["attempts"]
+    assert replay.trial_id not in native.history.snapshot()["failures"]
+
+    restored = _native(native_jobs)
+    restored.restore(native.snapshot())
+    retried = reserve_task(restored, prepared)
+    assert retried.denominator == 0
+    assert retried.replicates == 0
+    assert f"duplicate_{kind}" in retried.reasons
 
 
 def test_cached_artifact_under_a_new_trial_adds_zero(native_jobs, bundle):

@@ -27,14 +27,6 @@ __all__ = [
 ]
 
 
-def _key(identity: object) -> object:
-    if isinstance(identity, UUID):
-        return str(identity)
-    if isinstance(identity, tuple):
-        return tuple(_key(part) for part in identity)
-    return identity
-
-
 def _identities(arm: TrialEvidence) -> tuple[tuple[str, object], ...]:
     output = arm.output_sha256 if arm.output_sha256 is not None else arm.output_id
     pairs = (
@@ -80,19 +72,9 @@ def _cached(native: NativeEvidence, digests: set[str]) -> set[str]:
         return {str(row["artifact_sha256"]) for row in cur.fetchall()}
 
 
-def _remember(history, identity: object, method, prior: set[object], touched: set[object]) -> None:
-    key = _key(identity)
-    if key in prior or key in touched:
-        return
-    method(identity)
-    touched.add(key)
-
-
 def reserve_task(native: NativeEvidence, prepared: PreparedTask) -> Reservation:
     """Claim ``prepared`` on the existing history. Never replaces ``native.history``."""
     history = native.history
-    prior = set(history.consumed)
-    touched: set[object] = set()
     reasons = list(prepared.reasons)
     denominator = 0
     replicates = 0
@@ -100,7 +82,7 @@ def reserve_task(native: NativeEvidence, prepared: PreparedTask) -> Reservation:
     holdout = (prepared.content_sha256, prepared.task_id)
     holdout_duplicate = False
     if prepared.content_sha256 and prepared.task_id:
-        if _key(holdout) in prior:
+        if holdout in history.consumed:
             history.record_duplicate(holdout)
             holdout_duplicate = True
             reasons.append("duplicate_holdout")
@@ -121,7 +103,7 @@ def reserve_task(native: NativeEvidence, prepared: PreparedTask) -> Reservation:
 
     for arm in arms:
         identities = _identities(arm)
-        collisions = [(kind, value) for kind, value in identities if _key(value) in prior]
+        collisions = [(kind, value) for kind, value in identities if value in history.consumed]
         artifact_cached = any(
             kind in {"receipt", "output"} and isinstance(value, str) and value in cached
             for kind, value in identities
@@ -138,11 +120,12 @@ def reserve_task(native: NativeEvidence, prepared: PreparedTask) -> Reservation:
                 reasons.append(f"duplicate_{kind}")
             if artifact_cached:
                 for _kind, value in identities:
-                    _remember(history, value, history.record_failure, prior, touched)
+                    if value not in history.consumed:
+                        history.record_failure(value)
             continue
         method = history.record_attempt if arm.qualified else history.record_failure
         for _kind, value in identities:
-            _remember(history, value, method, prior, touched)
+            method(value)
         replicates += 1
         if not arm.qualified:
             denominator += 1
