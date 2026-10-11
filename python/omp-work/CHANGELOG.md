@@ -83,6 +83,7 @@
 
 - Verifier runtime roots now reject resolved `/work` and descendants, the worktree, roots inside or containing it, and existing forbidden roots while allowing trees under another directory named `work`; jailed `PYTHONPATH` entries follow the same `/work` and worktree rule. On proc mount `EPERM`/`EACCES`, the shim drops bounding and inheritable capability sets and sets `no_new_privs` in `unshare` before mounting an empty read-only tmpfs; `execvp` launches the payload directly instead of `setpriv`, so `setpriv` never reads `/proc`.
 - Host processes hidden when proc mounting denied (OMP-586).
+- Host processes hidden when proc mounting denied ([OMP-586](https://linear.app/issue/OMP-586)).
 
 - Concurrent domain-event appends for the same workspace and aggregate could fork the hash chain because the chain head was read before the workspace advisory lock was taken; the store now acquires the lock first and reads `previous_event_sha256` on a fresh snapshot, so every event links the committed head (OMP-567).
 - `omp_work_readonly` and `omp_work_backup` can read the native jobs tables (workers, operations, outbox) when the jobs migrations ran as `omp_work_migrator` (OMP-554).

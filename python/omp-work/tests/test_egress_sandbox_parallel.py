@@ -108,6 +108,7 @@ def _runner_main(
 def test_twenty_scans_with_two_file_runners(tmp_path: Path) -> None:
     test_file = str(Path(sandbox_tests.__file__).resolve())
     test_start = time.monotonic()
+    deadline = test_start + 600.0
 
     ctx = mp.get_context("fork")
     ready1 = ctx.Event()
@@ -118,8 +119,11 @@ def test_twenty_scans_with_two_file_runners(tmp_path: Path) -> None:
     p2 = ctx.Process(target=_runner_main, args=(1, test_file, tmp_path, ready2, stop_event))
 
     def _check_time() -> None:
-        if (time.monotonic() - test_start) > 600.0:
+        if time.monotonic() >= deadline:
             raise AssertionError("Total run exceeded 600s bound")
+
+    def _timeout(signum: int, frame: Any) -> None:
+        raise AssertionError("Foreground exceeded deadline reserved for runner cleanup")
 
     def _check_failed_rounds() -> list[dict[str, Any]]:
         records = []
@@ -141,6 +145,9 @@ def test_twenty_scans_with_two_file_runners(tmp_path: Path) -> None:
         return records
 
     scans: list[dict[str, Any]] = []
+    previous_handler = signal.signal(signal.SIGALRM, _timeout)
+    # Reserve ten seconds of the shared deadline for termination and reaping.
+    signal.setitimer(signal.ITIMER_REAL, max(0.001, deadline - time.monotonic() - 10.0))
     try:
         p1.start()
         p2.start()
@@ -182,19 +189,24 @@ def test_twenty_scans_with_two_file_runners(tmp_path: Path) -> None:
 
     finally:
         # Signal stop, join with bounds, terminate/kill only started PIDs individually if needed, then reap
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
         stop_event.set()
         for p in (p1, p2):
             if p.is_alive():
-                rem = max(1.0, 600.0 - (time.monotonic() - test_start))
-                p.join(timeout=min(rem, 60.0))
+                p.join(timeout=min(60.0, max(0.0, deadline - time.monotonic() - 10.0)))
             if p.is_alive():
                 pid = p.pid
                 p.terminate()
-                p.join(timeout=5.0)
+                p.join(timeout=min(5.0, max(0.0, deadline - time.monotonic() - 5.0)))
                 if p.is_alive() and pid is not None:
                     with suppress(ProcessLookupError):
                         os.kill(pid, signal.SIGKILL)
-                    p.join(timeout=5.0)
+                    p.join(timeout=max(0.0, deadline - time.monotonic()))
+            elif p.pid is not None:
+                p.join(timeout=0)
+
+    _check_time()
 
     # Validate process exit statuses
     assert p1.exitcode == 0, f"Runner 0 exited with status {p1.exitcode}"
@@ -234,6 +246,9 @@ def test_twenty_scans_with_two_file_runners(tmp_path: Path) -> None:
             "scan_index": s["scan_index"],
             "overlaps": scan_overlaps,
         })
+        assert {r["runner_id"] for r in scan_overlaps} == {0, 1}, (
+            f"Scan {s['scan_index']} did not overlap full-file rounds from both runners"
+        )
 
     # Save scan metrics and overlap times in tmp_path
     metrics = {
@@ -248,3 +263,4 @@ def test_twenty_scans_with_two_file_runners(tmp_path: Path) -> None:
     (tmp_path / "scan_metrics.json").write_text(json.dumps(metrics, indent=2))
     (tmp_path / "scans.json").write_text(json.dumps(scans, indent=2))
     (tmp_path / "overlap_times.json").write_text(json.dumps(overlap_metrics, indent=2))
+    _check_time()
