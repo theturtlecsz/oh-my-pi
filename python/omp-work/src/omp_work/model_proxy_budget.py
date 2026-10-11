@@ -465,12 +465,19 @@ class ModelCallAdmission:
         be measured; ``Prepared`` documents that the caller then charges
         ``max_usd`` and ``max_tokens``.
         """
-        self.settle(
-            actual_usd=self.max_usd, input_tokens=self.max_tokens,
-            output_tokens=0, cache_tokens=0, measurement="estimated",
-        )
+        self._settle_admitted_bound()
         detail = str(error) if error is not None else "unmeasurable upstream failure"
         raise ModelProxyBudgetError("unmeasurable_failure", detail)
+
+    def _settle_admitted_bound(self) -> dict[str, object]:
+        """Persist the admitted input/output capacity as estimated settlement."""
+        return self.settle(
+            actual_usd=self.prepared.max_usd,
+            input_tokens=self.prepared.max_input_tokens,
+            output_tokens=self.prepared.max_output_tokens,
+            cache_tokens=0,
+            measurement="estimated",
+        )
 
     def abort(self) -> None:
         """Abort before any send: roll back, write no ledgers, and free the locks."""
