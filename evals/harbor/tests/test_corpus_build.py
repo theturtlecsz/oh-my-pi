@@ -21,6 +21,18 @@ from omp_harbor_eval.fixtures import Fixture, IndependentTest
 from omp_harbor_eval.verify import REPO_ROOT
 
 
+def test_corpus_tasks_anchor_is_tracked_for_clean_checkouts() -> None:
+    anchor = "evals/harbor/corpus/tasks/.gitkeep"
+    tracked = subprocess.run(
+        ["git", "ls-files", "--", anchor],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert tracked.stdout.splitlines() == [anchor]
+
+
 def _init_repo(tmp_path: Path) -> tuple[Path, str, str, str]:
     """Initialize a git repo with a root commit, a bug commit (C^), and a fix commit (C)."""
     repo = tmp_path / "repo"
