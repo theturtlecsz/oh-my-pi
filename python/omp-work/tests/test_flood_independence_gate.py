@@ -1,0 +1,502 @@
+"""OMP-584 independence gate in external flood.py, staged and executed in pytest's temp dir.
+
+Contract defended:
+- validate_slices rejects an implementer dependency edge that only orders the slice: it is
+  valid only when a shared non-union file overlaps or the dependent's work text explicitly
+  consumes a named producer file/artifact.
+- Exclusions (Do not touch sections in inline/bold/heading/list formats, plus Assumptions and
+  Deferred) are parsed out, so a path named only under an exclusion cannot justify an edge.
+- Owner slice edges, implementer-after-owner edges, approval artifacts, and the final changelog
+  edge are preserved; union-merged inventory never justifies ordering.
+- `check-plan` and both plan-promotion paths (`plan_promotion=auto` and the manual `promote`
+  command) apply the same gate, so a disjoint order-only chain is refused as invalid.
+
+Staging contract:
+- OMP584_FLOOD_SOURCE names a directory holding an already-patched flood.py. The tests copy it
+  into pytest's temp dir and execute that copy; the selected source is never patched or mutated.
+- Otherwise only the explicitly staged raw infra/automation-user/ stage is used: a raw flood.py
+  plus its support files and the eventual omp584-dependencies.patch, copied into temp and patched
+  there. The original and its bytecode are never touched.
+- When neither a selected source nor a raw staged source exists, the gate tests skip. There is no
+  home discovery, no machine-specific home path, and no committed copy of flood.py to fall back on.
+"""
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[3]
+PATCH = ROOT / "infra" / "automation-user" / "omp584-dependencies.patch"
+STAGE_DIR = ROOT / "infra" / "automation-user" / "omp584-flood-stage"
+
+
+def _support_files(src_dir: Path) -> list[str]:
+    """Sibling .py modules flood.py may import, carried beside it into the temp stage.
+
+    flood.py ships as one stdlib-only module; the glob is defensive so a staged source that
+    splits a helper out still executes. Non-Python assets are not needed by the running copy.
+    """
+    if not src_dir.is_dir():
+        return []
+    return sorted(f.name for f in src_dir.iterdir() if f.is_file() and f.suffix == ".py" and f.name != "flood.py")
+
+
+def _resolve_stage(tmp_root: Path) -> tuple[Path, list[Path]]:
+    """Produce an executable flood.py copy plus the paths that must stay byte-identical.
+
+    Returns (flood.py path, untouched originals). Raises unittest-style SkipTest via pytest.skip
+    when there is nothing to execute.
+    """
+    selected = os.environ.get("OMP584_FLOOD_SOURCE")
+    if selected:
+        src_dir = Path(selected).resolve()
+        src_flood = src_dir / "flood.py"
+        # An explicit selection that is not usable is a configuration error, not "nothing to test":
+        # fail visibly so the operator sees the bad path instead of a green skip.
+        assert src_flood.is_file(), f"OMP584_FLOOD_SOURCE={src_dir} holds no flood.py"
+        dest = tmp_root / "flood.py"
+        shutil.copy2(src_flood, dest)
+        for name in _support_files(src_dir):
+            shutil.copy2(src_dir / name, tmp_root / name)
+        return dest, [src_flood]
+
+    raw_flood = STAGE_DIR / "flood.py"
+    raw_patch = (STAGE_DIR / PATCH.name) if (STAGE_DIR / PATCH.name).is_file() else PATCH
+    if raw_flood.is_file() and raw_patch.is_file():
+        dest = tmp_root / "flood.py"
+        shutil.copy2(raw_flood, dest)
+        for name in _support_files(STAGE_DIR):
+            shutil.copy2(STAGE_DIR / name, tmp_root / name)
+        res = subprocess.run(
+            ["patch", "-p1", "--forward", "-i", str(raw_patch)],
+            cwd=tmp_root,
+            capture_output=True,
+            text=True,
+        )
+        if res.returncode != 0:
+            raise AssertionError(
+                "staged omp584-dependencies.patch did not apply to the staged flood.py "
+                f"(exit {res.returncode}):\nstdout: {res.stdout}\nstderr: {res.stderr}"
+            )
+        return dest, [raw_flood, raw_patch]
+
+    pytest.skip(
+        "no staged flood.py to test: set OMP584_FLOOD_SOURCE to an already-patched directory, "
+        f"or stage raw {STAGE_DIR}/flood.py with {PATCH.name}"
+    )
+
+
+def _load(path: Path):
+    spec = importlib.util.spec_from_file_location("flood_staged", path)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.fixture(scope="session")
+def staged_flood(tmp_path_factory: pytest.TempPathFactory):
+    """An executable patched flood.py in temp, with the originals it was copied from."""
+    stage = tmp_path_factory.mktemp("flood_exec")
+    flood_py, originals = _resolve_stage(stage)
+    return _load(flood_py), stage, originals
+
+
+def _make_repo(tmp_path: Path) -> Path:
+    """Minimal main-branch git checkout so Flood(config, cfg_dir) can construct."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "todo.py").write_text("value = 1\n")
+    (repo / "test_todo.py").write_text("def test_ok():\n    assert True\n")
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "fixture"],
+                   cwd=repo, check=True)
+    return repo
+
+
+def _make_config(tmp_path: Path, repo: Path, *, promotion: str | None = None) -> Path:
+    """A config the gate can build a Flood from without launching jobs."""
+    cfg = {
+        "repo": str(repo),
+        "main_branch": "main",
+        "worktrees_dir": str(tmp_path / "wt"),
+        "tasks_dir": "tasks",
+        "state_file": "state.json",
+        "logs_dir": "logs",
+        "slots": 2,
+        "poll_seconds": 0.2,
+        "max_attempts": 2,
+        "default_max_minutes": 5,
+        "rider_dir": str(tmp_path / "riders"),
+        "convert_failed": False,
+        "reviewer": None,
+        "providers": {"fake": {"cmd": [sys.executable, "-c", "pass"], "max_parallel": 2}},
+    }
+    if promotion is not None:
+        cfg["plan_promotion"] = promotion
+    p = tmp_path / "flood.json"
+    p.write_text(json.dumps(cfg, indent=2))
+    return p
+
+
+def _plan_tree(tmp_path: Path, tid: str = "ITEM") -> Path:
+    pdir = tmp_path / "tasks" / "proposed" / tid
+    pdir.mkdir(parents=True, exist_ok=True)
+    return pdir
+
+
+def write_slice(pdir: Path, sid: str, deps: list[str] = (), files: list[str] | None = None,
+                body: str | None = None, owner: bool = False, mm: int = 30) -> Path:
+    pdir.mkdir(parents=True, exist_ok=True)
+    fm = ["---", f"id: {sid}", f"depends_on: [{', '.join(deps)}]", f"max_minutes: {mm}", "kind: implement"]
+    if owner:
+        fm.append("owner: true")
+    if files is not None:
+        fm.append(f"files: [{', '.join(files)}]")
+    fm.append("---")
+    if body is None:
+        if owner:
+            body = "Owner runs: check\nEvidence: output\nDone when: passes."
+        else:
+            body = f"Implement {sid}.\nDone when: test_{sid.replace('-', '_')}.py passes.\nDo not touch: none"
+    (pdir / f"{sid}.md").write_text("\n".join(fm) + "\n" + body + "\n")
+    return pdir / f"{sid}.md"
+
+
+EXCLUSION_FORMATS = [
+    ("inline", "Do not touch: src/a.ts"),
+    ("inline_backticks", "Do not touch: `src/a.ts`"),
+    ("bold_colon_inside", "**Do not touch:** src/a.ts"),
+    ("bold_colon_outside", "**Do not touch**: src/a.ts"),
+    ("italic_colon", "*Do not touch*: src/a.ts"),
+    ("underline_colon", "__Do not touch__: src/a.ts"),
+    ("heading_h1", "# Do not touch\nsrc/a.ts"),
+    ("heading_h2", "## Do not touch\n`src/a.ts`"),
+    ("heading_h3", "### Do not touch\nsrc/a.ts"),
+    ("heading_h4", "#### Do not touch\nsrc/a.ts"),
+    ("heading_with_label", "## Do not touch: unrelated files\nsrc/a.ts"),
+    ("unordered_dash", "Do not touch:\n- src/a.ts\n- other.ts"),
+    ("unordered_star", "Do not touch:\n* src/a.ts\n* other.ts"),
+    ("unordered_plus", "Do not touch:\n+ src/a.ts"),
+    ("numbered_dot", "Do not touch:\n1. src/a.ts\n2. other.ts"),
+    ("numbered_paren", "Do not touch:\n1) `src/a.ts`\n2) other.ts"),
+    ("bold_numbered", "**Do not touch**:\n1. src/a.ts"),
+    ("bold_unordered", "**Do not touch:**\n- src/a.ts"),
+    ("inline_done_when", "Done when: test_ITEM_s02.py passes. Do not touch: src/a.ts"),
+    ("assumptions_heading", "# Assumptions\nassume narrow reading src/a.ts\n# Work\nImplement ITEM-s02.\nDone when: test_ITEM_s02.py passes.\nDo not touch: unrelated.ts"),
+    ("deferred_heading", "# Deferred\ndefer src/a.ts\n# Work\nImplement ITEM-s02.\nDone when: test_ITEM_s02.py passes.\nDo not touch: unrelated.ts"),
+]
+
+
+@pytest.mark.parametrize("fmt_name,exclusion_snippet", EXCLUSION_FORMATS)
+def test_two_slice_exclusion_only_chains_fail_all_formats(staged_flood, tmp_path, fmt_name, exclusion_snippet):
+    mod, _, _ = staged_flood
+    pdir = tmp_path / f"plan_{fmt_name}"
+    write_slice(pdir, "ITEM-s01", deps=[], files=["src/a.ts"],
+                body="Implement ITEM-s01.\nDone when: test_ITEM_s01.py passes.\nDo not touch: none")
+
+    body_s02 = f"Implement ITEM-s02.\nDone when: test_ITEM_s02.py passes.\n{exclusion_snippet}"
+    if fmt_name in ("inline_done_when", "assumptions_heading", "deferred_heading"):
+        body_s02 = exclusion_snippet
+    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"], body=body_s02)
+
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    expected = "ITEM-s02: depends_on ITEM-s01 orders the slice only; leave depends_on empty, or name a path from ITEM-s01's files that this slice imports or extends"
+    assert any(expected in v for v in violations), (
+        f"Format {fmt_name} failed to reject order-only chain. Violations: {violations}"
+    )
+
+
+@pytest.mark.parametrize("fmt_name,exclusion_snippet", EXCLUSION_FORMATS[:6])
+def test_three_slice_exclusion_only_chains_fail_all_formats(staged_flood, tmp_path, fmt_name, exclusion_snippet):
+    mod, _, _ = staged_flood
+    pdir = tmp_path / f"plan_3_{fmt_name}"
+    write_slice(pdir, "ITEM-s01", deps=[], files=["src/a.ts"],
+                body="Implement ITEM-s01.\nDone when: test_ITEM_s01.py passes.\nDo not touch: none")
+
+    body_s02 = f"Implement ITEM-s02.\nDone when: test_ITEM_s02.py passes.\n{exclusion_snippet}"
+    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"], body=body_s02)
+
+    excl_s03 = exclusion_snippet.replace("src/a.ts", "src/b.ts")
+    body_s03 = f"Implement ITEM-s03.\nDone when: test_ITEM_s03.py passes.\n{excl_s03}"
+    write_slice(pdir, "ITEM-s03", deps=["ITEM-s02"], files=["src/c.ts"], body=body_s03)
+
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    assert any("ITEM-s02: depends_on ITEM-s01 orders the slice only" in v for v in violations), (
+        f"Violations missing s02 -> s01 failure: {violations}"
+    )
+    assert any("ITEM-s03: depends_on ITEM-s02 orders the slice only" in v for v in violations), (
+        f"Violations missing s03 -> s02 failure: {violations}"
+    )
+
+
+def test_independent_roots_pass(staged_flood, tmp_path):
+    mod, _, _ = staged_flood
+    pdir = tmp_path / "plan_indep"
+    write_slice(pdir, "ITEM-s01", deps=[], files=["src/a.ts"],
+                body="Implement ITEM-s01.\nDone when: test_ITEM_s01.py passes.\nDo not touch: none")
+    write_slice(pdir, "ITEM-s02", deps=[], files=["src/b.ts"],
+                body="Implement ITEM-s02.\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
+
+    violations, slices = mod.validate_slices("ITEM", pdir)
+    assert violations == [], f"Independent roots should pass without violations: {violations}"
+    assert len(slices) == 2
+
+
+def test_data_and_shared_file_reuse_pass(staged_flood, tmp_path):
+    mod, _, _ = staged_flood
+
+    pdir_shared = tmp_path / "plan_shared_file"
+    write_slice(pdir_shared, "ITEM-s01", deps=[], files=["src/common.ts", "src/a.ts"],
+                body="Implement ITEM-s01.\nDone when: test_ITEM_s01.py passes.\nDo not touch: none")
+    write_slice(pdir_shared, "ITEM-s02", deps=["ITEM-s01"], files=["src/common.ts", "src/b.ts"],
+                body="Implement ITEM-s02.\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
+    violations, _ = mod.validate_slices("ITEM", pdir_shared)
+    assert violations == [], f"Shared non-union file ordering should pass: {violations}"
+
+    pdir_consumed = tmp_path / "plan_consumed_path"
+    write_slice(pdir_consumed, "ITEM-s01", deps=[], files=["src/a.ts"],
+                body="Implement ITEM-s01.\nDone when: test_ITEM_s01.py passes.\nDo not touch: none")
+    write_slice(pdir_consumed, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"],
+                body="Implement ITEM-s02. It imports `src/a.ts` for pipeline data.\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
+    violations, _ = mod.validate_slices("ITEM", pdir_consumed)
+    assert violations == [], f"Explicit producer file consumption should pass: {violations}"
+
+    pdir_base = tmp_path / "plan_consumed_base"
+    write_slice(pdir_base, "ITEM-s01", deps=[], files=["infra/automation-user/tool.patch"],
+                body="Create patch.\nDone when: test_ITEM_s01.py passes.\nDo not touch: none")
+    write_slice(pdir_base, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"],
+                body="Implement ITEM-s02. Apply tool.patch before running tests.\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
+    violations, _ = mod.validate_slices("ITEM", pdir_base)
+    assert violations == [], f"Producer file basename consumption should pass: {violations}"
+
+
+def test_union_inventory_behavior(staged_flood, tmp_path):
+    mod, _, _ = staged_flood
+    is_union_fn = lambda fp: fp == "docs/upstream-fork-inventory.tsv"
+
+    pdir_u_indep = tmp_path / "plan_u_indep"
+    write_slice(pdir_u_indep, "ITEM-s01", deps=[], files=["docs/upstream-fork-inventory.tsv", "src/a.ts"],
+                body="Implement ITEM-s01.\nDone when: test_ITEM_s01.py passes.\nDo not touch: none")
+    write_slice(pdir_u_indep, "ITEM-s02", deps=[], files=["docs/upstream-fork-inventory.tsv", "src/b.ts"],
+                body="Implement ITEM-s02.\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
+    violations, _ = mod.validate_slices("ITEM", pdir_u_indep, is_union=is_union_fn)
+    assert violations == [], f"Union inventory sharing with independent roots must pass: {violations}"
+
+    pdir_u_order = tmp_path / "plan_u_order"
+    write_slice(pdir_u_order, "ITEM-s01", deps=[], files=["docs/upstream-fork-inventory.tsv", "src/a.ts"],
+                body="Implement ITEM-s01.\nDone when: test_ITEM_s01.py passes.\nDo not touch: none")
+    write_slice(pdir_u_order, "ITEM-s02", deps=["ITEM-s01"], files=["docs/upstream-fork-inventory.tsv", "src/b.ts"],
+                body="Implement ITEM-s02. Update docs/upstream-fork-inventory.tsv.\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
+    violations, _ = mod.validate_slices("ITEM", pdir_u_order, is_union=is_union_fn)
+    assert any("ITEM-s02: depends_on ITEM-s01 orders the slice only" in v for v in violations), (
+        f"Union inventory must not justify ordering. Violations: {violations}"
+    )
+
+
+def test_legitimate_serial_chain_passes(staged_flood, tmp_path):
+    mod, _, _ = staged_flood
+    pdir = tmp_path / "plan_serial"
+    write_slice(pdir, "ITEM-s01", deps=[], files=["src/a.ts"],
+                body="Implement ITEM-s01 producing a.ts.\nDone when: test_ITEM_s01.py passes.\nDo not touch: none")
+    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"],
+                body="Implement ITEM-s02 importing `src/a.ts`.\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
+    write_slice(pdir, "ITEM-s03", deps=["ITEM-s02"], files=["src/c.ts"],
+                body="Implement ITEM-s03 extending `src/b.ts`.\nDone when: test_ITEM_s03.py passes.\nDo not touch: none")
+
+    violations, slices = mod.validate_slices("ITEM", pdir)
+    assert violations == [], f"Legitimate serial pipeline should pass: {violations}"
+    assert len(slices) == 3
+
+
+def test_owner_and_changelog_cases_pass(staged_flood, tmp_path):
+    mod, _, _ = staged_flood
+
+    pdir_owner_after = tmp_path / "plan_owner_after"
+    write_slice(pdir_owner_after, "ITEM-s01", deps=[], files=["src/a.ts"],
+                body="Implement ITEM-s01.\nDone when: test_ITEM_s01.py passes.\nDo not touch: none")
+    write_slice(pdir_owner_after, "ITEM-s02", deps=["ITEM-s01"], files=[], owner=True,
+                body="Owner runs: test\nEvidence: ok\nDone when: passes.")
+    violations, _ = mod.validate_slices("ITEM", pdir_owner_after)
+    assert violations == [], f"Owner slice depending on implementer slice must pass: {violations}"
+
+    pdir_owner_before = tmp_path / "plan_owner_before"
+    write_slice(pdir_owner_before, "ITEM-s01", deps=[], files=[], owner=True,
+                body="Owner runs: approve\nEvidence: ok\nDone when: passes.")
+    write_slice(pdir_owner_before, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"],
+                body="Implement ITEM-s02 after owner step.\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
+    violations, _ = mod.validate_slices("ITEM", pdir_owner_before)
+    assert violations == [], f"Implementer slice depending on owner slice must pass: {violations}"
+
+    pdir_changelog = tmp_path / "plan_changelog"
+    write_slice(pdir_changelog, "ITEM-s01", deps=[], files=["src/a.ts"],
+                body="Implement ITEM-s01.\nDone when: test_ITEM_s01.py passes.\nDo not touch: none")
+    write_slice(pdir_changelog, "ITEM-s02", deps=["ITEM-s01"], files=["CHANGELOG.md"],
+                body="Record changelog entry.\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
+    violations, _ = mod.validate_slices("ITEM", pdir_changelog)
+    assert violations == [], f"Final changelog edge must be preserved: {violations}"
+
+    pdir_approval = tmp_path / "plan_approval"
+    write_slice(pdir_approval, "ITEM-s01", deps=[],
+                files=["python/omp-work/src/omp_work/contracts/v1/approval.json"],
+                body="Create approval.\nDone when: test_ITEM_s01.py passes.\nDo not touch: none")
+    write_slice(pdir_approval, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"],
+                body="Implement ITEM-s02.\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
+    violations, _ = mod.validate_slices("ITEM", pdir_approval)
+    assert violations == [], f"Approval artifact edge must be preserved: {violations}"
+
+
+def test_absent_source_skips_instead_of_reporting_success(tmp_path, monkeypatch):
+    """No selected source and no raw stage: staging reports skip, never an empty gate success."""
+    monkeypatch.delenv("OMP584_FLOOD_SOURCE", raising=False)
+    monkeypatch.setattr(sys.modules[__name__], "STAGE_DIR", tmp_path / "no-such-stage")
+    (tmp_path / "exec").mkdir()
+    with pytest.raises(pytest.skip.Exception):
+        _resolve_stage(tmp_path / "exec")
+
+
+def test_selected_source_without_flood_py_fails_visibly(tmp_path, monkeypatch):
+    """An explicit, unusable selection must fail loudly rather than skip green."""
+    selected = tmp_path / "selected"
+    selected.mkdir()
+    monkeypatch.setenv("OMP584_FLOOD_SOURCE", str(selected))
+    (tmp_path / "exec").mkdir()
+    with pytest.raises(AssertionError):
+        _resolve_stage(tmp_path / "exec")
+
+
+def test_malformed_selected_source_fails_visibly_and_stays_unmodified(tmp_path, monkeypatch):
+    """A selected source that is present but not loadable raises on load, and the source is untouched."""
+    selected = tmp_path / "selected"
+    selected.mkdir()
+    broken = "def broken(:\n    pass\n"
+    (selected / "flood.py").write_text(broken)
+    monkeypatch.setenv("OMP584_FLOOD_SOURCE", str(selected))
+    (tmp_path / "exec").mkdir()
+
+    dest, originals = _resolve_stage(tmp_path / "exec")
+    with pytest.raises(SyntaxError):
+        _load(dest)
+    assert (selected / "flood.py").read_text() == broken
+    assert originals == [selected / "flood.py"]
+
+
+def test_selected_candidate_executes_in_temp_without_touching_original(staged_flood):
+    """The executed module is the temp copy; the staged source keeps no generated bytecode."""
+    mod, stage, originals = staged_flood
+    executed = Path(mod.__file__).resolve()
+    assert executed.parent == stage
+    for original in originals:
+        assert original.is_file(), f"staged source missing after execution: {original}"
+        if original.suffix != ".py":
+            continue
+        cache = original.parent / "__pycache__"
+        generated = list(cache.glob(f"{original.stem}.*.pyc")) if cache.is_dir() else []
+        assert generated == [], (
+            f"bytecode for {original} found in {cache}: the staged source was imported in place"
+        )
+
+
+def test_check_plan_cli_uses_the_gate_and_manual_promote_blocks_invalid(staged_flood, tmp_path):
+    """check-plan reports the violation, and the manual `promote` command refuses on it."""
+    mod, _, _ = staged_flood
+    repo = _make_repo(tmp_path)
+    cfg = _make_config(tmp_path, repo, promotion="manual")
+    flood_py = Path(mod.__file__).resolve()
+    pdir = _plan_tree(tmp_path, "ITEM")
+
+    write_slice(pdir, "ITEM-s01", deps=[], files=["src/a.ts"],
+                body="Implement ITEM-s01.\nDone when: test_ITEM_s01.py passes.\nDo not touch: none")
+    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"],
+                body="Implement ITEM-s02.\nDone when: test_ITEM_s02.py passes.\nDo not touch: src/a.ts")
+
+    # Park the task at plan_ready (manual mode) so promote's own status precondition passes and the
+    # gate is the only thing that can refuse the plan.
+    f = mod.Flood(json.loads(cfg.read_text()), cfg.parent)
+    f.plan_passed({"id": "ITEM"})
+    assert f.state.task("ITEM")["status"] == "plan_ready"
+
+    invalid = subprocess.run([sys.executable, str(flood_py), "check-plan", "ITEM", "--config", str(cfg)],
+                             capture_output=True, text=True)
+    assert invalid.returncode == 1, f"check-plan should fail on an order-only plan:\n{invalid.stdout}\n{invalid.stderr}"
+    assert "orders the slice only" in invalid.stdout
+
+    promote = subprocess.run([sys.executable, str(flood_py), "promote", "ITEM", "--config", str(cfg)],
+                             capture_output=True, text=True)
+    assert promote.returncode != 0, f"manual promote must refuse an invalid plan:\n{promote.stdout}\n{promote.stderr}"
+    assert not (tmp_path / "tasks" / "ITEM-s01.md").exists(), "nothing may be promoted on an invalid plan"
+
+    (pdir / "ITEM-s02.md").unlink()
+    write_slice(pdir, "ITEM-s02", deps=[], files=["src/b.ts"],
+                body="Implement ITEM-s02.\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
+
+    valid = subprocess.run([sys.executable, str(flood_py), "check-plan", "ITEM", "--config", str(cfg)],
+                           capture_output=True, text=True)
+    assert valid.returncode == 0, f"check-plan should pass on independent slices:\n{valid.stdout}\n{valid.stderr}"
+    assert valid.stdout.startswith("OK: 2 slices pass the plan gate")
+
+
+def test_auto_plan_promotion_refuses_disjoint_order_only_chain(staged_flood, tmp_path):
+    """plan_promotion=auto reaches promote_plan, which the gate must reject, leaving the plan ready."""
+    mod, _, _ = staged_flood
+    repo = _make_repo(tmp_path)
+    cfg = _make_config(tmp_path, repo, promotion="auto")
+    f = mod.Flood(json.loads(cfg.read_text()), cfg.parent)
+    pdir = _plan_tree(tmp_path, "ITEM")
+    write_slice(pdir, "ITEM-s01", deps=[], files=["src/a.ts"],
+                body="Implement ITEM-s01.\nDone when: test_ITEM_s01.py passes.\nDo not touch: none")
+    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"],
+                body="Implement ITEM-s02.\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
+
+    f.promote_plan({"id": "ITEM"})
+
+    st = f.state.task("ITEM")
+    assert st["status"] == "plan_ready", f"invalid plan must not promote; state={st}"
+    assert "plan gate" in (st.get("last_error") or "")
+    assert not (tmp_path / "tasks" / "ITEM-s01.md").exists()
+    assert (pdir / "ITEM-s01.md").exists()
+
+    # Repairing the plan to independent roots promotes it.
+    write_slice(pdir, "ITEM-s02", deps=[], files=["src/b.ts"],
+                body="Implement ITEM-s02.\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
+    f.tasks = mod.load_tasks(f.tasks_dir)
+    f.promote_plan({"id": "ITEM"})
+    st = f.state.task("ITEM")
+    assert st["status"] == "planned", f"valid plan must promote; state={st}"
+    assert (tmp_path / "tasks" / "ITEM-s01.md").exists() and (tmp_path / "tasks" / "ITEM-s02.md").exists()
+
+
+def test_manual_plan_promotion_waits_then_promotes_only_a_valid_plan(staged_flood, tmp_path):
+    """plan_promotion=manual parks at plan_ready; the gate re-checks on every promote path."""
+    mod, _, _ = staged_flood
+    repo = _make_repo(tmp_path)
+    cfg = _make_config(tmp_path, repo, promotion="manual")
+    f = mod.Flood(json.loads(cfg.read_text()), cfg.parent)
+    pdir = _plan_tree(tmp_path, "ITEM")
+    write_slice(pdir, "ITEM-s01", deps=[], files=["src/a.ts"],
+                body="Implement ITEM-s01.\nDone when: test_ITEM_s01.py passes.\nDo not touch: none")
+    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"],
+                body="Implement ITEM-s02.\nDone when: test_ITEM_s02.py passes.\nDo not touch: src/a.ts")
+
+    f.plan_passed({"id": "ITEM"})
+    assert f.state.task("ITEM")["status"] == "plan_ready"
+
+    f.promote_plan({"id": "ITEM"})
+    assert f.state.task("ITEM")["status"] == "plan_ready"
+    assert not (tmp_path / "tasks" / "ITEM-s01.md").exists()
+
+    (pdir / "ITEM-s02.md").unlink()
+    write_slice(pdir, "ITEM-s02", deps=[], files=["src/b.ts"],
+                body="Implement ITEM-s02.\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
+    f.tasks = mod.load_tasks(f.tasks_dir)
+    f.promote_plan({"id": "ITEM"})
+    assert f.state.task("ITEM")["status"] == "planned"
+    assert (tmp_path / "tasks" / "ITEM-s01.md").exists()
