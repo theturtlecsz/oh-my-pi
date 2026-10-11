@@ -271,6 +271,34 @@ def test_partial_db_flags_exit_2_before_construction(
     _assert_unbuilt(calls, captured.out)
 
 
+def test_invalid_default_db_port_exits_2_before_construction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config, definition, _workspace, _actor, _bearer_bytes = _layout(tmp_path)
+    monkeypatch.setenv("OMP_WORK_POSTGRES_PORT", "invalid-port")
+    with _spies(monkeypatch) as calls:
+        code = main(
+            [
+                "research",
+                "run",
+                "--key",
+                "OMP-1",
+                "--definition",
+                str(definition),
+                "--client-config",
+                str(config),
+            ]
+        )
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "research:" in captured.err
+    assert "invalid-port" in captured.err
+    assert "Traceback" not in captured.err
+    _assert_unbuilt(calls, captured.out)
+
+
 def _campaign_result(outcome: str) -> dict[str, object]:
     return {
         "campaign_id": str(uuid4()),

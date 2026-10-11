@@ -374,9 +374,9 @@ def _run_research_command(args: argparse.Namespace) -> int:
     from .jobs.research_campaign import run_research_campaign
     from .jobs.store import NativeJobStore
 
-    ops = _research_db_config(args)
-    client_config = args.client_config or _default_client_config()
     try:
+        ops = _research_db_config(args)
+        client_config = args.client_config or _default_client_config()
         client, actor_id = _research_client(Path(client_config))
     except (OSError, ValueError, KeyError, TypeError) as error:
         print(f"research: {error}", file=sys.stderr)
