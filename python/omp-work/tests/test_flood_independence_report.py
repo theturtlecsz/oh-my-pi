@@ -199,36 +199,100 @@ def test_last_pass_attempt_wins_over_retries(evidence):
     assert report["plan_count"] == 1 and report["plans"][0]["attempt"] == 2
 
 
-@pytest.mark.parametrize("fields,kind", [
-    ({"slots": 2, "occupied_slots": 2}, "slots"),
-    ({"providers": {"alpha": {"load": 2, "max_parallel": 2}, "beta": {"load": 1, "max_parallel": 1}}}, "providers"),
-    ({"slots": 2, "occupied_slots": 3, "providers": {"alpha": {"load": 1, "max_parallel": 1}}}, "slots"),
-    ({"slots": True, "occupied_slots": 2}, None),
-    ({"slots": 2, "occupied_slots": 1}, None),
-    ({"providers": {"alpha": {"load": 2, "max_parallel": 2}, "spare": {"load": 0, "max_parallel": 1}}}, None),
-    ({"providers": {"alpha": {"load": True, "max_parallel": 1}}}, None),
-    ({"providers": {}}, None),
-])
-def test_low_median_needs_complete_capacity_proof(evidence, fields, kind):
-    for i in range(10):
-        evidence.plan(f"p{i}")
-    evidence.starts(**fields)
+def test_two_starts_on_one_running_task_both_count(evidence):
+    evidence.tasks["running"] = {"history": [
+        dict(phase="implement-start", attempt=1, at=AFTER, code_sha256=SHA, running_implementers=3),
+        dict(phase="implement-start", attempt=2, at=AFTER, code_sha256=SHA, running_implementers=4),
+    ]}
     code, report = evidence.run()
-    assert code == 2 and report["status"] == "pending"
-    assert report["verdicts"]["starts"] == ("met" if kind else "unmet")
-    assert report["cap"]["proven"] == bool(kind) and report["cap"]["kind"] == kind
-    assert report["median"] == 3 and report["cutoff"]["baseline"] == 3.0
+    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    assert report["start_count"] == 2
+    assert report["starts"] == [
+        dict(id="running", attempt=1, at=AFTER, running_implementers=3, code_sha256=SHA),
+        dict(id="running", attempt=2, at=AFTER, running_implementers=4, code_sha256=SHA),
+    ]
 
 
-@pytest.mark.parametrize("fields,change", [
-    ({"slots": 2, "occupied_slots": 2}, {"slots": 3}),
-    ({"providers": {"a": {"load": 1, "max_parallel": 1}}}, {"providers": {"b": {"load": 1, "max_parallel": 1}}}),
+def test_ten_fours_with_free_slots_and_under_ten_plans_met(evidence):
+    evidence.plan("p0")
+    evidence.starts(count=10, running=4, slots=5, occupied_slots=1)
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    assert report["plan_count"] == 1 and report["verdicts"]["plans"] == "pending"
+    assert report["start_count"] == 10 and report["verdicts"]["starts"] == "met"
+    assert report["median"] == 4 and report["cap"]["proven"] is False
+
+
+def test_median_two_with_free_slots_and_spare_provider_unmet(evidence):
+    evidence.plan("p0")
+    evidence.starts(count=10, running=2, slots=5, occupied_slots=1,
+                    providers={"alpha": {"load": 0, "max_parallel": 2}})
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    assert report["plan_count"] == 1 and report["verdicts"]["plans"] == "pending"
+    assert report["start_count"] == 10 and report["verdicts"]["starts"] == "unmet"
+    assert report["median"] == 2 and report["cap"]["proven"] is False
+
+
+def test_string_running_implementers_fails_with_median_null(evidence):
+    evidence.starts(count=10, running="4")
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "failure"
+    assert "malformed" in report["error"]
+    assert report["median"] is None
+    assert evidence.output.is_file()
+
+
+def test_nine_starts_stay_pending(evidence):
+    evidence.starts(count=9, running=4)
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    assert report["start_count"] == 9
+    assert report["verdicts"]["starts"] == "pending"
+
+
+@pytest.mark.parametrize("fields", [
+    {"slots": True},
+    {"slots": "2"},
+    {"occupied_slots": True},
+    {"occupied_slots": "1"},
+    {"providers": "not_an_object"},
+    {"providers": {"alpha": "not_an_object"}},
+    {"providers": {"alpha": {"load": True, "max_parallel": 2}}},
+    {"providers": {"alpha": {"load": 1, "max_parallel": True}}},
+    {"providers": {"alpha": {"load": "1", "max_parallel": 2}}},
+    {"providers": {"alpha": {"load": 1, "max_parallel": "2"}}},
+    {"load": True},
+    {"max_parallel": True},
 ])
-def test_cap_proof_must_cover_every_included_event(evidence, fields, change):
-    evidence.starts(**fields)
-    evidence.tasks["unfinished"]["history"][-1].update(change)
-    _, report = evidence.run()
-    assert report["cap"]["proven"] is False and report["verdicts"]["starts"] == "unmet"
+def test_matched_event_invalid_types_fail_with_malformed_and_median_null(evidence, fields):
+    evidence.starts(count=10, running=4, **fields)
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "failure"
+    assert "malformed" in report["error"]
+    assert report["median"] is None
+    assert evidence.output.is_file()
+
+
+def test_starts_cohort_row_schema_and_sorting(evidence):
+    evidence.tasks["t2"] = {"history": [
+        dict(phase="implement-start", attempt=2, at="2026-10-01T00:00:02Z", code_sha256=SHA, running_implementers=3),
+        dict(phase="implement-start", attempt=1, at="2026-10-01T00:00:02Z", code_sha256=SHA, running_implementers=2),
+    ]}
+    evidence.tasks["t1"] = {"history": [
+        dict(phase="implement-start", attempt=1, at="2026-10-01T00:00:01Z", code_sha256=SHA, running_implementers=4),
+        dict(phase="implement-start", attempt=1, at="2026-10-01T00:00:03Z", code_sha256=SHA, running_implementers=5),
+    ]}
+    code, report = evidence.run()
+    assert code == 2 and report["error"] is None
+    assert report["starts"] == [
+        {"id": "t1", "attempt": 1, "at": "2026-10-01T00:00:01Z", "running_implementers": 4, "code_sha256": SHA},
+        {"id": "t2", "attempt": 1, "at": "2026-10-01T00:00:02Z", "running_implementers": 2, "code_sha256": SHA},
+        {"id": "t2", "attempt": 2, "at": "2026-10-01T00:00:02Z", "running_implementers": 3, "code_sha256": SHA},
+        {"id": "t1", "attempt": 1, "at": "2026-10-01T00:00:03Z", "running_implementers": 5, "code_sha256": SHA},
+    ]
+    assert report["start_count"] == 4
+
 
 
 def test_start_cutoff_retries_and_median_use_event_counts(evidence):
