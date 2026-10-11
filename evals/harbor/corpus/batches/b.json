@@ -33,28 +33,28 @@
       "category": "resume",
       "fixture": "evals/harbor/corpus/tasks/b-05",
       "source_commit": "665a652de4e45ec96f80e7ae28d43baebdd95868",
-      "rationale": "Real fix in history, covered by a HEAD test: A rotated Cursor conversation replays the last user message and loses finished tool work"
+      "rationale": "Verified history fix 665a652de4e45ec96f80e7ae28d43baebdd95868: HEAD grading test packages/ai/test/cursor-conversation-rotate.test.ts passes in <60s with relative source imports; corpus_build check observed seed_fails=true, solution_passes=true, ok=true."
     },
     {
       "task_id": "b-06",
       "category": "resume",
       "fixture": "evals/harbor/corpus/tasks/b-06",
       "source_commit": "ebac55867b7f55c017621789b037b9bda79e87ed",
-      "rationale": "Real fix in history, covered by a HEAD test: Host reconnect to the collab relay drops guests when the relay refuses it"
+      "rationale": "Verified history fix ebac55867b7f55c017621789b037b9bda79e87ed: HEAD grading test packages/coding-agent/test/collab/relay-client-reconnect.test.ts passes in <60s with relative source imports; corpus_build check observed seed_fails=true, solution_passes=true, ok=true."
     },
     {
       "task_id": "b-07",
       "category": "migration",
       "fixture": "evals/harbor/corpus/tasks/b-07",
       "source_commit": "b2fff8577568bbecb90ac6d185d2aad897066ae1",
-      "rationale": "Real fix in history, covered by a HEAD test: Plugin skills get new names after every plugin update"
+      "rationale": "Verified history fix b2fff8577568bbecb90ac6d185d2aad897066ae1: HEAD grading test packages/coding-agent/test/discovery/agent-plugins.test.ts passes in <60s with relative source imports; corpus_build check observed seed_fails=true, solution_passes=true, ok=true."
     },
     {
       "task_id": "b-08",
       "category": "migration",
       "fixture": "evals/harbor/corpus/tasks/b-08",
       "source_commit": "a6179d1a4fd514c047f8aa1efadd5df109ddc274",
-      "rationale": "Real fix in history, covered by a HEAD test: Cursor model prices come from a scraped web page instead of the rate card"
+      "rationale": "Verified history fix a6179d1a4fd514c047f8aa1efadd5df109ddc274: HEAD grading test packages/catalog/test/cursor-discovery.test.ts passes in <60s with relative source imports; corpus_build check observed seed_fails=true, solution_passes=true, ok=true."
     },
     {
       "task_id": "b-09",
