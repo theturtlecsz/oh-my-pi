@@ -6,9 +6,9 @@
   "independent_tests": [
     {
       "runner": "bun",
-      "target": "packages/utils/test/cli-help.test.ts",
+      "target": "packages/coding-agent/test/extensibility/custom-commands/review.test.ts",
       "files": [
-        "independent/cli-help.test.ts"
+        "independent/review.test.ts"
       ]
     }
   ],

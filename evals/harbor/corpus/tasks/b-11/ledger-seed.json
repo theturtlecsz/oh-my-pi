@@ -10,13 +10,12 @@
       "work_id": "00000000-0000-7000-8000-000000000001",
       "revision_id": "00000000-0000-7000-8000-000000000010",
       "revision_number": 1,
-      "title": "Root help breaks custom callbacks expecting command constructors",
-      "description": "The lightweight root-help path passes static command metadata to existing custom help callbacks, which expect constructable command classes. Restore that callback contract while keeping ordinary root help lightweight and keeping per-command help scoped to the selected command.",
+      "title": "The PR picker of the review command closes when a search fails",
+      "description": "In the review command I pick a specific pull request, then search the open pull requests by text. When the GitHub search call fails (for example when it is rate limited), the whole picker ends and I have to start again. After a failed search I want to stay in the picker, see the list I had before, and still be able to choose a pull request.",
       "scope": "initial/scope",
       "acceptance_criteria": [
-        "Existing custom root-help callbacks receive constructable commands.",
-        "Ordinary root help avoids loading command implementations and per-command help loads only its selected command.",
-        "Root help retains supported option and command summaries."
+        "A failed search leaves the picker open on the previous list.",
+        "The user can still select a pull request after the failure and the review continues for it."
       ],
       "state": "IN_PROGRESS"
     }

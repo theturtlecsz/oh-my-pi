@@ -1,27 +1,21 @@
-diff --git a/packages/omptype/src/typebox.ts b/packages/omptype/src/typebox.ts
-index 7e252a5561..b674d47d60 100644
---- a/packages/omptype/src/typebox.ts
-+++ b/packages/omptype/src/typebox.ts
-@@ -220,7 +220,11 @@ function tString(opts?: StringOpts): TString {
- 		const valid = formatPredicate(format);
- 		schema = schema.narrow((value, ctx) => valid(value) || ctx.mustBe(`a string in ${format} format`));
- 	}
--	return applyMeta(schema, opts);
-+	const result = applyMeta(schema, opts);
-+	const keywords: Record<string, unknown> = {};
-+	if (opts?.pattern !== undefined) keywords.pattern = opts.pattern;
-+	if (opts?.format !== undefined) keywords.format = opts.format === "url" ? "uri" : opts.format;
-+	return opts?.pattern !== undefined || opts?.format !== undefined ? withJsonSchemaKeywords(result, keywords) : result;
- }
+diff --git a/packages/coding-agent/src/session/turn-recovery.ts b/packages/coding-agent/src/session/turn-recovery.ts
+index e70e00ec23..ad84ed5bea 100644
+--- a/packages/coding-agent/src/session/turn-recovery.ts
++++ b/packages/coding-agent/src/session/turn-recovery.ts
+@@ -101,11 +101,12 @@ const HTTP2_STREAM_RESET_ERROR_RE =
+ 	/stream closed with error code\s+nghttp2_(?:internal_error|refused_stream)|nghttp2_(?:internal_error|refused_stream)|HTTP2(?:StreamReset|RefusedStream)/i;
+ // Gateway/provider closes a stream mid-generation without its terminal chunk
+ // (openai-completions "finish_reason", openai/azure responses "terminal
+-// response event", Codex "terminal completion event"). Same transport-failure
+-// class as the stall/reset entries: retriable, and eligible for preserved-turn
+-// continuation on resolved tool turns.
++// response event", Codex "terminal completion event", Cursor "turnEnded" —
++// an HTTP/2 reset can settle as the stream end rather than the RST error).
++// Same transport-failure class as the stall/reset entries: retriable, and
++// eligible for preserved-turn continuation on resolved tool turns.
+ const PREMATURE_STREAM_CLOSE_ERROR_RE =
+-	/(?:stream closed before a (?:finish_reason|terminal response event)|Codex stream ended before terminal completion event)/i;
++	/(?:stream closed before a (?:finish_reason|terminal response event)|Codex stream ended before terminal completion event|Cursor stream ended before turnEnded)/i;
+ const IMMUTABLE_ANTHROPIC_THINKING_ERROR_PATTERN =
+ 	/messages\.\d+\.content\.\d+.*\b(?:thinking|redacted_thinking)\b.*\blatest assistant message cannot be modified\b/is;
  
- function formatPredicate(format: string): (value: string) => boolean {
-@@ -290,7 +294,8 @@ function tNumber(opts?: NumberOpts, integer = false): TNumber {
- 			);
- 		});
- 	}
--	return applyMeta(schema, opts);
-+	const result = applyMeta(schema, opts);
-+	return opts?.multipleOf !== undefined ? withJsonSchemaKeywords(result, { multipleOf: opts.multipleOf }) : result;
- }
- 
- function tLiteral<const V extends string | number | boolean | null>(value: V, opts?: Meta): TLiteral<V> {

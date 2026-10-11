@@ -1,17 +1,17 @@
 {
   "task_id": "b-10",
   "category": "ambiguous_intake",
-  "title": "Numeric and string constraints disappear from emitted schemas",
-  "source_commit": "9286b72b4fecfd3704cb05e0c70518272bda4dd1",
+  "title": "Cursor turns that stop early are not continued like other providers",
+  "source_commit": "29e54b899a3906a518990fc15c119c18f6d4dff0",
   "runner": "bun",
-  "test_target": "packages/omptype/test/typebox.test.ts",
+  "test_target": "packages/coding-agent/test/turn-recovery-replay-unsafe.test.ts",
   "source_paths": [
-    "packages/omptype/src/typebox.ts"
+    "packages/coding-agent/src/session/turn-recovery.ts"
   ],
-  "instruction": "TypeBox-compatible builders enforce string and number constraints locally, but the emitted JSON Schema loses some of them. Downstream validators then accept values that local validation rejects. Preserve the constraints in emitted schemas so both validation paths agree.",
+  "instruction": "With Cursor models, a turn that ends early after tools ran is reported as a plain failure. Other providers get an automatic continuation in the same situation. Cursor should be treated the same way when its stream ends early.",
   "acceptance_criteria": [
-    "Emitted string and number schemas retain the constraints enforced by their builders.",
-    "Existing local validation continues to reject values violating those constraints."
+    "A Cursor stream that ends early is classed as a retriable transport failure like the other providers.",
+    "Replay-unsafe turns are not replayed."
   ],
-  "withheld_detail": "uri"
+  "withheld_detail": "turnEnded"
 }

@@ -6,9 +6,9 @@
   "independent_tests": [
     {
       "runner": "bun",
-      "target": "packages/omptype/test/typebox.test.ts",
+      "target": "packages/coding-agent/test/turn-recovery-replay-unsafe.test.ts",
       "files": [
-        "independent/typebox.test.ts"
+        "independent/turn-recovery-replay-unsafe.test.ts"
       ]
     }
   ],

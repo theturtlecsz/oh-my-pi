@@ -6,9 +6,9 @@
   "independent_tests": [
     {
       "runner": "bun",
-      "target": "packages/utils/test/path.test.ts",
+      "target": "packages/tui/test/editor-autocomplete-actions.test.ts",
       "files": [
-        "independent/path.test.ts"
+        "independent/editor-autocomplete-actions.test.ts"
       ]
     }
   ],

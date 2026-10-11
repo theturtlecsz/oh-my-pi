@@ -1,21 +1,22 @@
-diff --git a/packages/utils/src/path.ts b/packages/utils/src/path.ts
-index 79d8327751..c33b25daab 100644
---- a/packages/utils/src/path.ts
-+++ b/packages/utils/src/path.ts
-@@ -43,14 +43,14 @@ export function stripWindowsExtendedLengthPathPrefix(
- 
- /**
-  * Test whether a path is fully qualified and drive-independent.
-- * On Windows, requires a drive letter with separator (e.g. `C:\`) or UNC (`\\`).
-+ * On Windows, requires a drive letter with separator (e.g. `C:\`) or UNC (`\\server\share` or `//server/share`).
-  * On POSIX, requires an absolute path.
-  */
- export function isFullyQualifiedPath(filePath: string, platform: NodeJS.Platform = process.platform): boolean {
- 	const p = platform === "win32" ? path.win32 : path.posix;
- 	if (!p.isAbsolute(filePath)) return false;
- 	if (platform === "win32") {
--		return /^[a-zA-Z]:[/\\]/.test(filePath) || filePath.startsWith("\\\\") || filePath.startsWith("//");
-+		return /^[a-zA-Z]:[/\\]/.test(filePath) || /^[\\/]{2}[^\\/]/.test(filePath);
+diff --git a/packages/tui/src/components/editor.ts b/packages/tui/src/components/editor.ts
+index 528e251a84..4f76ebfed2 100644
+--- a/packages/tui/src/components/editor.ts
++++ b/packages/tui/src/components/editor.ts
+@@ -4222,11 +4222,17 @@ export class Editor implements Component, Focusable {
+ 	 * Whether the selected completion for a submitted slash command's argument
+ 	 * only restates what the user already typed (e.g. `list ` for `/mcp list`).
+ 	 * Accepting it would change nothing visible, so Enter should submit.
++	 *
++	 * A selection whose usage hint still names a required `<arg>` outside any
++	 * optional `[...]` group (e.g. `test` with `<name>`) keeps Enter's accept
++	 * role, so the user continues into the argument instead of submitting a
++	 * command the handler can only reject.
+ 	 */
+ 	#selectedSlashArgumentIsAlreadyTyped(selected: AutocompleteItem): boolean {
+ 		if (!this.#isInSubmittedSlashCommandContext()) return false;
+ 		const currentLine = this.#state.lines[this.#state.cursorLine] ?? "";
+ 		if (this.#state.cursorCol !== currentLine.length) return false;
++		if (selected.hint?.replace(/\[[^\]]*\]/g, "").includes("<")) return false;
+ 		const typed = this.#autocompletePrefix.trimEnd();
+ 		return typed.length > 0 && selected.value.trimEnd() === typed;
  	}
- 	return true;
- }

@@ -1,1 +1,1 @@
-Windows path qualification currently accepts network paths containing only separators. Reject these incomplete paths while continuing to recognize supported drive and network path forms, including when checking Windows paths on another platform.
+In the prompt editor, when I type /mcp test and the suggestion list is open, pressing Enter sends the command at once and the handler then rejects it because the name is missing. I want Enter to continue into the argument for subcommands that cannot run without one, and to behave as before for the others.
