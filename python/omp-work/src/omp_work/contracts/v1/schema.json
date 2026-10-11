@@ -3605,6 +3605,69 @@
       "title": "AssessBoundedIntakePayload",
       "type": "object"
     },
+    "AssessIntakeCommand": {
+      "$defs": {
+        "AssessIntakePayload": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_revision": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "expected_revision"
+          ],
+          "title": "AssessIntakePayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/AssessIntakePayload"
+        },
+        "type": {
+          "const": "assess_intake",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "AssessIntakeCommand",
+      "type": "object"
+    },
+    "AssessIntakePayload": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_revision": {
+          "minimum": 1,
+          "title": "Expected Revision",
+          "type": "integer"
+        },
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "expected_revision"
+      ],
+      "title": "AssessIntakePayload",
+      "type": "object"
+    },
     "AttestCheckpointDeliveryCommand": {
       "$defs": {
         "AttestCheckpointDeliveryPayload": {
@@ -7553,6 +7616,62 @@
     },
     "CommandEnvelope": {
       "$defs": {
+        "AcceptanceCriterion": {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "title": "Description",
+              "type": "string"
+            },
+            "expected_result": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TypedStringValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedIntegerValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNumberValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedBooleanValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNullValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedEntityValue"
+                }
+              ],
+              "title": "Expected Result"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "requirement_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Requirement Ids",
+              "type": "array"
+            },
+            "verification_method": {
+              "title": "Verification Method",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "requirement_ids",
+            "description",
+            "verification_method",
+            "expected_result"
+          ],
+          "title": "AcceptanceCriterion",
+          "type": "object"
+        },
         "ActivateCutoverCommand": {
           "additionalProperties": false,
           "properties": {
@@ -8174,6 +8293,46 @@
             "draft"
           ],
           "title": "AssessBoundedIntakePayload",
+          "type": "object"
+        },
+        "AssessIntakeCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/AssessIntakePayload"
+            },
+            "type": {
+              "const": "assess_intake",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "AssessIntakeCommand",
+          "type": "object"
+        },
+        "AssessIntakePayload": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_revision": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "expected_revision"
+          ],
+          "title": "AssessIntakePayload",
           "type": "object"
         },
         "AttestCheckpointDeliveryCommand": {
@@ -9002,6 +9161,59 @@
           "title": "ClaimResearchReplicatePayload",
           "type": "object"
         },
+        "ClarificationQuestion": {
+          "additionalProperties": false,
+          "properties": {
+            "category": {
+              "enum": [
+                "functional_scope_and_behavior",
+                "domain_and_data_model",
+                "interaction_and_ux_flow",
+                "non_functional_qualities",
+                "integrations_and_external_dependencies",
+                "edge_cases_and_failure_handling",
+                "constraints_and_tradeoffs",
+                "terminology",
+                "completion_signals",
+                "placeholders_and_ambiguities",
+                "scope_boundaries"
+              ],
+              "title": "Category",
+              "type": "string"
+            },
+            "conflict_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Conflict Ids",
+              "type": "array"
+            },
+            "gap_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Gap Ids",
+              "type": "array"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "question": {
+              "title": "Question",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "question",
+            "gap_ids",
+            "conflict_ids",
+            "category"
+          ],
+          "title": "ClarificationQuestion",
+          "type": "object"
+        },
         "ClearFocusCommand": {
           "additionalProperties": false,
           "properties": {
@@ -9598,6 +9810,38 @@
             "reason"
           ],
           "title": "ConcludeResearchCampaignPayload",
+          "type": "object"
+        },
+        "Conflict": {
+          "additionalProperties": false,
+          "properties": {
+            "claim_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Claim Ids",
+              "type": "array"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "predicate_id": {
+              "title": "Predicate Id",
+              "type": "string"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "claim_ids",
+            "predicate_id",
+            "reason"
+          ],
+          "title": "Conflict",
           "type": "object"
         },
         "CreateBatchRelation": {
@@ -11406,6 +11650,58 @@
           "title": "KnownIntakeValue",
           "type": "object"
         },
+        "LinkIntakeCriterionCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/LinkIntakeCriterionPayload"
+            },
+            "type": {
+              "const": "link_intake_criterion",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "LinkIntakeCriterionCommand",
+          "type": "object"
+        },
+        "LinkIntakeCriterionPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "criterion": {
+              "$ref": "#/$defs/AcceptanceCriterion"
+            },
+            "expected_revision": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "requirements": {
+              "items": {
+                "$ref": "#/$defs/RequirementClause"
+              },
+              "title": "Requirements",
+              "type": "array"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "expected_revision",
+            "criterion",
+            "requirements"
+          ],
+          "title": "LinkIntakeCriterionPayload",
+          "type": "object"
+        },
         "LinkMissionWorkCommand": {
           "additionalProperties": false,
           "properties": {
@@ -12877,6 +13173,66 @@
           "title": "RecordIntakeDecisionPayload",
           "type": "object"
         },
+        "RecordIntakeIssueCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/RecordIntakeIssuePayload"
+            },
+            "type": {
+              "const": "record_intake_issue",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "RecordIntakeIssueCommand",
+          "type": "object"
+        },
+        "RecordIntakeIssuePayload": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_revision": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "gaps": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Gaps",
+              "type": "array"
+            },
+            "issue": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Conflict"
+                },
+                {
+                  "$ref": "#/$defs/ClarificationQuestion"
+                }
+              ],
+              "title": "Issue"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "expected_revision",
+            "issue",
+            "gaps"
+          ],
+          "title": "RecordIntakeIssuePayload",
+          "type": "object"
+        },
         "RecordProjectHealthCommand": {
           "additionalProperties": false,
           "properties": {
@@ -13560,6 +13916,59 @@
             "relation"
           ],
           "title": "RemoveRelationPayload",
+          "type": "object"
+        },
+        "RequirementClause": {
+          "additionalProperties": false,
+          "properties": {
+            "category": {
+              "enum": [
+                "functional_scope_and_behavior",
+                "domain_and_data_model",
+                "interaction_and_ux_flow",
+                "non_functional_qualities",
+                "integrations_and_external_dependencies",
+                "edge_cases_and_failure_handling",
+                "constraints_and_tradeoffs",
+                "terminology",
+                "completion_signals",
+                "placeholders_and_ambiguities",
+                "scope_boundaries"
+              ],
+              "title": "Category",
+              "type": "string"
+            },
+            "claim_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Claim Ids",
+              "type": "array"
+            },
+            "dimension_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Dimension Ids",
+              "type": "array"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "text": {
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "category",
+            "text",
+            "claim_ids",
+            "dimension_ids"
+          ],
+          "title": "RequirementClause",
           "type": "object"
         },
         "RequirementDimensionDefinition": {
@@ -15291,6 +15700,64 @@
           "title": "SubmitMissionPayload",
           "type": "object"
         },
+        "SupersedeIntakeClaimCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/SupersedeIntakeClaimPayload"
+            },
+            "type": {
+              "const": "supersede_intake_claim",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "SupersedeIntakeClaimCommand",
+          "type": "object"
+        },
+        "SupersedeIntakeClaimPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "decision_id": {
+              "minLength": 1,
+              "title": "Decision Id",
+              "type": "string"
+            },
+            "expected_revision": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "old_claim_id": {
+              "minLength": 1,
+              "title": "Old Claim Id",
+              "type": "string"
+            },
+            "replacement_claim_id": {
+              "minLength": 1,
+              "title": "Replacement Claim Id",
+              "type": "string"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "expected_revision",
+            "old_claim_id",
+            "replacement_claim_id",
+            "decision_id"
+          ],
+          "title": "SupersedeIntakeClaimPayload",
+          "type": "object"
+        },
         "TypedBooleanValue": {
           "additionalProperties": false,
           "properties": {
@@ -15518,6 +15985,7 @@
               "append_evidence": "#/$defs/AppendEvidenceCommand",
               "approve_mission": "#/$defs/ApproveMissionCommand",
               "assess_bounded_intake": "#/$defs/AssessBoundedIntakeCommand",
+              "assess_intake": "#/$defs/AssessIntakeCommand",
               "attest_checkpoint_delivery": "#/$defs/AttestCheckpointDeliveryCommand",
               "attest_cutover_plan": "#/$defs/AttestCutoverPlanCommand",
               "attest_intake_admission": "#/$defs/AttestIntakeAdmissionCommand",
@@ -15541,6 +16009,7 @@
               "draft_mission_intake": "#/$defs/DraftMissionIntakeCommand",
               "engage_stop": "#/$defs/EngageStopCommand",
               "finalize_candidate": "#/$defs/FinalizeCandidateCommand",
+              "link_intake_criterion": "#/$defs/LinkIntakeCriterionCommand",
               "link_mission_work": "#/$defs/LinkMissionWorkCommand",
               "promote_import_batch": "#/$defs/PromoteImportBatchCommand",
               "propose_research_trial": "#/$defs/ProposeResearchTrialCommand",
@@ -15554,6 +16023,7 @@
               "record_finding": "#/$defs/RecordFindingCommand",
               "record_intake_claim": "#/$defs/RecordIntakeClaimCommand",
               "record_intake_decision": "#/$defs/RecordIntakeDecisionCommand",
+              "record_intake_issue": "#/$defs/RecordIntakeIssueCommand",
               "record_project_health": "#/$defs/RecordProjectHealthCommand",
               "record_research_cache": "#/$defs/RecordResearchCacheCommand",
               "record_research_observation": "#/$defs/RecordResearchObservationCommand",
@@ -15580,7 +16050,8 @@
               "stage_import_batch": "#/$defs/StageImportBatchCommand",
               "stamp_execution_plan": "#/$defs/StampExecutionPlanCommand",
               "start_intake": "#/$defs/StartIntakeCommand",
-              "submit_mission": "#/$defs/SubmitMissionCommand"
+              "submit_mission": "#/$defs/SubmitMissionCommand",
+              "supersede_intake_claim": "#/$defs/SupersedeIntakeClaimCommand"
             },
             "propertyName": "type"
           },
@@ -15704,6 +16175,18 @@
             },
             {
               "$ref": "#/$defs/RecordIntakeDecisionCommand"
+            },
+            {
+              "$ref": "#/$defs/SupersedeIntakeClaimCommand"
+            },
+            {
+              "$ref": "#/$defs/RecordIntakeIssueCommand"
+            },
+            {
+              "$ref": "#/$defs/LinkIntakeCriterionCommand"
+            },
+            {
+              "$ref": "#/$defs/AssessIntakeCommand"
             },
             {
               "$ref": "#/$defs/RegisterResearchArtifactCommand"
@@ -24042,6 +24525,603 @@
       "title": "KnownIntakeValue",
       "type": "object"
     },
+    "LinkIntakeCriterionCommand": {
+      "$defs": {
+        "AcceptanceCriterion": {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "title": "Description",
+              "type": "string"
+            },
+            "expected_result": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TypedStringValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedIntegerValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNumberValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedBooleanValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNullValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedEntityValue"
+                }
+              ],
+              "title": "Expected Result"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "requirement_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Requirement Ids",
+              "type": "array"
+            },
+            "verification_method": {
+              "title": "Verification Method",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "requirement_ids",
+            "description",
+            "verification_method",
+            "expected_result"
+          ],
+          "title": "AcceptanceCriterion",
+          "type": "object"
+        },
+        "EntityRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "type": {
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "type"
+          ],
+          "title": "EntityRef",
+          "type": "object"
+        },
+        "LinkIntakeCriterionPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "criterion": {
+              "$ref": "#/$defs/AcceptanceCriterion"
+            },
+            "expected_revision": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "requirements": {
+              "items": {
+                "$ref": "#/$defs/RequirementClause"
+              },
+              "title": "Requirements",
+              "type": "array"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "expected_revision",
+            "criterion",
+            "requirements"
+          ],
+          "title": "LinkIntakeCriterionPayload",
+          "type": "object"
+        },
+        "RequirementClause": {
+          "additionalProperties": false,
+          "properties": {
+            "category": {
+              "enum": [
+                "functional_scope_and_behavior",
+                "domain_and_data_model",
+                "interaction_and_ux_flow",
+                "non_functional_qualities",
+                "integrations_and_external_dependencies",
+                "edge_cases_and_failure_handling",
+                "constraints_and_tradeoffs",
+                "terminology",
+                "completion_signals",
+                "placeholders_and_ambiguities",
+                "scope_boundaries"
+              ],
+              "title": "Category",
+              "type": "string"
+            },
+            "claim_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Claim Ids",
+              "type": "array"
+            },
+            "dimension_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Dimension Ids",
+              "type": "array"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "text": {
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "category",
+            "text",
+            "claim_ids",
+            "dimension_ids"
+          ],
+          "title": "RequirementClause",
+          "type": "object"
+        },
+        "TypedBooleanValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "boolean",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedBooleanValue",
+          "type": "object"
+        },
+        "TypedEntityValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "entity",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/EntityRef"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedEntityValue",
+          "type": "object"
+        },
+        "TypedIntegerValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "integer",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedIntegerValue",
+          "type": "object"
+        },
+        "TypedNullValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "null",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "null"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedNullValue",
+          "type": "object"
+        },
+        "TypedNumberValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "number",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "integer"
+                }
+              ],
+              "title": "Value"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedNumberValue",
+          "type": "object"
+        },
+        "TypedStringValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "string",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedStringValue",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/LinkIntakeCriterionPayload"
+        },
+        "type": {
+          "const": "link_intake_criterion",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "LinkIntakeCriterionCommand",
+      "type": "object"
+    },
+    "LinkIntakeCriterionPayload": {
+      "$defs": {
+        "AcceptanceCriterion": {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "title": "Description",
+              "type": "string"
+            },
+            "expected_result": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TypedStringValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedIntegerValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNumberValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedBooleanValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNullValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedEntityValue"
+                }
+              ],
+              "title": "Expected Result"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "requirement_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Requirement Ids",
+              "type": "array"
+            },
+            "verification_method": {
+              "title": "Verification Method",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "requirement_ids",
+            "description",
+            "verification_method",
+            "expected_result"
+          ],
+          "title": "AcceptanceCriterion",
+          "type": "object"
+        },
+        "EntityRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "type": {
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "type"
+          ],
+          "title": "EntityRef",
+          "type": "object"
+        },
+        "RequirementClause": {
+          "additionalProperties": false,
+          "properties": {
+            "category": {
+              "enum": [
+                "functional_scope_and_behavior",
+                "domain_and_data_model",
+                "interaction_and_ux_flow",
+                "non_functional_qualities",
+                "integrations_and_external_dependencies",
+                "edge_cases_and_failure_handling",
+                "constraints_and_tradeoffs",
+                "terminology",
+                "completion_signals",
+                "placeholders_and_ambiguities",
+                "scope_boundaries"
+              ],
+              "title": "Category",
+              "type": "string"
+            },
+            "claim_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Claim Ids",
+              "type": "array"
+            },
+            "dimension_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Dimension Ids",
+              "type": "array"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "text": {
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "category",
+            "text",
+            "claim_ids",
+            "dimension_ids"
+          ],
+          "title": "RequirementClause",
+          "type": "object"
+        },
+        "TypedBooleanValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "boolean",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedBooleanValue",
+          "type": "object"
+        },
+        "TypedEntityValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "entity",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/EntityRef"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedEntityValue",
+          "type": "object"
+        },
+        "TypedIntegerValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "integer",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedIntegerValue",
+          "type": "object"
+        },
+        "TypedNullValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "null",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "null"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedNullValue",
+          "type": "object"
+        },
+        "TypedNumberValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "number",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "integer"
+                }
+              ],
+              "title": "Value"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedNumberValue",
+          "type": "object"
+        },
+        "TypedStringValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "string",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedStringValue",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "criterion": {
+          "$ref": "#/$defs/AcceptanceCriterion"
+        },
+        "expected_revision": {
+          "minimum": 1,
+          "title": "Expected Revision",
+          "type": "integer"
+        },
+        "requirements": {
+          "items": {
+            "$ref": "#/$defs/RequirementClause"
+          },
+          "title": "Requirements",
+          "type": "array"
+        },
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "expected_revision",
+        "criterion",
+        "requirements"
+      ],
+      "title": "LinkIntakeCriterionPayload",
+      "type": "object"
+    },
     "LinkMissionWorkCommand": {
       "$defs": {
         "LinkMissionWorkPayload": {
@@ -28955,6 +30035,281 @@
         "instruction"
       ],
       "title": "RecordIntakeDecisionPayload",
+      "type": "object"
+    },
+    "RecordIntakeIssueCommand": {
+      "$defs": {
+        "ClarificationQuestion": {
+          "additionalProperties": false,
+          "properties": {
+            "category": {
+              "enum": [
+                "functional_scope_and_behavior",
+                "domain_and_data_model",
+                "interaction_and_ux_flow",
+                "non_functional_qualities",
+                "integrations_and_external_dependencies",
+                "edge_cases_and_failure_handling",
+                "constraints_and_tradeoffs",
+                "terminology",
+                "completion_signals",
+                "placeholders_and_ambiguities",
+                "scope_boundaries"
+              ],
+              "title": "Category",
+              "type": "string"
+            },
+            "conflict_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Conflict Ids",
+              "type": "array"
+            },
+            "gap_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Gap Ids",
+              "type": "array"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "question": {
+              "title": "Question",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "question",
+            "gap_ids",
+            "conflict_ids",
+            "category"
+          ],
+          "title": "ClarificationQuestion",
+          "type": "object"
+        },
+        "Conflict": {
+          "additionalProperties": false,
+          "properties": {
+            "claim_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Claim Ids",
+              "type": "array"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "predicate_id": {
+              "title": "Predicate Id",
+              "type": "string"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "claim_ids",
+            "predicate_id",
+            "reason"
+          ],
+          "title": "Conflict",
+          "type": "object"
+        },
+        "RecordIntakeIssuePayload": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_revision": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "gaps": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Gaps",
+              "type": "array"
+            },
+            "issue": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Conflict"
+                },
+                {
+                  "$ref": "#/$defs/ClarificationQuestion"
+                }
+              ],
+              "title": "Issue"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "expected_revision",
+            "issue",
+            "gaps"
+          ],
+          "title": "RecordIntakeIssuePayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/RecordIntakeIssuePayload"
+        },
+        "type": {
+          "const": "record_intake_issue",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "RecordIntakeIssueCommand",
+      "type": "object"
+    },
+    "RecordIntakeIssuePayload": {
+      "$defs": {
+        "ClarificationQuestion": {
+          "additionalProperties": false,
+          "properties": {
+            "category": {
+              "enum": [
+                "functional_scope_and_behavior",
+                "domain_and_data_model",
+                "interaction_and_ux_flow",
+                "non_functional_qualities",
+                "integrations_and_external_dependencies",
+                "edge_cases_and_failure_handling",
+                "constraints_and_tradeoffs",
+                "terminology",
+                "completion_signals",
+                "placeholders_and_ambiguities",
+                "scope_boundaries"
+              ],
+              "title": "Category",
+              "type": "string"
+            },
+            "conflict_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Conflict Ids",
+              "type": "array"
+            },
+            "gap_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Gap Ids",
+              "type": "array"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "question": {
+              "title": "Question",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "question",
+            "gap_ids",
+            "conflict_ids",
+            "category"
+          ],
+          "title": "ClarificationQuestion",
+          "type": "object"
+        },
+        "Conflict": {
+          "additionalProperties": false,
+          "properties": {
+            "claim_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Claim Ids",
+              "type": "array"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "predicate_id": {
+              "title": "Predicate Id",
+              "type": "string"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "claim_ids",
+            "predicate_id",
+            "reason"
+          ],
+          "title": "Conflict",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "expected_revision": {
+          "minimum": 1,
+          "title": "Expected Revision",
+          "type": "integer"
+        },
+        "gaps": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Gaps",
+          "type": "array"
+        },
+        "issue": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Conflict"
+            },
+            {
+              "$ref": "#/$defs/ClarificationQuestion"
+            }
+          ],
+          "title": "Issue"
+        },
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "expected_revision",
+        "issue",
+        "gaps"
+      ],
+      "title": "RecordIntakeIssuePayload",
       "type": "object"
     },
     "RecordProjectHealthCommand": {
@@ -37457,6 +38812,105 @@
         "draft"
       ],
       "title": "SubmitMissionPayload",
+      "type": "object"
+    },
+    "SupersedeIntakeClaimCommand": {
+      "$defs": {
+        "SupersedeIntakeClaimPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "decision_id": {
+              "minLength": 1,
+              "title": "Decision Id",
+              "type": "string"
+            },
+            "expected_revision": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "old_claim_id": {
+              "minLength": 1,
+              "title": "Old Claim Id",
+              "type": "string"
+            },
+            "replacement_claim_id": {
+              "minLength": 1,
+              "title": "Replacement Claim Id",
+              "type": "string"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "expected_revision",
+            "old_claim_id",
+            "replacement_claim_id",
+            "decision_id"
+          ],
+          "title": "SupersedeIntakeClaimPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/SupersedeIntakeClaimPayload"
+        },
+        "type": {
+          "const": "supersede_intake_claim",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "SupersedeIntakeClaimCommand",
+      "type": "object"
+    },
+    "SupersedeIntakeClaimPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "decision_id": {
+          "minLength": 1,
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "expected_revision": {
+          "minimum": 1,
+          "title": "Expected Revision",
+          "type": "integer"
+        },
+        "old_claim_id": {
+          "minLength": 1,
+          "title": "Old Claim Id",
+          "type": "string"
+        },
+        "replacement_claim_id": {
+          "minLength": 1,
+          "title": "Replacement Claim Id",
+          "type": "string"
+        },
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "expected_revision",
+        "old_claim_id",
+        "replacement_claim_id",
+        "decision_id"
+      ],
+      "title": "SupersedeIntakeClaimPayload",
       "type": "object"
     },
     "UnknownIntakeValue": {

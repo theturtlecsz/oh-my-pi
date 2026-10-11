@@ -1,0 +1,104 @@
+--- a/flood.py
++++ b/flood.py
+@@ -195,6 +195,80 @@
+     return str(meta.get("owner", "")).strip().lower() in ("true", "yes", "1")
+ 
+ 
++# Dependency context is parsed once, before any evidence is extracted.
++DEPENDENCY_EXCLUSIONS = {"do not touch", "assumptions", "deferred"}
++DEPENDENCY_LABEL_RE = re.compile(
++    r"^(?:(?:[-+*]|\d+[.)])\s+)?"
++    r"(?P<label>[A-Za-z][A-Za-z -]*):\s*(?P<value>.*)$")
++DEPENDENCY_TOKEN_RE = re.compile(r"(?<![\w./-])[./]*[A-Za-z0-9_][A-Za-z0-9_./-]*")
++
++
++def dependency_tokens(text: str) -> set[str]:
++    """Whole path/artifact tokens, never individual characters from a string."""
++    text = re.sub(r"(?m)^\s*(?:[-+*]|\d+[.)])\s+", "", text)
++    return {token.rstrip(".") for token in DEPENDENCY_TOKEN_RE.findall(text)}
++
++
++def dependency_label(line: str) -> tuple[int, str, str]:
++    """Recognize Markdown headings and plain, emphasized or list-prefixed labels."""
++    clean = line.strip().replace("**", "").replace("__", "")
++    heading = re.match(r"^(#{1,6})\s+(.*)$", clean)
++    level = len(heading[1]) if heading else 0
++    if heading:
++        clean = heading[2].rstrip("#").strip()
++    clean = re.sub(r"\*([^*]+)\*", r"\1", clean)
++    label = DEPENDENCY_LABEL_RE.match(clean)
++    if label:
++        return level, label["label"].strip().lower(), label["value"]
++    plain = re.sub(r"^(?:[-+*]|\d+[.)])\s+", "", clean).lower()
++    return level, plain if level or plain in DEPENDENCY_EXCLUSIONS else "", ""
++
++
++def parse_dependency_context(body: str) -> dict:
++    """Separate work from exclusions; nested headings belong to their parent section.
++
++    Inline exclusions continue through prose and lists until a peer label or heading.
++    Evidence is read only from the resulting work, so excluded references cannot leak.
++    """
++    work, excluded = [], []
++    exclusion_level = None
++    for line in body.splitlines():
++        level, label, _ = dependency_label(line)
++        if exclusion_level is not None:
++            boundary = (level and (exclusion_level == 0 or level <= exclusion_level))
++            boundary = boundary or (exclusion_level == 0 and bool(label))
++            if not boundary:
++                excluded.append(line)
++                continue
++            exclusion_level = None
++        if label in DEPENDENCY_EXCLUSIONS:
++            exclusion_level = level
++            excluded.append(line)
++            continue
++        # A label may follow work prose on the same line, e.g. "Done when: ... Do not touch: ...".
++        inline = re.search(r"(?i)(?<!\w)(?:\*\*|__|\*)?"
++                           r"(?:Do not touch|Assumptions|Deferred)(?:\*\*|__|\*)?:"
++                           r"(?:\*\*|__|\*)?", line)
++        if inline:
++            work.append(line[:inline.start()].rstrip())
++            excluded.append(line[inline.start():])
++            exclusion_level = 0
++        else:
++            work.append(line)
++    work_text = "\n".join(work).strip()
++    evidence, in_evidence = [], False
++    for line in work_text.splitlines():
++        level, label, value = dependency_label(line)
++        if level or label:
++            in_evidence = label == "evidence"
++            if in_evidence:
++                evidence.append(value)
++        elif in_evidence:
++            evidence.append(line)
++    return {"work_text": work_text, "excluded_tokens": dependency_tokens("\n".join(excluded)),
++            "evidence": dependency_tokens("\n".join(evidence))}
++
++
+ def validate_slices(item: str, pdir: Path, max_slices: int = 8, max_body: int = 2000,
+                     max_minutes: float = 90, is_union=lambda fp: False) -> tuple[list[str], list[dict]]:
+     """The planner's output checked without a model. Returns (violations, slices)."""
+@@ -240,7 +314,10 @@
+                 v.append(f"{sid}: no \"Do not touch\" list")
+             if not SLICE_TEST_RE.search(body):
+                 v.append(f"{sid}: names no test file to add or extend")
+-        slices.append({"id": sid, "depends_on": meta.get("depends_on", []), "file": f, "files": meta.get("files", [])})
++        context = parse_dependency_context(body)
++        slices.append({"id": sid, "depends_on": meta.get("depends_on", []), "file": f,
++                       "files": meta.get("files", []), "outputs": meta.get("outputs", []),
++                       "body": body, "owner": is_owner(meta), **context})
+     ids = [sl["id"] for sl in slices]
+     for dup in sorted({i for i in ids if ids.count(i) > 1}):
+         v.append(f"duplicate slice id {dup}")
+@@ -750,7 +827,7 @@
+             continue
+         k, v = line.split(":", 1)
+         k, v = k.strip(), v.strip()
+-        if k in ("depends_on", "providers", "files"):
++        if k in ("depends_on", "providers", "files", "outputs"):
+             v = v.strip("[]")
+             meta[k] = [x.strip().strip("'\"") for x in v.split(",") if x.strip()]
+         elif k == "max_attempts":

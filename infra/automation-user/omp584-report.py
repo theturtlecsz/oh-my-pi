@@ -20,35 +20,42 @@ def integer(value: object) -> bool:
 
 
 def cap_proof(starts: list[dict]) -> dict:
-    cap = {"proven": False, "kind": None, "value": None, "evidence": []}
+    proof = {"proven": False, "kind": None, "value": None, "evidence": starts}
     if not starts:
-        return cap
-    slots = starts[0].get("slots")
-    if integer(slots) and slots >= 1 and all(
-        integer(e.get("slots")) and e["slots"] == slots
-        and integer(e.get("occupied_slots")) and e["occupied_slots"] >= slots
-        for e in starts
-    ):
-        return {"proven": True, "kind": "slots", "value": slots,
-                "evidence": [{k: e[k] for k in ("task_id", "at", "slots", "occupied_slots")} for e in starts]}
-    providers = starts[0].get("providers")
-    if not isinstance(providers, dict) or not providers or not all(
-        isinstance(name, str) and name.strip() for name in providers
-    ):
-        return cap
-    for event in starts:
-        current = event.get("providers")
-        if not isinstance(current, dict) or current.keys() != providers.keys():
-            return cap
-        for limits in current.values():
-            if not isinstance(limits, dict):
-                return cap
-            load, maximum = limits.get("load"), limits.get("max_parallel")
-            if not integer(load) or not integer(maximum) or load < maximum:
-                return cap
-    return {"proven": True, "kind": "providers",
-            "value": {name: limits["max_parallel"] for name, limits in providers.items()},
-            "evidence": [{k: e[k] for k in ("task_id", "at", "providers")} for e in starts]}
+        return proof
+    slots = starts[0]["slots"]
+    if slots >= 1 and all(event["slots"] == slots and event["occupied_slots"] >= slots for event in starts):
+        proof.update(proven=True, kind="slots", value=slots)
+    else:
+        providers = starts[0]["providers"]
+        if providers and all(name.strip() for name in providers) and all(
+            event["providers"].keys() == providers.keys()
+            and all(limits["load"] >= limits["max_parallel"] for limits in event["providers"].values())
+            for event in starts
+        ):
+            proof.update(proven=True, kind="providers",
+                         value={name: limits["max_parallel"] for name, limits in providers.items()})
+    return proof
+
+
+def validate_matched_start(event: dict) -> None:
+    for key in ("running_implementers", "slots", "occupied_slots"):
+        if not integer(event.get(key)):
+            raise ValueError(f"malformed implement-start: {key} must be an integer, not boolean")
+    for key in ("load", "max_parallel"):
+        if key in event and not integer(event[key]):
+            raise ValueError(f"malformed implement-start: {key} must be an integer, not boolean")
+    providers = event.get("providers")
+    if not isinstance(providers, dict):
+        raise ValueError("malformed implement-start: providers must be an object")
+    for prov_name, limits in providers.items():
+        if not isinstance(limits, dict):
+            raise ValueError(f"malformed implement-start: provider {prov_name} must be an object")
+        for key in ("load", "max_parallel"):
+            if not integer(limits.get(key)):
+                raise ValueError(f"malformed implement-start: provider {prov_name} {key} must be an integer, not boolean")
+    if event.get("attempt") is not None and not integer(event["attempt"]):
+        raise ValueError("malformed implement-start: attempt must be an integer, not boolean")
 
 
 def report(flood_dir: Path, rollout_path: Path) -> tuple[dict, int]:
@@ -102,9 +109,13 @@ def report(flood_dir: Path, rollout_path: Path) -> tuple[dict, int]:
 
     def included(event: dict) -> bool:
         if not isinstance(event.get("at"), str) or not isinstance(event.get("code_sha256"), str):
-            raise ValueError("start requires string at and code_sha256")
+            raise ValueError("malformed start: requires string at and code_sha256")
+        if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", event["at"]):
+            return False
         return event["at"] > rollout["activated_at"] and event["code_sha256"] == rollout["flood_sha256"]
 
+    has_malformed_start = False
+    cap_events = []
     if valid_rollout and valid_state:
         for task_id, task in state["tasks"].items():
             try:
@@ -118,9 +129,21 @@ def report(flood_dir: Path, rollout_path: Path) -> tuple[dict, int]:
                     if event.get("phase") == "implement-start":
                         try:
                             if included(event):
-                                if not integer(event.get("running_implementers")):
-                                    raise ValueError("running_implementers must be an integer")
-                                result["starts"].append({**event, "task_id": task_id})
+                                try:
+                                    validate_matched_start(event)
+                                    result["starts"].append({
+                                        "id": task_id,
+                                        "attempt": event.get("attempt"),
+                                        "at": event["at"],
+                                        "running_implementers": event["running_implementers"],
+                                        "code_sha256": event["code_sha256"],
+                                    })
+                                    cap_events.append({"id": task_id, "attempt": event.get("attempt"),
+                                        "slots": event["slots"], "occupied_slots": event["occupied_slots"],
+                                        "providers": event["providers"]})
+                                except Exception as exc:
+                                    has_malformed_start = True
+                                    raise
                         except Exception as exc:
                             errors.append(f"{task_id}: {exc}")
                 slices = task.get("slices")
@@ -179,16 +202,31 @@ def report(flood_dir: Path, rollout_path: Path) -> tuple[dict, int]:
     )
     if result["plan_count"] >= 10:
         result["verdicts"]["plans"] = "met" if result["independent_plan_count"] * 2 > result["plan_count"] else "unmet"
+    result["starts"].sort(key=lambda s: (s["at"], s["id"], -1 if s["attempt"] is None else s["attempt"]))
     result["start_count"] = len(result["starts"])
-    if result["starts"]:
+    if has_malformed_start:
+        result["median"] = None
+    elif result["starts"]:
         result["median"] = statistics.median(e["running_implementers"] for e in result["starts"])
-    result["cap"] = cap_proof(result["starts"])
-    if result["start_count"] >= 10:
-        result["verdicts"]["starts"] = "met" if result["median"] > BASELINE or result["cap"]["proven"] else "unmet"
+    result["cap"] = cap_proof(cap_events) if not has_malformed_start else cap_proof([])
+    if result["start_count"] < 10:
+        result["verdicts"]["starts"] = "pending"
+    elif result["median"] is not None and result["median"] > BASELINE:
+        result["verdicts"]["starts"] = "met"
+    elif result["median"] is not None and result["median"] <= BASELINE:
+        result["verdicts"]["starts"] = "met" if result["cap"]["proven"] else "unmet"
+    else:
+        result["verdicts"]["starts"] = "pending"
     if errors:
         result.update(status="failure", error="; ".join(errors))
         return result, 2
-    return result, 2
+    if result["plan_count"] < 10 or result["start_count"] < 10:
+        return result, 2
+    if all(verdict == "met" for verdict in result["verdicts"].values()):
+        result["status"] = "ok"
+        return result, 0
+    result["status"] = "unmet"
+    return result, 1
 
 
 def main() -> int:

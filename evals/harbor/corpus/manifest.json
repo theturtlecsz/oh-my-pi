@@ -1,10 +1,10 @@
 {
-  "base_commit": "30f58b0793565701a39d41ca03a82ca595f7aa2d",
+  "base_commit": "f80959681432f165706446d36f5a4102220cefba",
   "batches": [
     "evals/harbor/corpus/batches/a.json",
     "evals/harbor/corpus/batches/b.json"
   ],
-  "corpus_sha256": "8361e949b7c07e458a62e2af82d263b5ea37a04ca86e6673e795c45f1b875506",
+  "corpus_sha256": "ddfe945e8fb496a002cadfa420b08e25bffafb6a78d1ea17c1819ca00eaf9603",
   "tasks": {
     "a-01": {
       "category": "localized_bug",
@@ -114,7 +114,7 @@
       "source_paths": [
         "scripts/ci-test-ts.ts"
       ],
-      "task_sha256": "c4538d838b79ddaa90dd79758479445d105c83380e222c1e84870d4b15c8c533"
+      "task_sha256": "bf45ff35454ce1e37e00429fef5ca280240d4fc98ed597c4357e8642aa538fd7"
     },
     "a-12": {
       "category": "seeded_defect",
@@ -143,10 +143,10 @@
       "fixture": "evals/harbor/corpus/tasks/a-14",
       "long_horizon": false,
       "source_paths": [
-        "python/omp-work/src/omp_work/egress_store.py",
-        "python/omp-work/src/omp_work/operations/migrations/0033_project_egress.sql"
+        "python/omp-work/src/omp_work/operations/migrations/0030_project_records.sql",
+        "python/omp-work/src/omp_work/operations/migrations/0037_project_lookup_indexes.sql"
       ],
-      "task_sha256": "73de0b3be64154e579cd1ab14380ccf0cfc07aa4de16d71de9d931221c44d90f"
+      "task_sha256": "c04bc92ef273680dcab8fbfa9a023b08848d60cb8a73dac3c1a1699785205859"
     },
     "b-01": {
       "category": "security_concurrency",
@@ -167,7 +167,7 @@
         "packages/mnemopi/src/core/episodic-graph.ts",
         "packages/mnemopi/src/core/polyphonic-recall.ts"
       ],
-      "task_sha256": "c73fdbe40572f9e59f802d0b6e33914b310b2805173e1e29c097e230d54e37cb"
+      "task_sha256": "d6ac757411ab3e5e7ba48a981aea3a3c9145cee4ac5b42418f5aed037a7434f0"
     },
     "b-03": {
       "category": "security_concurrency",
@@ -188,7 +188,7 @@
       "source_paths": [
         "packages/coding-agent/src/config/project-trust.ts"
       ],
-      "task_sha256": "6af475332603ceb49467c911d0f640371945c1ed6a74e5dd1326d9368f88938c"
+      "task_sha256": "2653a719c0ad8f8b6a8c9250be0a695be03d376afd01d3ffca56832b9029f324"
     },
     "b-05": {
       "category": "resume",
@@ -197,7 +197,7 @@
       "source_paths": [
         "packages/ai/src/providers/cursor.ts"
       ],
-      "task_sha256": "e7096499063d3504ed53fa7d7a397a470d0a861645cc7bed16a03859ce30e6de"
+      "task_sha256": "020de00b6384d0deb3ae1cfb40de1adef5ea6240c3970838aa7c61bfc770d233"
     },
     "b-06": {
       "category": "resume",
@@ -219,7 +219,7 @@
         "packages/coding-agent/src/discovery/skillshare.ts",
         "packages/coding-agent/src/extensibility/skills.ts"
       ],
-      "task_sha256": "e74c4c88f22ed653fbf2306e3440ab1ccd597c726e78bfd14b25d2ea4cb74978"
+      "task_sha256": "b34aa35be4a0917ba0b44ef63f63cff6dc463a222a515b3a524f18be23f13727"
     },
     "b-08": {
       "category": "migration",
@@ -238,7 +238,7 @@
       "source_paths": [
         "python/omp-work/src/omp_work/operations/cli.py"
       ],
-      "task_sha256": "b14978eba7af54f247792fdca1b3db16a890e101c34d4735e19716554eef0a72"
+      "task_sha256": "62f4b74b897bde4d470a2538cc83967188ab0949cf0b9d6b4e16b75f8f2d69a2"
     },
     "b-10": {
       "category": "ambiguous_intake",
@@ -287,7 +287,7 @@
     },
     "f1": {
       "category": "localized_bug",
-      "fixture": "fixtures/f1",
+      "fixture": "evals/harbor/fixtures/f1",
       "long_horizon": false,
       "source_paths": [
         "session-system/extensions/workflow/work.ts"
@@ -296,7 +296,7 @@
     },
     "f2": {
       "category": "resume",
-      "fixture": "fixtures/f2",
+      "fixture": "evals/harbor/fixtures/f2",
       "long_horizon": false,
       "source_paths": [
         "session-system/extensions/workflow/host.ts"

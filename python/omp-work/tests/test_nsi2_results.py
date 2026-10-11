@@ -7,6 +7,9 @@ from omp_work.v1.api_models import (
     AssessIntakeResult,
     CommandResult,
     IntakeFollowOnResult,
+    IntakeProvenance,
+    IntakeRecordView,
+    IntakeTrace,
     IntakeWriteResult,
     LinkIntakeCriterionResult,
     RecordIntakeClaimResult,
@@ -181,3 +184,60 @@ def test_assess_intake_result_has_no_verdict_field() -> None:
             "assessed_revision": 2,
             "ready": True,
         })
+
+
+@pytest.mark.parametrize("revision", [0, 2])
+def test_intake_record_view_accepts_empty_collecting_snapshot(revision: int) -> None:
+    view = IntakeRecordView.model_validate({
+        "workspace_id": "00000000-0000-0000-0000-000000000001",
+        "mission_id": "00000000-0000-0000-0000-000000000002",
+        "run_id": "run-1",
+        "revision": revision,
+        "snapshot": {
+            "run_id": "run-1",
+            "revision": 0,
+            "state": "collecting",
+            "artifacts": [],
+            "entities": [],
+            "claims": [],
+            "ontology": {"predicates": [], "dimensions": []},
+        },
+        "evidence_links": (),
+        "criterion_links": (),
+        "decisions": (),
+        "issues": (),
+        "traces": (),
+        "assessments": (),
+        "provenance": {
+            "run_id": "run-1",
+            "revision": revision,
+            "source_sha256": "a" * 64,
+        },
+    })
+
+    wire = view.model_dump_json()
+    parsed = IntakeRecordView.model_validate_json(wire)
+    assert parsed == view
+    assert parsed.snapshot.revision == 0
+    assert parsed.revision == revision
+    assert parsed.snapshot.state == "collecting"
+    assert parsed.evidence_links == ()
+    assert parsed.criterion_links == ()
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("run_id", ""), ("revision", -1), ("source_sha256", "a" * 63), ("source_sha256", "g" * 64)],
+)
+def test_intake_provenance_rejects_invalid_wire_values(field: str, value: object) -> None:
+    payload = {"run_id": "run-1", "revision": 0, "source_sha256": "a" * 64}
+    payload[field] = value
+    with pytest.raises(ValidationError) as exc:
+        IntakeProvenance.model_validate(payload)
+    assert exc.value.errors()[0]["loc"] == (field,)
+
+
+def test_intake_trace_rejects_empty_criterion_id() -> None:
+    with pytest.raises(ValidationError) as exc:
+        IntakeTrace.model_validate({"criterion_id": "", "requirement_ids": (), "claim_ids": ()})
+    assert exc.value.errors()[0]["loc"] == ("criterion_id",)

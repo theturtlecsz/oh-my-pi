@@ -1161,7 +1161,7 @@ def test_process_gate_stays_held_until_settlement_commit(admission_context, monk
 
 
 def test_unmeasurable_failure_commits_bound_receipt_once(admission_context):
-    """Unmeasurable calls retain full admitted capacity through receipt replay."""
+    """Unmeasurable receipt replay preserves separate input/output bounds once."""
     ctx = admission_context
     for _ in range(2):
         with _admit(ctx, _prepared("2", 10, 5), request_id="unmeasurable") as admission:
@@ -1172,7 +1172,21 @@ def test_unmeasurable_failure_commits_bound_receipt_once(admission_context):
     assert _admission_counts(ctx) == (1, 1, 1, 2)
     with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
         cur.execute(
-            "SELECT price_usd, input_tokens, measurement FROM omp_jobs.usage_events WHERE workspace_id=%s",
+            "SELECT price_usd, input_tokens, output_tokens, cache_tokens, measurement"
+            " FROM omp_jobs.usage_events WHERE workspace_id=%s",
             (ctx.workspace_id,),
         )
-        assert cur.fetchone() == {"price_usd": Decimal(2), "input_tokens": 15, "measurement": "estimated"}
+        assert cur.fetchone() == {
+            "price_usd": Decimal(2), "input_tokens": 10, "output_tokens": 5,
+            "cache_tokens": 0, "measurement": "estimated",
+        }
+        cur.execute(
+            "SELECT result FROM omp_jobs.operations"
+            " WHERE workspace_id=%s AND kind='model_call_receipt'",
+            (ctx.workspace_id,),
+        )
+        assert cur.fetchone()["result"]["settlement"] == {
+            "actual_usd": "2", "input_tokens": 10, "output_tokens": 5,
+            "cache_tokens": 0, "measurement": "estimated", "model": "test-model",
+            "price_version": None,
+        }

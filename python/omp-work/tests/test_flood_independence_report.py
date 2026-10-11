@@ -16,6 +16,7 @@ SCRIPT = Path(__file__).resolve().parents[3] / "infra/automation-user/omp584-rep
 CUTOFF = "2026-10-01T00:00:00Z"
 AFTER = "2026-10-01T00:00:01Z"
 SHA = "a" * 64
+START_METRICS = dict(slots=5, occupied_slots=1, providers={"alpha": {"load": 0, "max_parallel": 2}})
 STUB = '''
 def parse_front_matter(text):
     meta = {}
@@ -66,8 +67,9 @@ class Evidence:
         return self.tasks[name]
 
     def starts(self, count=10, running=3, **fields):
-        self.tasks["unfinished"] = {"history": [dict(phase="implement-start", attempt=i, at=AFTER,
-            code_sha256=SHA, running_implementers=running, **fields) for i in range(count)]}
+        metrics = START_METRICS | fields
+        self.tasks["unfinished"] = {"history": [dict(**metrics, phase="implement-start", attempt=i, at=AFTER,
+            code_sha256=SHA, running_implementers=running) for i in range(count)]}
 
     def run(self, write_state=True):
         if write_state:
@@ -75,6 +77,7 @@ class Evidence:
         before = {str(p.relative_to(self.directory)): p.read_bytes() for p in self.directory.rglob("*") if p.is_file()}
         completed = subprocess.run([sys.executable, str(SCRIPT), "--flood-dir", str(self.directory),
             "--rollout", str(self.rollout), "--output", str(self.output)], capture_output=True, text=True)
+        assert "Traceback" not in completed.stderr
         after = {str(p.relative_to(self.directory)): p.read_bytes() for p in self.directory.rglob("*") if p.is_file()}
         assert after == before
         assert {str(p.relative_to(self.directory)) for p in self.directory.rglob("*") if p.is_dir()} == {"tasks"}
@@ -140,7 +143,7 @@ def test_qualifiers_sorted_once_with_canonical_independence(evidence):
         evidence.plan(f"p{i}")
     evidence.starts(running=4)
     code, report = evidence.run()
-    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    assert code == 0 and report["status"] == "ok" and report["error"] is None
     assert report["plans"] == [dict(id=f"p{i}", attempt=1, code_sha256=SHA,
         slices=3, roots=2, implementer_slices=3, implementer_roots=2) for i in range(10)]
     assert report["plan_count"] == 10 and report["independent_plan_count"] == 10
@@ -199,36 +202,136 @@ def test_last_pass_attempt_wins_over_retries(evidence):
     assert report["plan_count"] == 1 and report["plans"][0]["attempt"] == 2
 
 
-@pytest.mark.parametrize("fields,kind", [
-    ({"slots": 2, "occupied_slots": 2}, "slots"),
-    ({"providers": {"alpha": {"load": 2, "max_parallel": 2}, "beta": {"load": 1, "max_parallel": 1}}}, "providers"),
-    ({"slots": 2, "occupied_slots": 3, "providers": {"alpha": {"load": 1, "max_parallel": 1}}}, "slots"),
-    ({"slots": True, "occupied_slots": 2}, None),
-    ({"slots": 2, "occupied_slots": 1}, None),
-    ({"providers": {"alpha": {"load": 2, "max_parallel": 2}, "spare": {"load": 0, "max_parallel": 1}}}, None),
-    ({"providers": {"alpha": {"load": True, "max_parallel": 1}}}, None),
-    ({"providers": {}}, None),
-])
-def test_low_median_needs_complete_capacity_proof(evidence, fields, kind):
-    for i in range(10):
-        evidence.plan(f"p{i}")
-    evidence.starts(**fields)
+def test_two_starts_on_one_running_task_both_count(evidence):
+    evidence.tasks["running"] = {"history": [
+        dict(**START_METRICS, phase="implement-start", attempt=1, at=AFTER, code_sha256=SHA, running_implementers=3),
+        dict(**START_METRICS, phase="implement-start", attempt=2, at=AFTER, code_sha256=SHA, running_implementers=4),
+    ]}
     code, report = evidence.run()
-    assert code == 2 and report["status"] == "pending"
-    assert report["verdicts"]["starts"] == ("met" if kind else "unmet")
-    assert report["cap"]["proven"] == bool(kind) and report["cap"]["kind"] == kind
-    assert report["median"] == 3 and report["cutoff"]["baseline"] == 3.0
+    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    assert report["start_count"] == 2
+    assert report["starts"] == [
+        dict(id="running", attempt=1, at=AFTER, running_implementers=3, code_sha256=SHA),
+        dict(id="running", attempt=2, at=AFTER, running_implementers=4, code_sha256=SHA),
+    ]
 
 
-@pytest.mark.parametrize("fields,change", [
-    ({"slots": 2, "occupied_slots": 2}, {"slots": 3}),
-    ({"providers": {"a": {"load": 1, "max_parallel": 1}}}, {"providers": {"b": {"load": 1, "max_parallel": 1}}}),
+def test_ten_fours_with_free_slots_and_under_ten_plans_met(evidence):
+    evidence.plan("p0")
+    evidence.starts(count=10, running=4, slots=5, occupied_slots=1)
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    assert report["plan_count"] == 1 and report["verdicts"]["plans"] == "pending"
+    assert report["start_count"] == 10 and report["verdicts"]["starts"] == "met"
+    assert report["median"] == 4 and report["cap"]["proven"] is False
+
+
+def test_median_two_with_free_slots_and_spare_provider_unmet(evidence):
+    evidence.plan("p0")
+    evidence.starts(count=10, running=2, slots=5, occupied_slots=1,
+                    providers={"alpha": {"load": 0, "max_parallel": 2}})
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    assert report["plan_count"] == 1 and report["verdicts"]["plans"] == "pending"
+    assert report["start_count"] == 10 and report["verdicts"]["starts"] == "unmet"
+    assert report["median"] == 2 and report["cap"]["proven"] is False
+
+
+def test_string_running_implementers_fails_with_median_null(evidence):
+    evidence.starts(count=10, running="4")
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "failure"
+    assert "malformed" in report["error"]
+    assert report["median"] is None
+    assert evidence.output.is_file()
+
+
+def test_ten_starts_equal_to_baseline_unmet(evidence):
+    evidence.starts(running=3)
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    assert report["median"] == 3 and report["verdicts"]["starts"] == "unmet"
+
+
+def test_nine_starts_stay_pending(evidence):
+    evidence.starts(count=9, running=4)
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    assert report["start_count"] == 9
+    assert report["verdicts"]["starts"] == "pending"
+
+
+@pytest.mark.parametrize("fields", [
+    {"slots": True},
+    {"slots": "2"},
+    {"occupied_slots": True},
+    {"occupied_slots": "1"},
+    {"providers": "not_an_object"},
+    {"providers": {"alpha": "not_an_object"}},
+    {"providers": {"alpha": {"load": True, "max_parallel": 2}}},
+    {"providers": {"alpha": {"load": 1, "max_parallel": True}}},
+    {"providers": {"alpha": {"load": "1", "max_parallel": 2}}},
+    {"providers": {"alpha": {"load": 1, "max_parallel": "2"}}},
+    {"load": True},
+    {"max_parallel": True},
 ])
-def test_cap_proof_must_cover_every_included_event(evidence, fields, change):
-    evidence.starts(**fields)
-    evidence.tasks["unfinished"]["history"][-1].update(change)
-    _, report = evidence.run()
-    assert report["cap"]["proven"] is False and report["verdicts"]["starts"] == "unmet"
+def test_matched_event_invalid_types_fail_with_malformed_and_median_null(evidence, fields):
+    evidence.starts(count=10, running=4, **fields)
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "failure"
+    assert "malformed" in report["error"]
+    assert report["median"] is None
+    assert evidence.output.is_file()
+
+
+@pytest.mark.parametrize("field", ["running_implementers", "slots", "occupied_slots", "providers",
+    "provider.load", "provider.max_parallel"])
+def test_missing_matched_metrics_fail_instead_of_certifying_median(evidence, field):
+    evidence.starts(running=4)
+    event = evidence.tasks["unfinished"]["history"][-1]
+    if field.startswith("provider."):
+        event["providers"] = {"alpha": {"load": 0, "max_parallel": 2}}
+        del event["providers"]["alpha"][field.split(".")[1]]
+    else:
+        del event[field]
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "failure"
+    assert "malformed" in report["error"] and field.split(".")[-1] in report["error"]
+    assert report["median"] is None and report["verdicts"]["starts"] == "pending"
+    assert report["start_count"] == 9
+
+
+@pytest.mark.parametrize("attempt", ["2", True, [], {}])
+def test_mixed_attempt_types_write_failure_without_sort_traceback(evidence, attempt):
+    evidence.starts(count=2, running=4)
+    evidence.tasks["unfinished"]["history"][-1]["attempt"] = attempt
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "failure"
+    assert "malformed" in report["error"] and "attempt" in report["error"]
+    assert report["median"] is None
+    assert report["starts"] == [dict(id="unfinished", attempt=0, at=AFTER,
+        running_implementers=4, code_sha256=SHA)]
+
+
+def test_starts_cohort_row_schema_and_sorting(evidence):
+    evidence.tasks["t2"] = {"history": [
+        dict(**START_METRICS, phase="implement-start", attempt=2, at="2026-10-01T00:00:02Z", code_sha256=SHA, running_implementers=3),
+        dict(**START_METRICS, phase="implement-start", attempt=1, at="2026-10-01T00:00:02Z", code_sha256=SHA, running_implementers=2),
+    ]}
+    evidence.tasks["t1"] = {"history": [
+        dict(**START_METRICS, phase="implement-start", attempt=1, at="2026-10-01T00:00:01Z", code_sha256=SHA, running_implementers=4),
+        dict(**START_METRICS, phase="implement-start", attempt=1, at="2026-10-01T00:00:03Z", code_sha256=SHA, running_implementers=5),
+    ]}
+    code, report = evidence.run()
+    assert code == 2 and report["error"] is None
+    assert report["starts"] == [
+        {"id": "t1", "attempt": 1, "at": "2026-10-01T00:00:01Z", "running_implementers": 4, "code_sha256": SHA},
+        {"id": "t2", "attempt": 1, "at": "2026-10-01T00:00:02Z", "running_implementers": 2, "code_sha256": SHA},
+        {"id": "t2", "attempt": 2, "at": "2026-10-01T00:00:02Z", "running_implementers": 3, "code_sha256": SHA},
+        {"id": "t1", "attempt": 1, "at": "2026-10-01T00:00:03Z", "running_implementers": 5, "code_sha256": SHA},
+    ]
+    assert report["start_count"] == 4
+
 
 
 def test_start_cutoff_retries_and_median_use_event_counts(evidence):
@@ -246,7 +349,7 @@ def test_start_cutoff_retries_and_median_use_event_counts(evidence):
 @pytest.mark.parametrize("change", [{"at": None}, {"code_sha256": None}, {"running_implementers": True}])
 def test_malformed_implement_start_fails_without_losing_other_counts(evidence, change):
     evidence.starts(running=4)
-    evidence.tasks["unfinished"]["history"].append(dict(phase="implement-start", at=AFTER,
+    evidence.tasks["unfinished"]["history"].append(dict(**START_METRICS, phase="implement-start", at=AFTER,
         code_sha256=SHA, running_implementers=4) | change)
     code, report = evidence.run()
     assert code == 2 and report["status"] == "failure" and report["start_count"] == 10
@@ -268,8 +371,9 @@ def test_pass_without_start_is_absent_beside_ten_qualifiers(evidence):
         evidence.plan(f"p{i}")
     evidence.tasks["legacy"] = dict(slices=["absent"], planned_at=AFTER,
         history=[dict(phase="plan-review", attempt=1, verdict="PASS")])
+    evidence.starts(running=4)
     code, report = evidence.run()
-    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    assert code == 0 and report["status"] == "ok" and report["error"] is None
     assert report["plan_count"] == 10
     assert "legacy" not in [plan["id"] for plan in report["plans"]]
 
@@ -415,3 +519,85 @@ def test_canonical_files_ignore_parked_twins(evidence):
     code, report = evidence.run()
     assert code == 2 and report["error"] is None
     assert report["plans"][0]["roots"] == 2 and report["independent_plan_count"] == 1
+
+
+@pytest.mark.parametrize("providers", [
+    {"alpha": {"load": 0, "max_parallel": 2}},
+    {"alpha": {"load": 2, "max_parallel": 2}},
+])
+def test_full_uniform_slots_prove_cap_and_take_precedence_over_providers(evidence, providers):
+    for i in range(10):
+        evidence.plan(f"p{i}")
+    evidence.starts(running=2, slots=2, occupied_slots=2, providers=providers)
+    code, report = evidence.run()
+    assert code == 0 and report["status"] == "ok"
+    assert report["verdicts"] == {"plans": "met", "starts": "met"}
+    assert report["cap"] == dict(proven=True, kind="slots", value=2, evidence=[
+        dict(id="unfinished", attempt=i, slots=2, occupied_slots=2, providers=providers) for i in range(10)])
+
+
+def test_all_uniform_providers_full_prove_cap_with_free_slots(evidence):
+    providers = {"alpha": {"load": 2, "max_parallel": 2}, "beta": {"load": 11, "max_parallel": 10}}
+    evidence.starts(running=3, providers=providers)
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "pending"
+    assert report["verdicts"]["starts"] == "met"
+    assert report["cap"] == dict(proven=True, kind="providers", value={"alpha": 2, "beta": 10}, evidence=[
+        dict(id="unfinished", attempt=i, **(START_METRICS | {"providers": providers})) for i in range(10)])
+
+
+@pytest.mark.parametrize("fields,running", [
+    ({"providers": {"alpha": {"load": 2, "max_parallel": 2}, "beta": {"load": 0, "max_parallel": 10}}}, 2),
+    ({"slots": 8, "occupied_slots": 2}, 2),
+    ({}, 3),
+])
+def test_spare_capacity_cannot_excuse_baseline_even_with_config_cap(evidence, fields, running):
+    for i in range(10):
+        evidence.plan(f"p{i}")
+    (evidence.directory / "flood.json").write_text('{"slots": 1}')
+    evidence.starts(running=running, **fields)
+    code, report = evidence.run()
+    assert code == 1 and report["status"] == "unmet" and report["error"] is None
+    assert report["median"] == running and report["cap"]["proven"] is False
+    assert report["verdicts"] == {"plans": "met", "starts": "unmet"}
+
+
+@pytest.mark.parametrize("fields,change", [
+    ({"slots": 2, "occupied_slots": 3}, {"slots": 3}),
+    ({"slots": 2, "occupied_slots": 2}, {"occupied_slots": 1}),
+    ({"slots": 0, "occupied_slots": 0, "providers": {}}, {}),
+    ({"providers": {"": {"load": 2, "max_parallel": 2}}}, {}),
+    ({"providers": {"alpha": {"load": 2, "max_parallel": 2}}},
+     {"providers": {"beta": {"load": 2, "max_parallel": 2}}}),
+    ({"providers": {"alpha": {"load": 2, "max_parallel": 2}}},
+     {"providers": {"alpha": {"load": 1, "max_parallel": 2}}}),
+])
+def test_cap_requires_uniform_capacity_and_every_event_saturated(evidence, fields, change):
+    evidence.starts(running=2, **fields)
+    evidence.tasks["unfinished"]["history"][-1].update(change)
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "pending"
+    assert report["cap"]["proven"] is False and report["cap"]["kind"] is None
+    assert report["cap"]["value"] is None and len(report["cap"]["evidence"]) == 10
+    assert report["verdicts"]["starts"] == "unmet"
+
+
+def test_half_independent_plans_with_ten_good_starts_is_unmet(evidence):
+    for i in range(10):
+        evidence.plan(f"p{i}", roots=2 if i < 5 else 1)
+    evidence.starts(running=4)
+    code, report = evidence.run()
+    assert code == 1 and report["status"] == "unmet"
+    assert report["plan_count"] == 10 and report["independent_plan_count"] == 5
+    assert report["verdicts"] == {"plans": "unmet", "starts": "met"}
+
+
+def test_hard_error_overrides_met_verdicts_without_losing_counts(evidence):
+    for i in range(10):
+        evidence.plan(f"p{i}")
+    evidence.starts(running=4)
+    evidence.tasks["broken"] = {"history": None}
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "failure" and "malformed" in report["error"]
+    assert report["plan_count"] == report["start_count"] == 10
+    assert report["verdicts"] == {"plans": "met", "starts": "met"}

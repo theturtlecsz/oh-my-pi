@@ -7,6 +7,14 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, Field, field_validator, model_serializer, model_validator
 
+from ..contracts.nsi.v1.models import (
+    AcceptanceCriterion as NSIAcceptanceCriterion,
+    ClarificationQuestion as NSIClarificationQuestion,
+    Conflict as NSIConflict,
+    IntakeSnapshot as NSIIntakeSnapshot,
+    OwnerDecision as NSIOwnerDecision,
+    RequirementClause as NSIRequirementClause,
+)
 from .models import (
     AuditManifest,
     AuditorLaunch,
@@ -18,6 +26,7 @@ from .models import (
     EvidenceReceipt,
     FindingSeverity,
     IntakeBlockingQuestion,
+    IntakeClaimEvidenceLink,
     ItemBudget,
     MissionDraft,
     MissionEventType,
@@ -816,6 +825,51 @@ class AssessIntakeResult(StrictModel):
         if self.revision != self.assessed_revision:
             raise ValueError("revision and assessed_revision must be equal")
         return self
+
+
+class IntakeProvenance(StrictModel):
+    run_id: str = Field(min_length=1)
+    revision: int = Field(ge=0)
+    source_sha256: hex64
+
+
+class IntakeDecisionRecord(StrictModel):
+    decision: NSIOwnerDecision
+    claim_ids: tuple[str, ...]
+    instruction: OwnerInstruction
+    superseded_decision_id: str | None = None
+    verified_relay_operation_id: UUID | None = None
+
+
+class IntakeIssueRecord(StrictModel):
+    issue: NSIConflict | NSIClarificationQuestion
+    gaps: tuple[str, ...]
+
+
+class IntakeCriterionLink(StrictModel):
+    criterion: NSIAcceptanceCriterion
+    requirements: tuple[NSIRequirementClause, ...]
+
+
+class IntakeTrace(StrictModel):
+    criterion_id: str = Field(min_length=1)
+    requirement_ids: tuple[str, ...]
+    claim_ids: tuple[str, ...]
+
+
+class IntakeRecordView(StrictModel):
+    workspace_id: UUID
+    mission_id: UUID
+    run_id: str = Field(min_length=1)
+    revision: int = Field(ge=0)
+    snapshot: NSIIntakeSnapshot
+    evidence_links: tuple[IntakeClaimEvidenceLink, ...]
+    criterion_links: tuple[IntakeCriterionLink, ...]
+    decisions: tuple[IntakeDecisionRecord, ...]
+    issues: tuple[IntakeIssueRecord, ...]
+    traces: tuple[IntakeTrace, ...]
+    assessments: tuple[AssessIntakeResult, ...]
+    provenance: IntakeProvenance
 
 
 CommandResult = Annotated[
