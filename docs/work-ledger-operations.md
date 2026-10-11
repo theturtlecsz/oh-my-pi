@@ -195,6 +195,133 @@ that work.
 
 Keep or remove: decided in OMP-537-s04, recorded on OMP-537 in the Work Ledger.
 
+## Research campaigns
+
+Run a Work Ledger research campaign on an item through from draft to concluded:
+
+```sh
+uv run --project python/omp-work omp-work research run --key <KEY> --definition <FILE> --client-config <client.json>
+```
+
+### Campaign definition schema and example
+
+The definition file specifies research objectives, evaluation domains, trial harnesses, criteria thresholds, and optional per-trial timeouts:
+
+```json
+{
+  "objective": "Every trial reaches score one",
+  "domain": "machine_learning",
+  "timeout_seconds": 60,
+  "criteria": [
+    {
+      "metric": "score",
+      "op": "gte",
+      "threshold": 1
+    }
+  ],
+  "trials": [
+    {
+      "harness": "trial.sh"
+    }
+  ]
+}
+```
+
+- `objective`: description of the campaign hypothesis or goal.
+- `domain`: research domain identifier (`machine_learning`, `systems`, etc.).
+- `timeout_seconds`: optional positive integer timeout in seconds per trial execution.
+- `criteria`: non-empty list of criteria objects with `metric` (string), `op` (`gte`, `gt`, `lte`, `lt`, `eq`), and `threshold` (number).
+- `trials`: non-empty list of trial specs with `harness` pointing to the script file (relative to definition or absolute).
+
+### Client configuration and scopes
+
+Client configuration JSON identifies the WorkService endpoint, workspace, and bearer credentials:
+
+```json
+{
+  "base_url": "http://127.0.0.1:8000",
+  "workspace_id": "00000000-0000-0000-0000-000000000000",
+  "bearer_file": "/path/to/bearer.json"
+}
+```
+
+When `--client-config` is omitted, defaults to `$XDG_CONFIG_HOME/omp-work/client.json` (or `~/.config/omp-work/client.json`).
+
+The bearer file (`mode 0600`) must contain `actor_id` and authorize the scopes:
+- `work.read`: fetch item and campaign state via `GET /v1/work-items/<key>/research`.
+- `work.execute`: record trial observations via `RecordResearchObservationCommand`.
+- `work.approve`: transition campaigns through lifecycle admission and conclusion.
+
+### Trial execution and METRIC scoring
+
+Trial harnesses execute in an isolated directory via `bash`. The harness emits metrics to stdout:
+
+```sh
+#!/bin/bash
+echo "METRIC score=1"
+exit 0
+```
+
+- Lines matching `METRIC <name>=<value>` are parsed as finite numeric metrics.
+- The harness must exit 0 for completion. Any non-zero exit code is recorded as `execution_status: "crashed"` and refutes the campaign even if printed metrics satisfy criteria.
+- Extracted metrics are scored against the definition's criteria.
+
+### Campaign lifecycle states and conclusion
+
+Campaigns transition through five sequential states:
+1. `draft`: initial campaign metadata created.
+2. `admitted`: content-addressed specs and components registered.
+3. `running`: trial jobs dispatched to the native job worker.
+4. `evaluating`: trials finished, evaluator verifies observations against criteria.
+5. `concluded`: campaign finalized with `outcome` and `outcome_reason`.
+
+The terminal `outcome` is:
+- `supported`: all trials completed successfully and satisfied all criteria thresholds.
+- `refuted`: one or more trials crashed, timed out, or failed to meet criteria thresholds.
+
+### Database flags and credentials
+
+Subprocess jobs execution communicates with the PostgreSQL job store using explicit database flags:
+- `--config-dir <DIR>`: configuration root containing `credentials/omp_work_app` and `credentials/omp_work_migrator`.
+- `--state-dir <DIR>`: runtime state directory.
+- `--data-dir <DIR>`: persistent data directory.
+- `--db-port <PORT>`: PostgreSQL listening port.
+
+These four flags must all be set together or all be omitted (falling back to `OperationsConfig.defaults()`). Only the `omp_work_app` and `omp_work_migrator` role files in `<config-dir>/credentials/` are read; no host credentials or ambient PostgreSQL environment variables are used.
+
+An optional `--harness-dir <DIR>` specifies where harness files are unpacked. If omitted, a secure temporary directory is created and cleaned up on exit.
+
+### Command output and execution semantics
+
+On conclusion, `research run` writes a single JSON payload to stdout and exits `0` for both `supported` and `refuted` outcomes:
+
+```json
+{
+  "campaign_id": "c6a66ec2-f1e1-4547-8fa7-fdfa404987f7",
+  "state": "concluded",
+  "outcome": "supported",
+  "reason": "criteria satisfied across 1 trial",
+  "trials": [
+    {
+      "trial_id": "4bf77dd6-0e10-4f51-b956-655d91e60058",
+      "execution_status": "completed",
+      "metrics": {
+        "score": 1.0
+      }
+    }
+  ]
+}
+```
+
+Exit codes:
+- `0`: campaign successfully executed and concluded (supported or refuted).
+- `1`: execution failure, unsettled jobs, or service refusal.
+- `2`: invalid CLI arguments, unreadable files, or malformed campaign definitions.
+
+### No resume
+
+`research run` always creates and admits a new content-addressed campaign on the targeted work item. It does not resume or pick up existing running or incomplete campaigns.
+
 ## Authority and sealed epoch
 
 The Work Ledger is the sole workflow authority (`work.omp.dev/v1`), operating locally on PostgreSQL. The cutover epoch is sealed; live operations run directly against the loopback WorkService. Linear history is preserved offline as static immutable exports, encrypted reports, and provenance mappings. Linear is never a fallback or recovery authority.

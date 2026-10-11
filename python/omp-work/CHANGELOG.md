@@ -4,6 +4,7 @@
 
 ### Added
 
+- `omp-work research run` executes content-addressed research campaigns on a work item through from draft to concluded with trial jobs scored by METRIC harness output ([#590](https://github.com/theturtlecsz/oh-my-pi/issues/590)).
 - Versioned NSI-1 intake schemas and authority matrix distinguish model proposals, rule-engine readiness, and owner ratification/publication while preserving bounded intake compatibility (OMP-521).
 
 - `omp-work projects trusted-paths` writes the trusted folder list to `~/.omp/agent/trusted-projects.json` (OMP-532, L-RT-03).
