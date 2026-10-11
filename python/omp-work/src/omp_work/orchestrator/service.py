@@ -34,7 +34,7 @@ from omp_work.jobs.worker import Frozen, Settlement
 from omp_work.operations.capabilities import DEFAULT_BASE_URL
 from omp_work.operations.config import OperationsConfig
 from omp_work.operations.database import _jobs_migration_state, check_migrations
-from omp_work.orchestrator import qualification
+from omp_work.orchestrator import qualification, verify_main
 from omp_work.orchestrator.stages import (
     STAGE_ORDER,
     UNRECORDED_KINDS,
@@ -2074,11 +2074,14 @@ def main(argv: list[str]) -> int:
     terminal_parser.add_argument("--draft", type=Path)
     dry_parser = _with_config(commands.add_parser("dry-run"))
     dry_parser.add_argument("--request", required=True, type=Path)
+    commands.add_parser("verify")
     qualify_parser = commands.add_parser("qualify")
     qualify_parser.add_argument("--lock-map", required=True, type=Path)
     qualify_parser.add_argument("--out", required=True, type=Path)
     qualify_parser.add_argument("--release")
     args = parser.parse_args(argv)
+    if args.orchestrator_command == "verify":
+        return verify_main.main([])
     try:
         if args.orchestrator_command == "qualify":
             body = qualify(args.lock_map, args.out, release=args.release)

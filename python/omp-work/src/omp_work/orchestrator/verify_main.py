@@ -22,7 +22,9 @@ import json
 import os
 from pathlib import Path
 import shlex
+import stat
 import subprocess  # nosec B404 - verifier argv lists only; no shell is used
+import sys
 import tempfile
 from contextlib import suppress
 
@@ -95,10 +97,11 @@ def _clear_outputs(omp_dir: Path) -> str | None:
             with suppress(OSError):
                 path.unlink()
             refused = refused or f"{name}_symlink"
-        elif path.is_dir():
-            refused = refused or f"{name}_not_regular"
         elif path.exists():
-            path.unlink()
+            if stat.S_ISREG(path.lstat().st_mode):
+                path.unlink()
+            else:
+                refused = refused or f"{name}_not_regular"
     return refused
 
 
@@ -106,7 +109,7 @@ def _read_task(omp_dir: Path) -> tuple[VerifyTask | None, str]:
     """Read ``.omp/verify-task.json`` once, into a validated ``VerifyTask``."""
     try:
         raw = (omp_dir / _TASK).read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeError):
         return None, "task_missing"
     try:
         document = json.loads(raw)
@@ -183,7 +186,7 @@ def _publish_failure(omp_dir: Path, cwd: Path, code: str, detail: str = "") -> b
     try:
         report = render_audit_result(_blocked_result(cwd, code, detail))
         _atomic_write(omp_dir / _REPORT, report.encode("utf-8"))
-    except OSError:
+    except Exception:  # noqa: BLE001 - failure publication must also fail closed
         return False
     return True
 
@@ -230,9 +233,7 @@ def _judge(task: VerifyTask, cwd: Path) -> tuple[int | None, str, str]:
     return exit_code, failure, detail
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Judge the candidate in the current worktree; 0 only for a persisted pass."""
-    del argv  # the verifier dispatch takes no arguments
+def _verify() -> int:
     cwd = Path.cwd()
     omp_dir = cwd / ".omp"
 
@@ -247,7 +248,8 @@ def main(argv: list[str] | None = None) -> int:
     except OSError:
         return 2
     if refused is not None or (omp_dir / _TASK).is_symlink():
-        return 2
+        reason = refused or "task_symlink"
+        return 1 if _publish_failure(omp_dir, cwd, reason) else 2
 
     task, reason = _read_task(omp_dir)
     if task is None:
@@ -257,25 +259,10 @@ def main(argv: list[str] | None = None) -> int:
     if failure:
         return 1 if _publish_failure(omp_dir, cwd, failure, detail) else 2
 
-    # The signer is the only place the HMAC key is read.
-    try:
-        key = Path(task.key_path).read_bytes()
-    except OSError:
-        return 1 if _publish_failure(omp_dir, cwd, "key_unreadable") else 2
-    if not key:
-        return 1 if _publish_failure(omp_dir, cwd, "key_empty") else 2
-    try:
-        record = sign_verdict(
-            key,
-            candidate_sha256=task.candidate_sha256,
-            attempt_id=task.attempt_id,
-            verdict="pass",
-            verifier_id=task.verifier_id,
-        )
-    except ValueError:
-        return 1 if _publish_failure(omp_dir, cwd, "sign_failed") else 2
+    record = _sign(task)
 
-    report = render_audit_result(_pass_result(task, cwd, int(exit_code)))
+    assert exit_code == 0
+    report = render_audit_result(_pass_result(task, cwd, exit_code))
     try:
         _atomic_write(omp_dir / _REPORT, report.encode("utf-8"))
         _atomic_write(
@@ -291,6 +278,32 @@ def main(argv: list[str] | None = None) -> int:
         _discard(omp_dir / _VERDICT)
         return 2
     return 0
+
+
+def _sign(task: VerifyTask) -> dict[str, str]:
+    """Read the secret only after judging and snapshot cleanup."""
+    key = Path(task.key_path).read_bytes()
+    return sign_verdict(
+        key,
+        candidate_sha256=task.candidate_sha256,
+        attempt_id=task.attempt_id,
+        verdict="pass",
+        verifier_id=task.verifier_id,
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Judge the current worktree; zero only for a persisted report and pass."""
+    args = sys.argv[1:] if argv is None else argv
+    try:
+        result = _verify() if not args else 2
+    except Exception as error:  # noqa: BLE001 - verifier faults cannot establish success
+        cwd = Path.cwd()
+        omp_dir = cwd / ".omp"
+        if omp_dir.is_symlink():
+            return 2
+        return 1 if _publish_failure(omp_dir, cwd, "verifier_error", str(error)) else 2
+    return result
 
 
 if __name__ == "__main__":
