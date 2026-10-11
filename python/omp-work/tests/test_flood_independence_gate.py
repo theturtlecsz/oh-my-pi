@@ -4,6 +4,8 @@ Contract defended:
 - validate_slices rejects an implementer dependency edge that only orders the slice: it is
   valid only when a shared non-union file overlaps or the dependent's work text explicitly
   consumes a named producer file/artifact.
+- Both endpoints' exclusions filter shared edits and consumed files/outputs before evidence.
+- Basename aliases belong only to unique eligible producer files; outputs require exact tokens.
 - Exclusions (Do not touch sections in inline/bold/heading/list formats, plus Assumptions and
   Deferred) are parsed out, so a path named only under an exclusion cannot justify an edge.
 - Owner slice edges, implementer-after-owner edges and the final changelog
@@ -304,6 +306,95 @@ def test_union_inventory_behavior(staged_flood, tmp_path):
     assert any("ITEM-s02: depends_on ITEM-s01 orders the slice only" in v for v in violations), (
         f"Union inventory must not justify ordering. Violations: {violations}"
     )
+
+    for target in ("docs/upstream-fork-inventory.tsv", "upstream-fork-inventory.tsv"):
+        write_slice(pdir_u_order, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"],
+                    body=f"Consume {target}.\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
+        violations, _ = mod.validate_slices("ITEM", pdir_u_order, is_union=is_union_fn)
+        assert violations == [
+            "ITEM-s02: depends_on ITEM-s01 orders the slice only; leave depends_on empty, "
+            "edit a file ITEM-s01 also edits, or name a file or output of ITEM-s01 "
+            "that this slice reads, imports, consumes or extends"
+        ]
+
+
+@pytest.mark.parametrize("endpoint", ["producer", "consumer"])
+@pytest.mark.parametrize("evidence,excluded", [
+    ("shared", "src/a.ts"),
+    ("file", "src/a.ts"),
+    ("alias", "src/a.ts"),
+    ("alias", "a.ts"),
+    ("output", "artifact_token"),
+    ("output_path", "reports/result.json"),
+])
+def test_either_endpoint_excludes_dependency_evidence(staged_flood, tmp_path, endpoint, evidence, excluded):
+    """Excluded edits, consumed files/aliases and outputs cannot justify either endpoint's edge."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path)
+    target = {"file": "src/a.ts", "alias": "a.ts", "output": "artifact_token",
+              "output_path": "reports/result.json"}.get(evidence)
+    producer_exclusion = excluded if endpoint == "producer" else "none"
+    consumer_exclusion = excluded if endpoint == "consumer" else "none"
+    write_slice(pdir, "ITEM-s01", files=["src/a.ts"], outputs=["artifact_token", "reports/result.json"],
+                body=f"Work: implement producer.\nDone when: test_producer.py passes.\nDo not touch: {producer_exclusion}")
+    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"],
+                files=["src/a.ts"] if evidence == "shared" else ["src/b.ts"],
+                body=f"Work: {f'Consume {target}.' if target else 'implement consumer.'}\n"
+                     f"Done when: test_consumer.py passes.\nDo not touch: {consumer_exclusion}")
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    assert violations == [
+        "ITEM-s02: depends_on ITEM-s01 orders the slice only; leave depends_on empty, "
+        "edit a file ITEM-s01 also edits, or name a file or output of ITEM-s01 "
+        "that this slice reads, imports, consumes or extends"
+    ]
+
+
+@pytest.mark.parametrize("files,outputs,target,excluded,valid,endpoint", [
+    (*case, endpoint)
+    for case in [
+        (["src/a.ts"], [], "src/a.ts", "other/a.ts", True),
+        (["src/a.ts"], [], "a.ts", "other/a.ts", True),
+        (["src/a.ts"], [], "src/a.ts", "a.ts", True),
+        (["src/a.ts"], [], "src/a.ts", "src/a.ts.backup", True),
+        (["src/a.ts", "other/a.ts"], [], "a.ts", "other/a.ts", True),
+        (["src/a.ts", "other/a.ts"], [], "a.ts", "none", False),
+        (["src/a.ts", "other/a.ts"], [], "src/a.ts", "none", True),
+        (["src/a.ts"], [], "src/a.ts.backup", "none", False),
+        (["src/a.ts"], [], "other/src/a.ts", "none", False),
+        (["src/a.ts"], [], "prefix-a.ts", "none", False),
+        (["src/a.ts"], [], "a.ts/suffix", "none", False),
+        (["data/input.json"], [], "data/input.json", "none", True),
+        (["src/a.ts"], ["artifact_token"], "artifact_token", "none", True),
+        (["src/a.ts"], ["artifact_token"], "a r t i f c _ o k e n", "none", False),
+        (["src/a.ts"], ["artifact_token"], "artifact_token_suffix", "none", False),
+        (["src/a.ts"], ["artifact_token"], "prefix-artifact_token", "none", False),
+        (["src/a.ts"], ["reports/result.json", "other/result.json"], "result.json", "none", False),
+        (["src/a.ts"], ["reports/result.json", "other/result.json"], "reports/result.json", "none", True),
+        (["src/a.ts"], ["reports/result.json", "other/result.json"], "other/result.json", "none", True),
+        (["src/a.ts"], ["reports/result.json"], "result.json", "none", False),
+    ]
+    for endpoint in (["producer", "consumer"] if case[3] != "none" else ["producer"])
+])
+def test_dependency_evidence_exact_tokens_and_eligible_file_aliases(
+        staged_flood, tmp_path, files, outputs, target, excluded, valid, endpoint):
+    """Only whole declared paths/outputs and unique eligible file basenames justify ordering."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path)
+    write_slice(pdir, "ITEM-s01", files=files, outputs=outputs,
+                body="Work: implement producer.\nDone when: test_producer.py passes.\n"
+                     f"Do not touch: {excluded if endpoint == 'producer' else 'none'}")
+    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"],
+                body=f"Work: Consume `{target}`.\nDone when: test_consumer.py passes.\n"
+                     f"Do not touch: {excluded if endpoint == 'consumer' else 'none'}")
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    if valid:
+        assert violations == []
+    else:
+        assert violations == [
+            "ITEM-s02: depends_on ITEM-s01 orders the slice only; leave depends_on empty, "
+            "edit a file ITEM-s01 also edits, or name a file or output of ITEM-s01 "
+            "that this slice reads, imports, consumes or extends"
+        ]
 
 
 def test_legitimate_serial_chain_passes(staged_flood, tmp_path):
