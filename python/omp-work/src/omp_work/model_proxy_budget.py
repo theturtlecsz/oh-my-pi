@@ -20,7 +20,7 @@ receipt replay, settlement, abort, and context exit all go through the owner.
 A consumed exit stack is not a live transaction. Cross-process exclusion is the
 database lock itself. Completed receipts are checked before authorization so
 retries can replay after cancellation or stop without another upstream call.
-Failed settlements retain their owner until private reconciliation verifies or
+Unresolved settlements retain their owner until private reconciliation verifies or
 commits the captured accounting in a fresh transaction. A receipt replay whose
 read-transaction commit fails before ``admit`` returns keeps that closed,
 unresolved owner in process-wide state. A later identical admit resolves it
@@ -557,9 +557,10 @@ class ModelCallAdmission:
     ) -> dict[str, object]:
         """Record measured usage and the project spend once, then release the locks.
 
-        The spend row uses authorization captured at admission. A failed write
-        or commit retains the consumed call and gate; an identical retry checks
-        its durable receipt in a fresh transaction without reauthorization.
+        The spend row uses authorization captured at admission. A rolled-back
+        write charges the admitted bound before surfacing the original error.
+        Failed bound writes or outer commits retain the consumed call and gate
+        for reconciliation without reauthorization.
         """
         with self._state.transition:
             if self.closed and not self.settled and self._state.unresolved is None:
@@ -597,9 +598,24 @@ class ModelCallAdmission:
                 )
 
             captured = _Settlement(canonical_json(payload), self.decision)
+            write_error: BaseException | None = None
             try:
-                with self._cur.connection.transaction():
-                    receipt = self._persist(self._cur, captured)
+                # Admission locks predate this savepoint. Explicit rollback
+                # confirms that only settlement effects were discarded; unlike
+                # transaction context cleanup, rollback errors cannot be ignored.
+                with self._cur.connection.transaction(savepoint_name="model_call_settlement"):
+                    try:
+                        receipt = self._persist(self._cur, captured)
+                    except BaseException as error:
+                        self._cur.execute("ROLLBACK TO SAVEPOINT model_call_settlement")
+                        write_error = error
+                if write_error is not None:
+                    bound = self._admitted_bound_payload()
+                    bound["actual_usd"] = _decimal_text(self.max_usd)
+                    captured = _Settlement(canonical_json(bound), self.decision)
+                    self._state.unresolved = captured
+                    with self._cur.connection.transaction():
+                        receipt = self._persist(self._cur, captured)
                 self._state.closed = True
                 if not self._owner.claim() or not self._owner.consume():
                     raise ModelProxyBudgetError("already_settled", "transaction already consumed")
@@ -613,7 +629,12 @@ class ModelCallAdmission:
                 if isinstance(error, JobError):
                     raise ModelProxyBudgetError(error.code) from error
                 raise
-            return self._finish_settlement(receipt)
+            result = self._finish_settlement(receipt)
+            if write_error is not None:
+                if isinstance(write_error, JobError):
+                    raise ModelProxyBudgetError(write_error.code) from write_error
+                raise write_error
+            return result
 
     def _persist(
         self, cur: psycopg.Cursor[dict[str, object]], captured: _Settlement,
