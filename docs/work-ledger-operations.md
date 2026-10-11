@@ -228,7 +228,7 @@ The definition file specifies research objectives, evaluation domains, trial har
 ```
 
 - `objective`: description of the campaign hypothesis or goal.
-- `domain`: research domain identifier (`machine_learning`, `systems`, etc.).
+- `domain`: research domain identifier (`machine_learning`, `engineering`, etc.).
 - `timeout_seconds`: optional positive integer timeout in seconds per trial execution.
 - `criteria`: non-empty list of criteria objects with `metric` (string), `op` (`gte`, `gt`, `lte`, `lt`, `eq`), and `threshold` (number).
 - `trials`: non-empty list of trial specs with `harness` pointing to the script file (relative to definition or absolute).

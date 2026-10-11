@@ -52,17 +52,20 @@ def _serve_app(service: SimpleNamespace) -> Iterator[str]:
         daemon=True,
     )
     thread.start()
-    deadline = time.monotonic() + 30
-    while not server.started:
-        if not thread.is_alive() or time.monotonic() > deadline:
-            raise RuntimeError("uvicorn service failed to start")
-        time.sleep(0.01)
     try:
+        deadline = time.monotonic() + 30
+        while not server.started:
+            if not thread.is_alive() or time.monotonic() > deadline:
+                raise RuntimeError("uvicorn service failed to start")
+            time.sleep(0.01)
         yield f"http://127.0.0.1:{port}"
     finally:
         server.should_exit = True
         thread.join(timeout=15)
-        sock.close()
+        try:
+            sock.close()
+        except OSError:
+            pass
 
 
 def test_research_campaign_cli_http(service: SimpleNamespace, tmp_path: Path) -> None:
