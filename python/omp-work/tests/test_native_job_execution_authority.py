@@ -25,6 +25,7 @@ from uuid import UUID, uuid4
 import psycopg
 import pytest
 
+from omp_work.jobs import worker as worker_module
 from omp_work.jobs.admission import claim_job
 from omp_work.jobs.cancel import cancel_job
 from omp_work.jobs.lease import (
@@ -285,6 +286,96 @@ def test_cancellation_during_execution_signals_and_forbids_settlement(native_job
     assert row["status"] == "cancelled"
     assert row["settlement"] is None
     assert "settled" not in _job_event_kinds(native_jobs, job_id)
+
+
+@pytest.mark.parametrize("recovery", [False, True], ids=["run", "observe"])
+def test_stop_does_not_mask_cancellation(
+    native_jobs: Any, monkeypatch: pytest.MonkeyPatch, recovery: bool
+) -> None:
+    """Stop plus cancellation signals the handler's event, never frozen ownership."""
+    store = _store(native_jobs)
+    renewal_entered = threading.Event()
+    allow_renewal = threading.Event()
+    started = threading.Event()
+    cancellation_events: list[threading.Event] = []
+    renewal_threads: list[threading.Thread] = []
+    errors: list[BaseException] = []
+    results: list[str | None] = []
+
+    def gated_renewal(*args: Any, **kwargs: Any) -> dict[str, object]:
+        renewal_threads.append(threading.current_thread())
+        renewal_entered.set()
+        assert allow_renewal.wait(timeout=10)
+        return renew_lease(*args, **kwargs)
+
+    monkeypatch.setattr(worker_module, "renew_lease", gated_renewal)
+
+    class Handler:
+        def observe(self, ctx: JobWorker, job: dict[str, Any]) -> Settlement:
+            assert recovery
+            return self.run(ctx, job)
+
+        def run(self, ctx: JobWorker, job: dict[str, Any]) -> Settlement:
+            cancellation_events.append(ctx.cancel_requested)
+            started.set()
+            assert cancellation_events[0].wait(timeout=5)
+            assert not ctx.frozen_requested.is_set()
+            return Settlement(outcome="succeeded", receipts=[_receipt(native_jobs)])
+
+    worker = _worker(native_jobs, store, Handler(), f"worker-stop-cancel-{uuid4().hex[:8]}")
+    job_id = f"job-stop-cancel-{uuid4().hex[:8]}"
+    _enqueue(native_jobs, store, job_id=job_id, lease_seconds=2)
+    if recovery:
+        with store.transaction(native_jobs.workspace_id, native_jobs.actor_id) as cur:
+            store.append_event(
+                cur,
+                workspace_id=native_jobs.workspace_id,
+                job_id=job_id,
+                kind="lease_expired",
+                actor=worker.worker_id,
+                operation_id=str(uuid4()),
+                payload={"fence": 0},
+            )
+
+    def tick() -> None:
+        try:
+            results.append(worker.tick(job_id=job_id))
+        except BaseException as exc:
+            errors.append(exc)
+
+    tick_thread = threading.Thread(target=tick)
+    tick_thread.start()
+    try:
+        assert started.wait(timeout=5)
+        assert renewal_entered.wait(timeout=5)
+        _engage(native_jobs.service, native_jobs.workspace_id, uuid4())
+        cancel_job(
+            store,
+            operation_id=str(uuid4()),
+            workspace_id=native_jobs.workspace_id,
+            actor_id=native_jobs.actor_id,
+            job_id=job_id,
+            reason="cancel_while_stopped",
+        )
+        allow_renewal.set()
+        tick_thread.join(timeout=10)
+        assert not tick_thread.is_alive()
+        assert not errors
+        assert results == [job_id]
+        assert worker.cancel_requested is cancellation_events[0]
+        assert cancellation_events[0].is_set()
+        assert worker.cancel_reason == "cancel_while_stopped"
+        assert worker.frozen_reason is None
+        assert renewal_threads and all(not thread.is_alive() for thread in renewal_threads)
+        row = _job_row(native_jobs, job_id)
+        assert row["status"] == "cancelled"
+        assert row["settlement"] is None
+        assert "settled" not in _job_event_kinds(native_jobs, job_id)
+        assert _reservation_reason(native_jobs, job_id) == "cancelled"
+    finally:
+        allow_renewal.set()
+        tick_thread.join(timeout=10)
+        _release(native_jobs.service, native_jobs.workspace_id)
 
 
 def test_reassignment_during_execution_signals_and_forbids_settlement(native_jobs: Any) -> None:

@@ -323,13 +323,26 @@ class JobWorker:
                         fence=fence,
                     )
                 except JobError as err:
+                    reason = err.code
                     if err.code == "agent_stop_engaged":
-                        self.frozen_reason = "agent_stop_engaged"
-                        self.stop_reason = "agent_stop_engaged"
-                        self.frozen_requested.set()
-                        frozen_stopped.set()
-                        break
-                    self.cancel_reason = err.code
+                        # Renewal refuses stop before checking ownership. A
+                        # cancelled or reassigned job must still signal loss.
+                        try:
+                            authority = self.current_authority(job_id, fence)
+                        except Exception:
+                            reason = "renewal_failed"
+                        else:
+                            if authority.is_live:
+                                # Stop was released before the authority read.
+                                continue
+                            if authority.is_frozen:
+                                self.frozen_reason = "agent_stop_engaged"
+                                self.stop_reason = "agent_stop_engaged"
+                                self.frozen_requested.set()
+                                frozen_stopped.set()
+                                break
+                            reason = authority.reason or "job_fence_stale"
+                    self.cancel_reason = reason
                     renewal_failed.set()
                     self.cancel_requested.set()
                     break
