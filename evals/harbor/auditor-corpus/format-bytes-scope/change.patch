@@ -1,13 +1,12 @@
 diff --git a/packages/utils/src/format.ts b/packages/utils/src/format.ts
-index eb32e2134b..b3ea605651 100644
 --- a/packages/utils/src/format.ts
 +++ b/packages/utils/src/format.ts
-@@ -55,7 +55,7 @@ export function formatBytes(bytes: number): string {
+@@ -51,7 +51,7 @@ function trim1(n: number): string {
+  * Format a byte count to a human-readable string.
+  * Examples: "512B", "1.5KB", "2.3MB", "1.2GB"
+  */
+-export function formatBytes(bytes: number): string {
++export function formatByteSize(bytes: number): string {
  	if (bytes < 1024) return `${bytes}B`;
  	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
  	if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
--	return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)}GB`;
-+	return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)}MB`;
- }
- 
- /**

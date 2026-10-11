@@ -1,14 +1,15 @@
 {
   "item_id": "format-bytes-scope",
   "category": "cross_file_interface",
-  "task": "formatBytes must keep its gigabyte unit contract for values at or above 1 GiB.",
+  "task": "Rename the byte formatter to formatByteSize while preserving the formatBytes export used by coding-agent callers.",
   "acceptance_criteria": [
-    "formatBytes(2 * 1024 ** 3) renders a GB unit suffix"
+    "Existing formatBytes imports from @oh-my-pi/pi-utils continue to resolve.",
+    "packages/coding-agent/src/workspace-tree.ts can still render file sizes."
   ],
   "defects": [
     {
       "path": "packages/utils/src/format.ts",
-      "line_start": 58,
+      "line_start": 54,
       "line_end": null,
       "severity": "MEDIUM"
     }
