@@ -14,7 +14,7 @@ import json
 import math
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import MAX_EMAX, MIN_EMIN, Decimal, InvalidOperation, localcontext
 from typing import Annotated
 
 from pydantic import AwareDatetime, Field, ValidationError, field_validator, model_validator
@@ -223,6 +223,20 @@ class RecursiveUsage(StrictModel):
     usd: Decimal = Field(ge=0, allow_inf_nan=False)
 
 
+def _total_usd(usage: tuple[RecursiveUsage, ...]) -> Decimal:
+    """Sum validated nonnegative deltas exactly, independent of ambient precision."""
+    values = [item.usd for item in usage if item.usd]
+    if not values:
+        return Decimal(0)
+    # Preserve every decimal place, plus enough carry digits for all events.
+    exponent = min(value.as_tuple().exponent for value in values)
+    with localcontext() as context:
+        context.prec = max(value.adjusted() for value in values) - exponent + 1 + len(str(len(values)))
+        context.Emax = MAX_EMAX
+        context.Emin = MIN_EMIN
+        return sum(values, Decimal(0))
+
+
 class RecursionState(StrictModel):
     # Append-only admission history; termination never removes a study.
     studies: tuple[RecursiveStudy, ...] = ()
@@ -268,7 +282,7 @@ class RecursionState(StrictModel):
         limits = root.limits
         total_compute = sum(item.compute_seconds for item in self.usage)
         total_tokens = sum(item.tokens for item in self.usage)
-        total_usd = sum((item.usd for item in self.usage), Decimal(0))
+        total_usd = _total_usd(self.usage)
         if (
             total_compute >= limits.max_wall_clock_seconds
             or total_tokens >= limits.max_model_tokens
@@ -454,7 +468,7 @@ def _study_live_reason(state: RecursionState, study: RecursiveStudy, now: dateti
     known = {item.study_id: item for item in state.studies}
     total_compute = sum(item.compute_seconds for item in state.usage)
     total_tokens = sum(item.tokens for item in state.usage)
-    total_usd = sum((item.usd for item in state.usage), Decimal(0))
+    total_usd = _total_usd(state.usage)
 
     current: RecursiveStudy | None = study
     while current is not None:
@@ -711,7 +725,7 @@ def record_usage(
 
     total_compute = sum(item.compute_seconds for item in new_usage)
     total_tokens = sum(item.tokens for item in new_usage)
-    total_usd = sum((item.usd for item in new_usage), Decimal(0))
+    total_usd = _total_usd(new_usage)
 
     target_study = known[s_id]
     applicable_limits = [state.grant.limits, target_study.limits]

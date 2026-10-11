@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from dataclasses import FrozenInstanceError, replace
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, localcontext
 import json
 from pathlib import Path
 
@@ -1249,6 +1249,66 @@ def test_record_usage_crossing_usage_retained_across_transitions() -> None:
     assert sum(item.usd for item in state.usage) == Decimal("11.00")
 
 
+@pytest.mark.parametrize("cap,deltas,exhausted", [
+    ("1.00000000000000000000000000001", ("1.00000000000000000000000000001",), True),
+    ("1.00000000000000000000000000001", ("1", "0.00000000000000000000000000001"), True),
+    ("1", ("0.99999999999999999999999999999", "0.00000000000000000000000000002"), True),
+    ("1.00000000000000000000000000002", ("1.00000000000000000000000000001",), False),
+])
+@pytest.mark.parametrize("precision", [2, 28])
+def test_decimal_usage_transition_and_reloaded_gates_are_exact(
+    tmp_path: Path, cap: str, deltas: tuple[str, ...], exhausted: bool, precision: int,
+) -> None:
+    limits = ResourceLimits(100, 1000, Decimal(cap))
+    state = admitted_root(limits=limits)
+    events = tuple(RecursiveUsage(
+        study_id="root", compute_seconds=0, tokens=0, usd=Decimal(delta),
+    ) for delta in deltas)
+    with localcontext() as context:
+        context.prec = precision
+        recorded = state
+        for event in events:
+            recorded = record_usage(recorded, event)
+        assert recorded.usage == events
+        assert recorded.terminal_reason == ("quota_exhausted" if exhausted else None)
+
+        # Restored usage need not already carry a terminal latch: gates still
+        # compare exact totals, using fresh authority supplied by admit helpers.
+        snapshot = tmp_path / "state.json"
+        snapshot.write_text(RecursionState(
+            studies=state.studies, grant=state.grant, usage=events,
+        ).model_dump_json())
+        restored = RecursionState.model_validate_json(snapshot.read_text())
+        assert restored.usage == events
+        assert restored.refuse_reason(START) == ("quota_exhausted" if exhausted else None)
+        study_result = admit(restored, child(limits=limits))
+        proposal_result = admit_prop(restored, proposal())
+        if exhausted:
+            assert_refusal(restored, study_result, "quota_exhausted")
+            assert_refusal(restored, proposal_result, "quota_exhausted")
+        else:
+            assert study_result.studies == (*restored.studies, child(limits=limits))
+            assert proposal_result.proposal_history == (proposal(),)
+            assert study_result.terminal_reason is proposal_result.terminal_reason is None
+
+
+def test_reloaded_narrowed_decimal_envelopes_refuse_study_and_proposal(tmp_path: Path) -> None:
+    cap = Decimal("1.00000000000000000000000000001")
+    limits = ResourceLimits(100, 1000, cap)
+    state = admit(admitted_root(), child(limits=limits))
+    # Spend recorded on root exhausts child's envelope, without exhausting root.
+    state = record_usage(state, "root", usd=cap)
+    assert state.terminal_reason is None
+    snapshot = tmp_path / "state.json"
+    snapshot.write_text(state.model_dump_json())
+    restored = RecursionState.model_validate_json(snapshot.read_text())
+    assert restored.usage[0].usd == cap
+    assert_refusal(restored, admit(restored, grandchild(limits=limits)), "quota_exhausted")
+    assert_refusal(restored, admit_prop(restored, proposal(
+        study_id="child", recipe={"min_metric": 0.6},
+    )), "quota_exhausted")
+
+
 @pytest.mark.parametrize("invalid_kwargs", [
     {"compute_seconds": -1},
     {"compute_seconds": float("inf")},
@@ -1358,13 +1418,26 @@ def test_second_root_and_renamed_ids_cannot_reset_usage() -> None:
 def test_tmp_path_reload_retains_exhaustion_descendants_duplicates_and_isolation(tmp_path: Path) -> None:
     state = admit(admitted_root(), child())
     state = admit_prop(state, proposal(study_id="root", recipe={"min_metric": 0.6}))
+    snapshot = tmp_path / "state.json"
+    snapshot.write_text(state.model_dump_json())
+    live_restored = RecursionState.model_validate_json(snapshot.read_text())
+    assert live_restored.terminal_reason is None
+    assert_refusal(live_restored, admit_prop(live_restored, proposal(
+        proposal_id="renamed", recipe={"min_metric": 0.6},
+    )), "equivalent_proposal")
+    reused = child(
+        study_id="child-reused", recipe={"min_metric": 0.7},
+        dev=[{"task_id": "root-dev-reuse", "content_sha256": "1" * 64}],
+        confirmation=[{"task_id": "root-confirm-reuse", "content_sha256": "7" * 64}],
+    )
+    assert_refusal(live_restored, admit(live_restored, reused), "cohort_reused")
+
     state = record_usage(state, "root", compute_seconds=100.0)  # exact compute limit equality
     assert state.terminal_reason == "quota_exhausted"
     assert len(state.studies) == 2
     assert len(state.proposal_history) == 1
     assert len(state.usage) == 1
 
-    snapshot = tmp_path / "state.json"
     snapshot.write_text(state.model_dump_json())
     restored = RecursionState.model_validate_json(snapshot.read_text())
 
@@ -1377,16 +1450,7 @@ def test_tmp_path_reload_retains_exhaustion_descendants_duplicates_and_isolation
     assert len(restored.studies) == 2
     assert [s.study_id for s in restored.studies] == ["root", "child"]
 
-    # Retains duplicates
-    assert admit_prop(restored, proposal(study_id="root", recipe={"min_metric": 0.6})) == restored
-
-    # Retains isolation: cohort reuse is rejected
-    reused = child(
-        study_id="child-reused",
-        dev=[{"task_id": "root-dev-reuse", "content_sha256": "1" * 64}],
-        confirmation=[{"task_id": "root-confirm-reuse", "content_sha256": "7" * 64}],
-    )
-    assert admit(restored, reused) == restored
+    assert admit_prop(restored, proposal(0.9, proposal_id="fresh")) == restored
 
 
 def test_integrated_r13_min_metric_admission_to_reload_scenario(tmp_path: Path) -> None:
