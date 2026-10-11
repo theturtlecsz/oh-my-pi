@@ -27,6 +27,7 @@ from uuid import UUID, uuid4
 
 from ..v1.api_models import CommandResponse, StopStatusView
 from ..v1.client import WorkClient
+from ..v1.service import WorkError
 from ..v1.models import (
     CommandEnvelope,
     EngageStopCommand,
@@ -113,6 +114,47 @@ def _default_run_cmd(cmd: list[str]) -> int:
     return result.returncode
 
 
+class _WatchReadState:
+    """Read recovery and outage lifetime shared by one watcher's ticks."""
+
+    def __init__(
+        self, client_config: Path | None = None, bearer_file: Path | None = None
+    ) -> None:
+        self.client_config = client_config
+        self.bearer_file = bearer_file
+        self.client: WorkClient | None = None
+        self.failed_since: float | None = None
+
+    def log_failure(self, error: Exception, source: object) -> None:
+        code = error.code if isinstance(error, WorkError) else type(error).__name__
+        diagnostics = error.diagnostics if isinstance(error, WorkError) else (str(error),)
+        message = f"stop watch: {json.dumps(code)} {json.dumps(diagnostics)}"
+        for client in (source, self.client):
+            token = getattr(client, "_token", None)
+            if isinstance(token, str) and token:
+                message = message.replace(token, "[redacted]")
+                message = message.replace(json.dumps(token)[1:-1], "[redacted]")
+        print(message, file=sys.stderr)
+
+    def read(
+        self, source: Callable[[], bool | StopStatusView] | WorkClient
+    ) -> bool | StopStatusView:
+        current = self.client or source
+        try:
+            return current() if callable(current) else current.stop_status()
+        except WorkError as error:
+            if error.code != "contract_mismatch" or self.client_config is None:
+                raise
+            self.log_failure(error, current)
+            # WorkClient construction hashes the contract bundle on disk again.
+            replacement, _ = load_client(self.client_config, self.bearer_file)
+            previous = self.client
+            self.client = replacement
+            if previous is not None:
+                previous.close()
+            return replacement.stop_status()
+
+
 def watch_tick(
     units: Sequence[str],
     last_known_stopped: bool | Callable[[], bool | StopStatusView] | WorkClient = False,
@@ -122,11 +164,14 @@ def watch_tick(
     read_status: Callable[[], bool | StopStatusView] | WorkClient | None = None,
     run_cmd: Callable[[list[str]], Any] | None = None,
     paused: set[str] | None = None,
+    fail_closed_after: float = 300.0,
+    read_state: _WatchReadState | None = None,
 ) -> bool:
     """Evaluate one tick of the stop watcher.
 
-    Reads the current workspace stop status. If stopped (or if reading fails
-    after having been stopped, preserving the last known enforcing state),
+    Reads the current workspace stop status. Short read outages preserve the
+    last known state; outages longer than ``fail_closed_after`` enforce stop.
+    ``read_state`` carries recovery and outage timing across ticks. If stopped,
     checks whether each unit is active via ``systemctl --user is-active <unit>``
     and stops it with ``systemctl --user stop <unit>`` if active. Every unit it
     stops joins ``paused``.
@@ -145,22 +190,26 @@ def watch_tick(
         actual_last_known = bool(last_known_stopped)
 
     runner = run_cmd or command_runner or _default_run_cmd
+    state = read_state if read_state is not None else _WatchReadState()
+    read_started = time.monotonic()
 
     try:
         if actual_status_source is not None:
-            if callable(actual_status_source):
-                raw = actual_status_source()
-            else:
-                raw = actual_status_source.stop_status()
+            raw = state.read(actual_status_source)
             if hasattr(raw, "stopped"):
                 current_stopped = bool(raw.stopped)
             else:
                 current_stopped = bool(raw)
+            state.failed_since = None
         else:
             current_stopped = actual_last_known
-    except Exception:
-        # On a failed read keep the last known state (stays enforcing).
-        current_stopped = actual_last_known
+    except Exception as error:
+        state.log_failure(error, actual_status_source)
+        if state.failed_since is None:
+            state.failed_since = read_started
+        current_stopped = actual_last_known or (
+            time.monotonic() - state.failed_since > fail_closed_after
+        )
 
     if current_stopped:
         stopped_units = paused if paused is not None else set()
@@ -191,27 +240,37 @@ def watch(
     max_ticks: int | None = None,
     stop_event: Any = None,
     run_cmd: Callable[[list[str]], Any] | None = None,
+    client_config: Path | None = None,
+    bearer_file: Path | None = None,
+    fail_closed_after: float = 300.0,
 ) -> None:
     """Periodically tick the stop watcher against the provided WorkClient."""
     last_known_stopped = False
     paused: set[str] = set()
+    read_state = _WatchReadState(client_config, bearer_file)
     ticks = 0
-    while True:
-        if stop_event is not None and stop_event.is_set():
-            break
-        if max_ticks is not None and ticks >= max_ticks:
-            break
-        last_known_stopped = watch_tick(
-            units,
-            last_known_stopped,
-            status_source=client,
-            run_cmd=run_cmd,
-            paused=paused,
-        )
-        ticks += 1
-        if max_ticks is not None and ticks >= max_ticks:
-            break
-        time.sleep(interval)
+    try:
+        while True:
+            if stop_event is not None and stop_event.is_set():
+                break
+            if max_ticks is not None and ticks >= max_ticks:
+                break
+            last_known_stopped = watch_tick(
+                units,
+                last_known_stopped,
+                status_source=client,
+                run_cmd=run_cmd,
+                paused=paused,
+                fail_closed_after=fail_closed_after,
+                read_state=read_state,
+            )
+            ticks += 1
+            if max_ticks is not None and ticks >= max_ticks:
+                break
+            time.sleep(interval)
+    finally:
+        if read_state.client is not None:
+            read_state.client.close()
 
 
 GUARD_DROP_IN_NAME = "50-omp-agent-stop.conf"
@@ -439,4 +498,3 @@ def install_guards(
     print("systemctl --user enable --now omp-agent-stop.service")
 
     return written
-

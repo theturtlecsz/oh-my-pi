@@ -271,7 +271,14 @@ def _run_stop_command(args: argparse.Namespace) -> int:
         return 255
     try:
         if args.stop_command == "watch":
-            stop_ops.watch(client, args.units, interval=args.interval)
+            stop_ops.watch(
+                client,
+                args.units,
+                interval=args.interval,
+                client_config=Path(client_config),
+                bearer_file=args.bearer_file,
+                fail_closed_after=args.fail_closed_after,
+            )
             return 0
         if args.stop_command == "check":
             return stop_ops.check(client)
@@ -400,6 +407,7 @@ def main(argv: list[str] | None = None) -> int | None:
         "--unit", action="extend", nargs="+", dest="units", required=True
     )
     watch_parser.add_argument("--interval", type=float, default=5.0)
+    watch_parser.add_argument("--fail-closed-after", type=float, default=300.0)
     install_parser = stop_commands.add_parser("install-guards", parents=[stop_scope])
     install_parser.add_argument(
         "--unit", action="extend", nargs="+", dest="units", required=True
