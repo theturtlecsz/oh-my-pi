@@ -9,7 +9,7 @@ from typing import Any, Protocol
 from uuid import UUID, uuid4
 
 import psycopg
-from psycopg.rows import dict_row
+from psycopg.rows import dict_row, tuple_row
 
 from omp_work import CONTRACT_VERSION, contract_sha256
 from omp_work.integration.importer import TRANSFORMATION_VERSION
@@ -41,6 +41,7 @@ from .intake_hold import (
     ScopeClass,
     classify_intake,
 )
+from .intake_commands import execute_intake, read_intake_view
 from .models import (
     LIVE_CLOSE_ATTEMPT_STATES,
     MAX_ACCEPTED_REPORTS,
@@ -576,6 +577,9 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
     ) -> tuple[OperationReceipt, dict[str, object]]:
         command = envelope.command
         serializable = command.type in {
+            "start_intake",
+            "register_intake_evidence",
+            "record_intake_claim",
             "create_work_batch",
             "publish_bounded_intake",
             "answer_intake_decision",
@@ -829,6 +833,13 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
                     "link_mission_work",
                 }:
                     result = execute_mission(cur, envelope, actor_id, actor_kind)
+                elif command.type in {
+                    "start_intake", "register_intake_evidence", "record_intake_claim",
+                }:
+                    with cur.connection.cursor(row_factory=tuple_row) as intake_cur:
+                        result, event = execute_intake(
+                            intake_cur, envelope, actor_id, actor_kind
+                        )
                 elif command.type == "draft_mission_intake":
                     payload = command.payload
                     ws = envelope.workspace_id
@@ -913,6 +924,17 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
     ) -> None:
         payload = envelope.command.payload
         mission_id = getattr(payload, "mission_id", None)
+        if envelope.command.type in {
+            "start_intake", "register_intake_evidence", "record_intake_claim",
+        } and not isinstance(mission_id, UUID):
+            cur.execute(
+                "SELECT mission_id FROM omp_work.intake_heads WHERE workspace_id=%s AND run_id=%s",
+                (envelope.workspace_id, payload.run_id),
+            )
+            head = cur.fetchone()
+            if head is None:
+                raise WorkStoreError("invalid_request")
+            mission_id = head["mission_id"]
         if isinstance(mission_id, UUID):
             aggregate_id = mission_id
             aggregate_type = "mission"
@@ -6619,6 +6641,9 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
         standing: bool = False,
     ) -> dict[str, object]:
         with self._transaction(workspace_id, actor_id) as cur:
+            if kind == "intake":
+                with cur.connection.cursor(row_factory=tuple_row) as intake_cur:
+                    return read_intake_view(intake_cur, workspace_id, value).model_dump(mode="json")
             if kind == "item":
                 return self._item_view(
                     cur,

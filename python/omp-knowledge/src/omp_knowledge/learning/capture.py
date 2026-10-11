@@ -13,7 +13,11 @@ from .generation import GeneratorError, LessonGenerator
 from .models import Attribution, RunStatus, SourceIdentity, StrictModel, UnitState
 from .policy import NativeReceipts
 from .proposals import create_proposal
-from .record import NativeRecords, bounded_work_record
+from .record import (
+    NativeRecords,
+    bounded_capture_records,
+    bounded_work_record,
+)
 from .store import LearningStore, compute_unit_id
 
 DEFAULT_CAPTURE_TYPES = frozenset({"complete_work", "complete_execution_item"})
@@ -119,6 +123,7 @@ def _event_trace(
     workspace_id: str,
     event: Any,
     work_record: dict[str, Any] | None = None,
+    research_record: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The trace one unit sends to the generator.
 
@@ -128,6 +133,8 @@ def _event_trace(
     attached when it could be read. ``work_record`` is present-but-``null`` when
     the read was unavailable: absence of evidence is visible to the generator
     instead of silently looking like an empty trace.
+    Concluded research campaigns are attached as ``research_record`` when
+    present, bounded in size and references.
     """
     return {
         "workspace_id": workspace_id,
@@ -141,6 +148,7 @@ def _event_trace(
         "actor_kind": event.actor_kind,
         "payload": event.payload,
         "work_record": work_record,
+        "research_record": research_record,
     }
 
 
@@ -161,16 +169,27 @@ def _queue_events(
     records: NativeRecords | None = None,
 ) -> None:
     now = _utcnow().isoformat()
-    with store.transaction() as conn:
-        for event in page.events:
-            if event.event_type not in capture_types:
-                continue
-            source = _event_source(workspace_id, event)
-            work_record = (
-                bounded_work_record(records, _event_work_id(event))
-                if records is not None
-                else None
+    enriched: list[tuple[Any, SourceIdentity, dict[str, Any]]] = []
+    for event in page.events:
+        if event.event_type not in capture_types:
+            continue
+        source = _event_source(workspace_id, event)
+        if records is not None:
+            work_record, research_record = bounded_capture_records(
+                records, _event_work_id(event)
             )
+        else:
+            work_record, research_record = None, None
+        trace = _event_trace(
+            workspace_id,
+            event,
+            work_record=work_record,
+            research_record=research_record,
+        )
+        enriched.append((event, source, trace))
+
+    with store.transaction() as conn:
+        for event, source, trace in enriched:
             conn.execute(
                 """
                 INSERT OR IGNORE INTO units (
@@ -183,7 +202,7 @@ def _queue_events(
                     compute_unit_id(workspace_id, event.event_id),
                     workspace_id,
                     str(event.event_id),
-                    canonical_json(_event_trace(workspace_id, event, work_record)),
+                    canonical_json(trace),
                     model,
                     profile,
                     source.model_dump_json(),
@@ -534,7 +553,7 @@ def drain(
     drain — it is not a unit count, because most scanned events are not of a
     captured type. When ``records`` is supplied, each ``complete_work`` or
     ``complete_execution_item`` unit's trace carries that item's own bounded
-    execution record before generation.
+    execution and research records before generation.
     """
     workspace = str(workspace_id)
     started_at = _utcnow().isoformat()

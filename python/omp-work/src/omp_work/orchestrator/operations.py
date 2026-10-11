@@ -12,11 +12,14 @@ from datetime import UTC, datetime
 import hashlib
 import json
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
+
+from pydantic import ValidationError
 
 import omp_work
 from omp_work import control_actions
@@ -29,6 +32,7 @@ from omp_work.orchestrator import (
     merge_gate,
     service,
     verifier,
+    verify_candidate,
     worker_sandbox,
 )
 from omp_work.orchestrator.service import (
@@ -953,6 +957,42 @@ def _push_receipt_exists(ctx: StageContext, commit: str) -> bool:
     return False
 
 
+_COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+_TRANSPORT_NAMES = ("verify-task.json", "verdict.json", "audit-report.txt")
+
+
+def _audit_transport_refusal(
+    control_repo: Path | str, worktree: Path, commit: str
+) -> str | None:
+    """The refusal code when a verify worktree's transport paths are unsafe.
+
+    A symlinked .omp, task input, or output would redirect the host's writes,
+    and a transport path committed in the frozen candidate means the producer
+    planted it. Both refuse before the host writes or clears anything.
+    """
+    omp_dir = worktree / ".omp"
+    if omp_dir.is_symlink():
+        return "transport_symlink"
+    for name in _TRANSPORT_NAMES:
+        if (omp_dir / name).is_symlink():
+            return "transport_symlink"
+    out = candidate_git.git(
+        control_repo,
+        "--no-optional-locks",
+        "ls-tree",
+        "-r",
+        "--name-only",
+        "-z",
+        commit,
+    )
+    committed = {
+        raw.decode("utf-8", errors="surrogateescape") for raw in out.split(b"\0") if raw
+    }
+    if any(path in committed for path in verify_candidate.TRANSPORT_PATHS):
+        return "committed_transport"
+    return None
+
+
 def run_push(ctx: StageContext) -> Outcome:
     """Push the frozen commit to ``candidate_ref`` and record one push receipt."""
     request = _request_mapping(ctx.request)
@@ -1110,6 +1150,33 @@ def run_audit(ctx: StageContext) -> Outcome:
     candidate_id = str(candidate_id)
     candidate_sha = str(candidate_sha)
     revision_id = str(revision_id)
+
+    base_commit_value = request.get("base_commit")
+    if not isinstance(base_commit_value, str) or not base_commit_value:
+        return Outcome(
+            outcome="failed",
+            data={"stage": "audit", "code": "base_commit_missing"},
+        )
+    if _COMMIT_RE.fullmatch(base_commit_value) is None:
+        return Outcome(
+            outcome="failed",
+            data={"stage": "audit", "code": "base_commit_invalid"},
+        )
+    base_commit = base_commit_value
+    raw_allowed = request.get("allowed_paths")
+    if raw_allowed is None:
+        return Outcome(
+            outcome="failed",
+            data={"stage": "audit", "code": "allowed_paths_missing"},
+        )
+    if not isinstance(raw_allowed, (list, tuple)) or any(
+        not isinstance(path, str) for path in raw_allowed
+    ):
+        return Outcome(
+            outcome="failed",
+            data={"stage": "audit", "code": "allowed_paths_invalid"},
+        )
+    allowed_paths = [str(path) for path in raw_allowed]
 
     eval_bucket = ctx.prior.get("evaluate")
     if not isinstance(eval_bucket, Mapping):
@@ -1477,13 +1544,60 @@ def run_audit(ctx: StageContext) -> Outcome:
         launch_id = str(launch.get("launch_id"))
         attempt = reserve_res.get("attempt") or attempt
 
+        # The verifier's task timeout is bounded by the remaining lease.
+        expires_at = ctx.lease_expires_at()
+        remaining = 0.0
+        if expires_at is not None:
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=UTC)
+            else:
+                expires_at = expires_at.astimezone(UTC)
+            remaining = (expires_at - datetime.now(UTC)).total_seconds()
+        if remaining <= 0:
+            cancel_launch(launch_id, intent_key, "crashed")
+            return Outcome(
+                outcome="crashed",
+                data={"stage": "audit", "code": "lease_dead"},
+            )
+
         worktree_name = f"{ctx.mission_id}-{ctx.step_index}-verify"
-        worktree = candidate_git.reset_worktree(
-            ctx.config.control_repo,
-            ctx.config.worktrees_dir,
-            worktree_name,
-            commit,
+        try:
+            worktree = candidate_git.reset_worktree(
+                ctx.config.control_repo,
+                ctx.config.worktrees_dir,
+                worktree_name,
+                commit,
+            )
+        except candidate_git.CandidateGitError as err:
+            cancel_launch(launch_id, intent_key, "rejected")
+            return Outcome(
+                outcome="failed",
+                verdict="fail",
+                data={
+                    "stage": "audit",
+                    "code": err.code,
+                    "candidate_commit": commit,
+                    "candidate_sha256": candidate_sha,
+                    "attempt_id": str(attempt_id),
+                },
+            )
+
+        refused_transport = _audit_transport_refusal(
+            ctx.config.control_repo, worktree, commit
         )
+        if refused_transport is not None:
+            cancel_launch(launch_id, intent_key, "rejected")
+            return Outcome(
+                outcome="failed",
+                verdict="fail",
+                data={
+                    "stage": "audit",
+                    "code": refused_transport,
+                    "candidate_commit": commit,
+                    "candidate_sha256": candidate_sha,
+                    "attempt_id": str(attempt_id),
+                },
+            )
 
         omp_dir = worktree / ".omp"
         omp_dir.mkdir(parents=True, exist_ok=True)
@@ -1512,7 +1626,26 @@ def run_audit(ctx: StageContext) -> Outcome:
             "key_path": str(ctx.config.verifier_key_path),
             "test_command": list(test_command),
             "criteria": criteria_json,
+            "candidate_commit": commit,
+            "base_commit": base_commit,
+            "allowed_paths": allowed_paths,
+            "timeout_seconds": remaining,
         }
+        try:
+            verify_candidate.VerifyTask.model_validate(task_json)
+        except ValidationError:
+            cancel_launch(launch_id, intent_key, "rejected")
+            return Outcome(
+                outcome="failed",
+                verdict="fail",
+                data={
+                    "stage": "audit",
+                    "code": "invalid_task",
+                    "candidate_commit": commit,
+                    "candidate_sha256": candidate_sha,
+                    "attempt_id": str(attempt_id),
+                },
+            )
         (omp_dir / "verify-task.json").write_text(
             json.dumps(task_json), encoding="utf-8"
         )
@@ -1540,6 +1673,26 @@ def run_audit(ctx: StageContext) -> Outcome:
             )
 
         verdict_path = omp_dir / "verdict.json"
+        if code != 0:
+            # Retry a verifier crash only when it left no verdict file. A
+            # nonzero exit never settles, even with a valid signed pass.
+            if not verdict_path.is_file():
+                attempt = cancel_launch(launch_id, intent_key, "crashed")
+                continue
+            cancel_launch(launch_id, intent_key, "rejected")
+            return Outcome(
+                outcome="failed",
+                verdict="fail",
+                data={
+                    "stage": "audit",
+                    "code": "verifier_exit_nonzero",
+                    "exit_code": code,
+                    "candidate_commit": commit,
+                    "candidate_sha256": candidate_sha,
+                    "attempt_id": str(attempt_id),
+                },
+            )
+
         verdict_data: Mapping[str, object] | None = None
         if verdict_path.is_file():
             try:
@@ -1548,11 +1701,6 @@ def run_audit(ctx: StageContext) -> Outcome:
                     verdict_data = loaded
             except Exception:
                 verdict_data = None
-
-        # Retry a verifier crash only when no verdict file exists.
-        if code != 0 and not verdict_path.is_file():
-            attempt = cancel_launch(launch_id, intent_key, "crashed")
-            continue
 
         # 5. accept_candidate: False -> cancel; True -> settle_auditor_launch; mark_done.
         verifier_key = ctx.config.verifier_key_path.read_bytes()

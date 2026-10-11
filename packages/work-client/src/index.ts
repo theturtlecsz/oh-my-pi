@@ -44,9 +44,31 @@ import type {
 	SetResearchCampaignStatePayload,
 	SetResearchCampaignStateResult,
 } from "./research.generated";
+import type {
+	AssessIntakePayload,
+	AssessIntakeResult,
+	IntakeCommand,
+	IntakeCommandResult,
+	IntakeRecordView,
+	LinkIntakeCriterionPayload,
+	LinkIntakeCriterionResult,
+	RecordIntakeClaimPayload,
+	RecordIntakeClaimResult,
+	RecordIntakeDecisionPayload,
+	RecordIntakeDecisionResult,
+	RecordIntakeIssuePayload,
+	RecordIntakeIssueResult,
+	RegisterIntakeEvidencePayload,
+	RegisterIntakeEvidenceResult,
+	StartIntakePayload,
+	StartIntakeResult,
+	SupersedeIntakeClaimPayload,
+	SupersedeIntakeClaimResult,
+} from "./intake-records";
 
 export { WORK_CONTRACT_SHA256 } from "./contract";
 export * from "./intake-nsi";
+export * from "./intake-records";
 export * from "./oversight";
 export * from "./research-views";
 export * from "./research-review";
@@ -870,7 +892,8 @@ export type Command =
 	| { type: "set_research_campaign_state"; payload: SetResearchCampaignStatePayload }
 	| { type: "conclude_research_campaign"; payload: ConcludeResearchCampaignPayload }
 	| { type: "engage_stop"; payload: EngageStopPayload }
-	| { type: "release_stop"; payload: ReleaseStopPayload };
+	| { type: "release_stop"; payload: ReleaseStopPayload }
+	| IntakeCommand;
 
 // ---- command results ----
 
@@ -987,7 +1010,8 @@ export type CommandResult =
 	| SetResearchCampaignStateResult
 	| ConcludeResearchCampaignResult
 	| { type: "engage_stop"; stopped: boolean; reason: string }
-	| { type: "release_stop"; stopped: boolean; reason: string };
+	| { type: "release_stop"; stopped: boolean; reason: string }
+	| IntakeCommandResult;
 
 export type ExecutionGrantView = {
 	grant_id: UUID;
@@ -1419,6 +1443,89 @@ export class WorkClient {
 			correlation_id: crypto.randomUUID(),
 			command,
 		});
+	}
+
+	async #intakeWrite<Result extends IntakeCommandResult>(
+		operationId: UUID,
+		command: IntakeCommand,
+	): Promise<{ receipt: OperationReceipt; result: Result }> {
+		const response = await this.execute({
+			api_version: "work.omp.dev/v1",
+			workspace_id: this.workspaceId,
+			operation_id: operationId,
+			request_id: crypto.randomUUID(),
+			correlation_id: crypto.randomUUID(),
+			command,
+		});
+		return { receipt: response.receipt, result: response.result as Result };
+	}
+
+	startIntake(
+		operationId: UUID,
+		payload: StartIntakePayload,
+	): Promise<{ receipt: OperationReceipt; result: StartIntakeResult }> {
+		return this.#intakeWrite<StartIntakeResult>(operationId, { type: "start_intake", payload });
+	}
+
+	registerIntakeEvidence(
+		operationId: UUID,
+		payload: RegisterIntakeEvidencePayload,
+	): Promise<{ receipt: OperationReceipt; result: RegisterIntakeEvidenceResult }> {
+		return this.#intakeWrite<RegisterIntakeEvidenceResult>(operationId, {
+			type: "register_intake_evidence",
+			payload,
+		});
+	}
+
+	recordIntakeClaim(
+		operationId: UUID,
+		payload: RecordIntakeClaimPayload,
+	): Promise<{ receipt: OperationReceipt; result: RecordIntakeClaimResult }> {
+		return this.#intakeWrite<RecordIntakeClaimResult>(operationId, { type: "record_intake_claim", payload });
+	}
+
+	recordIntakeDecision(
+		operationId: UUID,
+		payload: RecordIntakeDecisionPayload,
+	): Promise<{ receipt: OperationReceipt; result: RecordIntakeDecisionResult }> {
+		return this.#intakeWrite<RecordIntakeDecisionResult>(operationId, { type: "record_intake_decision", payload });
+	}
+
+	supersedeIntakeClaim(
+		operationId: UUID,
+		payload: SupersedeIntakeClaimPayload,
+	): Promise<{ receipt: OperationReceipt; result: SupersedeIntakeClaimResult }> {
+		return this.#intakeWrite<SupersedeIntakeClaimResult>(operationId, { type: "supersede_intake_claim", payload });
+	}
+
+	recordIntakeIssue(
+		operationId: UUID,
+		payload: RecordIntakeIssuePayload,
+	): Promise<{ receipt: OperationReceipt; result: RecordIntakeIssueResult }> {
+		return this.#intakeWrite<RecordIntakeIssueResult>(operationId, { type: "record_intake_issue", payload });
+	}
+
+	linkIntakeCriterion(
+		operationId: UUID,
+		payload: LinkIntakeCriterionPayload,
+	): Promise<{ receipt: OperationReceipt; result: LinkIntakeCriterionResult }> {
+		return this.#intakeWrite<LinkIntakeCriterionResult>(operationId, { type: "link_intake_criterion", payload });
+	}
+
+	assessIntake(
+		operationId: UUID,
+		payload: AssessIntakePayload,
+	): Promise<{ receipt: OperationReceipt; result: AssessIntakeResult }> {
+		return this.#intakeWrite<AssessIntakeResult>(operationId, { type: "assess_intake", payload });
+	}
+
+	/** GET /v1/workspaces/{workspace_id}/intake/{run_id} — optional historical revision. */
+	intake(runId: string, revision?: number): Promise<IntakeRecordView> {
+		const query = revision === undefined ? "" : `?revision=${revision}`;
+		return this.request(
+			"GET",
+			`/v1/workspaces/${this.workspaceId}/intake/${encodeURIComponent(runId)}${query}`,
+		) as Promise<IntakeRecordView>;
 	}
 
 	workItem(key: string): Promise<WorkItemView> {

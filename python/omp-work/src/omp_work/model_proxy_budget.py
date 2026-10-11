@@ -20,7 +20,13 @@ receipt replay, settlement, abort, and context exit all go through the owner.
 A consumed exit stack is not a live transaction. Cross-process exclusion is the
 database lock itself. Completed receipts are checked before authorization so
 retries can replay after cancellation or stop without another upstream call.
-Failed-commit reconciliation is a later slice and is not a public method.
+Failed settlements retain their owner until private reconciliation verifies or
+commits the captured accounting in a fresh transaction. A receipt replay whose
+read-transaction commit fails before ``admit`` returns keeps that closed,
+unresolved owner in process-wide state. A later identical admit resolves it
+before acquiring another gate, and only after a durable matching receipt is
+read and cleaned up. Changed intent conflicts and leaves the retained owner in
+place.
 """
 
 from __future__ import annotations
@@ -62,22 +68,27 @@ __all__ = [
 # is deliberately absent: an admission nested inside another admission would
 # deadlock against its own held budget locks anyway.
 class _ProcessGate:
-    lock = threading.Lock()
-    transition = threading.Lock()
+    transition = threading.Condition()
     owner: object | None = None
+    # Call identity -> replay admission whose commit failed before admit returned.
+    retained_replay: dict[str, ModelCallAdmission] = {}
 
 
-def _acquire_process_gate(token: object) -> None:
-    """Install ``token`` as the gate owner. Transitions are serialized."""
-    _ProcessGate.lock.acquire()
-    try:
-        with _ProcessGate.transition:
-            if _ProcessGate.owner is not None:
-                raise RuntimeError("process gate acquired without an owner transition")
-            _ProcessGate.owner = token
-    except BaseException:
-        _ProcessGate.lock.release()
-        raise
+def _acquire_process_gate(token: object, identity: str) -> ModelCallAdmission | None:
+    """Wait for either ownership or a retained replay of this identity.
+
+    Publication and acquisition share one condition: a caller already waiting
+    when replay commit fails must wake to resolve or conflict with that owner.
+    """
+    with _ProcessGate.transition:
+        while True:
+            retained = _ProcessGate.retained_replay.get(identity)
+            if retained is not None:
+                return retained
+            if _ProcessGate.owner is None:
+                _ProcessGate.owner = token
+                return None
+            _ProcessGate.transition.wait()
 
 
 def _release_process_gate(token: object) -> None:
@@ -85,8 +96,8 @@ def _release_process_gate(token: object) -> None:
     with _ProcessGate.transition:
         if _ProcessGate.owner is not token:
             return
-        _ProcessGate.lock.release()
         _ProcessGate.owner = None
+        _ProcessGate.transition.notify_all()
 
 
 class _OneShotExitStack(contextlib.ExitStack):
@@ -127,9 +138,11 @@ class _LifecycleOwner:
         self._claimed = False
 
     @classmethod
-    def acquire(cls) -> _LifecycleOwner:
+    def acquire(cls, identity: str) -> _LifecycleOwner | ModelCallAdmission:
         token = object()
-        _acquire_process_gate(token)
+        retained = _acquire_process_gate(token, identity)
+        if retained is not None:
+            return retained
         return cls(token, _OneShotExitStack())
 
     def claim(self) -> bool:
@@ -242,7 +255,11 @@ class ModelProxyBudget:
 
         A matching completed receipt returns ``settled=True``; callers skip the
         upstream send and can verify/replay its settlement. Changed intent is
-        an idempotency conflict, even after stop or cancellation.
+        an idempotency conflict, even after stop or cancellation. If committing
+        that read fails, the closed unresolved owner stays reachable for every
+        instance. An identical later admit resolves it before taking a new gate
+        and returns settled only after the durable receipt matches and cleanup
+        finishes. Changed intent does not replace that owner.
 
         The bound is ``prepared.max_usd`` and ``prepared.max_tokens``. Admission
         locks the project row, the mission row, then the mission and project
@@ -311,7 +328,11 @@ class ModelProxyBudget:
         # Capture complete intent without request headers or credentials.
         receipt_request = {"workspace_id": str(workspace_uuid), "fingerprint": fingerprint}
 
-        owner = _LifecycleOwner.acquire()
+        # Acquisition also wakes for retained-owner publication while waiting.
+        owner = _LifecycleOwner.acquire(identity)
+        if isinstance(owner, ModelCallAdmission):
+            return owner._resolve_retained_replay(receipt_request)
+        retained = False
         try:
             cur = owner.stack.enter_context(
                 self._jobs.transaction(workspace_uuid, actor_uuid)
@@ -343,14 +364,21 @@ class ModelProxyBudget:
                     prepared=prepared, decision=None, _identity=identity,
                     _receipt_request=canonical_json(receipt_request),
                 )
-                # Commit the read transaction, then release this owner once.
+                # Commit the read, then publish settled and release this owner once.
+                # A commit exception happens before return: keep the owner reachable
+                # and do not free the gate for another send.
                 admission._state.closed = True
-                if not owner.complete():
-                    raise ModelProxyBudgetError(
-                        "already_settled", "admission is already settled or closed"
-                    )
+                try:
+                    if not owner.claim() or not owner.consume():
+                        raise ModelProxyBudgetError(
+                            "already_settled", "admission is already settled or closed"
+                        )
+                except BaseException:
+                    retained = _keep_replay_owner(identity, admission, receipt)
+                    raise
                 admission._state.receipt = receipt
                 admission._state.settled = True
+                owner.release()
                 return admission
 
             # Refuse before budget locks. A waiter blocked later is checked
@@ -442,8 +470,17 @@ class ModelProxyBudget:
                 _receipt_request=canonical_json(receipt_request),
             )
         except BaseException as error:
-            owner.complete(error)
+            # Retained replay owners stay until a later identical admit resolves
+            # them. Every other failure still cleans up and releases this token.
+            if not retained:
+                owner.complete(error)
             raise
+
+
+@dataclass(frozen=True)
+class _Settlement:
+    payload: str
+    decision: SpendDecision | None
 
 
 @dataclass
@@ -451,6 +488,8 @@ class _AdmissionState:
     settled: bool = False
     closed: bool = False
     receipt: dict[str, object] | None = None
+    unresolved: _Settlement | None = None
+    transition: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -518,79 +557,189 @@ class ModelCallAdmission:
     ) -> dict[str, object]:
         """Record measured usage and the project spend once, then release the locks.
 
-        The spend row uses the authorization captured at admission; the budget
-        rows are still locked, so the decision cannot have been overtaken. A
-        repeated identity replays the usage and records no second spend.
+        The spend row uses authorization captured at admission. A failed write
+        or commit retains the consumed call and gate; an identical retry checks
+        its durable receipt in a fresh transaction without reauthorization.
         """
-        if self.closed and not self.settled:
-            raise ModelProxyBudgetError(
-                "already_settled", "admission is already settled or closed"
-            )
-        usd = _nonneg_decimal("actual_usd", actual_usd)
-        counted = _token_sum(input_tokens, output_tokens, cache_tokens)
-        payload = {
-            "actual_usd": _decimal_text(usd), "input_tokens": input_tokens,
-            "output_tokens": output_tokens, "cache_tokens": cache_tokens,
-            "measurement": measurement, "model": model or self.prepared.route.model,
-            "price_version": price_version,
-        }
-        if self._state.receipt is not None:
-            if self._state.receipt["settlement"] != payload:
-                raise ModelProxyBudgetError("idempotency_conflict", "settlement payload changed")
-            return {**self._state.receipt["result"], "actual_usd": usd}
+        with self._state.transition:
+            if self.closed and not self.settled and self._state.unresolved is None:
+                raise ModelProxyBudgetError(
+                    "already_settled", "admission is already settled or closed"
+                )
+            usd = _nonneg_decimal("actual_usd", actual_usd)
+            counted = _token_sum(input_tokens, output_tokens, cache_tokens)
+            payload = {
+                "actual_usd": _decimal_text(usd), "input_tokens": input_tokens,
+                "output_tokens": output_tokens, "cache_tokens": cache_tokens,
+                "measurement": measurement, "model": model or self.prepared.route.model,
+                "price_version": price_version,
+            }
+            if self._state.receipt is not None:
+                if self._state.receipt["settlement"] != payload:
+                    raise ModelProxyBudgetError("idempotency_conflict", "settlement payload changed")
+                return {**self._state.receipt["result"], "actual_usd": usd}
 
-        if usd > self.max_usd:
-            raise ModelProxyBudgetError(
-                "usage_exceeds_admission",
-                f"actual USD {usd} exceeds admitted bound {self.max_usd}",
-            )
-        if counted > self.max_tokens:
-            raise ModelProxyBudgetError(
-                "usage_exceeds_admission",
-                f"actual tokens {counted} exceed admitted bound {self.max_tokens}",
-            )
+            captured = self._state.unresolved
+            if captured is not None:
+                if captured.payload != canonical_json(payload):
+                    raise ModelProxyBudgetError("idempotency_conflict", "settlement payload changed")
+                return self._resolve()
+
+            if usd > self.max_usd:
+                raise ModelProxyBudgetError(
+                    "usage_exceeds_admission",
+                    f"actual USD {usd} exceeds admitted bound {self.max_usd}",
+                )
+            if counted > self.max_tokens:
+                raise ModelProxyBudgetError(
+                    "usage_exceeds_admission",
+                    f"actual tokens {counted} exceed admitted bound {self.max_tokens}",
+                )
+
+            captured = _Settlement(canonical_json(payload), self.decision)
+            try:
+                with self._cur.connection.transaction():
+                    receipt = self._persist(self._cur, captured)
+                self._state.closed = True
+                if not self._owner.claim() or not self._owner.consume():
+                    raise ModelProxyBudgetError("already_settled", "transaction already consumed")
+            except BaseException as error:
+                # The call was consumed. Roll back/clean up its old transaction but
+                # retain the process gate until accounting is durably reconciled.
+                self._state.closed = True
+                self._state.unresolved = captured
+                self._owner.claim()
+                self._owner.consume(error)
+                if isinstance(error, JobError):
+                    raise ModelProxyBudgetError(error.code) from error
+                raise
+            return self._finish_settlement(receipt)
+
+    def _persist(
+        self, cur: psycopg.Cursor[dict[str, object]], captured: _Settlement,
+    ) -> dict[str, object]:
+        """One atomic usage/spend/receipt writer, also used by reconciliation."""
+        payload = json.loads(captured.payload)
+        fingerprint = json.loads(self._receipt_request)["fingerprint"]
 
         def apply() -> dict[str, object]:
+            if self.job_id is not None:
+                current_root = root_work_id(cur, self.workspace_id, self.job_id)
+                if current_root != self.root_work_id:
+                    raise ModelProxyBudgetError("idempotency_conflict", "captured root changed")
             usage = self._record(
-                usd=Decimal(payload["actual_usd"]), input_tokens=input_tokens,
-                output_tokens=output_tokens, cache_tokens=cache_tokens,
-                measurement=measurement, model=payload["model"], price_version=price_version,
+                cur=cur, decision=captured.decision,
+                usd=Decimal(payload["actual_usd"]),
+                input_tokens=payload["input_tokens"], output_tokens=payload["output_tokens"],
+                cache_tokens=payload["cache_tokens"], measurement=payload["measurement"],
+                model=payload["model"], price_version=payload["price_version"],
             )
             return {
-                "root_work_id": str(self.root_work_id),
-                "fingerprint": json.loads(self._receipt_request)["fingerprint"],
+                "root_work_id": str(self.root_work_id), "fingerprint": fingerprint,
                 "settlement": payload,
                 "result": {"status": "settled", "actual_usd": payload["actual_usd"], "usage": usage},
             }
 
-        try:
-            # Created AFTER admission locks: rolling back settlement cannot drop them.
-            # A consumed stack is not a live transaction and cannot commit again.
-            if self._owner.stack.consumed:
-                raise ModelProxyBudgetError(
-                    "already_settled", "admission is already settled or closed"
+        receipt = self.budget._jobs.run_operation(
+            cur, f"model_call:receipt:{self._identity}", self.workspace_id,
+            "model_call_receipt", json.loads(self._receipt_request), apply,
+        ).result
+        if (
+            receipt.get("root_work_id") != str(self.root_work_id)
+            or receipt.get("fingerprint") != fingerprint
+            or receipt.get("settlement") != payload
+        ):
+            raise ModelProxyBudgetError("idempotency_conflict", "settlement receipt changed")
+        return receipt
+
+    def _resolve(self) -> dict[str, object]:
+        """Resolve only a failed consumed call; never acquire fresh authority."""
+        with self._state.transition:
+            captured = self._state.unresolved
+            if captured is None or not self.closed or self.settled:
+                raise ModelProxyBudgetError("already_settled", "no unresolved settlement")
+            stack = _OneShotExitStack()
+            try:
+                cur = stack.enter_context(
+                    self.budget._jobs.transaction(self.workspace_id, self.actor_id)
                 )
-            with self._cur.connection.transaction():
-                receipt = self.budget._jobs.run_operation(
-                    self._cur, f"model_call:receipt:{self._identity}", self.workspace_id,
-                    "model_call_receipt", json.loads(self._receipt_request), apply,
-                ).result
-            # Cleanup finishes before the gate release inside _close. Settled is
-            # recorded only after that live commit. A failed commit stays closed
-            # and unsettled; reconciling it is not this slice.
-            committed = self._close()
-        except BaseException as error:
-            self._close(error)
-            if isinstance(error, JobError):
-                raise ModelProxyBudgetError(error.code) from error
-            raise
-        if not committed:
-            raise ModelProxyBudgetError(
-                "already_settled", "admission is already settled or closed"
+                self.budget.lock_captured_identity(
+                    cur, self.workspace_id, f"model_call:receipt:{self._identity}",
+                    project_id=self.project_id, mission_id=self.mission_id,
+                    root_work_id=self.root_work_id, work_id=self.work_id, job_id=self.job_id,
+                )
+                receipt = self._persist(cur, captured)
+                stack.close()
+            except BaseException as error:
+                stack.__exit__(type(error), error, error.__traceback__)
+                if isinstance(error, JobError):
+                    raise ModelProxyBudgetError(error.code) from error
+                raise
+            return self._finish_settlement(receipt)
+
+    def _resolve_retained_replay(self, receipt_request: dict[str, object]) -> ModelCallAdmission:
+        """Resolve this replay owner. The caller must not have acquired the gate.
+
+        Identical intent re-reads the durable receipt and returns this admission
+        only after that transaction commits and cleans up. Changed intent
+        conflicts. Concurrent callers share this admission's transition lock, so
+        a later one observes the settled owner and does not release a newer gate.
+        """
+        with self._state.transition:
+            if canonical_json(receipt_request) != self._receipt_request:
+                raise ModelProxyBudgetError("idempotency_conflict", "model call intent changed")
+            if self.settled:
+                return self
+            if not self.closed or self._state.unresolved is None:
+                raise ModelProxyBudgetError("already_settled", "no unresolved settlement")
+            receipt = self._read_durable_replay()
+            self._finish_settlement(receipt)
+            return self
+
+    def _read_durable_replay(self) -> dict[str, object]:
+        """Read the committed receipt. Do not authorize or write a new charge."""
+        stack = _OneShotExitStack()
+        try:
+            cur = stack.enter_context(
+                self.budget._jobs.transaction(self.workspace_id, self.actor_id)
             )
+
+            def no_effect() -> dict[str, object]:
+                raise AssertionError("existing receipt disappeared under operation lock")
+
+            try:
+                receipt = self.budget._jobs.run_operation(
+                    cur,
+                    f"model_call:receipt:{self._identity}",
+                    self.workspace_id,
+                    "model_call_receipt",
+                    json.loads(self._receipt_request),
+                    no_effect,
+                ).result
+            except JobError as refused:
+                raise ModelProxyBudgetError(refused.code) from refused
+            fingerprint = json.loads(self._receipt_request)["fingerprint"]
+            if (
+                receipt.get("root_work_id") != str(self.root_work_id)
+                or receipt.get("fingerprint") != fingerprint
+                or not isinstance(receipt.get("settlement"), dict)
+            ):
+                raise ModelProxyBudgetError("idempotency_conflict", "settlement receipt changed")
+            stack.close()
+            return receipt
+        except BaseException as error:
+            if not stack.consumed:
+                stack.__exit__(type(error), error, error.__traceback__)
+            raise
+
+    def _finish_settlement(self, receipt: dict[str, object]) -> dict[str, object]:
+        # Called only after the writing/verifying transaction and cleanup finish.
         self._state.receipt = receipt
         self._state.settled = True
-        return {**receipt["result"], "actual_usd": usd}
+        self._state.unresolved = None
+        _drop_replay_owner(self._identity, self)
+        self._owner.release()
+        return {**receipt["result"], "actual_usd": Decimal(receipt["settlement"]["actual_usd"])}
 
     def settle_unmeasurable_failure(
         self, error: BaseException | str | None = None
@@ -617,9 +766,10 @@ class ModelCallAdmission:
 
     def abort(self) -> None:
         """Abort before any send: roll back, write no ledgers, and free the locks."""
-        if self.closed:
-            return
-        self._close(ModelProxyBudgetError("aborted_before_send"))
+        with self._state.transition:
+            if self.closed:
+                return
+            self._close(ModelProxyBudgetError("aborted_before_send"))
 
     def __enter__(self) -> Self:
         return self
@@ -637,6 +787,8 @@ class ModelCallAdmission:
     def _record(
         self,
         *,
+        cur: psycopg.Cursor[dict[str, object]],
+        decision: SpendDecision | None,
         usd: Decimal,
         input_tokens: int | None,
         output_tokens: int | None,
@@ -661,21 +813,21 @@ class ModelCallAdmission:
             measurement=measurement,
             price_usd=usd,
             price_version=price_version,
-            cur=self._cur,
+            cur=cur,
         )
         # A usage row without this atomic receipt is not a completed settlement.
         if usage.get("status") == "replayed":
             raise ModelProxyBudgetError("idempotency_conflict", "usage exists without call receipt")
         if self.project_id is not None and usd > 0:
-            if self.decision is None:
+            if decision is None:
                 raise AssertionError("project spend requires a budget decision")
             self.budget._projects.append_spend_cursor(
-                self._cur,
+                cur,
                 self.workspace_id,
                 self.project_id,
                 self.mission_id,
                 usd,
-                self.decision,
+                decision,
                 self._spend_record_id(),
             )
         return usage
@@ -697,6 +849,37 @@ class ModelCallAdmission:
             return self._owner.consume(error)
         finally:
             self._owner.release()
+
+
+def _keep_replay_owner(
+    identity: str, admission: ModelCallAdmission, receipt: dict[str, object]
+) -> bool:
+    """Retain a replay owner that failed before admit returned.
+
+    A different owner that still holds the gate is not replaced. The admission
+    stays closed and unresolved so another instance cannot send it again.
+    """
+    settlement = receipt.get("settlement")
+    payload = canonical_json(settlement) if isinstance(settlement, dict) else "{}"
+    admission._state.closed = True
+    admission._state.unresolved = _Settlement(payload, None)
+    with _ProcessGate.transition:
+        current = _ProcessGate.retained_replay.get(identity)
+        if (
+            current is not None
+            and current is not admission
+            and _ProcessGate.owner is current._owner.token
+        ):
+            return False
+        _ProcessGate.retained_replay[identity] = admission
+        _ProcessGate.transition.notify_all()
+        return True
+
+
+def _drop_replay_owner(identity: str, admission: ModelCallAdmission) -> None:
+    with _ProcessGate.transition:
+        if _ProcessGate.retained_replay.get(identity) is admission:
+            del _ProcessGate.retained_replay[identity]
 
 
 class _LockHelper(ProjectStoreMixin):

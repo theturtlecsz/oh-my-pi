@@ -7,6 +7,9 @@ Done when:
 - crash_after_command("reserve_auditor_launch"), lease expiry, re-run -> 1 cancelled, 1 settled.
 - Always crash -> 3 cancelled, unrecoverable-blocker.
 - fail/skip/other_attempt, forge+skip -> nothing settled, failed; mission status, item unchanged (open).
+- signed pass with nonzero exit -> no PASS receipt, launch cancelled, failed.
+- symlinked .omp/task/output transport -> secret intact, launch cancelled, no settled audit.
+- malformed base_commit/allowed_paths -> named failure before any command or launch.
 """
 
 from __future__ import annotations
@@ -22,7 +25,7 @@ import psycopg
 from psycopg.rows import dict_row
 import pytest
 
-from omp_work.orchestrator import operations, service
+from omp_work.orchestrator import candidate_git, operations, service
 from omp_work.orchestrator import worker_sandbox
 from omp_work.orchestrator.service import (
     LeaseClaim,
@@ -794,7 +797,7 @@ def test_audit_stage_stopped_launch_does_not_retry(
 def test_audit_stage_nonzero_with_verdict_does_not_retry(
     service, tmp_path: Path, monkeypatch, verdict_file: str
 ) -> None:
-    """A verdict file keeps the acceptance path after a nonzero exit."""
+    """A nonzero verifier exit never settles, even with a valid signed pass."""
     world, worker, work_id = _open(service, tmp_path / verdict_file, monkeypatch)
     _tick_to_push(world, worker)
     real_sandbox = operations._sandbox
@@ -811,13 +814,14 @@ def test_audit_stage_nonzero_with_verdict_does_not_retry(
     worker.tick()
 
     audit = _outcomes(world, "audit")[-1]
-    accepted = verdict_file == "pass"
-    assert audit["outcome"] == ("succeeded" if accepted else "failed")
-    assert audit["verdict"] == ("pass" if accepted else "fail")
+    assert audit["outcome"] == "failed"
+    assert audit["verdict"] == "fail"
+    assert audit["data"]["code"] == "verifier_exit_nonzero"
     attempt, = _attempts(world, work_id)
     assert attempt["launch_count"] == 1
-    assert attempt["accepted_report_count"] == int(accepted)
-    assert attempt["cancelled_launch_count"] == int(not accepted)
+    assert attempt["accepted_report_count"] == 0
+    assert attempt["cancelled_launch_count"] == 1
+    assert _receipts(world, work_id, EvidenceKind.AUDIT.value) == []
 
 
 def test_audit_stage_exhaustion_records_failed_verdict_before_pause(
@@ -885,3 +889,101 @@ def test_audit_stage_recovery_reads_attempt_after_cancellation(
             and s.get("ref") == ref
             for s in _steps(world)
         )
+
+
+@pytest.mark.parametrize("link", ["dir", "task", "output"])
+def test_audit_stage_symlinked_transport_refused(
+    service, tmp_path: Path, monkeypatch, link: str
+) -> None:
+    """A symlinked .omp, task input, or output cancels the launch and settles nothing.
+
+    The producer-controlled transport path is exposed right after the reserved
+    worktree reset, before the host writes or clears any transport file.
+    """
+    world, worker, work_id = _open(service, tmp_path / f"symlink-{link}", monkeypatch)
+    _tick_to_push(world, worker)
+
+    secret_dir = tmp_path / f"secret-{link}"
+    secret_dir.mkdir()
+    secret = secret_dir / "secret.txt"
+    secret.write_text("planted-secret\n", encoding="utf-8")
+
+    real_reset = candidate_git.reset_worktree
+    planted = {"done": False}
+
+    def reset_with_link(control_repo, worktrees_dir, name, commit):
+        worktree = real_reset(control_repo, worktrees_dir, name, commit)
+        if name.endswith("-verify") and not planted["done"]:
+            planted["done"] = True
+            omp_dir = worktree / ".omp"
+            if link == "dir":
+                omp_dir.symlink_to(secret_dir)
+            else:
+                omp_dir.mkdir(exist_ok=True)
+                name_in_omp = "verify-task.json" if link == "task" else "verdict.json"
+                (omp_dir / name_in_omp).symlink_to(secret)
+        return worktree
+
+    monkeypatch.setattr(candidate_git, "reset_worktree", reset_with_link)
+    worker.tick()
+
+    assert planted["done"]
+    audit = _outcomes(world, "audit")[-1]
+    assert audit["outcome"] == "failed"
+    assert audit["verdict"] == "fail"
+    assert audit["data"]["code"] == "transport_symlink"
+
+    assert secret.read_text(encoding="utf-8") == "planted-secret\n"
+    assert [p.name for p in secret_dir.iterdir()] == ["secret.txt"]
+
+    attempt, = _attempts(world, work_id)
+    assert attempt["launch_count"] == 1
+    assert attempt["cancelled_launch_count"] == 1
+    assert attempt["accepted_report_count"] == 0
+    assert attempt["state"] != "audited"
+    assert _receipts(world, work_id, EvidenceKind.AUDIT.value) == []
+    settled = _rows(
+        world,
+        "SELECT event_id::text AS event_id FROM omp_work.close_attempt_events "
+        "WHERE workspace_id = %s AND work_id = %s AND event_type = 'auditor_launch_settled'",
+        (world.workspace_id, work_id),
+    )
+    assert settled == []
+    assert any(
+        s.get("kind") == "external_done"
+        and s.get("external_ref") == f"verifier:{attempt['attempt_id']}:1"
+        and s.get("ref") == "rejected"
+        for s in _steps(world)
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "code"),
+    [
+        ("base_commit", "not-a-commit", "base_commit_invalid"),
+        ("allowed_paths", "feature.txt", "allowed_paths_invalid"),
+        ("allowed_paths", None, "allowed_paths_missing"),
+    ],
+)
+def test_audit_stage_malformed_task_input_never_launches(
+    service, tmp_path: Path, monkeypatch, field: str, value, code: str
+) -> None:
+    """A malformed required task input fails named before any command or launch."""
+    world, worker, work_id = _open(
+        service, tmp_path / f"malformed-{field}-{code}", monkeypatch, verifier_mode="pass"
+    )
+    _tick_to_push(world, worker)
+
+    request = dict(world.request.document())
+    request[field] = value
+
+    ctx = _audit_ctx(world, work_id, request=request)
+    commands_called: list[str] = []
+    ctx.command = _forbid_commands(commands_called, code)
+
+    outcome = operations.run_audit(ctx)
+    assert outcome.outcome == "failed"
+    assert outcome.data.get("code") == code
+    assert commands_called == []
+    assert _attempts(world, work_id) == []
+    assert _launches(world, work_id) == []

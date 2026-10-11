@@ -338,6 +338,92 @@ def intake_tables(conn):
     ).fetchall()]
 
 
+def test_read_legacy_inserts_reconstructs_provenance_and_defaults_relation(service, write_repository):
+    workspace_id, _ = write_repository
+    operation_id = uuid4()
+    common = dict(workspace_id=workspace_id, run_id="run-1", revision=0,
+                  operation_id=operation_id, nsi_version="nsi/v1")
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        locked(cur, write_repository, operation_id=operation_id)
+        insert(conn, "intake_revisions", common | dict(state="collecting", **{
+            f"{name}_hash": "a" * 64 for name in ("source", "claim_set", "rule_bundle", "schema", "contract")
+        }))
+        insert(conn, "intake_artifacts", common | dict(
+            artifact_id="source", bytes=b"hello", uri="file:///source",
+            media_type="text/plain", content_hash="a" * 64))
+        insert(conn, "intake_entities", common | dict(entity_id=ENTITY["id"], entity_type=ENTITY["type"]))
+        insert(conn, "intake_ontology", common | dict(
+            definition_id=PREDICATE["id"], kind="predicate", **{k: v for k, v in PREDICATE.items() if k != "id"}))
+        for origin in ("owner_statement", "policy_rule"):
+            insert(conn, "intake_claims", common | dict(
+                claim_id=origin, category=CLAIM["category"], subject_entity_id=ENTITY["id"],
+                predicate_id=PREDICATE["id"], value=Jsonb(CLAIM["value"]), origin=origin,
+                state="proposed", modality="desired", polarity="positive", truth="unknown",
+                asserted_by="asserter", admitted_by="admitter"))
+        insert(conn, "intake_claim_evidence", common | dict(
+            claim_id="owner_statement", artifact_id="source", start_byte=0, end_byte=5, quote="hello"))
+        view = read_revision(cur, workspace_id=workspace_id, run_id="run-1", revision=0)
+        artifact = view.snapshot.artifacts[0]
+        assert artifact.actor.id == str(operation_id)
+        assert artifact.actor.kind == "service"
+        assert artifact.revision == "0"
+        claims = {claim.id: claim for claim in view.snapshot.claims}
+        assert claims["owner_statement"].asserted_by.kind == "owner"
+        assert claims["owner_statement"].admitted_by.kind == "owner"
+        assert claims["policy_rule"].asserted_by.kind == "rule_engine"
+        assert claims["policy_rule"].admitted_by.kind == "rule_engine"
+        assert view.body.evidence_links[0].model_dump() == dict(
+            claim_id="owner_statement", artifact_id="source", start_byte=0, end_byte=5,
+            quote="hello", relation="neither")
+
+
+def test_append_preserves_source_and_claim_provenance_and_evidence_relations(service, write_repository):
+    workspace_id, _ = write_repository
+    body = revision_body(workspace_id)
+    body["assessments"] = []
+    artifact = body["snapshot"]["artifacts"][0]
+    artifact.update(actor=dict(id="source-owner", kind="owner"), revision="source-rev-7")
+    claim = body["snapshot"]["claims"][0]
+    claim.update(origin="owner_statement", asserted_by=dict(id="claim-owner", kind="owner"),
+                 admitted_by=dict(id="admission-engine", kind="rule_engine"))
+    claim["evidence"].extend([
+        dict(artifact_id=artifact["id"], start_byte=5, end_byte=6),
+        dict(artifact_id=artifact["id"], start_byte=6, end_byte=7),
+    ])
+    body["evidence_links"] = [
+        dict(claim_id=claim["id"], **span, relation=relation)
+        for span, relation in zip(claim["evidence"], ("supports", "contradicts"))
+    ]
+    original = IntakeRevisionBody.model_validate(body)
+    hashes = revision_hashes(original.snapshot, original.artifact_bytes)
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        append_revision(cur, locked(cur, write_repository), body, operation_id=uuid4())
+    with connection(service, workspace_id, "omp_work_readonly") as conn, conn.cursor() as cur:
+        view = read_revision(cur, workspace_id=workspace_id, run_id="run-1", revision=0)
+        assert view.snapshot.artifacts == original.snapshot.artifacts
+        restored = next(item for item in view.snapshot.claims if item.id == claim["id"])
+        assert restored.asserted_by == original.snapshot.claims[0].asserted_by
+        assert restored.admitted_by == original.snapshot.claims[0].admitted_by
+        assert [link.model_dump() for link in sorted(view.body.evidence_links,
+                                                   key=lambda link: link.start_byte)] == [
+            {"quote": None, **span, "claim_id": claim["id"], "relation": relation}
+            for span, relation in zip(claim["evidence"], ("supports", "contradicts", "neither"))
+        ]
+        assert (view.claim_set_hash, view.source_hash) == hashes
+        # Copying a read body into the next revision retains evidence relations.
+        copied = view.body.model_dump(exclude_none=True)
+    copied["snapshot"]["revision"] = copied["binding"]["revision"] = 1
+    for item in copied["decisions"]:
+        item["decision"]["revision"] = 1
+    for item in copied["derivations"]:
+        item["revision"] = 1
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        append_revision(cur, locked(cur, write_repository, 0), copied, operation_id=uuid4())
+        next_view = read_revision(cur, workspace_id=workspace_id, run_id="run-1", revision=1)
+        assert next_view.body.evidence_links == view.body.evidence_links
+        assert next_view.snapshot.artifacts == view.snapshot.artifacts
+
+
 def test_write_helpers_leave_initial_and_existing_writes_to_caller_rollback(service, write_repository):
     workspace_id, _ = write_repository
     with connection(service, workspace_id) as conn, conn.cursor() as cur:

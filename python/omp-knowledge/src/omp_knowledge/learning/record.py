@@ -32,6 +32,7 @@ __all__ = [
     "MAX_KEY_SCAN",
     "NativeRecords",
     "NativeResearchRecords",
+    "bounded_capture_records",
     "bounded_work_record",
     "research_record_block",
     "resolve_work_key",
@@ -336,6 +337,26 @@ def work_record_block(view: ViewInput) -> dict[str, Any]:
     }
 
 
+def _read_workflow(records: NativeRecords, key: str) -> dict[str, Any] | None:
+    try:
+        return work_record_block(records.workflow(key))
+    except (WorkError, httpx.HTTPError):
+        return None
+
+
+def _read_research(records: NativeRecords, key: str) -> dict[str, Any] | None:
+    research = getattr(records, "research", None)
+    if not callable(research):
+        return None
+    try:
+        view = research(key)
+        if isinstance(view, Mapping):
+            view = ResearchView.model_validate(view)
+        return research_record_block(view)
+    except (WorkError, httpx.HTTPError):
+        return None
+
+
 def bounded_work_record(
     records: NativeRecords, work_id: str | UUID
 ) -> dict[str, Any] | None:
@@ -349,6 +370,27 @@ def bounded_work_record(
         key = resolve_work_key(records, work_id)
         if key is None:
             return None
-        return work_record_block(records.workflow(key))
+        return _read_workflow(records, key)
     except (WorkError, httpx.HTTPError):
         return None
+
+
+def bounded_capture_records(
+    records: NativeRecords, work_id: str | UUID
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """The bounded execution and research records for ``work_id``.
+
+    ``work_id`` is resolved once via ``resolve_work_key``. The workflow and
+    research projections are read independently: an error on one does not
+    prevent reading the other. Unresolvable keys yield ``(None, None)``.
+    Missing research capability or an unavailable read yields ``None`` for
+    the research record.
+    """
+    try:
+        key = resolve_work_key(records, work_id)
+        if key is None:
+            return None, None
+        return _read_workflow(records, key), _read_research(records, key)
+    except (WorkError, httpx.HTTPError):
+        return None, None
+

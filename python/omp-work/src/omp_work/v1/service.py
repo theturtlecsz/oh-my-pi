@@ -232,7 +232,7 @@ class WorkService:
         "register_intake_evidence": "work.mutate",
         "record_intake_claim": "work.mutate",
         "record_intake_decision": "work.approve",
-        "supersede_intake_claim": "work.mutate",
+        "supersede_intake_claim": "work.approve",
         "record_intake_issue": "work.mutate",
         "link_intake_criterion": "work.mutate",
         "assess_intake": "work.approve",

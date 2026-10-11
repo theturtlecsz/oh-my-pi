@@ -22,6 +22,7 @@ from uuid import UUID, uuid4
 
 import psycopg
 import pytest
+from omp_work import model_proxy_budget as budget_module
 from omp_work.jobs.admission import enqueue_job
 from omp_work.jobs.budget import item_spend, root_work_id
 from omp_work.jobs.store import JobError, NativeJobStore
@@ -40,6 +41,7 @@ from omp_work.standing_policy import StandingPolicy
 from omp_work.v1.store import PostgresWorkStore
 from psycopg.errors import CheckViolation
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 from test_agent_stop_store import _envelope
 from test_item_budget_alerts import _seed_budget
 from test_workflow_service import OWNER, _create, _grant
@@ -1088,18 +1090,208 @@ def test_settlement_failure_rolls_back_usage_receipt_and_cancellation(admission_
     def fail(*args, **kwargs):
         raise RuntimeError("spend failed")
 
-    monkeypatch.setattr(ctx.budget._projects, "append_spend_cursor", fail)
-    with pytest.raises(RuntimeError, match="spend failed"):
-        with _admit(ctx, _prepared("1"), **kw) as admission:
-            admission.settle(actual_usd="1")
-    assert admission.closed and not admission.settled
-    assert _admission_counts(ctx) == before
-    with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
-        assert ctx.jobs.job_view(cur, ctx.workspace_id, job)["status"] == "admitted"
-    monkeypatch.setattr(ctx.budget._projects, "append_spend_cursor", append)
-    with _admit(ctx, _prepared("1"), **kw) as admission:
+    admission = _admit(ctx, _prepared("1"), **kw)
+    try:
+        monkeypatch.setattr(ctx.budget._projects, "append_spend_cursor", fail)
+        with pytest.raises(RuntimeError, match="spend failed"):
+            with admission:
+                admission.settle(actual_usd="1")
+        assert admission.closed and not admission.settled
+        admission.abort()
+        assert _admission_counts(ctx) == before
+        with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
+            assert ctx.jobs.job_view(cur, ctx.workspace_id, job)["status"] == "admitted"
+        monkeypatch.setattr(ctx.budget._projects, "append_spend_cursor", append)
         admission.settle(actual_usd="1")
-    assert _admission_counts(ctx)[:2] == (1, 1)
+        assert _admission_counts(ctx)[:2] == (1, 1)
+    finally:
+        monkeypatch.setattr(ctx.budget._projects, "append_spend_cursor", append)
+        if not admission.settled:
+            admission.settle(actual_usd="1")
+
+
+@pytest.mark.parametrize("fault", ["rollback-before-commit", "commit-then-raise"])
+def test_failed_settlement_reconciles_durable_accounting(admission_context, monkeypatch, fault):
+    """Consumed calls retain ownership across rollback or ambiguous commit, without another send/charge."""
+    ctx = admission_context
+    policy = StandingPolicy(
+        policy_id=uuid4(), action_class="spend_beyond_threshold", money_limit_usd=Decimal(1000),
+        decision_id=uuid4(), expires_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+    authority = ChangeAuthority("owner", policy.decision_id, "owner")
+    ctx.projects.set_spend_budget(
+        ctx.workspace_id, ctx.actor_id, ctx.project_id, None,
+        SpendBudget("project", Decimal(1000), Decimal(0)), authority,
+    )
+    ctx.projects.put_standing_policy(ctx.workspace_id, ctx.actor_id, ctx.project_id, policy, authority)
+    job = _admitting_job(ctx)
+    kw = dict(job_id=job, worker_id="worker-1", fence=1, request_id="failed-commit")
+    payload = dict(actual_usd="1.00", input_tokens=10, output_tokens=5, cache_tokens=0)
+    original = ctx.budget._jobs.transaction
+    enabled = True
+    connections = []
+    sends = []
+    replays = []
+
+    @contextmanager
+    def failing_transaction(workspace_id, actor_id):
+        with original(workspace_id, actor_id) as cur:
+            connections.append(cur.connection)
+            yield cur
+            if enabled and fault == "rollback-before-commit":
+                raise RuntimeError(fault)
+        if enabled and fault == "commit-then-raise":
+            raise RuntimeError(fault)
+
+    monkeypatch.setattr(ctx.budget._jobs, "transaction", failing_transaction)
+    admission = _admit(ctx, _prepared("2"), **kw)
+    sends.append("upstream")
+    before = _admission_counts(ctx)
+    waiter, finished = None, threading.Event()
+    outcomes = []
+    try:
+        # Private reconciliation has no authority to close a fresh admission.
+        with pytest.raises(ModelProxyBudgetError):
+            admission._resolve()
+        assert not admission.closed and not admission.settled
+        with pytest.raises(RuntimeError, match=fault):
+            with admission:
+                admission.settle(**payload)
+        admission.abort()
+        assert admission.closed and not admission.settled
+        expected = before if fault == "rollback-before-commit" else tuple(n + d for n, d in zip(before, (1, 1, 1, 2)))
+        assert _admission_counts(ctx) == expected
+
+        with pytest.raises(ModelProxyBudgetError) as changed:
+            admission.settle(**(payload | {"actual_usd": "3"}))
+        assert changed.value.code == "idempotency_conflict"
+        with pytest.raises(RuntimeError, match=fault):
+            admission.settle(**payload)
+        assert _admission_counts(ctx) == expected
+        assert not admission.settled
+        assert len(connections) == 2 and connections[0] is not connections[1]
+        assert all(conn.closed for conn in connections)
+
+        def waiting():
+            with _admit(ctx, _prepared("2"), **kw) as replay:
+                replays.append(replay.settled)
+                outcomes.append(replay.settle(**payload))
+            finished.set()
+
+        waiter = threading.Thread(target=waiting)
+        waiter.start()
+        assert not finished.wait(0.2), "failed settlement freed process gate"
+        _engage_stop(ctx)
+        with psycopg.connect(**ctx.service.config.connection_kwargs("postgres")) as conn:
+            conn.execute("UPDATE omp_work.standing_policies SET expires_at=clock_timestamp()-interval '1 second' WHERE policy_id=%s", (policy.policy_id,))
+            conn.execute("UPDATE omp_jobs.jobs SET worker_id='other', fence=fence+1, lease_expires_at=clock_timestamp()-interval '1 second' WHERE job_id=%s", (job,))
+
+        def forbidden(*args, **kwargs):
+            pytest.fail("resolution reauthorized consumed call")
+
+        monkeypatch.setattr(ctx.budget._projects, "authorize_spend_cursor", forbidden)
+        enabled = False
+        result = admission.settle(**(payload | {"actual_usd": "1"}))
+        assert finished.wait(5)
+        waiter.join(timeout=5)
+        assert admission.closed and admission.settled
+        assert outcomes == [result] and replays == [True] and sends == ["upstream"]
+        assert _admission_counts(ctx) == tuple(n + d for n, d in zip(before, (1, 1, 1, 2)))
+        with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
+            cur.execute("SELECT result FROM omp_jobs.operations WHERE operation_id=%s", (f"model_call:receipt:{admission._identity}",))
+            receipt = cur.fetchone()["result"]
+            assert receipt["root_work_id"] == str(ctx.work_id)
+            assert receipt["settlement"]["actual_usd"] == "1"
+            cur.execute("SELECT work_id, job_id_derived, price_usd, tokens FROM omp_jobs.usage_events WHERE workspace_id=%s", (ctx.workspace_id,))
+            assert cur.fetchone() == dict(work_id=ctx.work_id, job_id_derived=job, price_usd=Decimal(1), tokens=15)
+            cur.execute("SELECT project_id, amount_usd, policy_id, tier FROM omp_work.spend_records WHERE workspace_id=%s", (ctx.workspace_id,))
+            assert cur.fetchone() == dict(project_id=ctx.project_id, amount_usd=Decimal(1), policy_id=policy.policy_id, tier="tier2")
+    finally:
+        enabled = False
+        monkeypatch.setattr(ctx.budget._jobs, "transaction", original)
+        if not admission.settled:
+            admission.settle(**payload)
+        if waiter is not None:
+            waiter.join(timeout=5)
+
+
+@pytest.mark.parametrize("field", ["intent", "fingerprint", "root_work_id", "settlement"])
+def test_resolution_receipt_conflict_retains_consumed_owner(admission_context, monkeypatch, field):
+    """Conflicting durable receipt cannot settle/release an owner or rewrite its ledgers."""
+    ctx = admission_context
+    original = ctx.budget._jobs.transaction
+
+    @contextmanager
+    def ambiguous(workspace_id, actor_id):
+        with original(workspace_id, actor_id) as cur:
+            yield cur
+        raise RuntimeError("ambiguous commit")
+
+    monkeypatch.setattr(ctx.budget._jobs, "transaction", ambiguous)
+    admission = _admit(ctx, _prepared("1"), request_id="receipt-conflict")
+    receipt_id = f"model_call:receipt:{admission._identity}"
+    stored = None
+    try:
+        with pytest.raises(RuntimeError, match="ambiguous commit"):
+            admission.settle(actual_usd="1")
+        monkeypatch.setattr(ctx.budget._jobs, "transaction", original)
+        before = _admission_counts(ctx)
+        with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
+            cur.execute("SELECT request_sha256, result FROM omp_jobs.operations WHERE operation_id=%s", (receipt_id,))
+            stored = cur.fetchone()
+            if field == "intent":
+                cur.execute("UPDATE omp_jobs.operations SET request_sha256=%s WHERE operation_id=%s", ("0" * 64, receipt_id))
+            else:
+                cur.execute("UPDATE omp_jobs.operations SET result=jsonb_set(result, %s, %s) WHERE operation_id=%s", ([field], Jsonb("changed"), receipt_id))
+        with pytest.raises(ModelProxyBudgetError) as conflict:
+            admission.settle(actual_usd="1")
+        assert conflict.value.code == "idempotency_conflict"
+        assert admission.closed and not admission.settled
+        admission.abort()
+        assert admission.__exit__(None, None, None) is False
+        assert _admission_counts(ctx) == before
+    finally:
+        monkeypatch.setattr(ctx.budget._jobs, "transaction", original)
+        if stored is not None:
+            with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
+                cur.execute("UPDATE omp_jobs.operations SET request_sha256=%s, result=%s WHERE operation_id=%s", (stored["request_sha256"], Jsonb(stored["result"]), receipt_id))
+        if not admission.settled:
+            admission.settle(actual_usd="1")
+    assert _admission_counts(ctx) == (1, 1, 1, 2)
+
+
+def test_resolution_cannot_redirect_captured_root(admission_context, monkeypatch):
+    """Reparenting a failed consumed job conflicts instead of accounting under new root locks."""
+    ctx = admission_context
+    other = _item(ctx, "different root")
+    parent = _admitting_job(ctx, work_id=other)
+    job = _admitting_job(ctx)
+    append = ctx.budget._projects.append_spend_cursor
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("spend failed")
+
+    admission = _admit(ctx, _prepared("1"), job_id=job, worker_id="worker-1", fence=1)
+    try:
+        monkeypatch.setattr(ctx.budget._projects, "append_spend_cursor", fail)
+        with pytest.raises(RuntimeError, match="spend failed"):
+            admission.settle(actual_usd="1")
+        monkeypatch.setattr(ctx.budget._projects, "append_spend_cursor", append)
+        with psycopg.connect(**ctx.service.config.connection_kwargs("postgres")) as conn:
+            conn.execute("UPDATE omp_jobs.jobs SET parent_job_id=%s WHERE job_id=%s", (parent, job))
+        before = _admission_counts(ctx)
+        with pytest.raises(ModelProxyBudgetError) as conflict:
+            admission.settle(actual_usd="1")
+        assert conflict.value.code == "idempotency_conflict"
+        assert not admission.settled and admission.closed
+        assert _admission_counts(ctx) == before
+    finally:
+        monkeypatch.setattr(ctx.budget._projects, "append_spend_cursor", append)
+        with psycopg.connect(**ctx.service.config.connection_kwargs("postgres")) as conn:
+            conn.execute("UPDATE omp_jobs.jobs SET parent_job_id=NULL WHERE job_id=%s", (job,))
+        if not admission.settled:
+            admission.settle(actual_usd="1")
+    assert _admission_counts(ctx) == tuple(n + d for n, d in zip(before, (1, 1, 1, 2)))
 
 
 def _arm_cleanup_pauses(monkeypatch, jobs):
@@ -1211,12 +1403,25 @@ def _start_gate_waiter(ctx, work_id, request_id):
     return thread, waiting, finished, outcomes
 
 
-def test_process_gate_stays_held_until_settlement_commit(admission_context, monkeypatch):
+@pytest.mark.parametrize("retry", [False, True])
+def test_process_gate_stays_held_until_settlement_commit(admission_context, monkeypatch, retry):
     """Settlement keeps the gate through commit and cursor/connection cleanup."""
     ctx = admission_context
     other = _item(ctx, "separate commit waiter")
-    pauses = _arm_cleanup_pauses(monkeypatch, ctx.budget._jobs)
-    admission = _admit(ctx, _prepared("1"))
+    if retry:
+        admission = _admit(ctx, _prepared("1"))
+
+        def fail(*args, **kwargs):
+            raise RuntimeError("spend failed")
+
+        with monkeypatch.context() as fault:
+            fault.setattr(ctx.budget._projects, "append_spend_cursor", fail)
+            with pytest.raises(RuntimeError, match="spend failed"):
+                admission.settle(actual_usd="1")
+        pauses = _arm_cleanup_pauses(monkeypatch, ctx.budget._jobs)
+    else:
+        pauses = _arm_cleanup_pauses(monkeypatch, ctx.budget._jobs)
+        admission = _admit(ctx, _prepared("1"))
     outcomes: list[str] = []
 
     def settle():
@@ -1246,6 +1451,7 @@ def test_process_gate_stays_held_until_settlement_commit(admission_context, monk
 
         assert pauses.connection_closing.wait(5), outcomes
         assert _admission_counts(ctx) == (1, 1, 1, 2)
+        assert not admission.settled
         assert not finished.wait(0.2), "gate released before connection cleanup"
     finally:
         pauses.release()
@@ -1424,6 +1630,597 @@ def test_stale_owner_cleanup_cannot_release_another_gate(admission_context):
     assert second.closed and not second.settled
     assert outcomes == ["admitted"]
     assert _admission_counts(ctx) == charged
+
+
+@pytest.mark.parametrize("changed_intent", [False, True])
+def test_waiting_admit_observes_replay_owner_publication(
+    admission_context, monkeypatch, changed_intent
+):
+    """A retry already waiting at replay commit resolves or conflicts without a third retry."""
+    ctx = admission_context
+    prepared = _prepared("1")
+    request_id = "waiting-replay-owner"
+    payload = dict(actual_usd="1", input_tokens=1)
+    sends = []
+    with _admit(ctx, prepared, request_id=request_id) as admission:
+        sends.append("upstream")
+        first = admission.settle(**payload)
+    charged = _admission_counts(ctx)
+    assert charged == (1, 1, 1, 2)
+    unrelated = _item(ctx, "waiting replay unrelated")
+    at_exit, allow_exit = threading.Event(), threading.Event()
+    waiting, retry_done = threading.Event(), threading.Event()
+    outcomes, retries = [], []
+    original_transaction = ctx.budget._jobs.transaction
+    original_wait = budget_module._ProcessGate.transition.wait
+
+    @contextmanager
+    def failing_exit(workspace_id, actor_id):
+        with original_transaction(workspace_id, actor_id) as cur:
+            yield cur
+            if threading.current_thread() is replay_thread:
+                at_exit.set()
+                assert allow_exit.wait(5), "replay exit not released"
+        if threading.current_thread() is replay_thread:
+            raise RuntimeError("replay commit failed")
+
+    def observed_wait(timeout=None):
+        if threading.current_thread() is retry_thread:
+            # The condition is held here; publication cannot overtake this wait.
+            waiting.set()
+        return original_wait(timeout)
+
+    def replay():
+        try:
+            _admit(ctx, prepared, request_id=request_id)
+        except BaseException as exc:
+            outcomes.append(exc)
+
+    def retry():
+        found = None
+        try:
+            body = replace(prepared, body=b'{"changed":true}') if changed_intent else prepared
+            found = ModelProxyBudget(ctx.service.config).admit(
+                ctx.workspace_id, ctx.actor_id, ctx.project_id, None, ctx.work_id,
+                None, None, None, request_id, None, body,
+            )
+            if not found.settled:
+                sends.append("upstream")
+            retries.append(found)
+        except BaseException as exc:
+            retries.append(exc)
+        finally:
+            if found is not None and not found.closed:
+                found.abort()
+            retry_done.set()
+
+    replay_thread = threading.Thread(target=replay)
+    retry_thread = threading.Thread(target=retry)
+    waiter = None
+    with monkeypatch.context() as patch:
+        patch.setattr(ctx.budget._jobs, "transaction", failing_exit)
+        patch.setattr(budget_module._ProcessGate.transition, "wait", observed_wait)
+        try:
+            replay_thread.start()
+            assert at_exit.wait(5)
+            retry_thread.start()
+            assert waiting.wait(2)
+            assert not retry_done.wait(0.2), "retry bypassed held replay gate"
+            allow_exit.set()
+            replay_thread.join(timeout=5)
+            assert not replay_thread.is_alive()
+            assert len(outcomes) == 1 and str(outcomes[0]) == "replay commit failed"
+            assert retry_done.wait(5), "waiting retry missed retained-owner publication"
+            retry_thread.join(timeout=5)
+            assert len(retries) == 1
+            if changed_intent:
+                assert isinstance(retries[0], ModelProxyBudgetError)
+                assert retries[0].code == "idempotency_conflict"
+                waiter, started, finished, waiter_outcomes = _start_gate_waiter(
+                    ctx, unrelated, "waiting-replay-unrelated"
+                )
+                assert started.wait(2)
+                assert not finished.wait(0.2), "conflict released original ownership"
+            else:
+                assert retries[0].settled and retries[0].closed
+                assert retries[0].settle(**payload) == first
+            assert sends == ["upstream"] and _admission_counts(ctx) == charged
+        finally:
+            allow_exit.set()
+            replay_thread.join(timeout=7)
+            # Supported retry resolves any retained owner, including on assertion failure.
+            with _admit(ctx, prepared, request_id=request_id) as cleaned:
+                assert cleaned.settled
+            if retry_thread.ident is not None:
+                retry_thread.join(timeout=7)
+            if waiter is not None:
+                waiter.join(timeout=7)
+    assert not replay_thread.is_alive() and not retry_thread.is_alive()
+    if waiter is not None:
+        assert not waiter.is_alive() and waiter_outcomes == ["admitted"]
+    assert sends == ["upstream"] and _admission_counts(ctx) == charged
+
+
+@pytest.mark.parametrize("fault", ["rollback-before-commit", "commit-then-raise"])
+def test_replay_commit_exception_retains_owner_until_identical_admit(
+    admission_context, monkeypatch, fault
+):
+    """A replay read-exit fault keeps one reachable owner and blocks another send.
+
+    Another budget instance resolves that owner only for the same intent, after
+    the durable receipt is read and cleaned up. Changed intent and repeated
+    reconciliation failures leave the owner, gate, and ledgers in place.
+    """
+    ctx = admission_context
+    unrelated = _item(ctx, "unrelated during replay retain")
+    holder_work = _item(ctx, "holder after replay resolution")
+    third_work = _item(ctx, "third after replay holder")
+    request_id = "replay-commit-retain"
+    prepared = _prepared("1")
+    payload = dict(actual_usd="1", input_tokens=1)
+    sends: list[str] = []
+    with _admit(ctx, prepared, request_id=request_id) as admission:
+        if not admission.settled:
+            sends.append("upstream")
+        first = admission.settle(**payload)
+    charged = _admission_counts(ctx)
+    assert charged == (1, 1, 1, 2) and sends == ["upstream"]
+
+    original = ctx.budget._jobs.transaction
+    enabled = {"on": True}
+    connections: list[object] = []
+
+    @contextmanager
+    def failing_exit(workspace_id, actor_id):
+        with original(workspace_id, actor_id) as cur:
+            connections.append(cur.connection)
+            yield cur
+            if enabled["on"] and fault == "rollback-before-commit":
+                raise RuntimeError(fault)
+        if enabled["on"] and fault == "commit-then-raise":
+            raise RuntimeError(fault)
+
+    def admit_other(body: Prepared, budget: ModelProxyBudget | None = None):
+        return (budget or ModelProxyBudget(ctx.service.config)).admit(
+            ctx.workspace_id, ctx.actor_id, ctx.project_id, None, ctx.work_id,
+            None, None, None, request_id, None, body,
+        )
+
+    waiter = holder = None
+    threads: list[threading.Thread] = []
+    resolved: list[object] = []
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(ctx.budget._jobs, "transaction", failing_exit)
+            with pytest.raises(RuntimeError, match=fault):
+                _admit(ctx, prepared, request_id=request_id)
+            assert all(conn.closed for conn in connections)
+            waiter, waiting, finished, waiter_outcomes = _start_gate_waiter(
+                ctx, unrelated, "during-replay-retain"
+            )
+            threads.append(waiter)
+            assert waiting.wait(2)
+            assert not finished.wait(0.2), "replay commit exception released the gate"
+
+            other = ModelProxyBudget(ctx.service.config)
+            for _ in range(2):
+                with pytest.raises(RuntimeError, match=fault):
+                    admit_other(prepared, other)
+                assert not finished.wait(0.2), "failed reconciliation released the gate"
+                assert _admission_counts(ctx) == charged
+            assert all(conn.closed for conn in connections)
+            assert sends == ["upstream"]
+
+            with pytest.raises(ModelProxyBudgetError) as conflict:
+                admit_other(replace(prepared, body=b'{"different":true}'), other)
+            assert conflict.value.code == "idempotency_conflict"
+            assert not finished.wait(0.2), "changed intent replaced the retained owner"
+            assert _admission_counts(ctx) == charged
+
+            enabled["on"] = False
+            errors: list[BaseException] = []
+            ready = threading.Barrier(3)
+
+            def resolve() -> None:
+                found = None
+                try:
+                    ready.wait(5)
+                    found = admit_other(prepared, ModelProxyBudget(ctx.service.config))
+                    if not found.settled:
+                        sends.append("upstream")
+                    resolved.append(found)
+                except BaseException as exc:
+                    errors.append(exc)
+                finally:
+                    if found is not None and not found.closed:
+                        found.abort()
+
+            resolvers = [threading.Thread(target=resolve) for _ in range(3)]
+            threads.extend(resolvers)
+            for thread in resolvers:
+                thread.start()
+            for thread in resolvers:
+                thread.join(timeout=7)
+            assert errors == [] and all(not thread.is_alive() for thread in resolvers)
+            assert len(resolved) == 3
+            assert all(found.settled and found.closed for found in resolved)
+            assert all(found.settle(**payload) == first for found in resolved)
+            assert sends == ["upstream"] and _admission_counts(ctx) == charged
+            assert finished.wait(5), waiter_outcomes
+            waiter.join(timeout=7)
+            assert not waiter.is_alive() and waiter_outcomes == ["admitted"]
+
+        holder = ModelProxyBudget(ctx.service.config).admit(
+            ctx.workspace_id, ctx.actor_id, None, None, holder_work,
+            None, None, None, "holder-after-replay", None, prepared,
+        )
+        third, third_waiting, third_finished, third_outcomes = _start_gate_waiter(
+            ctx, third_work, "third-after-replay"
+        )
+        threads.append(third)
+        same_done = threading.Event()
+        same_out: list[object] = []
+
+        def same_again() -> None:
+            found = None
+            try:
+                found = admit_other(prepared)
+                if not found.settled:
+                    sends.append("upstream")
+                same_out.append(found)
+            except BaseException as exc:
+                same_out.append(exc)
+            finally:
+                if found is not None and not found.closed:
+                    found.abort()
+                same_done.set()
+
+        same_thread = threading.Thread(target=same_again)
+        threads.append(same_thread)
+        same_thread.start()
+        assert third_waiting.wait(2), third_outcomes
+        for found in resolved:
+            found.abort()
+            assert found.__exit__(None, None, None) is False
+            assert found.settle(**payload) == first
+        assert not third_finished.wait(0.2), "repeated resolution released the later gate"
+        assert _admission_counts(ctx) == charged and sends == ["upstream"]
+    finally:
+        enabled["on"] = False
+        if holder is not None and not holder.closed:
+            holder.abort()
+        try:
+            cleaned = admit_other(prepared)
+            if not cleaned.settled:
+                cleaned.abort()
+        except Exception:
+            pass
+        for thread in threads:
+            thread.join(timeout=7)
+    assert holder is not None
+    assert holder.closed and not holder.settled
+    assert third_finished.wait(5), third_outcomes
+    assert same_done.wait(5)
+    assert not third.is_alive() and not same_thread.is_alive()
+    assert third_outcomes == ["admitted"]
+    assert same_out and all(getattr(item, "settled", False) for item in same_out)
+    assert sends == ["upstream"] and _admission_counts(ctx) == charged
+    for thread in threads:
+        assert not thread.is_alive()
+
+
+def _accounting_snapshot(ctx):
+    """Compare durable rows, including receipt/usage/outbox contents, across replay."""
+    with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
+        rows = []
+        keys = ("record_id", "usage_id", "event_id", "operation_id")
+        for table, key in zip(_ADMISSION_TABLES, keys):
+            cur.execute(
+                f"SELECT * FROM {table} WHERE workspace_id=%s ORDER BY {key}",  # nosec B608 - fixed tables/keys
+                (ctx.workspace_id,),
+            )
+            rows.append(cur.fetchall())
+        return rows
+
+
+def test_rolled_back_settlement_and_stale_cleanup_keep_successor_excluded(
+    admission_context, monkeypatch
+):
+    """Rollback blocks another send; resolved owner's cleanup cannot free its successor."""
+    ctx = admission_context
+    second_work = _item(ctx, "rollback waiter")
+    third_work = _item(ctx, "rollback third")
+    original = ctx.budget._jobs.transaction
+    connections = []
+    fault = True
+
+    @contextmanager
+    def rollback_commit(workspace_id, actor_id):
+        with original(workspace_id, actor_id) as cur:
+            cur.execute("SET LOCAL lock_timeout = '3s'")
+            connections.append(cur.connection)
+            yield cur
+            if fault:
+                raise RuntimeError("settlement commit rolled back")
+
+    monkeypatch.setattr(ctx.budget._jobs, "transaction", rollback_commit)
+    prepared = _prepared("2")
+    payload = dict(actual_usd="1", input_tokens=10, output_tokens=5, cache_tokens=0)
+    admission = _admit(ctx, prepared, request_id="rollback-owner")
+    sends = ["first"]
+    started, entered, finish_waiter, done = (threading.Event() for _ in range(4))
+    errors = []
+
+    def waiter():
+        started.set()
+        try:
+            with ModelProxyBudget(ctx.service.config).admit(
+                ctx.workspace_id, ctx.actor_id, ctx.project_id, None, second_work,
+                None, None, None, "rollback-waiter", None, prepared,
+            ) as second:
+                entered.set()
+                assert finish_waiter.wait(5), "waiter not released"
+                sends.append("second")
+                second.settle(actual_usd="1", input_tokens=2)
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            done.set()
+
+    second = threading.Thread(target=waiter)
+    third = None
+    try:
+        with pytest.raises(RuntimeError, match="settlement commit rolled back"):
+            with admission:
+                admission.settle(**payload)
+        assert admission.closed and not admission.settled
+        assert connections and all(conn.closed for conn in connections)
+        assert _admission_counts(ctx) == (0, 0, 0, 0)
+        second.start()
+        assert started.wait(2)
+        admission.abort()
+        assert admission.__exit__(None, None, None) is False
+        with pytest.raises(RuntimeError, match="settlement commit rolled back"):
+            admission.settle(**payload)
+        assert not entered.wait(0.2) and not done.is_set()
+        assert sends == ["first"] and _accounting_snapshot(ctx) == [[], [], [], []]
+        assert len(connections) == 2 and all(conn.closed for conn in connections)
+
+        fault = False
+        result = admission.settle(**payload)
+        assert entered.wait(5), errors
+        charged = _accounting_snapshot(ctx)
+        assert _admission_counts(ctx) == (1, 1, 1, 2)
+        spend, usage, outbox, operations = charged
+        assert spend[0]["amount_usd"] == usage[0]["price_usd"] == Decimal(1)
+        assert usage[0]["work_id"] == ctx.work_id and usage[0]["tokens"] == 15
+        assert outbox[0]["event_id"] == f"usage:{usage[0]['usage_id']}"
+        receipt = next(row["result"] for row in operations if row["kind"] == "model_call_receipt")
+        assert receipt["settlement"] == payload | {"model": "test-model", "measurement": "measured", "price_version": None}
+        assert receipt["root_work_id"] == str(ctx.work_id)
+        third, waiting, finished, outcomes = _start_gate_waiter(ctx, third_work, "rollback-third")
+        assert waiting.wait(2)
+        for _ in range(2):
+            admission.abort()
+            assert admission.__exit__(None, None, None) is False
+            with admission:
+                pass
+            assert admission.settle(**payload) == result
+            assert not finished.wait(0.2), "stale cleanup freed waiter's gate"
+            assert sends == ["first"] and _accounting_snapshot(ctx) == charged
+        finish_waiter.set()
+        assert done.wait(5), errors
+        second.join(timeout=7)
+        assert finished.wait(5), outcomes
+        third.join(timeout=7)
+        assert errors == [] and outcomes == ["admitted"]
+        completed = _accounting_snapshot(ctx)
+        assert _admission_counts(ctx) == (2, 2, 2, 4)
+        with _admit(ctx, prepared, request_id="rollback-owner") as replay:
+            if not replay.settled:
+                sends.append("first replay")
+            assert replay.settle(**payload) == result
+        assert sends == ["first", "second"] and _accounting_snapshot(ctx) == completed
+    finally:
+        fault = False
+        monkeypatch.setattr(ctx.budget._jobs, "transaction", original)
+        finish_waiter.set()
+        if not admission.settled:
+            admission.settle(**payload)
+        for thread in (second, third):
+            if thread is not None and thread.ident is not None:
+                thread.join(timeout=7)
+                assert not thread.is_alive()
+    assert all(conn.closed for conn in connections)
+
+
+@pytest.mark.parametrize("fault_kind", ["rollback-before-commit", "commit-then-raise"])
+def test_resolution_locks_original_identity_after_commit_failure(
+    admission_context, monkeypatch, fault_kind
+):
+    """Resolution locks captured identities after root/lease/stop changes; fresh sends refuse."""
+    ctx = admission_context
+    mission = _mission(ctx, "1000")
+    policy = StandingPolicy(
+        policy_id=uuid4(), action_class="spend_beyond_threshold", money_limit_usd=Decimal(1000),
+        decision_id=uuid4(), expires_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+    authority = ChangeAuthority("owner", policy.decision_id, "owner")
+    ctx.projects.set_spend_budget(
+        ctx.workspace_id, ctx.actor_id, ctx.project_id, mission,
+        SpendBudget("mission", Decimal(1000), Decimal(0)), authority,
+    )
+    ctx.projects.put_standing_policy(ctx.workspace_id, ctx.actor_id, ctx.project_id, policy, authority)
+    root = _item(ctx, "original resolution root", _GENEROUS_ITEM)
+    task = _item(ctx, "resolution task", _GENEROUS_ITEM)
+    changed_root = _item(ctx, "changed resolution root", _GENEROUS_ITEM)
+    parent = _admitting_job(ctx, work_id=root)
+    changed_parent = _admitting_job(ctx, work_id=changed_root)
+    job = _admitting_job(ctx, work_id=task, parent_job_id=parent)
+    kw = dict(work_id=task, mission_id=mission, job_id=job, worker_id="worker-1", fence=1,
+              request_id="captured-resolution")
+    original = ctx.budget._jobs.transaction
+    connections = []
+    fault = True
+    baseline = _admission_counts(ctx)
+
+    @contextmanager
+    def failing_commit(workspace_id, actor_id):
+        with original(workspace_id, actor_id) as cur:
+            cur.execute("SET LOCAL lock_timeout = '3s'")
+            connections.append(cur.connection)
+            yield cur
+            if fault and fault_kind == "rollback-before-commit":
+                raise RuntimeError("settlement commit failed")
+        if fault:
+            raise RuntimeError("settlement commit failed")
+
+    monkeypatch.setattr(ctx.budget._jobs, "transaction", failing_commit)
+    prepared = _prepared("2")
+    payload = dict(actual_usd="1", input_tokens=10, output_tokens=5, cache_tokens=0)
+    admission = _admit(ctx, prepared, **kw)
+    sends = ["upstream"]
+    locked, proceed, fresh_started, fresh_done = (threading.Event() for _ in range(4))
+    results, fresh_outcomes = [], []
+    resolution = fresh = None
+    lock_identity = ctx.budget.lock_captured_identity
+
+    def paused_locks(*args, **kwargs):
+        lock_identity(*args, **kwargs)
+        locked.set()
+        assert proceed.wait(5), "resolution locks not released"
+
+    def resolve():
+        try:
+            results.append(admission.settle(**payload))
+        except BaseException as exc:
+            results.append(exc)
+
+    def fresh_call():
+        fresh_started.set()
+        try:
+            with _admit(ctx, prepared, **(kw | {"request_id": "fresh-captured"})):
+                sends.append("fresh")
+        except ModelProxyBudgetError as exc:
+            fresh_outcomes.append(exc.code)
+        except BaseException as exc:
+            fresh_outcomes.append(exc)
+        finally:
+            fresh_done.set()
+
+    try:
+        with pytest.raises(RuntimeError, match="settlement commit failed"):
+            admission.settle(**payload)
+        assert admission.closed and not admission.settled
+        assert all(conn.closed for conn in connections)
+        fault = False
+        durable = _accounting_snapshot(ctx)
+        before = _admission_counts(ctx)
+        charged = tuple(n + d for n, d in zip(baseline, (1, 1, 1, 2)))
+        assert before == (baseline if fault_kind == "rollback-before-commit" else charged)
+        fresh = threading.Thread(target=fresh_call)
+        fresh.start()
+        assert fresh_started.wait(2) and not fresh_done.wait(0.2)
+        _engage_stop(ctx)
+        with psycopg.connect(**ctx.service.config.connection_kwargs("postgres")) as conn:
+            conn.execute("SET LOCAL lock_timeout = '3s'")
+            conn.execute(
+                "UPDATE omp_jobs.jobs SET parent_job_id=%s, worker_id='changed', fence=fence+1,"
+                " lease_expires_at=clock_timestamp()-interval '1 second' WHERE job_id=%s",
+                (changed_parent, job),
+            )
+            conn.execute("UPDATE omp_work.standing_policies SET expires_at=clock_timestamp()-interval '1 second' WHERE policy_id=%s", (policy.policy_id,))
+
+        def forbidden(*args, **kwargs):
+            pytest.fail("resolution reauthorized consumed settlement")
+
+        monkeypatch.setattr(ctx.budget._projects, "authorize_spend_cursor", forbidden)
+        monkeypatch.setattr(ctx.budget, "lock_captured_identity", paused_locks)
+        resolution = threading.Thread(target=resolve)
+        resolution.start()
+        assert locked.wait(5), results
+        # Old admission connection is closed: these locks belong to resolution only.
+        assert len(connections) == 2 and connections[0].closed
+        assert not connections[1].closed
+        probes = [
+            ("SELECT pg_advisory_xact_lock(hashtextextended('omp_jobs.operation:' || %s, 0))", (f"model_call:receipt:{admission._identity}",)),
+            ("SELECT project_id FROM omp_work.projects WHERE workspace_id=%s AND project_id=%s FOR UPDATE", (ctx.workspace_id, ctx.project_id)),
+            ("SELECT mission_id FROM omp_work.project_missions WHERE workspace_id=%s AND project_id=%s AND mission_id=%s FOR UPDATE", (ctx.workspace_id, ctx.project_id, mission)),
+            ("SELECT budget_id FROM omp_work.spend_budgets WHERE workspace_id=%s AND project_id=%s AND mission_id=%s AND active FOR UPDATE", (ctx.workspace_id, ctx.project_id, mission)),
+            ("SELECT budget_id FROM omp_work.spend_budgets WHERE workspace_id=%s AND project_id=%s AND mission_id IS NULL AND active FOR UPDATE", (ctx.workspace_id, ctx.project_id)),
+            ("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (f"omp_work.item_budget:{ctx.workspace_id}:{root}",)),
+            ("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (f"omp_work.task_budget:{ctx.workspace_id}:{task}",)),
+            ("SELECT job_id FROM omp_jobs.jobs WHERE workspace_id=%s AND job_id=%s FOR UPDATE", (ctx.workspace_id, job)),
+        ]
+        with psycopg.connect(**ctx.service.config.connection_kwargs("postgres"), autocommit=True) as probe:
+            probe.execute("SET lock_timeout = '150ms'")
+            for query, args in probes:
+                with pytest.raises(psycopg.errors.LockNotAvailable):
+                    with probe.transaction():
+                        probe.execute(query, args)
+            with probe.transaction():
+                probe.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (f"omp_work.item_budget:{ctx.workspace_id}:{changed_root}",))
+            assert not fresh_done.is_set() and _accounting_snapshot(ctx) == durable
+            proceed.set()
+            resolution.join(timeout=7)
+            assert not resolution.is_alive() and len(results) == 1
+            if fault_kind == "rollback-before-commit":
+                assert isinstance(results[0], ModelProxyBudgetError), results
+                assert results[0].code == "idempotency_conflict"
+                assert not admission.settled and not fresh_done.wait(0.2)
+                assert _accounting_snapshot(ctx) == durable
+            else:
+                assert isinstance(results[0], dict), results
+            for query, args in probes:
+                with probe.transaction():
+                    probe.execute(query, args)
+        if fault_kind == "rollback-before-commit":
+            # Root conflict must retain the gate; restore identity through the DB,
+            # then reconcile captured authority even though lease/stop changed.
+            with psycopg.connect(**ctx.service.config.connection_kwargs("postgres")) as conn:
+                conn.execute("SET LOCAL lock_timeout = '3s'")
+                conn.execute("UPDATE omp_jobs.jobs SET parent_job_id=%s WHERE job_id=%s", (parent, job))
+            results[0] = admission.settle(**payload)
+        fresh.join(timeout=7)
+        assert not fresh.is_alive() and fresh_outcomes == ["agent_stop_engaged"]
+        completed = _accounting_snapshot(ctx)
+        assert _admission_counts(ctx) == charged
+        if fault_kind == "commit-then-raise":
+            assert completed == durable
+        spend, usage, outbox, operations = completed
+        assert len(spend) == len(usage) == len(outbox) == 1
+        assert sum(row["kind"] == "model_call_receipt" for row in operations) == 1
+        assert spend[0]["project_id"] == ctx.project_id and spend[0]["mission_id"] == mission
+        assert spend[0]["policy_id"] == policy.policy_id and spend[0]["tier"] == "tier2"
+        assert spend[0]["amount_usd"] == usage[0]["price_usd"] == Decimal(1)
+        assert usage[0]["work_id"] == task and usage[0]["job_id_derived"] == job
+        assert usage[0]["tokens"] == 15 and outbox[0]["event_id"] == f"usage:{usage[0]['usage_id']}"
+        receipt = next(row["result"] for row in operations if row["kind"] == "model_call_receipt")
+        assert receipt["root_work_id"] == str(root)
+        assert receipt["settlement"] == payload | {"model": "test-model", "measurement": "measured", "price_version": None}
+        with _admit(ctx, prepared, **kw) as replay:
+            if not replay.settled:
+                sends.append("replay")
+            assert replay.settle(**payload) == results[0]
+        assert sends == ["upstream"] and _accounting_snapshot(ctx) == completed
+    finally:
+        fault = False
+        proceed.set()
+        monkeypatch.setattr(ctx.budget._jobs, "transaction", original)
+        monkeypatch.setattr(ctx.budget, "lock_captured_identity", lock_identity)
+        if resolution is not None:
+            resolution.join(timeout=7)
+            assert not resolution.is_alive()
+        if not admission.settled:
+            with psycopg.connect(**ctx.service.config.connection_kwargs("postgres")) as conn:
+                conn.execute("SET LOCAL lock_timeout = '3s'")
+                conn.execute("UPDATE omp_jobs.jobs SET parent_job_id=%s WHERE job_id=%s", (parent, job))
+            admission.settle(**payload)
+        if fresh is not None:
+            fresh.join(timeout=7)
+            assert not fresh.is_alive()
+
+    assert all(conn.closed for conn in connections)
 
 
 def test_unmeasurable_failure_commits_bound_receipt_once(admission_context):

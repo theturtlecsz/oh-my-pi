@@ -4,7 +4,8 @@ Refusal branches:
 - verifier_mode "fail" (signed fail, exit 1)
 - verifier_mode "skip" (exit 0, no verdict)
 - other_attempt: test-local verifier script signs pass with attempt_id "a-other", exit 0
-- worker_mode "forge" + verifier_mode "skip" (candidate carries forged .omp/verdict.json)
+- worker_mode "forge" + verifier_mode "skip" (candidate carries forged .omp/verdict.json,
+  so the host refuses the committed transport before any verifier launch)
 """
 
 from __future__ import annotations
@@ -290,6 +291,23 @@ def test_orchestrator_audit_refusals(
     assert item_rows[0]["state"] not in ("DONE", "CANCELED", "CANCELLED")
 
     # 8. Branch-specific verifier checks.
+    if branch == "forge_skip":
+        # The candidate commit carries a forged .omp/verdict.json, so the host
+        # refuses the committed transport before any verifier process launches.
+        assert len(verifier_runs) == 0
+        assert audit_outcome["data"].get("code") == "committed_transport"
+        candidate_commit = audit_outcome["data"]["candidate_commit"]
+        proc = subprocess.run(
+            ["git", "-C", str(world.control_repo), "show", f"{candidate_commit}:.omp/verdict.json"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert proc.returncode == 0
+        forged_doc = json.loads(proc.stdout)
+        assert forged_doc["attempt_id"] == "a-forged"
+        return
+
     assert len(verifier_runs) == 1
     v_run = verifier_runs[0]
     v_worktree = v_run["worktree"]
@@ -312,17 +330,3 @@ def test_orchestrator_audit_refusals(
         assert verdict_doc["attempt_id"] == "a-other"
         assert (v_worktree / ".omp" / "audit-report.txt").is_file()
         assert "VERDICT: PASS" in (v_worktree / ".omp" / "audit-report.txt").read_text(encoding="utf-8")
-    elif branch == "forge_skip":
-        assert v_run["exit_code"] == 0
-        assert not verdict_path.is_file()
-        # Candidate commit in git carried forged verdict.json
-        candidate_commit = audit_outcome["data"]["candidate_commit"]
-        proc = subprocess.run(
-            ["git", "-C", str(world.control_repo), "show", f"{candidate_commit}:.omp/verdict.json"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        assert proc.returncode == 0
-        forged_doc = json.loads(proc.stdout)
-        assert forged_doc["attempt_id"] == "a-forged"

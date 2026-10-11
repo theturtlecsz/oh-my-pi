@@ -4,10 +4,15 @@ Contract defended:
 - validate_slices rejects an implementer dependency edge that only orders the slice: it is
   valid only when a shared non-union file overlaps or the dependent's work text explicitly
   consumes a named producer file/artifact.
+- Negation covers coordinated verbs/targets and post-target predicates within one clause.
+- Consumption verbs bind to producer tokens within one clause; hypothetical/reference/unrelated
+  prose stays local, and words inside path/artifact tokens cannot qualify consumption.
+- Both endpoints' exclusions filter shared edits and consumed files/outputs before evidence.
+- Basename aliases belong only to unique eligible producer files; outputs require exact tokens.
 - Exclusions (Do not touch sections in inline/bold/heading/list formats, plus Assumptions and
   Deferred) are parsed out, so a path named only under an exclusion cannot justify an edge.
-- Owner slice edges, implementer-after-owner edges, approval artifacts, and the final changelog
-  edge are preserved; union-merged inventory never justifies ordering.
+- Owner dependents, issue-linked owner approvals, consumed owner results and final changelog
+  aggregation are preserved; union-merged inventory never justifies ordering.
 - `check-plan` and both plan-promotion paths (`plan_promotion=auto` and the manual `promote`
   command) apply the same gate, so a disjoint order-only chain is refused as invalid.
 
@@ -154,11 +159,15 @@ def _plan_tree(tmp_path: Path, tid: str = "ITEM") -> Path:
 
 
 def write_slice(pdir: Path, sid: str, deps: list[str] = (), files: list[str] | None = None,
-                body: str | None = None, owner: bool = False, mm: int = 30) -> Path:
+                body: str | None = None, owner: bool = False, mm: int = 30,
+                owner_cmd: str | None = None, outputs: list[str] = ()) -> Path:
     pdir.mkdir(parents=True, exist_ok=True)
     fm = ["---", f"id: {sid}", f"depends_on: [{', '.join(deps)}]", f"max_minutes: {mm}", "kind: implement"]
     if owner:
         fm.append("owner: true")
+    if owner_cmd is not None:
+        fm.append(f"owner_cmd: {owner_cmd}")
+    fm.append(f"outputs: [{', '.join(outputs)}]")
     if files is not None:
         fm.append(f"files: [{', '.join(files)}]")
     fm.append("---")
@@ -209,7 +218,7 @@ def test_two_slice_exclusion_only_chains_fail_all_formats(staged_flood, tmp_path
     write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"], body=body_s02)
 
     violations, _ = mod.validate_slices("ITEM", pdir)
-    expected = "ITEM-s02: depends_on ITEM-s01 orders the slice only; leave depends_on empty, or name a path from ITEM-s01's files that this slice imports or extends"
+    expected = "ITEM-s02: depends_on ITEM-s01 orders the slice only; leave depends_on empty, edit a file ITEM-s01 also edits, or name a file or output of ITEM-s01 that this slice reads, imports, consumes or extends"
     assert any(expected in v for v in violations), (
         f"Format {fmt_name} failed to reject order-only chain. Violations: {violations}"
     )
@@ -301,6 +310,95 @@ def test_union_inventory_behavior(staged_flood, tmp_path):
         f"Union inventory must not justify ordering. Violations: {violations}"
     )
 
+    for target in ("docs/upstream-fork-inventory.tsv", "upstream-fork-inventory.tsv"):
+        write_slice(pdir_u_order, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"],
+                    body=f"Consume {target}.\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
+        violations, _ = mod.validate_slices("ITEM", pdir_u_order, is_union=is_union_fn)
+        assert violations == [
+            "ITEM-s02: depends_on ITEM-s01 orders the slice only; leave depends_on empty, "
+            "edit a file ITEM-s01 also edits, or name a file or output of ITEM-s01 "
+            "that this slice reads, imports, consumes or extends"
+        ]
+
+
+@pytest.mark.parametrize("endpoint", ["producer", "consumer"])
+@pytest.mark.parametrize("evidence,excluded", [
+    ("shared", "src/a.ts"),
+    ("file", "src/a.ts"),
+    ("alias", "src/a.ts"),
+    ("alias", "a.ts"),
+    ("output", "artifact_token"),
+    ("output_path", "reports/result.json"),
+])
+def test_either_endpoint_excludes_dependency_evidence(staged_flood, tmp_path, endpoint, evidence, excluded):
+    """Excluded edits, consumed files/aliases and outputs cannot justify either endpoint's edge."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path)
+    target = {"file": "src/a.ts", "alias": "a.ts", "output": "artifact_token",
+              "output_path": "reports/result.json"}.get(evidence)
+    producer_exclusion = excluded if endpoint == "producer" else "none"
+    consumer_exclusion = excluded if endpoint == "consumer" else "none"
+    write_slice(pdir, "ITEM-s01", files=["src/a.ts"], outputs=["artifact_token", "reports/result.json"],
+                body=f"Work: implement producer.\nDone when: test_producer.py passes.\nDo not touch: {producer_exclusion}")
+    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"],
+                files=["src/a.ts"] if evidence == "shared" else ["src/b.ts"],
+                body=f"Work: {f'Consume {target}.' if target else 'implement consumer.'}\n"
+                     f"Done when: test_consumer.py passes.\nDo not touch: {consumer_exclusion}")
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    assert violations == [
+        "ITEM-s02: depends_on ITEM-s01 orders the slice only; leave depends_on empty, "
+        "edit a file ITEM-s01 also edits, or name a file or output of ITEM-s01 "
+        "that this slice reads, imports, consumes or extends"
+    ]
+
+
+@pytest.mark.parametrize("files,outputs,target,excluded,valid,endpoint", [
+    (*case, endpoint)
+    for case in [
+        (["src/a.ts"], [], "src/a.ts", "other/a.ts", True),
+        (["src/a.ts"], [], "a.ts", "other/a.ts", True),
+        (["src/a.ts"], [], "src/a.ts", "a.ts", True),
+        (["src/a.ts"], [], "src/a.ts", "src/a.ts.backup", True),
+        (["src/a.ts", "other/a.ts"], [], "a.ts", "other/a.ts", True),
+        (["src/a.ts", "other/a.ts"], [], "a.ts", "none", False),
+        (["src/a.ts", "other/a.ts"], [], "src/a.ts", "none", True),
+        (["src/a.ts"], [], "src/a.ts.backup", "none", False),
+        (["src/a.ts"], [], "other/src/a.ts", "none", False),
+        (["src/a.ts"], [], "prefix-a.ts", "none", False),
+        (["src/a.ts"], [], "a.ts/suffix", "none", False),
+        (["data/input.json"], [], "data/input.json", "none", True),
+        (["src/a.ts"], ["artifact_token"], "artifact_token", "none", True),
+        (["src/a.ts"], ["artifact_token"], "a r t i f c _ o k e n", "none", False),
+        (["src/a.ts"], ["artifact_token"], "artifact_token_suffix", "none", False),
+        (["src/a.ts"], ["artifact_token"], "prefix-artifact_token", "none", False),
+        (["src/a.ts"], ["reports/result.json", "other/result.json"], "result.json", "none", False),
+        (["src/a.ts"], ["reports/result.json", "other/result.json"], "reports/result.json", "none", True),
+        (["src/a.ts"], ["reports/result.json", "other/result.json"], "other/result.json", "none", True),
+        (["src/a.ts"], ["reports/result.json"], "result.json", "none", False),
+    ]
+    for endpoint in (["producer", "consumer"] if case[3] != "none" else ["producer"])
+])
+def test_dependency_evidence_exact_tokens_and_eligible_file_aliases(
+        staged_flood, tmp_path, files, outputs, target, excluded, valid, endpoint):
+    """Only whole declared paths/outputs and unique eligible file basenames justify ordering."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path)
+    write_slice(pdir, "ITEM-s01", files=files, outputs=outputs,
+                body="Work: implement producer.\nDone when: test_producer.py passes.\n"
+                     f"Do not touch: {excluded if endpoint == 'producer' else 'none'}")
+    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"],
+                body=f"Work: Consume `{target}`.\nDone when: test_consumer.py passes.\n"
+                     f"Do not touch: {excluded if endpoint == 'consumer' else 'none'}")
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    if valid:
+        assert violations == []
+    else:
+        assert violations == [
+            "ITEM-s02: depends_on ITEM-s01 orders the slice only; leave depends_on empty, "
+            "edit a file ITEM-s01 also edits, or name a file or output of ITEM-s01 "
+            "that this slice reads, imports, consumes or extends"
+        ]
+
 
 def test_legitimate_serial_chain_passes(staged_flood, tmp_path):
     mod, _, _ = staged_flood
@@ -317,22 +415,283 @@ def test_legitimate_serial_chain_passes(staged_flood, tmp_path):
     assert len(slices) == 3
 
 
+@pytest.mark.parametrize("work,affirmative", [
+    ("Cannot import src/a.ts.", False),
+    ("Neither slice imports src/a.ts.", False),
+    ("Instead of importing src/a.ts, write src/b.ts.", False),
+    ("It fails to import src/a.ts.", False),
+    ("Does not import src/a.ts.", False),
+    ("Don't import src/a.ts.", False),
+    ("Read src/unrelated.ts; src/a.ts stays unchanged.", False),
+    ("Implement independent widget.", False),
+    ("Import src/a.ts.", True),
+    ("Importing src/a.ts is not required.", False),
+    ("Importing src/a.ts not required.", False),
+    ("Importing src/a.ts is required.", True),
+    ("Importing src/a.ts required.", True),
+    ("Reading src/a.ts is not required.", False),
+    ("Reading src/a.ts is required.", True),
+    ("Consuming src/a.ts not required.", False),
+    ("Consuming src/a.ts required.", True),
+    ("Extending src/a.ts is not required.", False),
+    ("Extending src/a.ts is required.", True),
+    ("Do not read src/local.ts or import src/a.ts.", False),
+    ("Read src/local.ts or import src/a.ts.", True),
+    ("Do not read src/local.ts and import src/a.ts.", False),
+    ("Read src/local.ts and import src/a.ts.", True),
+    ("Read src/unrelated.ts. src/a.ts stays unchanged.", False),
+    ("Read src/unrelated.ts\nsrc/a.ts stays unchanged.", False),
+    ("Read src/unrelated.ts, src/a.ts.", True),
+    ("Read `src/local.ts`, `src/a.ts`.", True),
+    ("Read src/local.ts and `src/a.ts`.", True),
+    ("Never write src/b.ts, import src/a.ts.", True),
+    ("Never write src/b.ts; import src/a.ts.", True),
+    ("Never write src/b.ts. import src/a.ts.", True),
+    ("Never write src/b.ts\nimport src/a.ts.", True),
+    ("Read src/unrelated.ts and never import src/a.ts.", False),
+    ("Important src/a.ts application.", False),
+    ("Import src/a.ts.backup.", False),
+    ("Import other/src/a.ts.", False),
+    ("Read `src/a.ts`.", True),
+    ("Consume src/a.ts.", True),
+    ("Extend src/a.ts.", True),
+    ("Apply src/a.ts.", True),
+])
+def test_affirmative_consumption_only(staged_flood, tmp_path, work, affirmative):
+    """Order-only edges fail; affirmative consumption of producer files permits ordering."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path)
+    write_slice(pdir, "ITEM-s01", files=["src/a.ts"])
+    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"],
+                body=f"{work}\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    if affirmative:
+        assert violations == []
+    else:
+        assert violations == [
+            "ITEM-s02: depends_on ITEM-s01 orders the slice only; leave depends_on empty, "
+            "edit a file ITEM-s01 also edits, or name a file or output of ITEM-s01 "
+            "that this slice reads, imports, consumes or extends"
+        ]
+
+
+@pytest.mark.parametrize("work,affirmative", [
+    ("Does not import src/a.ts. Import src/a.ts.", True),
+    ("Importing src/a.ts is not required. Import src/a.ts.", True),
+    ("Importing src/a.ts not required. Import src/a.ts.", True),
+    ("Do not read src/local.ts or import src/a.ts. Import src/a.ts.", True),
+    ("Do not read src/local.ts and import src/a.ts. Import src/a.ts.", True),
+    ("Importing src/a.ts is not required, but import src/a.ts.", True),
+    ("Import src/a.ts and never read src/local.ts.", True),
+    ("Do not read src/local.ts and import src/a.ts; import src/a.ts.", True),
+    ("Cannot import src/a.ts. Read src/a.ts.", True),
+    ("Neither slice imports src/a.ts. Consume src/a.ts.", True),
+    ("It fails to import src/a.ts. Extend src/a.ts.", True),
+    ("Don't import src/a.ts. Import src/a.ts.", True),
+    ("Read src/unrelated.ts. Import src/a.ts.", True),
+    ("Import src/a.ts, then write src/b.ts.", True),
+    ("Instead of writing src/b.ts, import src/a.ts.", True),
+    ("Rather than importing src/a.ts, write src/b.ts.", False),
+    ("Read src/unrelated.ts. src/a.ts stays unchanged.", False),
+    ("Import src/b.ts. src/a.ts stays unchanged.", False),
+    ("Read src/local.ts, and document src/a.ts location.", False),
+    ("src/a.ts.", False),
+    ("Read src/a.ts for reference.", False),
+    ("Read src/a.ts as an unrelated example.", False),
+    ("We may import src/a.ts in a later iteration.", False),
+    ("We may import src/a.ts later. Import src/a.ts.", True),
+    ("Read src/a.ts for reference. Import src/a.ts.", True),
+    ("Read src/a.ts as an unrelated example. Import src/a.ts.", True),
+    ("Import src/a.ts, and we may revise src/b.ts later.", True),
+    ("Read docs/x.md for reference, but import src/a.ts.", True),
+    ("Read docs/x.md for reference and import src/a.ts.", True),
+    ("We may revise src/b.ts later, but import src/a.ts.", True),
+    ("Import src/a.ts, and document unrelated src/b.ts.", True),
+    ("Read src/local.ts and document src/a.ts location.", False),
+    ("Read src/local.ts, document src/a.ts location.", False),
+])
+def test_clause_bounds(staged_flood, tmp_path, work, affirmative):
+    """Negation stays in its clause; only a following producer token justifies an edge."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path)
+    write_slice(pdir, "ITEM-s01", files=["src/a.ts"])
+    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"],
+                body=f"{work}\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    if affirmative:
+        assert violations == [], f"Consumption should justify edge: {work!r}: {violations}"
+    else:
+        assert violations == [
+            "ITEM-s02: depends_on ITEM-s01 orders the slice only; leave depends_on empty, "
+            "edit a file ITEM-s01 also edits, or name a file or output of ITEM-s01 "
+            "that this slice reads, imports, consumes or extends"
+        ], f"Order-only edge should fail: {work!r}: {violations}"
+
+
+@pytest.mark.parametrize("work,producer_files,affirmative", [
+    ("Do not read src/a.ts or src/b.ts.", ["src/a.ts", "src/b.ts"], False),
+    ("Read src/a.ts or src/b.ts.", ["src/a.ts", "src/b.ts"], True),
+    ("Do not read src/a.ts and src/b.ts.", ["src/a.ts", "src/b.ts"], False),
+    ("Read src/a.ts and src/b.ts.", ["src/a.ts", "src/b.ts"], True),
+    ("Do not read src/local.ts or import src/a.ts.", ["src/local.ts", "src/a.ts"], False),
+    ("Read src/local.ts or import src/a.ts.", ["src/local.ts", "src/a.ts"], True),
+    ("Do not read src/a.ts and consume src/b.ts.", ["src/a.ts", "src/b.ts"], False),
+    ("Read src/a.ts and consume src/b.ts.", ["src/a.ts", "src/b.ts"], True),
+    ("Reading src/a.ts and src/b.ts is not required.", ["src/a.ts", "src/b.ts"], False),
+    ("Reading src/a.ts and src/b.ts is required.", ["src/a.ts", "src/b.ts"], True),
+    ("Reading src/a.ts and consuming src/b.ts not required.", ["src/a.ts", "src/b.ts"], False),
+    ("Reading src/a.ts and consuming src/b.ts required.", ["src/a.ts", "src/b.ts"], True),
+])
+def test_negation_covers_each_coordinated_producer(
+        staged_flood, tmp_path, work, producer_files, affirmative):
+    """Negated verbs/target lists cannot justify either producer's dependency edge."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path)
+    write_slice(pdir, "ITEM-s01", files=[producer_files[0]])
+    write_slice(pdir, "ITEM-s02", files=[producer_files[1]])
+    write_slice(pdir, "ITEM-s03", deps=["ITEM-s01", "ITEM-s02"], files=["src/c.ts"],
+                body=f"{work}\nDone when: test_ITEM_s03.py passes.\nDo not touch: none")
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    assert violations == ([] if affirmative else [
+        f"ITEM-s03: depends_on {producer} orders the slice only; leave depends_on empty, "
+        f"edit a file {producer} also edits, or name a file or output of {producer} "
+        "that this slice reads, imports, consumes or extends"
+        for producer in ("ITEM-s01", "ITEM-s02")
+    ])
+
+
+@pytest.mark.parametrize("work,affirmative", [
+    ("Do not apply omp584-dependencies.patch.", False),
+    ("Apply omp584-dependencies.patch.", True),
+    ("Applying omp584-dependencies.patch is not required.", False),
+    ("Applying omp584-dependencies.patch is required.", True),
+    ("Applying omp584-dependencies.patch not required.", False),
+    ("Applying omp584-dependencies.patch required.", True),
+    ("Do not extend src/local.ts or apply omp584-dependencies.patch.", False),
+    ("Extend src/local.ts or apply omp584-dependencies.patch.", True),
+])
+def test_named_patch_application_requires_affirmative_evidence(staged_flood, tmp_path, work, affirmative):
+    """Named patch outputs require affirmative application, including post-target predicates."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path)
+    write_slice(pdir, "ITEM-s01", files=["src/producer.ts"], outputs=["omp584-dependencies.patch"])
+    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/consumer.ts"],
+                body=f"{work}\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    assert violations == ([] if affirmative else [
+        "ITEM-s02: depends_on ITEM-s01 orders the slice only; leave depends_on empty, "
+        "edit a file ITEM-s01 also edits, or name a file or output of ITEM-s01 "
+        "that this slice reads, imports, consumes or extends"
+    ])
+
+
+@pytest.mark.parametrize("token,verb,artifact", [
+    ("src/future.ts", "Import", False),
+    ("src/optional.ts", "Read", False),
+    ("src/unrelated.ts", "Import", False),
+    ("reports/for-reference.json", "Consume", True),
+    ("future-artifact", "Consume", True),
+    ("optional-artifact", "Read", True),
+    ("unrelated-artifact", "Extend", True),
+    ("reference.patch", "Apply", True),
+    ("omp584-dependencies.patch", "Apply", True),
+    ("may-artifact", "Consume", True),
+])
+def test_qualifier_words_inside_tokens_are_consumption(staged_flood, tmp_path, token, verb, artifact):
+    """Producer names cannot turn affirmative consumption into hypothetical/reference prose."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path)
+    write_slice(pdir, "ITEM-s01", files=["src/producer.ts" if artifact else token],
+                outputs=[token] if artifact else [])
+    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/consumer.ts"],
+                body=f"{verb} {token}.\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    assert violations == []
+
+
+@pytest.mark.parametrize("work,affirmative", [
+    ("Consume reports/result.json.", True),
+    ("Consume result.json.", False),
+    ("Consume reports/result.", False),
+    ("Consume reports/result.json.old.", False),
+    ("We may consume reports/result.json later.", False),
+    ("Consume reports/result.json for reference.", False),
+])
+def test_output_consumption_requires_whole_output(staged_flood, tmp_path, work, affirmative):
+    """Output references permit ordering only when consumer names entire producer artifact."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path)
+    write_slice(pdir, "ITEM-s01", files=["src/a.ts"], outputs=["reports/result.json"])
+    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"],
+                body=f"{work}\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    assert bool(violations) is not affirmative
+    if violations:
+        assert violations == [
+            "ITEM-s02: depends_on ITEM-s01 orders the slice only; leave depends_on empty, "
+            "edit a file ITEM-s01 also edits, or name a file or output of ITEM-s01 "
+            "that this slice reads, imports, consumes or extends"
+        ]
+
+
+@pytest.mark.parametrize("path", ["approval.json", "test_approval.py", "src/b.ts"])
+def test_filenames_do_not_exempt_order_only_edges(staged_flood, tmp_path, path):
+    """Approval and test filenames carry no owner exemption."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path)
+    write_slice(pdir, "ITEM-s01", files=[path])
+    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/consumer.ts"])
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    assert any("ITEM-s02: depends_on ITEM-s01 orders the slice only" in v for v in violations)
+
+
+@pytest.mark.parametrize("producer_path,consumer_path,outputs,work,passes", [
+    ("src/a.ts", "src/approval-widget.ts", [], "Implement widget.", False),
+    ("python/omp-work/src/omp_work/contracts/v1/approval.json", "src/b.ts", [],
+     "Implement consumer.", False),
+    ("src/a.ts", "src/b.ts", ["reports/result.json"], "Consume reports/result.json.", True),
+    ("src/a.ts", "src/b.ts", ["reports/result.json"], "Consume result.json.", False),
+    ("src/a.ts", "src/b.ts", ["artifact_token"], "Consume artifact_token.", True),
+    ("src/a.ts", "src/b.ts", ["artifact_token"], "Consume artifact.", False),
+])
+def test_filename_and_output_tokens(staged_flood, tmp_path, producer_path, consumer_path,
+                                    outputs, work, passes):
+    """Approval filenames cannot exempt edges; outputs require their whole declared token."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path)
+    write_slice(pdir, "ITEM-s01", files=[producer_path], outputs=outputs)
+    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=[consumer_path],
+                body=f"{work}\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    if passes:
+        assert violations == []
+    else:
+        assert violations == [
+            "ITEM-s02: depends_on ITEM-s01 orders the slice only; leave depends_on empty, "
+            "edit a file ITEM-s01 also edits, or name a file or output of ITEM-s01 "
+            "that this slice reads, imports, consumes or extends"
+        ]
+
+
 def test_owner_and_changelog_cases_pass(staged_flood, tmp_path):
     mod, _, _ = staged_flood
 
     pdir_owner_after = tmp_path / "plan_owner_after"
-    write_slice(pdir_owner_after, "ITEM-s01", deps=[], files=["src/a.ts"],
-                body="Implement ITEM-s01.\nDone when: test_ITEM_s01.py passes.\nDo not touch: none")
-    write_slice(pdir_owner_after, "ITEM-s02", deps=["ITEM-s01"], files=[], owner=True,
-                body="Owner runs: test\nEvidence: ok\nDone when: passes.")
-    violations, _ = mod.validate_slices("ITEM", pdir_owner_after)
+    write_slice(pdir_owner_after, "OMP-584-s01", deps=[], files=["src/a.ts"],
+                body="Implement OMP-584-s01.\nDone when: test_ITEM_s01.py passes.\nDo not touch: none")
+    write_slice(pdir_owner_after, "OMP-584-s02", deps=["OMP-584-s01"], files=[], owner=True,
+                owner_cmd="omp-work approve --issue OMP-584",
+                body="Owner runs: omp-work approve --issue OMP-584\nEvidence: ok\nDone when: passes.")
+    violations, slices = mod.validate_slices("OMP-584", pdir_owner_after)
+    assert slices[1]["owner_cmd"] == "omp-work approve --issue OMP-584"
     assert violations == [], f"Owner slice depending on implementer slice must pass: {violations}"
 
     pdir_owner_before = tmp_path / "plan_owner_before"
     write_slice(pdir_owner_before, "ITEM-s01", deps=[], files=[], owner=True,
-                body="Owner runs: approve\nEvidence: ok\nDone when: passes.")
+                outputs=["artifacts/result.json"],
+                body="Owner runs: check\nEvidence: artifacts/result.json\nDone when: passes.")
     write_slice(pdir_owner_before, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"],
-                body="Implement ITEM-s02 after owner step.\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
+                body="Consume artifacts/result.json.\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
     violations, _ = mod.validate_slices("ITEM", pdir_owner_before)
     assert violations == [], f"Implementer slice depending on owner slice must pass: {violations}"
 
@@ -343,15 +702,6 @@ def test_owner_and_changelog_cases_pass(staged_flood, tmp_path):
                 body="Record changelog entry.\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
     violations, _ = mod.validate_slices("ITEM", pdir_changelog)
     assert violations == [], f"Final changelog edge must be preserved: {violations}"
-
-    pdir_approval = tmp_path / "plan_approval"
-    write_slice(pdir_approval, "ITEM-s01", deps=[],
-                files=["python/omp-work/src/omp_work/contracts/v1/approval.json"],
-                body="Create approval.\nDone when: test_ITEM_s01.py passes.\nDo not touch: none")
-    write_slice(pdir_approval, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"],
-                body="Implement ITEM-s02.\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
-    violations, _ = mod.validate_slices("ITEM", pdir_approval)
-    assert violations == [], f"Approval artifact edge must be preserved: {violations}"
 
 
 def test_absent_source_skips_instead_of_reporting_success(tmp_path, monkeypatch):
@@ -447,11 +797,15 @@ def test_check_plan_cli_uses_the_gate_and_manual_promote_blocks_invalid(staged_f
     invalid = subprocess.run([sys.executable, str(flood_py), "check-plan", "ITEM", "--config", str(cfg)],
                              capture_output=True, text=True)
     assert invalid.returncode == 1, f"check-plan should fail on an order-only plan:\n{invalid.stdout}\n{invalid.stderr}"
-    assert "orders the slice only" in invalid.stdout
+    expected = ("ITEM-s02: depends_on ITEM-s01 orders the slice only; leave depends_on empty, "
+                "edit a file ITEM-s01 also edits, or name a file or output of ITEM-s01 "
+                "that this slice reads, imports, consumes or extends")
+    assert expected in invalid.stdout
 
     promote = subprocess.run([sys.executable, str(flood_py), "promote", "ITEM", "--config", str(cfg)],
                              capture_output=True, text=True)
     assert promote.returncode != 0, f"manual promote must refuse an invalid plan:\n{promote.stdout}\n{promote.stderr}"
+    assert expected in promote.stdout
     assert not (tmp_path / "tasks" / "ITEM-s01.md").exists(), "nothing may be promoted on an invalid plan"
 
     (pdir / "ITEM-s02.md").unlink()
@@ -480,7 +834,11 @@ def test_auto_plan_promotion_refuses_disjoint_order_only_chain(staged_flood, tmp
 
     st = f.state.task("ITEM")
     assert st["status"] == "plan_ready", f"invalid plan must not promote; state={st}"
-    assert "plan gate" in (st.get("last_error") or "")
+    assert st["last_error"].startswith("plan gate failed:")
+    assert "ITEM-s02: depends_on ITEM-s01 orders the slice only" in st["last_error"]
+    saved = mod.Flood(json.loads(cfg.read_text()), cfg.parent).state.task("ITEM")
+    assert saved["status"] == "plan_ready"
+    assert saved["last_error"] == st["last_error"]
     assert not (tmp_path / "tasks" / "ITEM-s01.md").exists()
     assert (pdir / "ITEM-s01.md").exists()
 
@@ -592,7 +950,7 @@ def test_dependency_context_outputs_normalized_at_front_matter(staged_flood, tmp
     mod, _, _ = staged_flood
     pdir = _plan_tree(tmp_path)
     path = write_slice(pdir, "ITEM-s01", files=["src/a.ts"])
-    path.write_text(path.read_text().replace("kind: implement", f"kind: implement\noutputs: {outputs}"))
+    path.write_text(path.read_text().replace("outputs: []", f"outputs: {outputs}"))
     expected = ([] if outputs == "[]" else ["single-token"] if outputs.startswith("'")
                 else ["result-token", "reports/result.json"])
     assert mod.load_tasks(pdir)["ITEM-s01"]["outputs"] == expected
@@ -628,7 +986,7 @@ def test_dependency_context_standalone_labels_exclude_prose(staged_flood, label)
 
 @pytest.mark.parametrize("case", ["order_only", "unknown", "cycle", "unordered_shared", "format"])
 def test_dependency_context_preserves_graph_and_format_checks(staged_flood, tmp_path, case):
-    """Context extraction keeps current validation; it does not enforce dependency edges yet."""
+    """Dependency evidence gate preserves graph and slice format validation."""
     mod, _, _ = staged_flood
     pdir = _plan_tree(tmp_path)
     first_deps = ["ITEM-s02"] if case == "cycle" else []
@@ -640,7 +998,7 @@ def test_dependency_context_preserves_graph_and_format_checks(staged_flood, tmp_
                 body="Work: src/b.ts" if case == "format" else None)
     violations, _ = mod.validate_slices("ITEM", pdir)
     if case == "order_only":
-        assert violations == []
+        assert any("ITEM-s02: depends_on ITEM-s01 orders the slice only" in v for v in violations)
     else:
         expected = {"unknown": "depends on MISSING, which is not in this set",
                     "cycle": "dependency cycle through",
@@ -662,3 +1020,116 @@ def test_dependency_context_evidence_lists_preserve_exact_paths_and_tokens(stage
     }
     assert context["work_text"].endswith("## Work\nconsume peer-token")
     assert "blocked-token" in context["excluded_tokens"]
+
+
+@pytest.mark.parametrize("source,work,producer_exclusion,consumer_exclusion,passes", [
+    ("evidence", "Consume artifacts/result.json.", "none", "none", True),
+    ("outputs", "Consume artifacts/result.json.", "none", "none", True),
+    ("missing", "Consume artifacts/result.json.", "none", "none", False),
+    ("evidence", "Implement independent widget.", "none", "none", False),
+    ("evidence", "Consume artifacts/unrelated.json.", "none", "none", False),
+    ("outputs", "Consume result.json.", "none", "none", False),
+    ("evidence", "Do not consume artifacts/result.json.", "none", "none", False),
+    ("outputs", "We may consume artifacts/result.json later.", "none", "none", False),
+    ("evidence", "Consume artifacts/result.json for reference.", "none", "none", False),
+    ("outputs", "Consuming artifacts/result.json is not required.", "none", "none", False),
+    ("evidence", "Read artifacts/unrelated.json; artifacts/result.json stays unchanged.",
+     "none", "none", False),
+    ("evidence", "Consume artifacts/result.json.", "artifacts/result.json", "none", False),
+    ("outputs", "Consume artifacts/result.json.", "artifacts/result.json", "none", False),
+    ("evidence", "Consume artifacts/result.json.", "none", "artifacts/result.json", False),
+    ("outputs", "Consume artifacts/result.json.", "none", "artifacts/result.json", False),
+    ("evidence", "Do not consume artifacts/result.json. Consume artifacts/result.json.",
+     "none", "none", True),
+])
+def test_owner_result_edges_require_affirmative_unexcluded_result(
+        staged_flood, tmp_path, source, work, producer_exclusion, consumer_exclusion, passes):
+    """Owner ordering needs named consumption; exclusions override even declared metadata outputs."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path)
+    evidence = "artifacts/result.json" if source == "evidence" else "check complete"
+    write_slice(pdir, "ITEM-s01", owner=True, files=["artifacts/result.json"],
+                outputs=["artifacts/result.json"] if source == "outputs" else [],
+                body=f"Owner runs: check\nEvidence: {evidence}\nDone when: passes.\n"
+                     f"Do not touch: {producer_exclusion}")
+    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/consumer.ts"],
+                body=f"{work}\nDone when: test_consumer.py passes.\n"
+                     f"Do not touch: {consumer_exclusion}")
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    if passes:
+        assert violations == []
+    else:
+        assert len(violations) == 1
+        assert "ITEM-s02: depends_on ITEM-s01" in violations[0]
+        assert "owner result evidence" in violations[0]
+
+
+def test_unrelated_owner_result_cannot_justify_another_owner_edge(staged_flood, tmp_path):
+    """Consuming one owner's result cannot justify a second, unrelated owner dependency."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path)
+    for sid, result in [("ITEM-s01", "artifacts/first.json"), ("ITEM-s02", "artifacts/second.json")]:
+        write_slice(pdir, sid, owner=True, outputs=[result])
+    write_slice(pdir, "ITEM-s03", deps=["ITEM-s01", "ITEM-s02"], files=["src/consumer.ts"],
+                body="Consume artifacts/first.json.\nDone when: test_consumer.py passes.\nDo not touch: none")
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    assert len(violations) == 1
+    assert "ITEM-s03: depends_on ITEM-s02" in violations[0]
+    assert "evidence" in violations[0]
+
+
+@pytest.mark.parametrize("owner,command,metadata,passes", [
+    (True, "omp-work approve --issue OMP-584", True, True),
+    (True, "omp-work approve --issue OMP-584", False, True),
+    (True, "\n- `omp-work approve --issue OMP-584`", False, True),
+    (True, "omp-work approve --issue OMP-999", True, False),
+    (True, "approve", True, False),
+    (True, "Do not run omp-work approve --issue OMP-584", False, False),
+    (False, "omp-work approve --issue OMP-584", True, False),
+    (True, "omp-work approve --issue OMP-584 --dry-run", True, False),
+])
+def test_approval_edges_require_owner_command_for_linked_issue(
+        staged_flood, tmp_path, owner, command, metadata, passes):
+    """Real synthetic owner approvals permit edges; approval filenames and unrelated commands do not."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path, "OMP-584")
+    write_slice(pdir, "OMP-584-s01", owner=owner, files=["artifacts/approval.json"],
+                owner_cmd=command if metadata else None,
+                body=f"Owner runs: {command if not metadata else 'check'}\nEvidence: check complete\n"
+                     "Done when: test_approval.py passes.\nDo not touch: none")
+    write_slice(pdir, "OMP-584-s02", deps=["OMP-584-s01"], files=["src/approval-widget.ts"])
+    violations, _ = mod.validate_slices("OMP-584", pdir)
+    if passes:
+        assert violations == []
+    else:
+        assert len(violations) == 1
+        assert "OMP-584-s02: depends_on OMP-584-s01" in violations[0]
+
+
+@pytest.mark.parametrize("final", [True, False])
+def test_changelog_aggregation_requires_all_other_slices(staged_flood, tmp_path, final):
+    """Changelog exemption applies only to aggregation after every other slice."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path)
+    write_slice(pdir, "ITEM-s01", files=["src/a.ts"])
+    write_slice(pdir, "ITEM-s02", owner=True)
+    write_slice(pdir, "ITEM-s03", deps=["ITEM-s01", "ITEM-s02"] if final else ["ITEM-s01"],
+                files=["CHANGELOG.md"])
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    if final:
+        assert violations == []
+    else:
+        assert any("touches the changelog but is not the last slice" in v for v in violations)
+        assert any("ITEM-s03: depends_on ITEM-s01 orders the slice only" in v for v in violations)
+
+
+
+def test_owner_approval_links_nested_slices_to_root_issue(staged_flood, tmp_path):
+    """Nested slice IDs still use the root issue's approval command, as Flood does."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path, "OMP-584-s01")
+    write_slice(pdir, "OMP-584-s01-s01", owner=True,
+                owner_cmd="omp-work approve --issue OMP-584")
+    write_slice(pdir, "OMP-584-s01-s02", deps=["OMP-584-s01-s01"], files=["src/widget.ts"])
+    violations, _ = mod.validate_slices("OMP-584-s01", pdir)
+    assert violations == []

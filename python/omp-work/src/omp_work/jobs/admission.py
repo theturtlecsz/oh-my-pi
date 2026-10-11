@@ -264,6 +264,7 @@ def claim_job(
     actor_id: UUID,
     worker_id: str,
     resource_limits: dict[str, int] | None = None,
+    job_id: str | None = None,
 ) -> dict[str, object]:
     """Lease the oldest matching native backlog job to one active worker.
 
@@ -288,15 +289,28 @@ def claim_job(
     by ``resume_claimed``. It appends ``resume_claimed`` and does not change
     the worker, fence, or reservation. Any other claim leases from the backlog
     as usual.
+
+    ``job_id``, when set, limits both that resumed lookup and the backlog read
+    to the one job before either query locks a row or appends an event. The
+    claim never leases or resumes a different job. A missing or ineligible
+    target returns ``job: None``. Stop, capability, capacity, resource,
+    ancestry, budget, trial, campaign, and component-manifest gates still
+    apply to the target. Omitting ``job_id`` leaves the operation request as
+    workspace, worker, and resource limits, and keeps oldest-first selection.
+    A non-None ``job_id`` is part of the ``job_claim`` request hash.
     """
     limits = _require_resource_limits(resource_limits)
     if not isinstance(worker_id, str) or not worker_id:
         raise JobError("job_worker_unavailable", ("unknown worker",))
-    request = {
+    if job_id is not None and (not isinstance(job_id, str) or not job_id):
+        raise JobError("invalid_request", ("job_id must be a job id",))
+    request: dict[str, object] = {
         "workspace_id": str(workspace_id),
         "worker_id": worker_id,
         "resource_limits": limits,
     }
+    if job_id is not None:
+        request["job_id"] = job_id
 
     with store.transaction(workspace_id, actor_id) as cur:
 
@@ -318,7 +332,7 @@ def claim_job(
             if worker["state"] != "active":
                 raise JobError("job_worker_unavailable", ("worker is not active",))
             resumed = _claim_resumed(
-                store, cur, workspace_id, worker_id, operation_id
+                store, cur, workspace_id, worker_id, operation_id, job_id
             )
             if resumed is not None:
                 return resumed
@@ -326,16 +340,7 @@ def claim_job(
             reserved_res = _reserved_resources(cur, workspace_id, worker_id)
             free = int(worker["capacity"]) - sum(reserved_res.values())
             component = str(worker["component_sha256"])
-            cur.execute(
-                """
-                SELECT job_id, required_capabilities, resources, lease_seconds, trial_id
-                FROM omp_jobs.jobs
-                WHERE workspace_id=%s AND source='native' AND status='backlog'
-                ORDER BY created_at, job_id
-                """,
-                (workspace_id,),
-            )
-            for candidate in cur.fetchall():
+            for candidate in _select_backlog(cur, workspace_id, job_id):
                 if not _claimable(
                     store,
                     cur,
@@ -392,36 +397,99 @@ def claim_job(
     return _public(operation_id, outcome)
 
 
+def _select_backlog(
+    cur: Any, workspace_id: UUID, target_job_id: str | None
+) -> list[dict[str, Any]]:
+    """Backlog candidates in FIFO order, or only ``target_job_id`` when set.
+
+    The targeted read filters on ``job_id`` so it does not scan other backlog
+    rows. The unfiltered read stays oldest-first across the workspace backlog.
+    """
+    if target_job_id is None:
+        cur.execute(
+            """
+            SELECT job_id, required_capabilities, resources, lease_seconds, trial_id
+            FROM omp_jobs.jobs
+            WHERE workspace_id=%s AND source='native' AND status='backlog'
+            ORDER BY created_at, job_id
+            """,
+            (workspace_id,),
+        )
+    else:
+        cur.execute(
+            """
+            SELECT job_id, required_capabilities, resources, lease_seconds, trial_id
+            FROM omp_jobs.jobs
+            WHERE workspace_id=%s AND source='native' AND status='backlog'
+              AND job_id=%s
+            ORDER BY created_at, job_id
+            """,
+            (workspace_id, target_job_id),
+        )
+    return list(cur.fetchall())
+
+
 def _claim_resumed(
     store: NativeJobStore,
     cur: Any,
     workspace_id: UUID,
     worker_id: str,
     operation_id: str,
+    target_job_id: str | None = None,
 ) -> dict[str, object] | None:
-    """Return this worker's resumed lease, appending ``resume_claimed`` once."""
-    cur.execute(
-        """
-        SELECT j.job_id, j.fence
-        FROM omp_jobs.jobs j
-        WHERE j.workspace_id=%s AND j.source='native' AND j.status='admitted'
-          AND j.worker_id=%s
-          AND EXISTS (
-            SELECT 1 FROM omp_jobs.job_events resumed
-            WHERE resumed.job_id=j.job_id AND resumed.kind='lease_resumed'
-              AND NOT EXISTS (
-                SELECT 1 FROM omp_jobs.job_events claimed
-                WHERE claimed.job_id=resumed.job_id
-                  AND claimed.kind='resume_claimed'
-                  AND claimed.seq > resumed.seq
+    """Return this worker's resumed lease, appending ``resume_claimed`` once.
+
+    ``target_job_id`` limits the lookup to that job before the row lock and
+    before ``resume_claimed`` is appended. Another job's resumed lease is
+    left untouched. No match returns None.
+    """
+    if target_job_id is None:
+        cur.execute(
+            """
+            SELECT j.job_id, j.fence
+            FROM omp_jobs.jobs j
+            WHERE j.workspace_id=%s AND j.source='native' AND j.status='admitted'
+              AND j.worker_id=%s
+              AND EXISTS (
+                SELECT 1 FROM omp_jobs.job_events resumed
+                WHERE resumed.job_id=j.job_id AND resumed.kind='lease_resumed'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM omp_jobs.job_events claimed
+                    WHERE claimed.job_id=resumed.job_id
+                      AND claimed.kind='resume_claimed'
+                      AND claimed.seq > resumed.seq
+                  )
               )
-          )
-        ORDER BY j.created_at, j.job_id
-        FOR UPDATE OF j
-        LIMIT 1
-        """,
-        (workspace_id, worker_id),
-    )
+            ORDER BY j.created_at, j.job_id
+            FOR UPDATE OF j
+            LIMIT 1
+            """,
+            (workspace_id, worker_id),
+        )
+    else:
+        cur.execute(
+            """
+            SELECT j.job_id, j.fence
+            FROM omp_jobs.jobs j
+            WHERE j.workspace_id=%s AND j.source='native' AND j.status='admitted'
+              AND j.worker_id=%s
+              AND j.job_id=%s
+              AND EXISTS (
+                SELECT 1 FROM omp_jobs.job_events resumed
+                WHERE resumed.job_id=j.job_id AND resumed.kind='lease_resumed'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM omp_jobs.job_events claimed
+                    WHERE claimed.job_id=resumed.job_id
+                      AND claimed.kind='resume_claimed'
+                      AND claimed.seq > resumed.seq
+                  )
+              )
+            ORDER BY j.created_at, j.job_id
+            FOR UPDATE OF j
+            LIMIT 1
+            """,
+            (workspace_id, worker_id, target_job_id),
+        )
     row = cur.fetchone()
     if row is None:
         return None

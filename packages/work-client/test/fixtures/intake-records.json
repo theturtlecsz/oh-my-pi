@@ -1,0 +1,314 @@
+{
+	"commands": {
+		"start_intake": {
+			"envelope": {
+				"api_version": "work.omp.dev/v1",
+				"workspace_id": "11111111-1111-4111-8111-111111111111",
+				"operation_id": "11111111-1111-4111-8111-111111111111",
+				"request_id": "11111111-1111-4111-8111-111111111111",
+				"correlation_id": "11111111-1111-4111-8111-111111111111",
+				"command": {
+					"type": "start_intake",
+					"payload": {
+						"run_id": "run-1",
+						"expected_revision": 0,
+						"mission_id": "11111111-1111-4111-8111-111111111111",
+						"ontology": {
+							"predicates": [
+								{
+									"id": "uptime_target",
+									"title": "Uptime target",
+									"subject_types": ["service"],
+									"object_types": ["number"],
+									"cardinality": "one",
+									"exclusivity": true,
+									"transitivity": false,
+									"authority": ["owner", "rule_engine"]
+								}
+							],
+							"dimensions": [
+								{
+									"id": "uptime",
+									"title": "Uptime",
+									"category": "non_functional_qualities",
+									"applicability": { "entity_types": ["service"], "predicate_ids": ["uptime_target"] },
+									"required_premises": ["uptime_target"],
+									"materiality": "material",
+									"waiver_policy": "owner_with_reason"
+								}
+							]
+						},
+						"entities": [{ "id": "service-1", "type": "service" }]
+					}
+				}
+			},
+			"result": {
+				"type": "start_intake",
+				"run_id": "run-1",
+				"expected_revision": 0,
+				"revision": 1
+			}
+		},
+		"register_intake_evidence": {
+			"envelope": {
+				"api_version": "work.omp.dev/v1",
+				"workspace_id": "11111111-1111-4111-8111-111111111111",
+				"operation_id": "11111111-1111-4111-8111-111111111111",
+				"request_id": "11111111-1111-4111-8111-111111111111",
+				"correlation_id": "11111111-1111-4111-8111-111111111111",
+				"command": {
+					"type": "register_intake_evidence",
+					"payload": {
+						"run_id": "run-1",
+						"expected_revision": 1,
+						"artifact": {
+							"id": "artifact-1",
+							"uri": "https://example.test/a",
+							"content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+							"revision": "1",
+							"actor": { "id": "tool-1", "kind": "tool" },
+							"media_type": "text/plain"
+						},
+						"source": {
+							"text": "Owner: café\n",
+							"sha256": "09d449efbfe5eaaae98301b59d6a29b5b9827b1610c06cbcacc8e19c3bbb438f",
+							"spans": []
+						}
+					}
+				}
+			},
+			"result": {
+				"type": "register_intake_evidence",
+				"run_id": "run-1",
+				"expected_revision": 1,
+				"revision": 2
+			}
+		},
+		"record_intake_claim": {
+			"envelope": {
+				"api_version": "work.omp.dev/v1",
+				"workspace_id": "11111111-1111-4111-8111-111111111111",
+				"operation_id": "11111111-1111-4111-8111-111111111111",
+				"request_id": "11111111-1111-4111-8111-111111111111",
+				"correlation_id": "11111111-1111-4111-8111-111111111111",
+				"command": {
+					"type": "record_intake_claim",
+					"payload": {
+						"run_id": "run-1",
+						"expected_revision": 1,
+						"claim": {
+							"id": "claim-1",
+							"category": "non_functional_qualities",
+							"subject": { "id": "service-1", "type": "service" },
+							"predicate_id": "uptime_target",
+							"value": { "type": "number", "value": 99.9 },
+							"origin": "owner_statement",
+							"state": "admitted",
+							"modality": "required",
+							"polarity": "positive",
+							"truth": "true",
+							"asserted_by": { "id": "owner-1", "kind": "owner" },
+							"admitted_by": { "id": "owner-1", "kind": "owner" },
+							"evidence": [
+								{ "artifact_id": "artifact-1", "start_byte": 0, "end_byte": 5, "quote": "Owner" }
+							],
+							"premise_ids": []
+						},
+						"evidence_links": [
+							{
+								"span": { "artifact_id": "artifact-1", "start_byte": 0, "end_byte": 5, "quote": "Owner" },
+								"relation": "supports"
+							}
+						]
+					}
+				}
+			},
+			"result": {
+				"type": "record_intake_claim",
+				"run_id": "run-1",
+				"expected_revision": 1,
+				"revision": 2
+			}
+		},
+		"record_intake_decision": {
+			"envelope": {
+				"api_version": "work.omp.dev/v1",
+				"workspace_id": "11111111-1111-4111-8111-111111111111",
+				"operation_id": "11111111-1111-4111-8111-111111111111",
+				"request_id": "11111111-1111-4111-8111-111111111111",
+				"correlation_id": "11111111-1111-4111-8111-111111111111",
+				"command": {
+					"type": "record_intake_decision",
+					"payload": {
+						"run_id": "run-1",
+						"expected_revision": 1,
+						"decision": {
+							"id": "decision-1",
+							"run_id": "run-1",
+							"revision": 1,
+							"actor": { "id": "owner-1", "kind": "owner" },
+							"question_id": "question-1",
+							"answer": { "type": "string", "value": "99.9" },
+							"reason": "Owner confirmed the target.",
+							"created_at": "2026-10-10T00:00:00Z"
+						},
+						"claim_ids": ["claim-1"],
+						"instruction": {
+							"text": "Require 99.9% availability.",
+							"provenance": {
+								"channel": "test-owner",
+								"message_ref": "message-1",
+								"received_at": "2026-10-11T00:00:00+00:00"
+							}
+						},
+						"superseded_decision_id": null,
+						"verified_relay_operation_id": null
+					}
+				}
+			},
+			"result": {
+				"type": "record_intake_decision",
+				"run_id": "run-1",
+				"expected_revision": 1,
+				"revision": 2
+			}
+		},
+		"supersede_intake_claim": {
+			"envelope": {
+				"api_version": "work.omp.dev/v1",
+				"workspace_id": "11111111-1111-4111-8111-111111111111",
+				"operation_id": "11111111-1111-4111-8111-111111111111",
+				"request_id": "11111111-1111-4111-8111-111111111111",
+				"correlation_id": "11111111-1111-4111-8111-111111111111",
+				"command": {
+					"type": "supersede_intake_claim",
+					"payload": {
+						"run_id": "run-1",
+						"expected_revision": 1,
+						"old_claim_id": "claim-1",
+						"replacement_claim_id": "claim-2",
+						"decision_id": "decision-1"
+					}
+				}
+			},
+			"result": {
+				"type": "supersede_intake_claim",
+				"run_id": "run-1",
+				"expected_revision": 1,
+				"revision": 2
+			}
+		},
+		"record_intake_issue": {
+			"envelope": {
+				"api_version": "work.omp.dev/v1",
+				"workspace_id": "11111111-1111-4111-8111-111111111111",
+				"operation_id": "11111111-1111-4111-8111-111111111111",
+				"request_id": "11111111-1111-4111-8111-111111111111",
+				"correlation_id": "11111111-1111-4111-8111-111111111111",
+				"command": {
+					"type": "record_intake_issue",
+					"payload": {
+						"run_id": "run-1",
+						"expected_revision": 1,
+						"issue": {
+							"id": "conflict-1",
+							"claim_ids": ["claim-1", "claim-2"],
+							"predicate_id": "uptime_target",
+							"reason": "Admitted claims contradict."
+						},
+						"gaps": ["gap-1"]
+					}
+				}
+			},
+			"result": {
+				"type": "record_intake_issue",
+				"run_id": "run-1",
+				"expected_revision": 1,
+				"revision": 2
+			}
+		},
+		"link_intake_criterion": {
+			"envelope": {
+				"api_version": "work.omp.dev/v1",
+				"workspace_id": "11111111-1111-4111-8111-111111111111",
+				"operation_id": "11111111-1111-4111-8111-111111111111",
+				"request_id": "11111111-1111-4111-8111-111111111111",
+				"correlation_id": "11111111-1111-4111-8111-111111111111",
+				"command": {
+					"type": "link_intake_criterion",
+					"payload": {
+						"run_id": "run-1",
+						"expected_revision": 1,
+						"criterion": {
+							"id": "criterion-1",
+							"requirement_ids": ["requirement-1"],
+							"description": "Uptime is measured at 99.9%.",
+							"verification_method": "monitoring",
+							"expected_result": { "type": "number", "value": 99.9 }
+						},
+						"requirements": [
+							{
+								"id": "requirement-1",
+								"category": "non_functional_qualities",
+								"text": "Uptime must reach 99.9%.",
+								"claim_ids": ["claim-1"],
+								"dimension_ids": ["uptime"]
+							}
+						]
+					}
+				}
+			},
+			"result": {
+				"type": "link_intake_criterion",
+				"run_id": "run-1",
+				"expected_revision": 1,
+				"revision": 2
+			}
+		},
+		"assess_intake": {
+			"envelope": {
+				"api_version": "work.omp.dev/v1",
+				"workspace_id": "11111111-1111-4111-8111-111111111111",
+				"operation_id": "11111111-1111-4111-8111-111111111111",
+				"request_id": "11111111-1111-4111-8111-111111111111",
+				"correlation_id": "11111111-1111-4111-8111-111111111111",
+				"command": {
+					"type": "assess_intake",
+					"payload": { "run_id": "run-1", "expected_revision": 1 }
+				}
+			},
+			"result": {
+				"type": "assess_intake",
+				"run_id": "run-1",
+				"revision": 2,
+				"assessed_revision": 2
+			}
+		}
+	},
+	"view": {
+		"workspace_id": "11111111-1111-4111-8111-111111111111",
+		"mission_id": "11111111-1111-4111-8111-111111111111",
+		"run_id": "run-1",
+		"revision": 0,
+		"snapshot": {
+			"run_id": "run-1",
+			"revision": 0,
+			"state": "collecting",
+			"artifacts": [],
+			"entities": [],
+			"claims": [],
+			"ontology": { "predicates": [], "dimensions": [] }
+		},
+		"evidence_links": [],
+		"criterion_links": [],
+		"decisions": [],
+		"issues": [],
+		"traces": [],
+		"assessments": [],
+		"provenance": {
+			"run_id": "run-1",
+			"revision": 0,
+			"source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		}
+	}
+}
