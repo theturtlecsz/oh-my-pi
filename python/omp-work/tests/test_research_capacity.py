@@ -3,6 +3,12 @@
 A remembered CPU worker of capacity 2 refuses ``instrument:scope`` and a job
 whose weight consumes the engineering reserve. Neither refusal writes a job
 row. A job that leaves that reserve enqueues as compute with no worker assigned.
+
+OMP-318-s02-s03: the adapter's ``claim``/``cancel``/``reclaim`` are thin passes
+to the native jobs API. One worker's free capacity admits both an
+adapter-enqueued job and a directly enqueued engineering job, claim routing
+filters on capabilities rather than capacity, and cleanup cancels every open
+job so the module-scoped fixture holds no lease or backlog.
 """
 
 from __future__ import annotations
@@ -15,7 +21,7 @@ import pytest
 from psycopg.rows import dict_row
 
 from native_jobs_support import native_jobs  # noqa: F401  (fixture)
-from omp_work.jobs import JobError, NativeJobStore
+from omp_work.jobs import JobError, NativeJobStore, enqueue_job
 from omp_work.research.capacity import CapacityRefused, ResearchCapacity
 
 pytest_plugins = ("test_workflow_service",)
@@ -261,3 +267,208 @@ def test_malformed_resources_raise_flat_diagnostics_and_write_no_row(native_jobs
         assert _RESOURCE_DIAGNOSTIC[0] in " ".join(error.diagnostics)
         assert required == ["compute.cpu"]
     assert _job_rows(native_jobs, job_ids) == []
+
+
+_CLEANUP_REASON = "research capacity test cleanup"
+
+
+def _status_rows(native_jobs, job_ids: list[str]) -> dict[str, dict[str, object]]:
+    with psycopg.connect(
+        **native_jobs.service.config.connection_kwargs("omp_work_app"),
+        row_factory=dict_row,
+        autocommit=True,
+    ) as conn:
+        rows = conn.execute(
+            """
+            SELECT job_id, status, worker_id
+            FROM omp_jobs.jobs WHERE job_id = ANY(%s)
+            """,
+            (job_ids,),
+        ).fetchall()
+    return {str(row["job_id"]): row for row in rows}
+
+
+def _open_job_ids(native_jobs) -> list[str]:
+    with psycopg.connect(
+        **native_jobs.service.config.connection_kwargs("omp_work_app"),
+        row_factory=dict_row,
+        autocommit=True,
+    ) as conn:
+        return [
+            str(row["job_id"])
+            for row in conn.execute(
+                """
+                SELECT job_id FROM omp_jobs.jobs
+                WHERE workspace_id = %s AND status IN ('backlog', 'admitted')
+                ORDER BY created_at, job_id
+                """,
+                (native_jobs.workspace_id,),
+            ).fetchall()
+        ]
+
+
+def _unreleased_reservations(native_jobs, worker_id: str) -> int:
+    with psycopg.connect(
+        **native_jobs.service.config.connection_kwargs("omp_work_app"),
+        row_factory=dict_row,
+        autocommit=True,
+    ) as conn:
+        row = conn.execute(
+            """
+            SELECT count(*) AS held FROM omp_jobs.reservations
+            WHERE workspace_id = %s AND worker_id = %s AND released_at IS NULL
+            """,
+            (native_jobs.workspace_id, worker_id),
+        ).fetchone()
+    return int(row["held"])
+
+
+def _cancel_open(native_jobs, gate: ResearchCapacity) -> None:
+    """Cancel every backlog or admitted job left in the fixture workspace."""
+    for open_id in _open_job_ids(native_jobs):
+        gate.cancel(str(uuid4()), open_id, _CLEANUP_REASON)
+
+
+def test_claim_assigns_adapter_and_direct_jobs_from_shared_headroom(native_jobs) -> None:
+    """One capacity-2 worker admits an adapter job and a direct engineering job.
+
+    Both jobs weigh cpu=1; the gate's claim draws both from the same worker's
+    free capacity in enqueue order and returns each admitted job with its
+    worker_id and fence. With nothing left to route a third claim is
+    ``job=None``, ``reclaim`` finds no expired lease, and the persisted rows
+    are admitted under the same worker.
+    """
+    store = NativeJobStore(native_jobs.service.config)
+    gate = ResearchCapacity(store, native_jobs.workspace_id, native_jobs.actor_id)
+    worker_id = f"cpu-{uuid4()}"
+    gate.register(
+        str(uuid4()),
+        worker_id,
+        native_jobs.components["worker"],
+        ["compute.cpu"],
+        2,
+    )
+    work_id = UUID(native_jobs.item["work_id"])
+    adapter_job_id = f"job-{uuid4()}"
+    engineering_job_id = f"job-{uuid4()}"
+    try:
+        _cancel_open(native_jobs, gate)
+        adapter = gate.enqueue(
+            str(uuid4()),
+            adapter_job_id,
+            work_id,
+            ["compute.cpu"],
+            _resources(cpu=1),
+            30,
+            trial_id=native_jobs.trial_id,
+        )
+        assert adapter["status"] == "applied"
+        engineering = enqueue_job(
+            store,
+            operation_id=str(uuid4()),
+            workspace_id=native_jobs.workspace_id,
+            actor_id=native_jobs.actor_id,
+            job_id=engineering_job_id,
+            work_id=work_id,
+            kind="compute",
+            required_capabilities=["compute.cpu"],
+            resources=_resources(cpu=1),
+            lease_seconds=30,
+            parent_job_id=None,
+            trial_id=None,
+        )
+        assert engineering["status"] == "applied"
+
+        first = gate.claim(str(uuid4()), worker_id)
+        second = gate.claim(str(uuid4()), worker_id)
+        assert [first["job"]["job_id"], second["job"]["job_id"]] == [
+            adapter_job_id,
+            engineering_job_id,
+        ]
+        for claimed in (first, second):
+            assert claimed["status"] == "applied"
+            assert claimed["job"]["status"] == "admitted"
+            assert claimed["job"]["worker_id"] == worker_id
+            assert claimed["job"]["fence"] == 1
+
+        exhausted = gate.claim(str(uuid4()), worker_id)
+        assert exhausted["status"] == "applied"
+        assert exhausted["job"] is None
+
+        rows = _status_rows(native_jobs, [adapter_job_id, engineering_job_id])
+        assert set(rows) == {adapter_job_id, engineering_job_id}
+        for row in rows.values():
+            assert row["status"] == "admitted"
+            assert row["worker_id"] == worker_id
+
+        reclaimed = gate.reclaim(str(uuid4()))
+        assert reclaimed["status"] == "applied"
+        assert reclaimed["job_ids"] == []
+
+        cancelled = gate.cancel(str(uuid4()), engineering_job_id, "assignment done")
+        assert cancelled["status"] == "applied"
+        assert cancelled["job_ids"] == [engineering_job_id]
+        assert _status_rows(native_jobs, [engineering_job_id])[engineering_job_id][
+            "status"
+        ] == "cancelled"
+    finally:
+        _cancel_open(native_jobs, gate)
+    assert _open_job_ids(native_jobs) == []
+
+
+def test_claim_filters_on_capability_not_free_capacity(native_jobs) -> None:
+    """A cpu-only worker with free capacity does not claim a gpu job.
+
+    The gpu job is routable — the gpu worker claims it — so the cpu worker's
+    ``job=None`` is capability filtering, not missing headroom.
+    """
+    store = NativeJobStore(native_jobs.service.config)
+    gate = ResearchCapacity(store, native_jobs.workspace_id, native_jobs.actor_id)
+    cpu_worker = f"cpu-{uuid4()}"
+    gpu_worker = f"gpu-{uuid4()}"
+    gate.register(
+        str(uuid4()),
+        cpu_worker,
+        native_jobs.components["worker"],
+        ["compute.cpu"],
+        2,
+    )
+    gate.register(
+        str(uuid4()),
+        gpu_worker,
+        native_jobs.components["worker"],
+        ["compute.gpu"],
+        2,
+    )
+    work_id = UUID(native_jobs.item["work_id"])
+    gpu_job_id = f"job-{uuid4()}"
+    try:
+        _cancel_open(native_jobs, gate)
+        enqueued = gate.enqueue(
+            str(uuid4()),
+            gpu_job_id,
+            work_id,
+            ["compute.gpu"],
+            _resources(gpu=1),
+            30,
+            trial_id=native_jobs.trial_id,
+        )
+        assert enqueued["status"] == "applied"
+
+        assert _unreleased_reservations(native_jobs, cpu_worker) == 0
+        cpu_claim = gate.claim(str(uuid4()), cpu_worker)
+        assert cpu_claim["status"] == "applied"
+        assert cpu_claim["job"] is None
+
+        gpu_claim = gate.claim(str(uuid4()), gpu_worker)
+        assert gpu_claim["status"] == "applied"
+        assert gpu_claim["job"]["job_id"] == gpu_job_id
+        assert gpu_claim["job"]["status"] == "admitted"
+        assert gpu_claim["job"]["worker_id"] == gpu_worker
+        assert gpu_claim["job"]["fence"] == 1
+        row = _status_rows(native_jobs, [gpu_job_id])[gpu_job_id]
+        assert row["status"] == "admitted"
+        assert row["worker_id"] == gpu_worker
+    finally:
+        _cancel_open(native_jobs, gate)
+    assert _open_job_ids(native_jobs) == []

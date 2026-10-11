@@ -4,15 +4,27 @@
 ``enqueue`` admits a compute job only when a remembered worker holds every
 required capability and at least one of those workers still covers the job
 weight after ``engineering_headroom`` is held back for ordinary work. A miss
-raises ``CapacityRefused`` and does not call ``enqueue_job``. No worker is
-assigned; claim remains a later step.
+raises ``CapacityRefused`` and does not call ``enqueue_job``.
+
+``claim``, ``cancel``, and ``reclaim`` are the assignment step: thin passes to
+``claim_job``, ``cancel_job``, and ``reconcile_jobs`` on the same store and
+workspace/actor identity. ``claim`` leases with no per-resource limits and
+returns the admitted job (with ``worker_id`` and ``fence``) or ``job=None``.
+All three return the native result dict unchanged and propagate ``JobError``.
 """
 
 from __future__ import annotations
 
 from uuid import UUID
 
-from omp_work.jobs import JobError, enqueue_job, register_worker
+from omp_work.jobs import (
+    JobError,
+    claim_job,
+    enqueue_job,
+    reconcile_jobs,
+    register_worker,
+)
+from omp_work.jobs.cancel import cancel_job
 
 __all__ = ["CapacityRefused", "ResearchCapacity"]
 
@@ -124,6 +136,57 @@ class ResearchCapacity:
             lease_seconds=lease_seconds,
             parent_job_id=None,
             trial_id=trial_id,
+        )
+
+
+    def claim(self, operation_id: str, worker_id: str) -> dict[str, object]:
+        """Lease the oldest matching backlog job to ``worker_id``.
+
+        Thin pass to ``claim_job`` with ``resource_limits=None``: per-resource
+        caps are not the gate's concern. The result is the native claim dict —
+        the admitted job with its ``worker_id`` and ``fence``, or ``job=None``
+        when nothing routable fits. ``JobError`` propagates.
+        """
+        return claim_job(
+            self._store,
+            operation_id=operation_id,
+            workspace_id=self.workspace_id,
+            actor_id=self.actor_id,
+            worker_id=worker_id,
+            resource_limits=None,
+        )
+
+    def cancel(
+        self,
+        operation_id: str,
+        job_id: str,
+        reason: str,
+    ) -> dict[str, object]:
+        """Cancel ``job_id`` and its non-terminal descendants for ``reason``.
+
+        Thin pass to ``cancel_job``: the native cancel dict is returned
+        unchanged and ``JobError`` propagates.
+        """
+        return cancel_job(
+            self._store,
+            operation_id=operation_id,
+            workspace_id=self.workspace_id,
+            actor_id=self.actor_id,
+            job_id=job_id,
+            reason=reason,
+        )
+
+    def reclaim(self, operation_id: str) -> dict[str, object]:
+        """Reclaim this workspace's expired leases.
+
+        Thin pass to ``reconcile_jobs``: the native reconcile dict is returned
+        unchanged and ``JobError`` propagates.
+        """
+        return reconcile_jobs(
+            self._store,
+            operation_id=operation_id,
+            workspace_id=self.workspace_id,
+            actor_id=self.actor_id,
         )
 
 
