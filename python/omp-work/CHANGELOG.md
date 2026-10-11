@@ -60,6 +60,7 @@
 - The orchestrator grant step stamps the execution plan from the request, or fails with `test_command_missing` when the request's test command is empty.
 - managed research trials bind a deliverable only with a trusted, qualified evaluator receipt.
 - The auditor yields a typed, validated AuditResult, and the host shows the service-rendered report (OMP-520).
+- A verifier worktree mounts read-only, linked Git metadata and the trusted `omp_work` import path are readable, and `/work/.omp` is the only writable transport.
 
 ### Changed
 
