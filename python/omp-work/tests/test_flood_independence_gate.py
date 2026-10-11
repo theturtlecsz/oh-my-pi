@@ -520,3 +520,145 @@ def test_manual_plan_promotion_waits_then_promotes_only_a_valid_plan(staged_floo
     f.promote_plan({"id": "ITEM"})
     assert f.state.task("ITEM")["status"] == "planned"
     assert (tmp_path / "tasks" / "ITEM-s01.md").exists()
+
+
+@pytest.mark.parametrize("label", ["Do not touch", "Assumptions", "Deferred"])
+@pytest.mark.parametrize("marker", ["", "**{label}:**", "**{label}**:", "- {label}:", "* {label}:", "+ {label}:", "1. {label}:", "1) {label}:"])
+def test_dependency_context_inline_exclusions_keep_peer_work(staged_flood, label, marker):
+    """Unindented prose and numbered/unordered lists cannot leak excluded dependencies."""
+    mod, _, _ = staged_flood
+    start = marker.format(label=label) if marker else f"{label}: `src/blocked.ts`"
+    body = (f"Work: consume src/first.ts\n{start}\n"
+            "Avoid src/blocked.ts and blocked-token\n- src/listed.ts\n1) numbered-token\n"
+            "- Work: consume src/peer.ts\nDone when: test_peer.py passes.")
+    context = mod.parse_dependency_context(body)
+    assert context["work_text"] == ("Work: consume src/first.ts\n"
+                                    "- Work: consume src/peer.ts\nDone when: test_peer.py passes.")
+    assert {"src/blocked.ts", "blocked-token", "src/listed.ts", "numbered-token"} <= context["excluded_tokens"]
+    assert "src/peer.ts" not in context["excluded_tokens"]
+
+
+@pytest.mark.parametrize("level", range(1, 7))
+@pytest.mark.parametrize("label", ["Do not touch", "Assumptions", "Deferred"])
+def test_dependency_context_heading_exclusions_keep_nested_sections(staged_flood, level, label):
+    """Exclusion heading owns nested headings until a same/higher-level work heading."""
+    mod, _, _ = staged_flood
+    heading = "#" * level
+    nested = f"{'#' * (level + 1)} Work\nconsume src/nested.ts\n" if level < 6 else ""
+    body = (f"Work: src/first.ts\n{heading} **{label}**:\n- src/blocked.ts\n"
+            f"{nested}**Work**: src/still-blocked.ts\n"
+            f"{heading} **Work**\nconsume src/peer.ts")
+    context = mod.parse_dependency_context(body)
+    assert context["work_text"] == f"Work: src/first.ts\n{heading} **Work**\nconsume src/peer.ts"
+    assert {"src/blocked.ts", "src/still-blocked.ts"} <= context["excluded_tokens"]
+    if nested:
+        assert "src/nested.ts" in context["excluded_tokens"]
+
+
+@pytest.mark.parametrize("peer", ["Work:", "**Work**:", "**Work:**", "1. Work:", "1) **Work**:", "# Work"])
+def test_dependency_context_inline_exclusion_stops_at_work_boundary(staged_flood, peer):
+    """Peer work labels, including list and bold forms, resume dependency-bearing work."""
+    mod, _, _ = staged_flood
+    context = mod.parse_dependency_context(f"Do not touch: src/blocked.ts\n{peer}\nUse src/peer.ts")
+    assert context["work_text"] == f"{peer}\nUse src/peer.ts"
+    assert "src/blocked.ts" in context["excluded_tokens"]
+    assert "src/peer.ts" not in context["excluded_tokens"]
+
+
+@pytest.mark.parametrize("ending", ["", "\nUnindented src/tail.ts\n- tail-token"])
+def test_dependency_context_midline_exclusion_runs_to_eof(staged_flood, ending):
+    """Same-line exclusions keep preceding work but remove the entire remaining exclusion."""
+    mod, _, _ = staged_flood
+    context = mod.parse_dependency_context(
+        f"Done when: test_work.py passes. **Do not touch:** src/blocked.ts{ending}")
+    assert context["work_text"] == "Done when: test_work.py passes."
+    assert "src/blocked.ts" in context["excluded_tokens"]
+    if ending:
+        assert {"src/tail.ts", "tail-token"} <= context["excluded_tokens"]
+
+
+def test_dependency_context_higher_heading_ends_exclusion(staged_flood):
+    """A parent work heading ends exclusion even when exclusion's nested label says Work."""
+    mod, _, _ = staged_flood
+    context = mod.parse_dependency_context(
+        "### Deferred\nsrc/blocked.ts\n#### Work\nsrc/nested.ts\n## Work\nsrc/peer.ts")
+    assert context["work_text"] == "## Work\nsrc/peer.ts"
+    assert {"src/blocked.ts", "src/nested.ts"} <= context["excluded_tokens"]
+
+
+@pytest.mark.parametrize("outputs", ["[result-token, reports/result.json]", "result-token, reports/result.json", "'single-token'", "[]"])
+def test_dependency_context_outputs_normalized_at_front_matter(staged_flood, tmp_path, outputs):
+    """Task loading and validation expose complete output tokens rather than string characters."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path)
+    path = write_slice(pdir, "ITEM-s01", files=["src/a.ts"])
+    path.write_text(path.read_text().replace("kind: implement", f"kind: implement\noutputs: {outputs}"))
+    expected = ([] if outputs == "[]" else ["single-token"] if outputs.startswith("'")
+                else ["result-token", "reports/result.json"])
+    assert mod.load_tasks(pdir)["ITEM-s01"]["outputs"] == expected
+    violations, slices = mod.validate_slices("ITEM", pdir)
+    assert violations == []
+    assert slices[0]["outputs"] == expected
+
+
+def test_dependency_context_validate_retains_owner_and_filters_evidence_once(staged_flood, tmp_path):
+    """Owner evidence comes only from work; validator retains context for later edge checks."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path)
+    body = ("Owner runs: check\nEvidence: reports/owner.json result-token\n"
+            "# Do not touch: src/blocked.ts\n## Evidence: blocked-token\n"
+            "# Work\nDone when: test_owner.py passes.")
+    write_slice(pdir, "ITEM-s01", owner=True, body=body)
+    violations, slices = mod.validate_slices("ITEM", pdir)
+    assert violations == []
+    assert slices[0]["owner"] is True
+    assert slices[0]["body"] == body
+    assert slices[0]["evidence"] == {"reports/owner.json", "result-token"}
+    assert "blocked-token" in slices[0]["excluded_tokens"]
+
+
+@pytest.mark.parametrize("label", ["Do not touch", "**Assumptions**", "- Deferred"])
+def test_dependency_context_standalone_labels_exclude_prose(staged_flood, label):
+    """Standalone exclusion labels need no colon to exclude following prose."""
+    mod, _, _ = staged_flood
+    context = mod.parse_dependency_context(f"{label}\nsrc/blocked.ts\n**Work**: src/peer.ts")
+    assert context["work_text"] == "**Work**: src/peer.ts"
+    assert "src/blocked.ts" in context["excluded_tokens"]
+
+
+@pytest.mark.parametrize("case", ["order_only", "unknown", "cycle", "unordered_shared", "format"])
+def test_dependency_context_preserves_graph_and_format_checks(staged_flood, tmp_path, case):
+    """Context extraction keeps current validation; it does not enforce dependency edges yet."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path)
+    first_deps = ["ITEM-s02"] if case == "cycle" else []
+    second_deps = (["MISSING"] if case == "unknown" else [] if case == "unordered_shared"
+                   else ["ITEM-s01"])
+    write_slice(pdir, "ITEM-s01", deps=first_deps, files=["src/a.ts"])
+    write_slice(pdir, "ITEM-s02", deps=second_deps,
+                files=["src/a.ts"] if case == "unordered_shared" else ["src/b.ts"],
+                body="Work: src/b.ts" if case == "format" else None)
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    if case == "order_only":
+        assert violations == []
+    else:
+        expected = {"unknown": "depends on MISSING, which is not in this set",
+                    "cycle": "dependency cycle through",
+                    "unordered_shared": "both edit src/a.ts but neither depends on the other",
+                    "format": 'no "Done when:" section'}
+        assert any(expected[case] in violation for violation in violations)
+
+
+def test_dependency_context_evidence_lists_preserve_exact_paths_and_tokens(staged_flood):
+    """Evidence extraction preserves dotfiles, relative/absolute paths and producer basenames."""
+    mod, _, _ = staged_flood
+    context = mod.parse_dependency_context(
+        "Evidence:\n- `.github/result.json`\n1. ../reports/result.json\n"
+        "2) /reports/result.json\n+ producer.patch\nresult-token\n"
+        "## **Do not touch:**\nEvidence: blocked-token\n## Work\nconsume peer-token")
+    assert context["evidence"] == {
+        ".github/result.json", "../reports/result.json", "/reports/result.json",
+        "producer.patch", "result-token",
+    }
+    assert context["work_text"].endswith("## Work\nconsume peer-token")
+    assert "blocked-token" in context["excluded_tokens"]
