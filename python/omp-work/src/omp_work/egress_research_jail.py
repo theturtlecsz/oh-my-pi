@@ -11,8 +11,9 @@ like exit 0. chroot is not used. Every import is at module load, before the
 pivot.
 
 A research root reads the CA certificate before any mount and lands in
-``/home/research``. A worker root is that same jail plus one read-write bind
-of the linked worktree at ``/work`` and the caller's read-only file binds.
+``/home/research``. A worker root adds the linked worktree at ``/work`` and the caller's
+read-only file binds. Verifiers can make the worktree and named directories
+read-only, with an optional writable audit overlay at ``/work/.omp``.
 The research profile does not take those binds.
 """
 
@@ -131,7 +132,7 @@ def _rbind_readonly(source: str, target: Path) -> None:
     remounted read-only with that mount's own flags. Children are remounted
     before the target.
     """
-    target.mkdir(parents=True)
+    target.mkdir(parents=True, exist_ok=True)
     destination = os.path.normpath(str(target))
     _mount(source, destination, None, _MS_BIND | _MS_REC)
     prefix = destination + "/"
@@ -284,7 +285,7 @@ def _exec_worker(setpriv: str, argv: list[str], env: dict[str, str]) -> None:
 
 
 def _bind_rw_dir(source: str, target: Path) -> None:
-    target.mkdir(parents=True)
+    target.mkdir(parents=True, exist_ok=True)
     _mount(source, str(target), None, _MS_BIND)
 
 
@@ -313,11 +314,19 @@ def _bind_ro_file(source: str, target: Path) -> None:
 
 
 def _build_worker_root(config_path: Path, config: dict) -> Path:
-    """Research jail plus /work read-write and the named read-only files."""
+    """Worker jail with explicit read-only mounts and an optional audit overlay."""
     worktree = config.get("worktree")
     if not isinstance(worktree, str) or not worktree.startswith("/"):
         sys.stderr.write("worker jail: worktree is missing\n")
         sys.exit(1)
+    readonly = config.get("worktree_readonly")
+    ro_dirs = config.get("ro_dirs") or ()
+    audit_dir = config.get("audit_dir")
+    if readonly:
+        for raw in (*ro_dirs, *((audit_dir,) if audit_dir is not None else ())):
+            if not isinstance(raw, str) or not raw.startswith("/") or raw == "/":
+                sys.stderr.write("worker jail: directory bind is not an absolute non-root path\n")
+                sys.exit(1)
     _mount("none", "/", None, _MS_REC | _MS_PRIVATE)
     new = config_path.parent / "worker-root"
     new.mkdir(mode=0o755)
@@ -334,7 +343,14 @@ def _build_worker_root(config_path: Path, config: dict) -> Path:
     tmp.mkdir()
     # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
     os.chmod(tmp, 0o1777)  # nosec B103 - sticky world-writable /tmp is the POSIX contract inside the jail
-    _bind_rw_dir(worktree, new / "work")
+    if readonly:
+        _rbind_readonly(worktree, new / "work")
+        for raw in sorted(ro_dirs, key=lambda path: path.count("/")):
+            _rbind_readonly(raw, new / raw.lstrip("/"))
+        if audit_dir is not None:
+            _bind_rw_dir(audit_dir, new / "work" / ".omp")
+    else:
+        _bind_rw_dir(worktree, new / "work")
     for raw in config.get("ro_binds") or ():
         if not isinstance(raw, str) or not raw.startswith("/") or raw == "/":
             sys.stderr.write("worker jail: read-only bind is not an absolute file\n")
