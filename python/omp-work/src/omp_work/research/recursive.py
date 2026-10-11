@@ -95,6 +95,8 @@ class RecursiveStudy(_WindowCaps):
     protocol_sha256: hex64
     dev: tuple[TaskEvidence, ...] = Field(min_length=1)
     confirmation: tuple[TaskEvidence, ...] = Field(min_length=1)
+    dev_sha256: hex64
+    confirmation_sha256: hex64
     upstream_assets: tuple[UpstreamAsset, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -103,7 +105,12 @@ class RecursiveStudy(_WindowCaps):
             raise ValueError("root requires explicit depth 0; children require a parent")
         if self.depth > self.max_depth:
             raise ValueError("depth exceeds max_depth")
-        _disjoint_evidence(self.dev + self.confirmation)
+        for evidence, digest in (
+            (self.dev, self.dev_sha256), (self.confirmation, self.confirmation_sha256),
+        ):
+            if digest != canonical.sha256(sorted(item.content_sha256 for item in evidence)):
+                raise ValueError("cohort digest must bind canonical task content identities")
+        _disjoint_cohorts((self,))
         identities = [asset.identity for asset in self.upstream_assets]
         if len(set(identities)) != len(identities):
             raise ValueError("duplicate upstream asset identity")
@@ -128,6 +135,17 @@ def _disjoint_evidence(evidence: tuple[TaskEvidence, ...]) -> None:
     digests = [item.content_sha256 for item in evidence]
     if len(set(ids)) != len(ids) or len(set(digests)) != len(digests):
         raise ValueError("task IDs and content digests must be disjoint across cohorts/history")
+
+
+def _disjoint_cohorts(studies: tuple[RecursiveStudy, ...]) -> None:
+    _disjoint_evidence(tuple(
+        item for study in studies for item in study.dev + study.confirmation
+    ))
+    digests = [
+        digest for study in studies for digest in (study.dev_sha256, study.confirmation_sha256)
+    ]
+    if len(set(digests)) != len(digests):
+        raise ValueError("whole-cohort content digests must be disjoint across cohorts/history")
 
 
 def _reject_constant(value: str) -> None:
@@ -201,7 +219,6 @@ class RecursionState(StrictModel):
         if root.parent_id is not None:
             raise ValueError("history must start with its root")
         known: dict[str, RecursiveStudy] = {}
-        evidence: tuple[TaskEvidence, ...] = ()
         for study in self.studies:
             if study.study_id in known:
                 raise ValueError("duplicate study ID")
@@ -216,8 +233,7 @@ class RecursionState(StrictModel):
             ):
                 raise ValueError("study exceeds root bounds")
             known[study.study_id] = study
-            evidence += study.dev + study.confirmation
-        _disjoint_evidence(evidence)
+        _disjoint_cohorts(self.studies)
         if len(self.studies) - 1 > root.max_descendants:
             raise ValueError("history exceeds max_descendants")
         grant = self.grant
@@ -336,6 +352,10 @@ def _tree_reason(
             return "max_descendants"
     if len(studies) > grant.max_descendants:
         return "max_descendants"
+    try:
+        _disjoint_cohorts((*studies, study))
+    except ValueError:
+        return "cohort_reused"
     return None
 
 
@@ -412,6 +432,10 @@ def admit_study(
         return refuse("outside_window")
     # Revalidate restored snapshots; their records cannot authorize a new call.
     for index, admitted in enumerate(state.studies):
+        try:
+            admitted = RecursiveStudy.model_validate(admitted.model_dump())
+        except (ValidationError, AttributeError):
+            return refuse("invalid_history")
         reason = _tree_reason(state.studies[:index], admitted, grant)
         if reason:
             return refuse(reason)

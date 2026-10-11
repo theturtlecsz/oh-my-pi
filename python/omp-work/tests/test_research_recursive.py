@@ -19,6 +19,7 @@ from omp_work.research.recursive import (
 )
 from omp_work.standing_change import ChangeAuthority
 from omp_work.standing_policy import ActionRequest, RepositoryRecord, StandingPolicy
+from omp_work.v1 import canonical
 
 START = datetime(2026, 1, 1, tzinfo=timezone.utc)
 END = START + timedelta(hours=1)
@@ -39,6 +40,10 @@ def study_payload(**overrides: object) -> dict[str, object]:
         "max_depth": 2, "max_descendants": 2, "limits": LIMITS,
     }
     payload.update(overrides)
+    for field in ("dev", "confirmation"):
+        payload.setdefault(f"{field}_sha256", canonical.sha256(sorted(
+            item["content_sha256"] for item in payload[field]
+        )))
     return payload
 
 
@@ -564,4 +569,154 @@ def test_reused_cohort_refusal_retains_proposals_and_usage() -> None:
         "usage": (RecursiveUsage(study_id="root", compute_seconds=1, tokens=1, usd=1),),
     })
     reused = child(dev=[{"task_id": "dev-1", "content_sha256": "4" * 64}])
-    assert_refusal(state, admit(state, reused), "invalid_history")
+    assert_refusal(state, admit(state, reused), "cohort_reused")
+
+
+@pytest.mark.parametrize("field", ["dev", "confirmation", "dev_sha256", "confirmation_sha256"])
+@pytest.mark.parametrize("has_root", [False, True])
+def test_missing_cohort_evidence_or_digest_cannot_admit(field: str, has_root: bool) -> None:
+    state = admitted_root() if has_root else RecursionState(grant=grant())
+    candidate = child() if has_root else RecursiveStudy.model_validate(study_payload())
+    payload = dict(candidate)
+    del payload[field]
+    invalid = RecursiveStudy.model_construct(**payload)
+    assert_refusal(state, admit(state, invalid), "invalid_admission")
+
+
+@pytest.mark.parametrize("field", ["dev", "confirmation"])
+@pytest.mark.parametrize("has_root", [False, True])
+def test_empty_evidence_cannot_inherit_or_claim_a_cohort(field: str, has_root: bool) -> None:
+    state = admitted_root() if has_root else RecursionState(grant=grant())
+    candidate = child() if has_root else RecursiveStudy.model_validate(study_payload())
+    digest = getattr(state.studies[0], f"{field}_sha256") if has_root else canonical.sha256([])
+    invalid = candidate.model_copy(update={field: (), f"{field}_sha256": digest})
+    assert_refusal(state, admit(state, invalid), "invalid_admission")
+
+
+@pytest.mark.parametrize("field", ["dev_sha256", "confirmation_sha256"])
+def test_contradictory_cohort_digest_cannot_claim_fresh_evidence(field: str) -> None:
+    state = admitted_root()
+    # In particular, a development digest cannot name the parent's confirmation
+    # while its evidence claims a fresh development cohort.
+    invalid = child().model_copy(update={field: state.studies[0].confirmation_sha256})
+    assert_refusal(state, admit(state, invalid), "invalid_admission")
+
+
+@pytest.mark.parametrize("source", ["dev", "confirmation"])
+@pytest.mark.parametrize("destination", ["dev", "confirmation"])
+@pytest.mark.parametrize("overlap", ["task_id", "renamed_content", "partial_content"])
+def test_either_cohort_cannot_reuse_any_parent_cohort(
+    source: str, destination: str, overlap: str,
+) -> None:
+    state = RecursionState.model_validate({
+        **admitted_root().model_dump(), "proposal_history": (proposal(),),
+        "usage": (RecursiveUsage(study_id="root", compute_seconds=1, tokens=1, usd=1),),
+    })
+    prior = getattr(state.studies[0], source)[0]
+    evidence = [{
+        "task_id": prior.task_id if overlap == "task_id" else "renamed",
+        "content_sha256": "8" * 64 if overlap == "task_id" else prior.content_sha256,
+    }]
+    if overlap == "partial_content":
+        evidence.append({"task_id": "extra", "content_sha256": "9" * 64})
+    candidate = child(**{destination: evidence})
+    if overlap == "renamed_content":
+        assert getattr(candidate, f"{destination}_sha256") == getattr(
+            state.studies[0], f"{source}_sha256"
+        )
+    elif overlap == "partial_content":
+        assert getattr(candidate, f"{destination}_sha256") != getattr(
+            state.studies[0], f"{source}_sha256"
+        )
+    assert_refusal(state, admit(state, candidate), "cohort_reused")
+
+
+@pytest.mark.parametrize("source_study", ["root", "child"])
+@pytest.mark.parametrize("source", ["dev", "confirmation"])
+def test_grandchild_cannot_leak_ancestor_content(source_study: str, source: str) -> None:
+    state = admit(admitted_root(), child())
+    prior = next(item for item in state.studies if item.study_id == source_study)
+    candidate = grandchild(dev=[{
+        "task_id": "renamed-ancestor", "content_sha256": getattr(prior, source)[0].content_sha256,
+    }])
+    assert_refusal(state, admit(state, candidate), "cohort_reused")
+
+
+@pytest.mark.parametrize("source", ["dev", "confirmation"])
+def test_expired_sibling_content_remains_reserved(source: str) -> None:
+    state = admit(admitted_root(), child(window_end=START + timedelta(seconds=1)))
+    prior = getattr(state.studies[1], source)[0]
+    sibling = grandchild(study_id="sibling", parent_id="root", depth=1,
+                         confirmation=[{"task_id": "renamed-sibling", "content_sha256": prior.content_sha256}])
+    assert_refusal(state, admit(state, sibling, now=START + timedelta(seconds=2)), "cohort_reused")
+
+
+def test_terminal_study_history_cannot_be_discarded_by_retry() -> None:
+    state = admit(admitted_root(), child())
+    refused = admit(state, grandchild(dev=[{
+        "task_id": "renamed", "content_sha256": state.studies[0].dev[0].content_sha256,
+    }]))
+    assert_refusal(state, refused, "cohort_reused")
+    assert admit(refused, grandchild()) == refused
+
+
+@pytest.mark.parametrize("corruption", ["empty", "contradictory", "reused"])
+def test_restored_history_cannot_hide_invalid_cohort_evidence(corruption: str) -> None:
+    state = admit(admitted_root(), child())
+    admitted = state.studies[1]
+    if corruption == "empty":
+        admitted = admitted.model_copy(update={"confirmation": ()})
+    elif corruption == "contradictory":
+        admitted = admitted.model_copy(update={"dev_sha256": state.studies[0].confirmation_sha256})
+    else:
+        admitted = child(dev=[{"task_id": "renamed", "content_sha256": "1" * 64}])
+    state = state.model_copy(update={"studies": (state.studies[0], admitted)})
+    result = admit(state, grandchild())
+    assert result.terminal_reason == ("cohort_reused" if corruption == "reused" else "invalid_history")
+    assert result.studies == state.studies
+
+
+def test_canonical_cohort_identity_ignores_order_and_task_labels() -> None:
+    evidence = [
+        {"task_id": "task-a", "content_sha256": "6" * 64},
+        {"task_id": "task-b", "content_sha256": "7" * 64},
+    ]
+    state = admitted_root(dev=evidence)
+    renamed = child(dev=[
+        {"task_id": "renamed-b", "content_sha256": "7" * 64},
+        {"task_id": "renamed-a", "content_sha256": "6" * 64},
+    ])
+    assert renamed.dev_sha256 == state.studies[0].dev_sha256
+    assert_refusal(state, admit(state, renamed), "cohort_reused")
+    contradictory = renamed.model_copy(update={"dev_sha256": canonical.sha256(evidence)})
+    assert_refusal(state, admit(state, contradictory), "invalid_admission")
+
+
+@pytest.mark.parametrize("overlap", ["task_id", "content_sha256"])
+def test_admission_rejects_overlap_between_own_cohorts(overlap: str) -> None:
+    state = admitted_root()
+    candidate = child()
+    evidence = candidate.confirmation[0].model_copy(update={
+        overlap: getattr(candidate.dev[0], overlap),
+    })
+    invalid = candidate.model_copy(update={
+        "confirmation": (evidence,),
+        "confirmation_sha256": canonical.sha256([evidence.content_sha256]),
+    })
+    assert_refusal(state, admit(state, invalid), "invalid_admission")
+
+
+def test_fresh_disjoint_multitask_cohorts_admit_with_canonical_content_binding() -> None:
+    state = admitted_root()
+    candidate = child(dev=[
+        {"task_id": "new-b", "content_sha256": "7" * 64},
+        {"task_id": "new-a", "content_sha256": "6" * 64},
+    ], confirmation=[
+        {"task_id": "new-c", "content_sha256": "8" * 64},
+        {"task_id": "new-d", "content_sha256": "9" * 64},
+    ], dev_sha256=canonical.sha256(["6" * 64, "7" * 64]),
+       confirmation_sha256=canonical.sha256(["8" * 64, "9" * 64]))
+    result = admit(RecursionState.model_validate_json(state.model_dump_json()), candidate)
+    assert result.terminal_reason is None
+    assert [item.study_id for item in result.studies] == ["root", "child"]
+    assert RecursionState.model_validate_json(result.model_dump_json()) == result
