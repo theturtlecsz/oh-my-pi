@@ -298,8 +298,12 @@ def test_real_verifier_uses_live_deduplicated_runtime_roots(verifier_launch, tmp
     assert env["PYTHONPATH"].split(os.pathsep)[0] == str(Path(omp_work.__file__).resolve().parent.parent)
     assert env["PYTHONSAFEPATH"] == "1"
     assert set(env) == {*BASE_ENV, "PYTHONPATH", "PYTHONSAFEPATH"}
-    assert "/work" not in env["PYTHONPATH"]
-    assert str(worktree) not in env["PYTHONPATH"]
+    for entry in env["PYTHONPATH"].split(os.pathsep):
+        root = Path(entry).resolve()
+        with pytest.raises(ValueError):
+            root.relative_to(Path("/work").resolve())
+        with pytest.raises(ValueError):
+            root.relative_to(worktree.resolve())
     assert spy.call_args.kwargs["ro_dirs"] == (commondir, gitdir, *roots)
     assert spy.call_args.kwargs["ro_dirs"][2:] == roots
     assert spy.call_args.kwargs["verifier_runtime"] is True
@@ -619,8 +623,12 @@ def test_verifier_namespace_trusts_installed_runtime(linked_namespace, capfd) ->
     assert payload["env"]["OMP_TASK_TOKEN"] == _TOKEN
     assert payload["env"]["OMP_WORK_URL"] == f"http://127.0.0.1:{service.port}"
     assert payload["env"]["PYTHONSAFEPATH"] == "1"
-    assert "/work" not in payload["env"]["PYTHONPATH"]
-    assert str(job) not in payload["env"]["PYTHONPATH"]
+    for entry in payload["env"]["PYTHONPATH"].split(os.pathsep):
+        root = Path(entry).resolve()
+        with pytest.raises(ValueError):
+            root.relative_to(Path("/work").resolve())
+        with pytest.raises(ValueError):
+            root.relative_to(job.resolve())
 
 
 def test_worker_namespace_hides_git_and_runtime(linked_namespace, capfd) -> None:
