@@ -13,14 +13,17 @@ Every instance in the process shares one serialization gate (a module-level
 lock) so two in-process admissions cannot interleave their lock acquisition and
 accounting; the gate is acquired before the first database lock and released
 when the admission settles or aborts. Cross-process exclusion is the database
-lock itself.
+lock itself. Completed receipts are checked before authorization so retries can
+replay after cancellation or stop without another upstream call.
 """
 
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import json
 import threading
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Self
@@ -29,14 +32,14 @@ from uuid import UUID
 import psycopg
 
 from omp_work.jobs.budget import item_budget, item_spend, root_work_id
-from omp_work.jobs.store import NativeJobStore
+from omp_work.jobs.store import JobError, NativeJobStore
 from omp_work.jobs.usage import record_usage
 from omp_work.model_proxy_upstream import Prepared
 from omp_work.operations.config import OperationsConfig
 from omp_work.project_store import ProjectAuthorityRefused, ProjectStoreMixin
 from omp_work.spend_budget import SpendDecision
 from omp_work.v1.agent_stop import read_stop_state
-from omp_work.v1.canonical import sha256
+from omp_work.v1.canonical import canonical_json, sha256
 from omp_work.v1.store import PostgresWorkStore
 
 __all__ = [
@@ -95,6 +98,10 @@ class ModelProxyBudget:
     ) -> ModelCallAdmission:
         """Admit a bounded model call, holding locks until it settles.
 
+        A matching completed receipt returns ``settled=True``; callers skip the
+        upstream send and can verify/replay its settlement. Changed intent is
+        an idempotency conflict, even after stop or cancellation.
+
         The bound is ``prepared.max_usd`` and ``prepared.max_tokens``. Admission
         locks the project row, the mission row, then the mission and project
         budget rows (through ``authorize_spend_cursor``), then the root item and
@@ -135,6 +142,33 @@ class ModelProxyBudget:
         task_ceiling = _optional_decimal("task_ceiling_usd", task_ceiling_usd)
         operation_id = operation_id or f"model_call:{request_id}"
 
+        identity = sha256({
+            "workspace_id": str(workspace_uuid), "work_id": str(work_uuid),
+            "job_id": job_id, "request_id": request_id,
+        })
+        receipt_id = f"model_call:receipt:{identity}"
+        fingerprint = {
+            "workspace_id": str(workspace_uuid), "actor_id": str(actor_uuid),
+            "work_id": str(work_uuid), "project_id": str(project_uuid) if project_uuid else None,
+            "mission_id": str(mission_uuid) if mission_uuid else None,
+            "job_id": job_id, "worker_id": worker_id, "fence": fence,
+            "request_id": request_id, "operation_id": operation_id, "role": role,
+            "task_ceiling_usd": _decimal_text(task_ceiling) if task_ceiling is not None else None,
+            "prepared": {
+                "body_sha256": hashlib.sha256(prepared.body).hexdigest(),
+                "route": {
+                    key: _decimal_text(value) if isinstance(value, Decimal) else value
+                    for key, value in asdict(prepared.route).items()
+                },
+                "url": prepared.url,
+                "max_input_tokens": prepared.max_input_tokens,
+                "max_output_tokens": prepared.max_output_tokens,
+                "max_usd": _decimal_text(max_usd),
+            },
+        }
+        # Capture complete intent without request headers or credentials.
+        receipt_request = {"workspace_id": str(workspace_uuid), "fingerprint": fingerprint}
+
         _GATE.acquire()
         transaction = contextlib.ExitStack()
         try:
@@ -142,7 +176,40 @@ class ModelProxyBudget:
                 self._jobs.transaction(workspace_uuid, actor_uuid)
             )
 
-            # Fast refuse before any lock. A waiter blocked later is checked
+            # Serialize this identity across processes before fresh authorization.
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended('omp_jobs.operation:' || %s, 0))",
+                (receipt_id,),
+            )
+            cur.execute("SELECT 1 FROM omp_jobs.operations WHERE operation_id=%s", (receipt_id,))
+            if cur.fetchone() is not None:
+                def no_effect() -> dict[str, object]:
+                    raise AssertionError("existing receipt disappeared under operation lock")
+
+                try:
+                    receipt = self._jobs.run_operation(
+                        cur, receipt_id, workspace_uuid, "model_call_receipt", receipt_request, no_effect,
+                    ).result
+                except JobError as refused:
+                    raise ModelProxyBudgetError(refused.code) from refused
+                admission = ModelCallAdmission(
+                    budget=self, _transaction=transaction, _cur=cur,
+                    workspace_id=workspace_uuid, actor_id=actor_uuid, work_id=work_uuid,
+                    root_work_id=UUID(str(receipt["root_work_id"])),
+                    project_id=project_uuid, mission_id=mission_uuid,
+                    job_id=job_id, worker_id=worker_id, fence=fence,
+                    request_id=request_id, operation_id=operation_id, role=role,
+                    prepared=prepared, decision=None, _identity=identity,
+                    _receipt_request=canonical_json(receipt_request),
+                )
+                # Commit the read transaction before releasing the gate.
+                transaction.close()
+                admission._state.receipt = receipt
+                admission._state.closed = admission._state.settled = True
+                _GATE.release()
+                return admission
+
+            # Refuse before budget locks. A waiter blocked later is checked
             # again after those locks, in _revalidate.
             _refuse_if_stopped(cur, workspace_uuid)
 
@@ -245,6 +312,8 @@ class ModelProxyBudget:
                 role=role,
                 prepared=prepared,
                 decision=decision,
+                _identity=identity,
+                _receipt_request=canonical_json(receipt_request),
             )
         except BaseException as error:
             try:
@@ -258,6 +327,7 @@ class ModelProxyBudget:
 class _AdmissionState:
     settled: bool = False
     closed: bool = False
+    receipt: dict[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,6 +351,8 @@ class ModelCallAdmission:
     role: str
     prepared: Prepared
     decision: SpendDecision | None
+    _identity: str
+    _receipt_request: str
     _state: _AdmissionState = field(default_factory=_AdmissionState, init=False)
 
     @property
@@ -326,38 +398,63 @@ class ModelCallAdmission:
         rows are still locked, so the decision cannot have been overtaken. A
         repeated identity replays the usage and records no second spend.
         """
-        if self.settled or self.closed:
+        if self.closed and not self.settled:
             raise ModelProxyBudgetError(
                 "already_settled", "admission is already settled or closed"
             )
         usd = _nonneg_decimal("actual_usd", actual_usd)
+        counted = _token_sum(input_tokens, output_tokens, cache_tokens)
+        payload = {
+            "actual_usd": _decimal_text(usd), "input_tokens": input_tokens,
+            "output_tokens": output_tokens, "cache_tokens": cache_tokens,
+            "measurement": measurement, "model": model or self.prepared.route.model,
+            "price_version": price_version,
+        }
+        if self._state.receipt is not None:
+            if self._state.receipt["settlement"] != payload:
+                raise ModelProxyBudgetError("idempotency_conflict", "settlement payload changed")
+            return {**self._state.receipt["result"], "actual_usd": usd}
+
         if usd > self.max_usd:
             raise ModelProxyBudgetError(
                 "usage_exceeds_admission",
                 f"actual USD {usd} exceeds admitted bound {self.max_usd}",
             )
-        counted = _token_sum(input_tokens, output_tokens, cache_tokens)
         if counted > self.max_tokens:
             raise ModelProxyBudgetError(
                 "usage_exceeds_admission",
                 f"actual tokens {counted} exceed admitted bound {self.max_tokens}",
             )
-        try:
+
+        def apply() -> dict[str, object]:
             usage = self._record(
-                usd=usd,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                cache_tokens=cache_tokens,
-                measurement=measurement,
-                model=model or self.prepared.route.model,
-                price_version=price_version,
+                usd=Decimal(payload["actual_usd"]), input_tokens=input_tokens,
+                output_tokens=output_tokens, cache_tokens=cache_tokens,
+                measurement=measurement, model=payload["model"], price_version=price_version,
             )
+            return {
+                "root_work_id": str(self.root_work_id),
+                "fingerprint": json.loads(self._receipt_request)["fingerprint"],
+                "settlement": payload,
+                "result": {"status": "settled", "actual_usd": payload["actual_usd"], "usage": usage},
+            }
+
+        try:
+            # Created AFTER admission locks: rolling back settlement cannot drop them.
+            with self._cur.connection.transaction():
+                receipt = self.budget._jobs.run_operation(
+                    self._cur, f"model_call:receipt:{self._identity}", self.workspace_id,
+                    "model_call_receipt", json.loads(self._receipt_request), apply,
+                ).result
             self._close()
+            self._state.receipt = receipt
             self._state.settled = True
         except BaseException as error:
             self._close(error)
+            if isinstance(error, JobError):
+                raise ModelProxyBudgetError(error.code) from error
             raise
-        return {"status": "settled", "actual_usd": usd, "usage": usage}
+        return {**receipt["result"], "actual_usd": usd}
 
     def settle_unmeasurable_failure(
         self, error: BaseException | str | None = None
@@ -368,25 +465,10 @@ class ModelCallAdmission:
         be measured; ``Prepared`` documents that the caller then charges
         ``max_usd`` and ``max_tokens``.
         """
-        if self.settled or self.closed:
-            raise ModelProxyBudgetError(
-                "already_settled", "admission is already settled or closed"
-            )
-        try:
-            self._record(
-                usd=self.max_usd,
-                input_tokens=self.max_tokens,
-                output_tokens=0,
-                cache_tokens=0,
-                measurement="estimated",
-                model=self.prepared.route.model,
-                price_version=None,
-            )
-            self._close()
-            self._state.settled = True
-        except BaseException as error:
-            self._close(error)
-            raise
+        self.settle(
+            actual_usd=self.max_usd, input_tokens=self.max_tokens,
+            output_tokens=0, cache_tokens=0, measurement="estimated",
+        )
         detail = str(error) if error is not None else "unmeasurable upstream failure"
         raise ModelProxyBudgetError("unmeasurable_failure", detail)
 
@@ -422,12 +504,12 @@ class ModelCallAdmission:
     ) -> dict[str, object]:
         usage = record_usage(
             self.budget._jobs,
-            operation_id=self.operation_id,
+            operation_id=f"model_call:usage:{self._identity}",
             workspace_id=self.workspace_id,
             actor_id=self.actor_id,
             work_id=self.work_id,
             job_id=self.job_id,
-            request_id=self.request_id,
+            request_id=f"model_call:request:{self._identity}",
             role=self.role,
             model=model,
             input_tokens=input_tokens,
@@ -438,13 +520,10 @@ class ModelCallAdmission:
             price_version=price_version,
             cur=self._cur,
         )
-        # A replayed usage records no second project charge. The spend identity is
-        # deterministic, so a replay maps to the same spend_records row.
-        if (
-            usage.get("status") != "replayed"
-            and self.project_id is not None
-            and usd > 0
-        ):
+        # A usage row without this atomic receipt is not a completed settlement.
+        if usage.get("status") == "replayed":
+            raise ModelProxyBudgetError("idempotency_conflict", "usage exists without call receipt")
+        if self.project_id is not None and usd > 0:
             assert self.decision is not None
             self.budget._projects.append_spend_cursor(
                 self._cur,
@@ -458,22 +537,7 @@ class ModelCallAdmission:
         return usage
 
     def _spend_record_id(self) -> UUID:
-        digest = sha256(
-            {
-                "kind": "model_proxy_spend",
-                "workspace_id": str(self.workspace_id),
-                "work_id": str(self.work_id),
-                "job_id": self.job_id,
-                "request_id": self.request_id,
-                "project_id": (
-                    None if self.project_id is None else str(self.project_id)
-                ),
-                "mission_id": (
-                    None if self.mission_id is None else str(self.mission_id)
-                ),
-            }
-        )
-        return UUID(bytes=bytes.fromhex(digest[:32]))
+        return UUID(bytes=bytes.fromhex(self._identity[:32]))
 
     def _close(self, error: BaseException | None = None) -> None:
         if self.closed:
@@ -486,6 +550,13 @@ class ModelCallAdmission:
                 self._transaction.__exit__(type(error), error, error.__traceback__)
         finally:
             _GATE.release()
+
+
+def _decimal_text(value: Decimal) -> str:
+    if value == 0:
+        return "0"
+    text = format(value, "f")
+    return (text.rstrip("0").rstrip(".") if "." in text else text) or "0"
 
 
 def _revalidate(

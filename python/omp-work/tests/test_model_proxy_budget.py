@@ -14,8 +14,8 @@ import os
 import threading
 import time
 from contextlib import contextmanager
-from dataclasses import FrozenInstanceError
-from datetime import UTC, datetime
+from dataclasses import FrozenInstanceError, replace
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from uuid import UUID, uuid4
@@ -35,6 +35,7 @@ from omp_work.operations.jobs_migrate import apply_jobs_migrations
 from omp_work.project_store import ProjectAuthorityRefused
 from omp_work.spend_budget import SpendBudget
 from omp_work.standing_change import ChangeAuthority
+from omp_work.standing_policy import StandingPolicy
 from omp_work.v1.store import PostgresWorkStore
 from psycopg.errors import CheckViolation
 from psycopg.rows import dict_row
@@ -700,7 +701,7 @@ def test_admission_settle_writes_usage_and_spend_once(admission_context):
     )
     assert result["status"] == "settled"
     assert result["usage"]["status"] == "applied"
-    assert _admission_counts(ctx)[:2] == (1, 1)
+    assert _admission_counts(ctx) == (1, 1, 1, 2)
 
     # The locks are released: a second connection can now authorize a spend.
     with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
@@ -791,7 +792,7 @@ def test_admission_identity_and_bounds_cannot_redirect_settlement(admission_cont
             (ctx.workspace_id,),
         )
         assert cur.fetchone() == {
-            "work_id": ctx.work_id, "request_id": "immutable", "price_usd": Decimal(1)
+            "work_id": ctx.work_id, "request_id": f"model_call:request:{admission._identity}", "price_usd": Decimal(1)
         }
 
 
@@ -937,3 +938,241 @@ def test_child_job_uses_root_item_budget(admission_context):
         admission.settle(actual_usd="1")
     with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
         assert item_spend(cur, ctx.workspace_id, root).usd == Decimal(1)
+
+
+def test_settlement_receipt_replays_after_tree_cancellation_and_stop(admission_context, monkeypatch):
+    """Completed calls bypass authorization/send after cancellation and stop, without double charge."""
+    ctx = admission_context
+    root = _item(ctx, "capped root", {**_GENEROUS_ITEM, "usd": "1"})
+    parent = _admitting_job(ctx, work_id=root)
+    child = _item(ctx, "child")
+    job = _admitting_job(ctx, work_id=child, parent_job_id=parent)
+    kw = dict(work_id=child, job_id=job, worker_id="worker-1", fence=1, request_id="receipt-replay")
+    payload = dict(actual_usd="1.00", input_tokens=10, output_tokens=5, cache_tokens=0)
+    sends = []
+
+    def call():
+        with _admit(ctx, _prepared("1"), **kw) as admission:
+            if not admission.settled:
+                sends.append("upstream")
+            return admission.settle(**payload)
+
+    first = call()
+    with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
+        cur.execute("SELECT status, cancel_reason FROM omp_jobs.jobs WHERE job_id=ANY(%s)", ([parent, job],))
+        assert cur.fetchall() == [{"status": "cancelled", "cancel_reason": "budget_exceeded"}] * 2
+        cur.execute("SELECT result FROM omp_jobs.operations WHERE workspace_id=%s AND kind='model_call_receipt'", (ctx.workspace_id,))
+        receipt = cur.fetchone()["result"]
+        assert receipt["settlement"]["actual_usd"] == "1"
+        assert receipt["fingerprint"]["worker_id"] == "worker-1"
+        assert receipt["fingerprint"]["prepared"]["max_usd"] == "1"
+    before = _admission_counts(ctx)
+    assert before[:2] == (1, 1)
+    _engage_stop(ctx)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("receipt replay tried fresh authorization")
+
+    monkeypatch.setattr(ctx.budget._projects, "authorize_spend_cursor", forbidden)
+    payload["actual_usd"] = "1"
+    assert call() == first
+    assert sends == ["upstream"]
+    assert _admission_counts(ctx) == before
+
+
+@pytest.mark.parametrize("change", ["body", "route", "bounds", "worker", "fence", "ceiling", "role", "project"])
+def test_completed_call_refuses_changed_intent(admission_context, change):
+    """Same call identity with different intent conflicts even when workspace stopped."""
+    ctx = admission_context
+    prepared = _prepared("2")
+    kw = dict(request_id="intent", task_ceiling_usd="10")
+    with _admit(ctx, prepared, **kw) as admission:
+        admission.settle(actual_usd="1")
+    _engage_stop(ctx)
+    before = _admission_counts(ctx)
+    if change == "body":
+        prepared = replace(prepared, body=b'{"different":true}')
+    elif change == "route":
+        prepared = replace(prepared, route=replace(prepared.route, model="other"))
+    elif change == "bounds":
+        prepared = replace(prepared, max_output_tokens=51)
+    else:
+        kw.update({"worker": {"worker_id": "other"}, "fence": {"fence": 2},
+                   "ceiling": {"task_ceiling_usd": "11"}, "role": {"role": "other"},
+                   "project": {"project_id": uuid4()}}[change])
+    with pytest.raises(ModelProxyBudgetError) as exc:
+        _admit(ctx, prepared, **kw)
+    assert exc.value.code == "idempotency_conflict"
+    assert _admission_counts(ctx) == before
+
+
+@pytest.mark.parametrize("changed", [
+    {"actual_usd": "1.5"}, {"actual_usd": "3"}, {"input_tokens": 151}, {"input_tokens": 11}, {"output_tokens": 6},
+    {"cache_tokens": 1}, {"model": "other"}, {"measurement": "estimated"},
+    {"price_version": "other"},
+])
+def test_settlement_replay_refuses_changed_usage(admission_context, changed):
+    """Receipt payload conflicts preserve original ledgers and result."""
+    ctx = admission_context
+    kw = dict(request_id="usage-conflict")
+    payload = dict(actual_usd="1", input_tokens=10, output_tokens=5, cache_tokens=0)
+    with _admit(ctx, _prepared("2"), **kw) as admission:
+        first = admission.settle(**payload)
+    replay = _admit(ctx, _prepared("2"), **kw)
+    assert replay.settled and replay.closed
+    with pytest.raises(ModelProxyBudgetError) as exc:
+        replay.settle(**(payload | changed))
+    assert exc.value.code == "idempotency_conflict"
+    assert replay.settle(**payload) == first
+    assert _admission_counts(ctx) == (1, 1, 1, 2)
+
+
+@pytest.mark.parametrize("change", ["stop", "policy_expiry"])
+def test_admitted_settlement_survives_authority_change(admission_context, change):
+    """Admission authority remains valid for settlement after stop or policy expiry."""
+    ctx = admission_context
+    expiry = datetime.now(UTC) + timedelta(seconds=1)
+    policy = StandingPolicy(
+        policy_id=uuid4(), action_class="spend_beyond_threshold", money_limit_usd=Decimal(1000),
+        decision_id=uuid4(), expires_at=expiry,
+    )
+    # Force a tier2 call covered by a policy at admission.
+    ctx.projects.set_spend_budget(
+        ctx.workspace_id, ctx.actor_id, ctx.project_id, None,
+        SpendBudget("project", Decimal(1000), Decimal(0)),
+        ChangeAuthority("owner", uuid4(), "owner"),
+    )
+    ctx.projects.put_standing_policy(
+        ctx.workspace_id, ctx.actor_id, ctx.project_id, policy,
+        ChangeAuthority("owner", policy.decision_id, "owner"),
+    )
+    with _admit(ctx, _prepared("1"), now=expiry-timedelta(seconds=1)) as admission:
+        assert admission.decision.policy_id == policy.policy_id
+        if change == "stop":
+            _engage_stop(ctx)
+        else:
+            time.sleep(max(0, (expiry-datetime.now(UTC)).total_seconds()) + 0.05)
+        admission.settle(actual_usd="1", input_tokens=1)
+    assert _admission_counts(ctx) == (1, 1, 1, 2)
+    with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
+        cur.execute("SELECT policy_id, tier FROM omp_work.spend_records WHERE workspace_id=%s", (ctx.workspace_id,))
+        assert cur.fetchone() == {"policy_id": policy.policy_id, "tier": "tier2"}
+
+
+def test_zero_settlement_retains_tokens_without_spend(admission_context):
+    """Free calls still commit usage/outbox/receipt and replay token counts."""
+    ctx = admission_context
+    kw = dict(request_id="free")
+    with _admit(ctx, _prepared("0"), **kw) as admission:
+        first = admission.settle(actual_usd="0.00", input_tokens=10, output_tokens=5, cache_tokens=2)
+    replay = _admit(ctx, _prepared("0"), **kw)
+    assert replay.settled
+    assert replay.settle(actual_usd="0", input_tokens=10, output_tokens=5, cache_tokens=2) == first
+    assert _admission_counts(ctx) == (0, 1, 1, 2)
+    with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
+        assert item_spend(cur, ctx.workspace_id, ctx.work_id).tokens == 15
+        cur.execute("SELECT tokens, cache_tokens FROM omp_jobs.usage_events WHERE workspace_id=%s", (ctx.workspace_id,))
+        assert cur.fetchone() == {"tokens": 17, "cache_tokens": 2}
+
+
+def test_settlement_failure_rolls_back_usage_receipt_and_cancellation(admission_context, monkeypatch):
+    """Spend insert failure cannot leave usage, receipt, alerts or cancelled jobs behind."""
+    ctx = admission_context
+    work = _item(ctx, "rollback root", {**_GENEROUS_ITEM, "usd": "1"})
+    job = _admitting_job(ctx, work_id=work)
+    kw = dict(work_id=work, job_id=job, worker_id="worker-1", fence=1, request_id="retry-atomic")
+    before = _admission_counts(ctx)
+    append = ctx.budget._projects.append_spend_cursor
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("spend failed")
+
+    monkeypatch.setattr(ctx.budget._projects, "append_spend_cursor", fail)
+    with pytest.raises(RuntimeError, match="spend failed"):
+        with _admit(ctx, _prepared("1"), **kw) as admission:
+            admission.settle(actual_usd="1")
+    assert admission.closed and not admission.settled
+    assert _admission_counts(ctx) == before
+    with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
+        assert ctx.jobs.job_view(cur, ctx.workspace_id, job)["status"] == "admitted"
+    monkeypatch.setattr(ctx.budget._projects, "append_spend_cursor", append)
+    with _admit(ctx, _prepared("1"), **kw) as admission:
+        admission.settle(actual_usd="1")
+    assert _admission_counts(ctx)[:2] == (1, 1)
+
+
+def test_process_gate_stays_held_until_settlement_commit(admission_context, monkeypatch):
+    """Another admission cannot enter while settlement writes await transaction commit."""
+    ctx = admission_context
+    other = _item(ctx, "separate commit waiter")
+    transaction = ctx.budget._jobs.transaction
+    committing, allow_commit, waiting, finished = (threading.Event() for _ in range(4))
+    outcomes = []
+
+    @contextmanager
+    def held_commit(workspace_id, actor_id):
+        with transaction(workspace_id, actor_id) as cur:
+            yield cur
+            committing.set()
+            assert allow_commit.wait(5), "commit test did not release transaction"
+
+    monkeypatch.setattr(ctx.budget._jobs, "transaction", held_commit)
+    admission = _admit(ctx, _prepared("1"))
+
+    def settle():
+        try:
+            admission.settle(actual_usd="1")
+            outcomes.append("committed")
+        except Exception as exc:
+            outcomes.append(type(exc).__name__)
+
+    def waiter():
+        waiting.set()
+        try:
+            with ModelProxyBudget(ctx.service.config).admit(
+                ctx.workspace_id, ctx.actor_id, None, None, other,
+                None, None, None, "commit-waiter", None, _prepared("1"),
+            ):
+                outcomes.append("admitted")
+        except Exception as exc:
+            outcomes.append(type(exc).__name__)
+        finally:
+            finished.set()
+
+    settlement = threading.Thread(target=settle)
+    second = threading.Thread(target=waiter)
+    try:
+        settlement.start()
+        assert committing.wait(3)
+        assert _admission_counts(ctx) == (0, 0, 0, 0)
+        second.start()
+        assert waiting.wait(2)
+        assert not finished.wait(0.2), "gate released before commit"
+    finally:
+        allow_commit.set()
+        settlement.join(timeout=7)
+        if second.ident is not None:
+            second.join(timeout=7)
+        admission.abort()
+    assert not settlement.is_alive() and not second.is_alive()
+    assert sorted(outcomes) == ["admitted", "committed"]
+    assert admission.settled
+    assert _admission_counts(ctx) == (1, 1, 1, 2)
+
+
+def test_unmeasurable_failure_commits_bound_receipt_once(admission_context):
+    """Unmeasurable calls retain full admitted capacity through receipt replay."""
+    ctx = admission_context
+    for _ in range(2):
+        with _admit(ctx, _prepared("2", 10, 5), request_id="unmeasurable") as admission:
+            with pytest.raises(ModelProxyBudgetError) as exc:
+                admission.settle_unmeasurable_failure("provider disconnected")
+            assert exc.value.code == "unmeasurable_failure"
+            assert admission.settled and admission.closed
+    assert _admission_counts(ctx) == (1, 1, 1, 2)
+    with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
+        cur.execute(
+            "SELECT price_usd, input_tokens, measurement FROM omp_jobs.usage_events WHERE workspace_id=%s",
+            (ctx.workspace_id,),
+        )
+        assert cur.fetchone() == {"price_usd": Decimal(2), "input_tokens": 15, "measurement": "estimated"}
