@@ -1,4 +1,4 @@
-"""OMP-584 report classifies isolated history and canonical slice evidence."""
+"""OMP-584 report classifies isolated history and defers slice evidence."""
 
 from __future__ import annotations
 
@@ -57,6 +57,8 @@ class Evidence:
         return name
 
     def plan(self, name, roots=2, at=AFTER, sha=SHA):
+        path = self.directory / "tasks" / f"{name}.md"
+        path.write_text("---\ndepends_on: []\ndepends_on: []\n---\nTask body\n")
         slices = [self.slice(f"{name}-s{i}", "[]" if i < roots else "[upstream]") for i in range(3)]
         self.tasks[name] = dict(slices=slices, history=[
             dict(phase="plan-start", attempt=1, at=at, code_sha256=sha),
@@ -123,43 +125,34 @@ def test_missing_functions_or_import_error_fail(evidence, source):
 
 
 @pytest.mark.parametrize("function", ["parse_front_matter", "is_owner"])
-def test_raised_flood_call_keeps_classified_counts(evidence, function):
+def test_slice_calls_are_deferred_without_losing_classified_counts(evidence, function):
     (evidence.directory / "flood.py").write_text(STUB + f"\ndef {function}(value): raise RuntimeError('call broke')\n")
     evidence.plan("plan")
     evidence.starts(running=4)
     code, report = evidence.run()
-    assert code == 2 and report["status"] == "failure" and "call broke" in report["error"]
+    assert code == 2 and report["status"] == "pending" and report["error"] is None
     assert report["plan_count"] == 1 and report["start_count"] == 10
     assert report["verdicts"] == {"plans": "pending", "starts": "met"}
 
 
-@pytest.mark.parametrize("independent,expected,code", [(6, "ok", 0), (5, "unmet", 1)])
-def test_majority_counts_plans_with_two_roots_not_majority_of_slices(evidence, independent, expected, code):
-    for i in range(10):
-        evidence.plan(f"p{i}", roots=2 if i < independent else 1)
+def test_qualifiers_sorted_once_with_independence_pending(evidence):
+    for i in reversed(range(10)):
+        evidence.plan(f"p{i}")
     evidence.starts(running=4)
-    actual, report = evidence.run()
-    assert actual == code and report["status"] == expected
-    assert report["plan_count"] == 10 and report["independent_plan_count"] == independent
-    assert report["median"] == 4
-
-
-def test_roots_require_explicit_empty_line_and_canonical_file_owners_count(evidence):
-    task = evidence.plan("p")
-    task["slices"] = [evidence.slice("root"), evidence.slice("owner", owner="yes"),
-                      evidence.slice("blank", ""), evidence.slice("missing", None)]
     code, report = evidence.run()
-    assert code == 2 and report["error"] is None
-    assert (report["plans"][0]["roots"], report["plans"][0]["implementer_roots"]) == (2, 1)
-    assert report["independent_plan_count"] == 1
+    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    assert report["plans"] == [dict(id=f"p{i}", attempt=1, code_sha256=SHA,
+        slices=None, roots=None, implementer_slices=None, implementer_roots=None) for i in range(10)]
+    assert report["plan_count"] == 10 and report["independent_plan_count"] == 0
+    assert report["verdicts"] == {"plans": "pending", "starts": "met"}
 
 
 @pytest.mark.parametrize("parked", [".failed", ".dropped"])
-def test_parked_twin_is_missing_evidence(evidence, parked):
+def test_slice_files_are_deferred_even_when_only_parked_twin_exists(evidence, parked):
     task = evidence.plan("p")
     task["slices"] = [evidence.slice("parked", parked=parked)]
     code, report = evidence.run()
-    assert code == 2 and report["status"] == "failure" and "parked.md" in report["error"]
+    assert code == 2 and report["status"] == "pending" and report["error"] is None
     assert report["plan_count"] == 1
 
 
@@ -172,7 +165,7 @@ def test_excluded_plans_are_not_read_and_review_time_is_not_cutoff(evidence):
     evidence.plan("included")
     code, report = evidence.run()
     assert code == 2 and report["error"] is None and report["plan_count"] == 1
-    assert report["plans"][0]["task_id"] == "included"
+    assert report["plans"][0]["id"] == "included"
 
 
 @pytest.mark.parametrize("history", [
@@ -216,7 +209,8 @@ def test_low_median_needs_complete_capacity_proof(evidence, fields, kind):
         evidence.plan(f"p{i}")
     evidence.starts(**fields)
     code, report = evidence.run()
-    assert code == (0 if kind else 1)
+    assert code == 2 and report["status"] == "pending"
+    assert report["verdicts"]["starts"] == ("met" if kind else "unmet")
     assert report["cap"]["proven"] == bool(kind) and report["cap"]["kind"] == kind
     assert report["median"] == 3 and report["cutoff"]["baseline"] == 3.0
 
@@ -253,12 +247,108 @@ def test_malformed_implement_start_fails_without_losing_other_counts(evidence, c
     assert code == 2 and report["status"] == "failure" and report["start_count"] == 10
 
 
-def test_short_start_side_is_pending_while_plans_record_met(evidence):
+def test_short_start_side_and_plan_independence_stay_pending(evidence):
     for i in range(10):
         evidence.plan(f"p{i}")
     evidence.starts(count=9, running=4)
     evidence.tasks["never_planned"] = dict(slices=["absent"], history=[])
     code, report = evidence.run()
     assert code == 2 and report["status"] == "pending" and report["error"] is None
-    assert report["verdicts"] == {"plans": "met", "starts": "pending"}
+    assert report["verdicts"] == {"plans": "pending", "starts": "pending"}
     assert report["plan_count"] == 10 and report["start_count"] == 9
+
+
+def test_pass_without_start_is_absent_beside_ten_qualifiers(evidence):
+    for i in range(10):
+        evidence.plan(f"p{i}")
+    evidence.tasks["legacy"] = dict(slices=["absent"], planned_at=AFTER,
+        history=[dict(phase="plan-review", attempt=1, verdict="PASS")])
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    assert report["plan_count"] == 10
+    assert "legacy" not in [plan["id"] for plan in report["plans"]]
+
+
+def test_later_planned_at_cannot_qualify_earlier_start(evidence):
+    task = evidence.plan("early", at=CUTOFF)
+    task.update(planned_at=AFTER, slices=["absent"])
+    code, report = evidence.run()
+    assert code == 2 and report["error"] is None and report["plan_count"] == 0
+
+
+def test_fail_then_pass_counts_once(evidence):
+    task = evidence.plan("retry")
+    task["history"].insert(1, dict(phase="plan-review", attempt=1, verdict="FAIL"))
+    code, report = evidence.run()
+    assert code == 2 and report["error"] is None
+    assert report["plan_count"] == 1 and report["plans"][0]["id"] == "retry"
+
+
+@pytest.mark.parametrize("attempts", [[2], [1, 1]])
+def test_ambiguous_attempt_keeps_other_qualifiers(evidence, attempts):
+    evidence.plan("qualifier")
+    evidence.tasks["ambiguous-plan"] = dict(slices=["absent"], history=[
+        dict(phase="plan-start", attempt=attempt, at=AFTER, code_sha256=SHA) for attempt in attempts
+    ] + [dict(phase="plan-review", attempt=1, verdict="PASS")])
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "failure"
+    assert "ambiguous" in report["error"] and "ambiguous-plan" in report["error"]
+    assert report["plan_count"] == 1 and report["plans"][0]["id"] == "qualifier"
+
+
+def test_ten_fail_only_plans_cannot_succeed(evidence):
+    for i in range(10):
+        task = evidence.plan(f"failed{i}")
+        task["history"][-1]["verdict"] = "FAIL"
+    evidence.starts(running=4)
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "failure" and report["plan_count"] == 0
+    assert "missing" in report["error"]
+    for i in range(10):
+        assert f"failed{i}" in report["error"]
+
+
+def test_last_review_fail_overrides_earlier_pass(evidence):
+    task = evidence.plan("failed-final")
+    task["history"].append(dict(phase="plan-review", attempt=1, verdict="FAIL"))
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "failure" and report["plan_count"] == 0
+    assert "missing" in report["error"] and "failed-final" in report["error"]
+
+
+def test_wrong_hash_excluded_without_error(evidence):
+    task = evidence.plan("wrong", sha="b" * 64)
+    task["slices"] = ["absent"]
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "pending"
+    assert report["plans"] == [] and report["plan_count"] == 0 and report["error"] is None
+
+
+@pytest.mark.parametrize("task", [None, [], {"history": None}, {"history": {}}, {"history": [None]}])
+def test_malformed_task_history_fails_and_keeps_qualifiers(evidence, task):
+    evidence.plan("qualifier")
+    evidence.tasks["bad"] = task
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "failure"
+    assert "malformed" in report["error"] and "bad" in report["error"]
+    assert report["plan_count"] == 1
+
+
+@pytest.mark.parametrize("change", [{"at": None}, {"at": "yesterday"},
+    {"at": "2026-10-01T00:00:01+00:00"}, {"code_sha256": None}, {"code_sha256": 123}])
+def test_malformed_plan_start_fails_and_keeps_qualifiers(evidence, change):
+    evidence.plan("qualifier")
+    task = evidence.plan("bad")
+    task["history"][0].update(change)
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "failure"
+    assert "malformed" in report["error"] and "bad" in report["error"]
+    assert report["plan_count"] == 1
+
+
+def test_missing_history_and_non_promoted_tasks_are_excluded(evidence):
+    evidence.tasks.update(missing=dict(slices=["absent"]), empty=dict(slices=[], history=[
+        dict(phase="plan-start")]), non_list=dict(slices="absent", history=[dict(phase="plan-start")]))
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    assert report["plan_count"] == 0

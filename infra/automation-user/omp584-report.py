@@ -109,10 +109,10 @@ def report(flood_dir: Path, rollout_path: Path) -> tuple[dict, int]:
         for task_id, task in state["tasks"].items():
             try:
                 if not isinstance(task, dict):
-                    raise ValueError("task must be an object")
+                    raise ValueError("malformed task: must be an object")
                 history = task.get("history", [])
                 if not isinstance(history, list) or not all(isinstance(e, dict) for e in history):
-                    raise ValueError("history must be a list of objects")
+                    raise ValueError("malformed history: must be a list of objects")
                 # Implement starts count even for tasks that never promoted a plan.
                 for event in history:
                     if event.get("phase") == "implement-start":
@@ -127,63 +127,41 @@ def report(flood_dir: Path, rollout_path: Path) -> tuple[dict, int]:
                 if not isinstance(slices, list) or not slices:
                     continue
                 plan_starts = [e for e in history if e.get("phase") == "plan-start"]
-                passes = [e for e in history if e.get("phase") == "plan-review"
-                          and isinstance(e.get("verdict"), str) and e["verdict"].upper() == "PASS"]
+                reviews = [e for e in history if e.get("phase") == "plan-review"]
                 if not plan_starts:
                     continue
-                if not passes:
-                    raise ValueError("plan-start has no successful plan-review")
-                success = passes[-1]
+                success = reviews[-1] if reviews else {}
+                verdict = success.get("verdict")
+                if not isinstance(verdict, str) or verdict.upper() != "PASS":
+                    raise ValueError("missing successful final plan-review")
                 matching = [e for e in plan_starts if "attempt" in e and success.get("attempt") is not None
                             and e["attempt"] == success["attempt"]]
                 if len(matching) != 1:
-                    raise ValueError("successful plan-review must match exactly one plan-start attempt")
+                    raise ValueError("ambiguous successful plan-review: requires exactly one plan-start attempt")
                 start = matching[0]
+                if not isinstance(start.get("at"), str) or not re.fullmatch(
+                    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", start["at"]
+                ) or not isinstance(start.get("code_sha256"), str):
+                    raise ValueError("malformed plan-start: requires timestamp at and string code_sha256")
                 if not included(start):
                     continue
-                plan = {"task_id": task_id, "attempt": success["attempt"], "at": start["at"],
-                        "roots": 0, "implementer_roots": 0, "independent": False}
-                result["plans"].append(plan)
-                for slice_id in slices:
-                    try:
-                        if not isinstance(slice_id, str) or Path(slice_id).name != slice_id or slice_id in (".", ".."):
-                            raise ValueError("slice id must be a canonical task id")
-                        text = (flood_dir / "tasks" / f"{slice_id}.md").read_text(encoding="utf-8")
-                        if flood is None:
-                            continue
-                        meta, _ = flood.parse_front_matter(text)
-                        owner = flood.is_owner(meta)
-                        lines = text.splitlines()
-                        front = lines[1:lines.index("---", 1)] if lines and lines[0] == "---" else []
-                        if any(line.strip() == "depends_on: []" for line in front) and meta.get("depends_on") == []:
-                            plan["roots"] += 1
-                            if not owner:
-                                plan["implementer_roots"] += 1
-                    except Exception as exc:
-                        errors.append(f"{task_id}/{slice_id}: {exc}")
-                plan["independent"] = plan["roots"] >= 2
+                result["plans"].append({"id": task_id, "attempt": success["attempt"],
+                    "code_sha256": start["code_sha256"], "slices": None, "roots": None,
+                    "implementer_slices": None, "implementer_roots": None})
             except Exception as exc:
                 errors.append(f"{task_id}: {exc}")
+    result["plans"].sort(key=lambda plan: plan["id"])
     result["plan_count"] = len(result["plans"])
-    result["independent_plan_count"] = sum(p["independent"] for p in result["plans"])
     result["start_count"] = len(result["starts"])
     if result["starts"]:
         result["median"] = statistics.median(e["running_implementers"] for e in result["starts"])
     result["cap"] = cap_proof(result["starts"])
-    if result["plan_count"] >= 10:
-        result["verdicts"]["plans"] = "met" if result["independent_plan_count"] * 2 > result["plan_count"] else "unmet"
     if result["start_count"] >= 10:
         result["verdicts"]["starts"] = "met" if result["median"] > BASELINE or result["cap"]["proven"] else "unmet"
     if errors:
         result.update(status="failure", error="; ".join(errors))
         return result, 2
-    if "pending" in result["verdicts"].values():
-        return result, 2
-    if all(v == "met" for v in result["verdicts"].values()):
-        result["status"] = "ok"
-        return result, 0
-    result["status"] = "unmet"
-    return result, 1
+    return result, 2
 
 
 def main() -> int:
