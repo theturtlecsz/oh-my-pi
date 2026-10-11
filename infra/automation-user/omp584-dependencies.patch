@@ -1,6 +1,6 @@
 --- a/flood.py
 +++ b/flood.py
-@@ -195,6 +195,120 @@
+@@ -195,6 +195,147 @@
      return str(meta.get("owner", "")).strip().lower() in ("true", "yes", "1")
  
  
@@ -85,6 +85,43 @@
 +    r"\b(?:no|not|never|without|avoid|neither|nor|cannot|fail|fails|failed|"
 +    r"instead|rather|\w*n't\w*)\b", re.I)
 +
++DEPENDENCY_QUALIFIER_RE = re.compile(
++    r"\b(?:may|might|could|would|hypothetical|potential|optional|future|later|"
++    r"reference|unrelated)\b", re.I)
++DEPENDENCY_CLAUSE_RE = re.compile(
++    r"\n|;|\.(?=\s|$)|,\s*(?![\s`\'\"]*\x00|\s)|"
++    r"\b(?:but|then|while|whereas)\b|\band\b(?!\s+[`\'\"]*\x00)", re.I)
++
++
++def dependency_consumes(work_text: str, tokens: set[str]) -> bool:
++    """Bind a producer token and affirmative verb inside one consumption clause."""
++    # Mask token contents in prose, keeping offsets and sentence punctuation intact.
++    # Path dots are not sentence boundaries; artifact names are not qualifiers/verbs.
++    def mask_token(match: re.Match) -> str:
++        token = match[0].rstrip(".")
++        if token in tokens or "/" in token or "." in token:
++            return "\x00" * len(token) + match[0][len(token):]
++        return match[0]
++
++    prose = DEPENDENCY_TOKEN_RE.sub(mask_token, work_text)
++    start = 0
++    for boundary in [*DEPENDENCY_CLAUSE_RE.finditer(prose), None]:
++        end = boundary.start() if boundary else len(prose)
++        clause = prose[start:end]
++        verbs = list(DEPENDENCY_VERB_RE.finditer(clause))
++        for i, verb in enumerate(verbs):
++            prefix = clause[:verb.start()]
++            stop = verbs[i + 1].start() if i + 1 < len(verbs) else len(clause)
++            if (DEPENDENCY_NEGATION_RE.search(prefix)
++                    or DEPENDENCY_QUALIFIER_RE.search(clause[:stop])):
++                continue
++            target = work_text[start + verb.end():start + stop]
++            if any(token and re.search(r"(?<![\w./-])" + re.escape(token)
++                                       + r"(?![\w./-])", target) for token in tokens):
++                return True
++        start = boundary.end() if boundary else end
++    return False
++
 +
 +def dependency_edge_violation(consumer: dict, producer: dict, is_union) -> str | None:
 +    """Require shared edits or affirmative consumption, never mere ordering."""
@@ -101,18 +138,8 @@
 +                      if basenames.count(name) == 1 and name not in excluded}
 +    tokens.update(output for output in producer["outputs"]
 +                  if output not in excluded and not is_union(output))
-+    for clause in re.split(r"\n|;|\.(?=\s|$)", consumer["work_text"]):
-+        verbs = list(DEPENDENCY_VERB_RE.finditer(clause))
-+        for i, verb in enumerate(verbs):
-+            # A comma ends the reach of an earlier negation marker.
-+            prefix = clause[:verb.start()].rsplit(",", 1)[-1]
-+            if DEPENDENCY_NEGATION_RE.search(prefix):
-+                continue
-+            end = verbs[i + 1].start() if i + 1 < len(verbs) else len(clause)
-+            target = clause[verb.end():end]
-+            if any(token and re.search(r"(?<![\w./-])" + re.escape(token)
-+                                       + r"(?![\w./-])", target) for token in tokens):
-+                return None
++    if dependency_consumes(consumer["work_text"], tokens):
++        return None
 +    return (f"{consumer['id']}: depends_on {producer['id']} orders the slice only; "
 +            f"leave depends_on empty, edit a file {producer['id']} also edits, or name a file "
 +            f"or output of {producer['id']} that this slice reads, imports, consumes or extends")
@@ -121,7 +148,7 @@
  def validate_slices(item: str, pdir: Path, max_slices: int = 8, max_body: int = 2000,
                      max_minutes: float = 90, is_union=lambda fp: False) -> tuple[list[str], list[dict]]:
      """The planner's output checked without a model. Returns (violations, slices)."""
-@@ -240,7 +354,10 @@
+@@ -240,7 +381,10 @@
                  v.append(f"{sid}: no \"Do not touch\" list")
              if not SLICE_TEST_RE.search(body):
                  v.append(f"{sid}: names no test file to add or extend")
@@ -133,7 +160,7 @@
      ids = [sl["id"] for sl in slices]
      for dup in sorted({i for i in ids if ids.count(i) > 1}):
          v.append(f"duplicate slice id {dup}")
-@@ -287,6 +404,13 @@
+@@ -287,6 +431,13 @@
          v.append(f"only the last slice may touch the changelog; {', '.join(logs)} all do")
      elif logs and anc.get(logs[0], set()) != set(ids) - {logs[0]}:
          v.append(f"{logs[0]} touches the changelog but is not the last slice (it must depend on every other slice)")
@@ -147,7 +174,7 @@
      return v, slices
  
  
-@@ -750,7 +874,7 @@
+@@ -750,7 +901,7 @@
              continue
          k, v = line.split(":", 1)
          k, v = k.strip(), v.strip()
@@ -156,7 +183,7 @@
              v = v.strip("[]")
              meta[k] = [x.strip().strip("'\"") for x in v.split(",") if x.strip()]
          elif k == "max_attempts":
-@@ -1717,6 +1841,12 @@
+@@ -1717,6 +1868,12 @@
  
      def promote_plan(self, task: dict) -> None:
          tid, st = task["id"], self.state.task(task["id"])
@@ -169,7 +196,7 @@
          pdir = self.proposed_dir(tid)
          files = sorted(pdir.glob("*.md"))
          clash = [f.name for f in files if (self.tasks_dir / f.name).exists()]
-@@ -3817,6 +3947,10 @@
+@@ -3817,6 +3974,10 @@
      if a.cmd == "promote":
          if not a.task or f.state.task(a.task)["status"] != "plan_ready":
              ap.error(f"promote needs a task whose plan passed gate and review; {a.task} is {f.state.task(a.task or '')['status']}")

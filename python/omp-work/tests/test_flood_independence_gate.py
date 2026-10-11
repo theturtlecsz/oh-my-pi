@@ -4,6 +4,8 @@ Contract defended:
 - validate_slices rejects an implementer dependency edge that only orders the slice: it is
   valid only when a shared non-union file overlaps or the dependent's work text explicitly
   consumes a named producer file/artifact.
+- Consumption verbs bind to producer tokens within one clause; hypothetical/reference/unrelated
+  prose stays local, and words inside path/artifact tokens cannot qualify consumption.
 - Both endpoints' exclusions filter shared edits and consumed files/outputs before evidence.
 - Basename aliases belong only to unique eligible producer files; outputs require exact tokens.
 - Exclusions (Do not touch sections in inline/bold/heading/list formats, plus Assumptions and
@@ -425,6 +427,8 @@ def test_legitimate_serial_chain_passes(staged_flood, tmp_path):
     ("Read src/unrelated.ts. src/a.ts stays unchanged.", False),
     ("Read src/unrelated.ts\nsrc/a.ts stays unchanged.", False),
     ("Read src/unrelated.ts, src/a.ts.", True),
+    ("Read `src/local.ts`, `src/a.ts`.", True),
+    ("Read src/local.ts and `src/a.ts`.", True),
     ("Never write src/b.ts, import src/a.ts.", True),
     ("Never write src/b.ts; import src/a.ts.", True),
     ("Never write src/b.ts. import src/a.ts.", True),
@@ -468,6 +472,21 @@ def test_affirmative_consumption_only(staged_flood, tmp_path, work, affirmative)
     ("Rather than importing src/a.ts, write src/b.ts.", False),
     ("Read src/unrelated.ts. src/a.ts stays unchanged.", False),
     ("Import src/b.ts. src/a.ts stays unchanged.", False),
+    ("Read src/local.ts, and document src/a.ts location.", False),
+    ("src/a.ts.", False),
+    ("Read src/a.ts for reference.", False),
+    ("Read src/a.ts as an unrelated example.", False),
+    ("We may import src/a.ts in a later iteration.", False),
+    ("We may import src/a.ts later. Import src/a.ts.", True),
+    ("Read src/a.ts for reference. Import src/a.ts.", True),
+    ("Read src/a.ts as an unrelated example. Import src/a.ts.", True),
+    ("Import src/a.ts, and we may revise src/b.ts later.", True),
+    ("Read docs/x.md for reference, but import src/a.ts.", True),
+    ("Read docs/x.md for reference and import src/a.ts.", True),
+    ("We may revise src/b.ts later, but import src/a.ts.", True),
+    ("Import src/a.ts, and document unrelated src/b.ts.", True),
+    ("Read src/local.ts and document src/a.ts location.", False),
+    ("Read src/local.ts, document src/a.ts location.", False),
 ])
 def test_clause_bounds(staged_flood, tmp_path, work, affirmative):
     """Negation stays in its clause; only a following producer token justifies an edge."""
@@ -487,11 +506,37 @@ def test_clause_bounds(staged_flood, tmp_path, work, affirmative):
         ], f"Order-only edge should fail: {work!r}: {violations}"
 
 
+@pytest.mark.parametrize("token,verb,artifact", [
+    ("src/future.ts", "Import", False),
+    ("src/optional.ts", "Read", False),
+    ("src/unrelated.ts", "Import", False),
+    ("reports/for-reference.json", "Consume", True),
+    ("future-artifact", "Consume", True),
+    ("optional-artifact", "Read", True),
+    ("unrelated-artifact", "Extend", True),
+    ("reference.patch", "Apply", True),
+    ("omp584-dependencies.patch", "Apply", True),
+    ("may-artifact", "Consume", True),
+])
+def test_qualifier_words_inside_tokens_are_consumption(staged_flood, tmp_path, token, verb, artifact):
+    """Producer names cannot turn affirmative consumption into hypothetical/reference prose."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path)
+    write_slice(pdir, "ITEM-s01", files=["src/producer.ts" if artifact else token],
+                outputs=[token] if artifact else [])
+    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/consumer.ts"],
+                body=f"{verb} {token}.\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    assert violations == []
+
+
 @pytest.mark.parametrize("work,affirmative", [
     ("Consume reports/result.json.", True),
     ("Consume result.json.", False),
     ("Consume reports/result.", False),
     ("Consume reports/result.json.old.", False),
+    ("We may consume reports/result.json later.", False),
+    ("Consume reports/result.json for reference.", False),
 ])
 def test_output_consumption_requires_whole_output(staged_flood, tmp_path, work, affirmative):
     """Output references permit ordering only when consumer names entire producer artifact."""
@@ -503,7 +548,11 @@ def test_output_consumption_requires_whole_output(staged_flood, tmp_path, work, 
     violations, _ = mod.validate_slices("ITEM", pdir)
     assert bool(violations) is not affirmative
     if violations:
-        assert "orders the slice only" in violations[0]
+        assert violations == [
+            "ITEM-s02: depends_on ITEM-s01 orders the slice only; leave depends_on empty, "
+            "edit a file ITEM-s01 also edits, or name a file or output of ITEM-s01 "
+            "that this slice reads, imports, consumes or extends"
+        ]
 
 
 @pytest.mark.parametrize("path", ["approval.json", "test_approval.py", "src/b.ts"])
