@@ -1,6 +1,7 @@
 """Versioned NSI-1 runtime models and validation helpers."""
 
-from . import models, validate
+from . import models, validate, authority
+from .authority import *
 from .models import (
     Applicability,
     TypedStringValue,
@@ -67,6 +68,7 @@ from .validate import (
 __all__ = [
     "validate",
     "models",
+    "authority",
     "Applicability",
     "TypedStringValue",
     "TypedIntegerValue",
@@ -125,4 +127,6 @@ __all__ = [
     "premise_truth",
     "validate_unknown_semantics",
     "validate_waiver",
+    "AuthorityRefusal",
+    "refuse_markdown_canonical_state",
 ]

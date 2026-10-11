@@ -12,26 +12,30 @@ host, or a host an unexpired standing policy grants, and refuses every other
 name with ``name_not_allowed`` on channel ``dns``; ``<dir>/ws.sock`` relays to
 ``workservice`` and nothing else. Both are consumed by
 :mod:`omp_work.egress_sandbox_helper`, which exposes them on loopback inside the
-worker's network namespace. Without a gateway no name service or WorkService
-relay exists and names fail as before.
+worker's network namespace. Without a gateway no name service exists;
+WorkService is relayed only when explicitly supplied. A separate
+``model_proxy=(host, port)``
+exposes only that loopback endpoint through ``model.sock``; it cannot coexist
+with a gateway or share the WorkService listener port. It adds no DNS service.
 """
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
-import signal
-import time
-from contextlib import suppress
-from pathlib import Path
 import shutil
+import signal
 import socket
 import struct
 import subprocess  # nosec B404 - argv lists only, no shell
 import sys
 import tempfile
 import threading
+import time
+from contextlib import suppress
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Iterable, Mapping, Protocol, Sequence, runtime_checkable
 
 from omp_work.egress_policy import (
@@ -269,6 +273,34 @@ class _DnsResponder:
             self._recorder.record(record)
 
 
+def _model_endpoint(
+    endpoint: tuple[str, int],
+    workservice: tuple[str, int] | None,
+    gateway: RelayGateway | None,
+) -> tuple[str, int]:
+    """Validate the dedicated loopback relay before starting any process."""
+    if not isinstance(endpoint, tuple) or len(endpoint) != 2:
+        raise ValueError("model_proxy must be a loopback (host, port)")
+    host, port = endpoint
+    if not isinstance(host, str):
+        raise ValueError("model_proxy host must be loopback")
+    try:
+        address = ipaddress.ip_address("127.0.0.1" if host == "localhost" else host)
+    except (ValueError, TypeError):
+        raise ValueError("model_proxy host must be loopback") from None
+    if not address.is_loopback:
+        raise ValueError("model_proxy host must be loopback")
+    if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
+        raise ValueError("model_proxy port must be between 1 and 65535")
+    if workservice is not None:
+        ws_port = workservice[1]
+        if not isinstance(ws_port, int) or isinstance(ws_port, bool) or not 1 <= ws_port <= 65535:
+            raise ValueError("WorkService port must be between 1 and 65535")
+    if gateway is not None or (workservice is not None and port == workservice[1]):
+        raise ValueError("model_proxy must be separate from WorkService and gateway")
+    return str(address), port
+
+
 class _TcpOverUnixRelay:
     """Accepts AF_UNIX connections on ``sock_path`` and relays each to TCP."""
 
@@ -277,6 +309,8 @@ class _TcpOverUnixRelay:
         self._host = tcp_host
         self._port = tcp_port
         self._stop = threading.Event()
+        self._connections: set[socket.socket] = set()
+        self._lock = threading.Lock()
         self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._thread = threading.Thread(target=self._run, daemon=True)
 
@@ -291,6 +325,11 @@ class _TcpOverUnixRelay:
         self._stop.set()
         self._thread.join(timeout=1.0)
         self._sock.close()
+        with self._lock:
+            for conn in self._connections:
+                with suppress(OSError):
+                    conn.shutdown(socket.SHUT_RDWR)
+                conn.close()
         with suppress(OSError):
             self._path.unlink()
 
@@ -305,14 +344,26 @@ class _TcpOverUnixRelay:
             threading.Thread(target=self._relay, args=(conn,), daemon=True).start()
 
     def _relay(self, conn: socket.socket) -> None:
-        upstream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        family = socket.AF_INET6 if ":" in self._host else socket.AF_INET
+        upstream = socket.socket(family, socket.SOCK_STREAM)
+        with self._lock:
+            if self._stop.is_set():
+                conn.close()
+                upstream.close()
+                return
+            self._connections.update((conn, upstream))
         try:
+            upstream.settimeout(5.0)
             upstream.connect((self._host, self._port))
+            upstream.settimeout(None)
+            _pump(conn, upstream)
         except OSError:
+            pass
+        finally:
             conn.close()
             upstream.close()
-            return
-        _pump(conn, upstream)
+            with self._lock:
+                self._connections.difference_update((conn, upstream))
 
 
 def _pump(left: socket.socket, right: socket.socket) -> None:
@@ -423,8 +474,11 @@ def _run_sandbox_body(
     worktree: str | Path | None = None,
     cancel: threading.Event | None = None,
     output: bytearray | None = None,
+    model_proxy: tuple[str, int] | None = None,
 ) -> int:
     """Shared sandbox body. ``root`` names the worker profile in config.json."""
+    if model_proxy is not None:
+        model_proxy = _model_endpoint(model_proxy, workservice, gateway)
     resolved: dict[str, str] = {}
     for tool in ("unshare", "setpriv", "ip"):
         found = shutil.which(tool)
@@ -542,8 +596,9 @@ def _run_sandbox_body(
 
     dns_responder: _DnsResponder | None = None
     ws_relay: _TcpOverUnixRelay | None = None
+    model_relay: _TcpOverUnixRelay | None = None
     proxy_sock_path: Path | None = None
-    mask_sockets_root = gateway is not None or workservice is not None
+    mask_sockets_root = gateway is not None or workservice is not None or model_proxy is not None
     returncode = -1
     canceled = False
     drain: threading.Thread | None = None
@@ -557,6 +612,10 @@ def _run_sandbox_body(
             ws_relay = _TcpOverUnixRelay(sandbox_dir / "ws.sock", str(workservice[0]), int(workservice[1]))
             ws_relay.start()
 
+        if model_proxy is not None:
+            model_relay = _TcpOverUnixRelay(sandbox_dir / "model.sock", *model_proxy)
+            model_relay.start()
+
         config = {
             "record_sock": str(sock_path),
             "setup_ok": str(setup_ok),
@@ -568,6 +627,8 @@ def _run_sandbox_body(
             "dns_sock": str(sandbox_dir / "dns.sock") if gateway is not None else None,
             "ws_sock": str(sandbox_dir / "ws.sock") if ws_relay is not None else None,
             "workservice_port": int(workservice[1]) if workservice is not None else None,
+            "model_sock": str(sandbox_dir / "model.sock") if model_relay is not None else None,
+            "model_port": model_proxy[1] if model_proxy is not None else None,
             "ca_cert_path": str(ca_cert_path) if ca_cert_path is not None else None,
             "sockets_root": str(sockets_root) if mask_sockets_root else None,
             "sandbox_dir": str(sandbox_dir) if mask_sockets_root else None,
@@ -632,7 +693,7 @@ def _run_sandbox_body(
                     break
         finally:
             dgram_sock.close()
-            for relay in (ws_relay, dns_responder):
+            for relay in (model_relay, ws_relay, dns_responder):
                 if relay is not None:
                     with suppress(Exception):
                         relay.stop()
@@ -666,6 +727,7 @@ def run_sandboxed(
     worktree: str | Path | None = None,
     cancel: threading.Event | None = None,
     output: bytearray | None = None,
+    model_proxy: tuple[str, int] | None = None,
 ) -> int:
     """Run argv inside an isolated egress sandbox.
 
@@ -679,7 +741,9 @@ def run_sandboxed(
     calls use ``--kill-child``. ``cancel``, when set, SIGKILLs that session and
     returns -9. A timeout SIGKILLs the same session and raises
     ``subprocess.TimeoutExpired``. ``output``, when given, receives at most
-    1 MiB of combined worker output.
+    1 MiB of combined worker output. ``model_proxy`` is a dedicated loopback
+    TCP relay, validated before namespace probing and socket creation; it
+    cannot share a port with WorkService or run alongside a gateway.
     """
     if identity.stage == "research":
         raise ResearchStageRefused("research_stage_launcher")
@@ -699,6 +763,7 @@ def run_sandboxed(
         worktree=worktree,
         cancel=cancel,
         output=output,
+        model_proxy=model_proxy,
     )
 
 

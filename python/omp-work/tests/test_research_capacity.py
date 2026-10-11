@@ -9,6 +9,26 @@ to the native jobs API. One worker's free capacity admits both an
 adapter-enqueued job and a directly enqueued engineering job, claim routing
 filters on capabilities rather than capacity, and cleanup cancels every open
 job so the module-scoped fixture holds no lease or backlog.
+
+OMP-318-s02-s06: locality uses the s05 capability grammar and the adapter.
+``_register_component`` records a worker named locality with compute.cpu,
+compute.gpu, location:local, location:remote, and instrument:scope, and does
+not replace the fixture worker component. Two uniquely named capacity-2
+workers bind that sha: one holds compute.cpu and location:local, the other
+holds compute.cpu and location:remote. Adapter enqueue of compute.cpu with
+weight cpu=1, lease 60, trial_id None, and location local persists exactly
+one location:local token. The remote claim returns no job; the local claim
+returns that job admitted under its worker_id. A finally cancel with a fresh
+operation id leaves no backlog or active lease.
+
+OMP-318-s02-s08: lifecycle fencing. A capacity-2 compute.cpu worker on the
+fixture worker sha claims a cpu=1 job (memory, gpu, and model calls 0,
+lease 60). Cancel with reason "test cancellation", then settle of the saved
+fence with a sound receipt, raises JobError job_fence_stale and the SQL row
+stays cancelled. A fresh claim whose lease is moved one second into the past
+is reclaimed by the adapter; the row is backlog at fence+1, and settle of
+the saved holder and fence raises the same error while that row stays
+backlog. Leftovers are cancelled in finally.
 """
 
 from __future__ import annotations
@@ -25,6 +45,7 @@ from native_jobs_support import native_jobs  # noqa: F401  (fixture)
 from omp_work.jobs import JobError, NativeJobStore, enqueue_job
 from omp_work.research.capacity import CapacityRefused, ResearchCapacity
 from omp_work.research.receipt import TrialReceipt
+from test_research_contract import _register_component
 
 pytest_plugins = ("test_workflow_service",)
 pytestmark = pytest.mark.skipif(
@@ -571,3 +592,260 @@ def test_claim_filters_on_capability_not_free_capacity(native_jobs) -> None:
     finally:
         _cancel_open(native_jobs, gate)
     assert _open_job_ids(native_jobs) == []
+
+
+def _persisted_capabilities(native_jobs, job_id: str) -> list[str]:
+    with psycopg.connect(
+        **native_jobs.service.config.connection_kwargs("omp_work_app"),
+        row_factory=dict_row,
+        autocommit=True,
+    ) as conn:
+        row = conn.execute(
+            """
+            SELECT required_capabilities FROM omp_jobs.jobs
+            WHERE workspace_id = %s AND job_id = %s
+            """,
+            (native_jobs.workspace_id, job_id),
+        ).fetchone()
+    assert row is not None
+    return list(row["required_capabilities"])
+
+
+def test_locality_routes_the_located_job_to_the_local_worker(native_jobs) -> None:
+    """location:local is persisted once and claimed only by the local worker.
+
+    The locality component is the s05 grammar registered through the research
+    contract. The fixture worker map is left as the campaign recorded it.
+    trial_id None keeps the job off campaign compatibility, which does not
+    list this component. The remote worker has no location:local token, so
+    its claim misses; the local worker admits the same job.
+    """
+    store = NativeJobStore(native_jobs.service.config)
+    gate = ResearchCapacity(store, native_jobs.workspace_id, native_jobs.actor_id)
+    fixture_worker = native_jobs.components["worker"]
+    locality_sha = _register_component(
+        native_jobs.service,
+        native_jobs.workspace_id,
+        "worker",
+        name="locality",
+        capabilities=(
+            "compute.cpu",
+            "compute.gpu",
+            "location:local",
+            "location:remote",
+            "instrument:scope",
+        ),
+    )
+    assert native_jobs.components["worker"] == fixture_worker
+    assert locality_sha != fixture_worker
+
+    local_worker_id = f"local-{uuid4()}"
+    remote_worker_id = f"remote-{uuid4()}"
+    local_worker = gate.register(
+        str(uuid4()),
+        local_worker_id,
+        locality_sha,
+        ["compute.cpu", "location:local"],
+        2,
+    )
+    remote_worker = gate.register(
+        str(uuid4()),
+        remote_worker_id,
+        locality_sha,
+        ["compute.cpu", "location:remote"],
+        2,
+    )
+    assert local_worker["status"] == "applied"
+    assert remote_worker["status"] == "applied"
+    assert local_worker["worker"]["component_sha256"] == locality_sha
+    assert remote_worker["worker"]["component_sha256"] == locality_sha
+    assert local_worker["worker"]["capacity"] == 2
+    assert remote_worker["worker"]["capacity"] == 2
+    assert local_worker["worker"]["capabilities"] == ["compute.cpu", "location:local"]
+    assert remote_worker["worker"]["capabilities"] == [
+        "compute.cpu",
+        "location:remote",
+    ]
+    assert "location:local" not in remote_worker["worker"]["capabilities"]
+
+    work_id = UUID(native_jobs.item["work_id"])
+    job_id = f"job-{uuid4()}"
+    required = ["compute.cpu"]
+    resources = {"cpu": 1, "memory_mib": 0, "gpu": 0, "model_calls": 0}
+    try:
+        _cancel_open(native_jobs, gate)
+        enqueued = gate.enqueue(
+            str(uuid4()),
+            job_id,
+            work_id,
+            required,
+            resources,
+            60,
+            trial_id=None,
+            location="local",
+        )
+        assert enqueued["status"] == "applied"
+        assert required == ["compute.cpu"]
+        persisted = _persisted_capabilities(native_jobs, job_id)
+        assert persisted.count("location:local") == 1
+        assert persisted == ["compute.cpu", "location:local"]
+
+        remote_claim = gate.claim(str(uuid4()), remote_worker_id)
+        assert remote_claim["status"] == "applied"
+        assert remote_claim["job"] is None
+        waiting = _status_rows(native_jobs, [job_id])[job_id]
+        assert waiting["status"] == "backlog"
+        assert waiting["worker_id"] is None
+
+        local_claim = gate.claim(str(uuid4()), local_worker_id)
+        assert local_claim["status"] == "applied"
+        assert local_claim["job"]["job_id"] == job_id
+        assert local_claim["job"]["status"] == "admitted"
+        assert local_claim["job"]["worker_id"] == local_worker_id
+        admitted = _status_rows(native_jobs, [job_id])[job_id]
+        assert admitted["status"] == "admitted"
+        assert admitted["worker_id"] == local_worker_id
+        assert _unreleased_reservations(native_jobs, remote_worker_id) == 0
+        assert _unreleased_reservations(native_jobs, local_worker_id) == 1
+    finally:
+        _cancel_open(native_jobs, gate)
+    assert _open_job_ids(native_jobs) == []
+    assert _unreleased_reservations(native_jobs, local_worker_id) == 0
+    assert _unreleased_reservations(native_jobs, remote_worker_id) == 0
+
+
+def _lifecycle_row(native_jobs, job_id: str) -> dict[str, object]:
+    with psycopg.connect(
+        **native_jobs.service.config.connection_kwargs("omp_work_app"),
+        row_factory=dict_row,
+        autocommit=True,
+    ) as conn:
+        row = conn.execute(
+            """
+            SELECT status, fence
+            FROM omp_jobs.jobs
+            WHERE job_id = %s
+            """,
+            (job_id,),
+        ).fetchone()
+    assert row is not None
+    return row
+
+
+def _cpu_worker(native_jobs, gate: ResearchCapacity) -> str:
+    worker_id = f"cpu-{uuid4()}"
+    registered = gate.register(
+        str(uuid4()),
+        worker_id,
+        native_jobs.components["worker"],
+        ["compute.cpu"],
+        2,
+    )
+    assert registered["status"] == "applied"
+    assert registered["worker"]["capacity"] == 2
+    assert registered["worker"]["component_sha256"] == native_jobs.components["worker"]
+    return worker_id
+
+
+def _enqueue_cpu(native_jobs, gate: ResearchCapacity, job_id: str) -> None:
+    resources = _resources(cpu=1, memory_mib=0, gpu=0, model_calls=0)
+    enqueued = gate.enqueue(
+        str(uuid4()),
+        job_id,
+        UUID(native_jobs.item["work_id"]),
+        ["compute.cpu"],
+        resources,
+        60,
+        trial_id=native_jobs.trial_id,
+    )
+    assert enqueued["status"] == "applied"
+    assert enqueued["job"]["resources"] == resources
+    assert enqueued["job"]["lease_seconds"] == 60
+
+
+def test_stale_settlement_after_cancel_leaves_the_row_cancelled(native_jobs) -> None:
+    """Cancel, then settle the saved fence: job_fence_stale, row stays cancelled."""
+    store = NativeJobStore(native_jobs.service.config)
+    gate = ResearchCapacity(store, native_jobs.workspace_id, native_jobs.actor_id)
+    worker_id = _cpu_worker(native_jobs, gate)
+    job_id = f"job-{uuid4()}"
+    evaluator = native_jobs.components["evaluator"]
+    try:
+        _cancel_open(native_jobs, gate)
+        _enqueue_cpu(native_jobs, gate, job_id)
+        claimed = gate.claim(str(uuid4()), worker_id)
+        assert claimed["status"] == "applied"
+        assert claimed["job"]["job_id"] == job_id
+        saved_fence = claimed["job"]["fence"]
+        saved_worker_id = claimed["job"]["worker_id"]
+        assert saved_worker_id == worker_id
+        cancelled = gate.cancel(str(uuid4()), job_id, "test cancellation")
+        assert cancelled["status"] == "applied"
+        assert cancelled["job_ids"] == [job_id]
+        with pytest.raises(JobError) as stale:
+            gate.settle(
+                str(uuid4()),
+                job_id,
+                saved_worker_id,
+                saved_fence,
+                "succeeded",
+                _sound_receipt(native_jobs, job_id),
+                evaluator,
+            )
+        assert stale.value.code == "job_fence_stale"
+        assert _lifecycle_row(native_jobs, job_id)["status"] == "cancelled"
+    finally:
+        _cancel_open(native_jobs, gate)
+
+
+def test_stale_settlement_after_reclaim_leaves_the_row_backlog(native_jobs) -> None:
+    """Expire, reclaim, then settle the saved fence: job_fence_stale, fence stays +1."""
+    store = NativeJobStore(native_jobs.service.config)
+    gate = ResearchCapacity(store, native_jobs.workspace_id, native_jobs.actor_id)
+    worker_id = _cpu_worker(native_jobs, gate)
+    job_id = f"job-{uuid4()}"
+    evaluator = native_jobs.components["evaluator"]
+    try:
+        _cancel_open(native_jobs, gate)
+        _enqueue_cpu(native_jobs, gate, job_id)
+        claimed = gate.claim(str(uuid4()), worker_id)
+        assert claimed["status"] == "applied"
+        assert claimed["job"]["job_id"] == job_id
+        saved_fence = claimed["job"]["fence"]
+        saved_worker_id = claimed["job"]["worker_id"]
+        assert saved_worker_id == worker_id
+        with psycopg.connect(
+            **native_jobs.service.config.connection_kwargs("omp_work_app"),
+            row_factory=dict_row,
+            autocommit=True,
+        ) as conn:
+            conn.execute(
+                """
+                UPDATE omp_jobs.jobs
+                SET lease_expires_at = clock_timestamp() - interval '1 second'
+                WHERE job_id=%s
+                """,
+                (job_id,),
+            )
+        reclaimed = gate.reclaim(str(uuid4()))
+        assert reclaimed["status"] == "applied"
+        assert job_id in reclaimed["job_ids"]
+        returned = _lifecycle_row(native_jobs, job_id)
+        assert returned["status"] == "backlog"
+        assert returned["fence"] == saved_fence + 1
+        with pytest.raises(JobError) as stale:
+            gate.settle(
+                str(uuid4()),
+                job_id,
+                saved_worker_id,
+                saved_fence,
+                "succeeded",
+                _sound_receipt(native_jobs, job_id),
+                evaluator,
+            )
+        assert stale.value.code == "job_fence_stale"
+        stayed = _lifecycle_row(native_jobs, job_id)
+        assert stayed["status"] == "backlog"
+        assert stayed["fence"] == saved_fence + 1
+    finally:
+        _cancel_open(native_jobs, gate)

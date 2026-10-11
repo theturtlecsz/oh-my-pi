@@ -5,7 +5,9 @@ jail (tmpfs ``pivot_root``, read-only ``/usr`` ``/bin`` ``/lib``, a fresh
 ``/proc``, and its own user, PID, and network namespaces) plus one read-write
 bind of a linked worktree at ``/work`` and any read-only files the caller
 names. The process environment is PATH, LANG, TERM, TZ, OMP_TASK_TOKEN, and
-OMP_WORK_URL. The only loopback service is the WorkService relay.
+OMP_WORK_URL. Worker launches may additionally receive OMP_MODEL_PROXY_URL,
+OMP_MODEL_TOKEN, and OMP_WORKER_MANIFEST from explicit caller arguments.
+Only WorkService and the optional dedicated model relay listen on loopback.
 
 The worktree must be a linked worktree (a ``.git`` file whose gitdir lives
 under ``worktrees/``) strictly inside ``OMP_WORKTREES_DIR``. The live checkout
@@ -21,7 +23,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from omp_work.egress_policy import Identity, MemoryRecorder
-from omp_work.egress_sandbox import run_sandboxed
+from omp_work.egress_sandbox import _model_endpoint, run_sandboxed
 
 __all__ = ["WorkerSandboxRefused", "run_worker"]
 
@@ -33,8 +35,8 @@ class WorkerSandboxRefused(RuntimeError):
     """Raised when a worker launch is refused before any sandbox process starts.
 
     ``code`` is ``identity_not_allowed``, ``worktrees_dir_unconfigured``,
-    ``worktree_not_allowed``, ``live_checkout``, ``ro_bind_not_allowed``, or
-    ``workservice_not_allowed``.
+    ``worktree_not_allowed``, ``live_checkout``, ``ro_bind_not_allowed``,
+    ``workservice_not_allowed``, or ``model_proxy_not_allowed``.
     """
 
     code: str
@@ -126,20 +128,41 @@ def run_worker(
     identity: str,
     ro_binds: Sequence[str | Path] = (),
     timeout: float | int | None,
+    model_proxy: tuple[str, int] | None = None,
+    model_token: str | None = None,
+    manifest_path: str | Path | None = None,
 ) -> int:
     """Run ``argv`` in the worker jail. Returns the process exit status.
 
     Refuses, before any sandbox process, a worktree that is the live checkout
     or that lies outside ``OMP_WORKTREES_DIR``. ``token`` is ``OMP_TASK_TOKEN``.
     ``workservice_socket`` is the host WorkService the existing relay exposes
-    on loopback inside the jail as ``OMP_WORK_URL``.
+    on loopback inside the jail as ``OMP_WORK_URL``. Worker-only ``model_proxy``
+    exposes a separate loopback endpoint as ``OMP_MODEL_PROXY_URL`` without a
+    gateway or DNS. ``model_token`` sets ``OMP_MODEL_TOKEN``; ``manifest_path``
+    is a caller-named read-only file bind exposed as ``OMP_WORKER_MANIFEST``.
+    An executable outside the worktree can be supplied through ``ro_binds``.
     """
     if identity not in _IDENTITIES:
         raise WorkerSandboxRefused("identity_not_allowed")
+    if identity != "worker" and any(
+        value is not None for value in (model_proxy, model_token, manifest_path)
+    ):
+        raise WorkerSandboxRefused("identity_not_allowed")
+    if model_token is not None and model_proxy is None:
+        raise WorkerSandboxRefused("model_proxy_not_allowed")
     root = _worktrees_dir()
     linked = _linked_worktree(worktree, root)
     binds = tuple(_ro_bind(item) for item in ro_binds)
     host, port = _workservice(workservice_socket)
+    if model_proxy is not None:
+        try:
+            model_proxy = _model_endpoint(model_proxy, (host, port), None)
+        except ValueError:
+            raise WorkerSandboxRefused("model_proxy_not_allowed") from None
+    manifest = _ro_bind(manifest_path) if manifest_path is not None else None
+    if manifest is not None:
+        binds = (*binds, manifest)
     env = {
         "PATH": _PATH,
         "LANG": "C.UTF-8",
@@ -148,6 +171,12 @@ def run_worker(
         "OMP_TASK_TOKEN": token,
         "OMP_WORK_URL": f"http://127.0.0.1:{port}",
     }
+    if model_proxy is not None:
+        env["OMP_MODEL_PROXY_URL"] = f"http://127.0.0.1:{model_proxy[1]}"
+    if model_token is not None:
+        env["OMP_MODEL_TOKEN"] = model_token
+    if manifest is not None:
+        env["OMP_WORKER_MANIFEST"] = manifest
     egress = Identity(
         workspace_id="worker",
         project_id=identity,
@@ -166,4 +195,5 @@ def run_worker(
         root="worker",
         ro_binds=binds,
         worktree=linked,
+        model_proxy=model_proxy,
     )
