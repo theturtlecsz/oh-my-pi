@@ -272,6 +272,37 @@ def _prepare_gemini(route: ModelRoute, request: dict[str, Any]) -> tuple[dict, i
     _refuse_unknown(request, _GEMINI_TOP, "disallowed_field")
     if not isinstance(request.get("contents"), list) or not request["contents"]:
         raise UpstreamRefused("malformed_request")
+    # Gemini has no request-level input context cap. Only accept self-contained
+    # text/function turns: media and server tools can expand a short request
+    # into an input larger than the configured admission context.
+    contents = list(request["contents"])
+    if "systemInstruction" in request:
+        contents.append(request["systemInstruction"])
+    for content in contents:
+        content = _object(content, "malformed_request")
+        _refuse_unknown(content, {"role", "parts"}, "disallowed_field")
+        parts = content.get("parts")
+        if not isinstance(parts, list) or not parts:
+            raise UpstreamRefused("malformed_request")
+        for part in parts:
+            part = _object(part, "malformed_request")
+            _refuse_unknown(
+                part,
+                {"text", "functionCall", "functionResponse", "thought", "thoughtSignature"},
+                "unbounded_option",
+            )
+            if "text" in part and not isinstance(part["text"], str):
+                raise UpstreamRefused("malformed_request")
+            if "functionResponse" in part:
+                response = _object(part["functionResponse"], "malformed_request")
+                _refuse_unknown(response, {"id", "name", "response"}, "unbounded_option")
+    tools = request.get("tools", [])
+    if not isinstance(tools, list):
+        raise UpstreamRefused("malformed_request")
+    for tool in tools:
+        _refuse_unknown(
+            _object(tool, "malformed_request"), {"functionDeclarations"}, "unbounded_option"
+        )
     config = _object(request.get("generationConfig", {}), "malformed_request")
     _refuse_unknown(config, _GEMINI_GENERATION, "disallowed_option")
     if config.get("candidateCount", 1) != 1:
@@ -344,9 +375,13 @@ def prepare(
         request, output_bound = _prepare_ollama(route, request)
         url = f"{_origin_base(route.origin)}/api/chat"
     payload = json.dumps(request, separators=(",", ":")).encode("utf-8")
-    # One token is at most one byte of request text, and the provider
-    # refuses past the context window.
-    input_bound = min(len(payload), route.context_tokens)
+    # Reserve the entire configured input context, including cached input.
+    # Serialized size cannot estimate provider tokens (especially for media).
+    # Gemini lacks num_ctx; conservatively reject text exceeding this byte
+    # budget instead of silently clamping an oversized input reservation.
+    if route.api == GEMINI and len(payload) > route.context_tokens:
+        raise UpstreamRefused("context_bound_exceeded")
+    input_bound = route.context_tokens
     rate = max(route.input_usd, route.cache_usd)
     usd = (rate * input_bound + route.output_usd * output_bound) / _MILLION
     return Prepared(
@@ -369,41 +404,56 @@ def _usd(route: ModelRoute, input_t: int, output_t: int, cache_t: int) -> Decima
 
 
 def _json_lines(data: bytes, *, sse: bool) -> list[dict[str, Any]]:
+    chunks: list[dict[str, Any]] = []
+    malformed = False
     try:
         text = data.decode("utf-8")
-    except UnicodeDecodeError as error:
-        raise UpstreamUnmeasured("malformed_response") from error
-    chunks: list[dict[str, Any]] = []
-    for line in text.splitlines():
-        line = line.strip()
-        if sse:
-            if not line.startswith("data:"):
+        for line in text.splitlines():
+            line = line.strip()
+            if sse:
+                if not line.startswith("data:"):
+                    continue
+                line = line[5:].strip()
+            if not line or line == "[DONE]":
                 continue
-            line = line[5:].strip()
-        if not line or line == "[DONE]":
-            continue
-        try:
             chunk = json.loads(line)
-        except ValueError as error:
-            raise UpstreamUnmeasured("malformed_response") from error
-        if not isinstance(chunk, dict):
-            raise UpstreamUnmeasured("malformed_response")
-        chunks.append(chunk)
+            if not isinstance(chunk, dict):
+                malformed = True
+                break
+            chunks.append(chunk)
+    except (ValueError, UnicodeDecodeError):
+        malformed = True
+    # Raise outside the handler: decoder errors retain the entire response,
+    # which may include credentials echoed by the provider.
+    if malformed:
+        raise UpstreamUnmeasured("malformed_response")
     return chunks
 
 
 def _gemini_usage(data: bytes) -> tuple[int, int, int]:
-    usage: object = None
-    for chunk in _json_lines(data, sse=True):
+    chunks = _json_lines(data, sse=True)
+    finished = False
+    for chunk in chunks:
         if "error" in chunk:
             raise UpstreamUnmeasured("provider_error")
-        if "usageMetadata" in chunk:
-            # Snapshots are cumulative: the last one is the total.
-            usage = chunk["usageMetadata"]
+        candidates = chunk.get("candidates", [])
+        if not isinstance(candidates, list) or any(
+            not isinstance(candidate, dict) for candidate in candidates
+        ):
+            raise UpstreamUnmeasured("malformed_response")
+        finished = finished or any(
+            isinstance(candidate.get("finishReason"), str) and candidate["finishReason"]
+            for candidate in candidates
+        )
+    # Snapshots are cumulative. Only a final snapshot after completion can
+    # measure the whole turn; earlier usage cannot cover subsequent output.
+    usage = chunks[-1].get("usageMetadata") if chunks else None
     if not isinstance(usage, dict):
         raise UpstreamUnmeasured("missing_usage")
+    if not finished:
+        raise UpstreamUnmeasured("incomplete_response")
     prompt = usage.get("promptTokenCount")
-    candidates = usage.get("candidatesTokenCount", 0)
+    candidates = usage.get("candidatesTokenCount")
     cached = usage.get("cachedContentTokenCount", 0)
     thoughts = usage.get("thoughtsTokenCount", 0)
     tool_prompt = usage.get("toolUsePromptTokenCount", 0)
@@ -443,11 +493,13 @@ class ModelProxyUpstream:
 
     def invoke(self, prepared: Prepared) -> UpstreamResult:
         route = prepared.route
+        key: str | None = None
         try:
             key = self._config.read_secret(route.key_file)
-        except ValueError as error:
-            raise UpstreamRefused("key_unavailable") from error
-        if _BAD_KEY_CHARS.search(key):
+        except ValueError:
+            # A credential decoding error can retain the secret bytes too.
+            pass
+        if key is None or _BAD_KEY_CHARS.search(key):
             raise UpstreamRefused("key_unavailable")
         headers = dict(prepared.headers)
         if route.api == GEMINI:

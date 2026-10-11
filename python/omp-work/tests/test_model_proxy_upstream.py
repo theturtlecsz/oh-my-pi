@@ -144,6 +144,9 @@ OLLAMA_TOOL_TURN = jsonl(
             "tool_calls": [{"function": {"name": "ls", "arguments": {"p": "."}}}],
         },
         "done": False,
+        "prompt_eval_count": 1000,
+        "prompt_eval_cached_count": 400,
+        "eval_count": 20,
     },
     {
         "message": {"role": "assistant", "content": ""},
@@ -197,6 +200,7 @@ def test_gemini_bound_includes_thinking_and_caps_options():
     assert sent["generationConfig"]["maxOutputTokens"] == 1000
     assert sent["generationConfig"]["thinkingConfig"]["thinkingBudget"] == 500
     assert prepared.max_output_tokens == 1500
+    assert prepared.max_input_tokens == route.context_tokens
     expected = (
         Decimal("0.30") * prepared.max_input_tokens + Decimal("2.50") * 1500
     ) / 1_000_000
@@ -210,6 +214,52 @@ def test_gemini_bound_includes_thinking_and_caps_options():
     ):
         with pytest.raises(UpstreamRefused):
             prepare(route, body(generationConfig=cfg))
+
+
+@pytest.mark.parametrize("api", [GEMINI, OLLAMA])
+def test_admission_reserves_context_at_higher_input_or_cache_rate(api):
+    route = (gemini_route if api == GEMINI else ollama_route)(cache_usd=Decimal("9"))
+    prepared = prepare(route, body() if api == GEMINI else ollama_body())
+    assert prepared.max_input_tokens == route.context_tokens
+    assert prepared.max_usd == (
+        Decimal("9") * route.context_tokens
+        + route.output_usd * prepared.max_output_tokens
+    ) / 1_000_000
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"contents": [{"parts": [{"fileData": {"fileUri": "https://files.example/large.pdf"}}]}]},
+        {"contents": [{"parts": [{"inlineData": {"mimeType": "image/png", "data": "AAAA"}}]}]},
+        {"systemInstruction": {"parts": [{"fileData": {"fileUri": "https://files.example/doc"}}]}},
+        {"tools": [{"googleSearch": {}}]},
+        {"contents": [{"parts": [{"functionResponse": {"name": "read", "response": {}, "parts": [{"inlineData": {"data": "AAAA"}}]}}]}]},
+    ],
+)
+def test_gemini_refuses_inputs_expanding_beyond_serialized_context(extra):
+    with pytest.raises(UpstreamRefused, match="unbounded_option"):
+        prepare(gemini_route(), body(**extra))
+
+
+def test_gemini_rejects_oversized_input_instead_of_clamping_admission():
+    with pytest.raises(UpstreamRefused, match="context_bound_exceeded"):
+        prepare(
+            gemini_route(context_tokens=2000),
+            body(contents=[{"parts": [{"text": "x" * 2001}]}]),
+        )
+
+
+def test_gemini_bounded_function_history_preserves_signatures_and_results():
+    contents = [
+        {"role": "model", "parts": [{"functionCall": {"name": "read", "args": {}}, "thoughtSignature": "SIG"}]},
+        {"role": "user", "parts": [{"functionResponse": {"name": "read", "response": {"text": "result"}}}]},
+    ]
+    prepared = prepare(
+        gemini_route(),
+        body(contents=contents, tools=[{"functionDeclarations": [{"name": "read"}]}]),
+    )
+    assert json.loads(prepared.body)["contents"] == contents
 
 
 def test_ollama_bound_and_option_refusals():
@@ -305,9 +355,62 @@ def test_errors_never_carry_key(config):
     assert KEY not in str(info.value)
 
 
+@pytest.mark.parametrize("api", [GEMINI, OLLAMA])
+@pytest.mark.parametrize("payload", [KEY.encode() + b"\xff", b'{"key":"' + KEY.encode() + b'", invalid}'])
+def test_malformed_provider_response_drops_secret_bearing_decoder_errors(config, api, payload):
+    prepared = prepare(
+        gemini_route() if api == GEMINI else ollama_route(),
+        body() if api == GEMINI else ollama_body(),
+    )
+    if api == GEMINI:
+        payload = b"data: " + payload + b"\n\n"
+    with pytest.raises(UpstreamUnmeasured, match="malformed_response") as info:
+        ModelProxyUpstream(config, FakeTransport(body=payload)).invoke(prepared)
+    assert info.value.__cause__ is None
+    assert info.value.__context__ is None
+    assert KEY not in str(info.value)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        sse(
+            {"usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 1}},
+            {"candidates": [{"content": {"parts": [{"text": "later output"}]}, "finishReason": "STOP"}]},
+        ),
+        sse({"candidates": [{"content": {"parts": [{"text": "output"}]}, "finishReason": "STOP"}], "usageMetadata": {"promptTokenCount": 5}}),
+        sse({"candidates": [{"content": {"parts": [{"text": "truncated"}]}}], "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 2}}),
+    ],
+)
+def test_gemini_stale_incomplete_or_partial_usage_requires_bound_charge(config, payload):
+    prepared = prepare(gemini_route(), body())
+    with pytest.raises(UpstreamUnmeasured):
+        ModelProxyUpstream(config, FakeTransport(body=payload)).invoke(prepared)
+
+
+def test_gemini_accepts_final_usage_only_chunk_after_completion(config):
+    payload = sse(
+        {"candidates": [{"content": {"parts": [{"text": "done"}]}, "finishReason": "STOP"}]},
+        {"usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 2}},
+    )
+    result = ModelProxyUpstream(config, FakeTransport(body=payload)).invoke(
+        prepare(gemini_route(), body())
+    )
+    assert (result.input_tokens, result.output_tokens) == (5, 2)
+
+
 def test_missing_key_file_refused_without_sending(config):
     prepared = prepare(gemini_route(key_file="absent"), body())
     transport = FakeTransport(body=GEMINI_TOOL_TURN)
     with pytest.raises(UpstreamRefused):
         ModelProxyUpstream(config, transport).invoke(prepared)
+    assert transport.calls == []
+
+
+def test_invalid_credential_encoding_refused_without_leaking_or_sending(config):
+    config.secret_path("gemini-key").write_bytes(KEY.encode() + b"\xff")
+    transport = FakeTransport(body=GEMINI_TOOL_TURN)
+    with pytest.raises(UpstreamRefused, match="key_unavailable") as info:
+        ModelProxyUpstream(config, transport).invoke(prepare(gemini_route(), body()))
+    assert info.value.__cause__ is None and info.value.__context__ is None
     assert transport.calls == []
