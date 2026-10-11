@@ -15,6 +15,7 @@ All three return the native result dict unchanged and propagate ``JobError``.
 
 from __future__ import annotations
 
+import hashlib
 from uuid import UUID
 
 from omp_work.jobs import (
@@ -23,8 +24,10 @@ from omp_work.jobs import (
     enqueue_job,
     reconcile_jobs,
     register_worker,
+    settle_job,
 )
 from omp_work.jobs.cancel import cancel_job
+from omp_work.research.receipt import TrialReceipt, verify_receipt
 
 __all__ = ["CapacityRefused", "ResearchCapacity"]
 
@@ -35,7 +38,7 @@ _RESOURCE_ERROR = (
 
 
 class CapacityRefused(Exception):
-    """Enqueue refused before a job row is written."""
+    """Research operation refused before native job state is changed."""
 
     def __init__(self, code: str) -> None:
         super().__init__(code)
@@ -154,6 +157,46 @@ class ResearchCapacity:
             actor_id=self.actor_id,
             worker_id=worker_id,
             resource_limits=None,
+        )
+
+    def settle(
+        self,
+        operation_id: str,
+        job_id: str,
+        worker_id: str,
+        fence: int,
+        outcome: str,
+        receipt: TrialReceipt | bytes,
+        evaluator_component_sha256: str,
+    ) -> dict[str, object]:
+        """Settle a held lease only after verifying its receipt bytes.
+
+        Unsound receipts raise ``receipt_rejected`` without calling the native
+        settlement API. Sound receipts become verified evaluator evidence
+        bound to the job id and byte digest. ``JobError`` propagates.
+        """
+        data = receipt.receipt_bytes() if isinstance(receipt, TrialReceipt) else receipt
+        if verify_receipt(data):
+            raise CapacityRefused("receipt_rejected")
+        return settle_job(
+            self._store,
+            operation_id=operation_id,
+            workspace_id=self.workspace_id,
+            actor_id=self.actor_id,
+            job_id=job_id,
+            worker_id=worker_id,
+            fence=fence,
+            outcome=outcome,
+            receipts=[{
+                "role": "evaluator",
+                "issuer_component_sha256": evaluator_component_sha256,
+                "evidence": {
+                    "id": job_id,
+                    "kind": "receipt",
+                    "content_digest": hashlib.sha256(data).hexdigest(),
+                    "trust": "verified",
+                },
+            }],
         )
 
     def cancel(
