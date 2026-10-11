@@ -518,9 +518,39 @@ def _ensure_worker_unshare_supported(temp_dir: Path) -> dict[str, str]:
 #include <errno.h>
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <sys/mount.h>
+#include <sys/prctl.h>
+#include <sys/syscall.h>
 
 static int (*real_mount)(const char *, const char *, const char *, unsigned long, const void *) = NULL;
+static int (*real_execvp)(const char *, char *const *) = NULL;
+
+struct omp_cap_header {
+    unsigned int version;
+    int pid;
+};
+
+struct omp_cap_data {
+    unsigned int effective;
+    unsigned int permitted;
+    unsigned int inheritable;
+};
+
+/* setpriv --bounding-set=-all --inh-caps=-all --no-new-privs, done in-process: once /proc is
+   masked the real setpriv cannot read cap_last_cap, so the payload must never exec it. */
+static void drop_caps(void) {
+    for (unsigned int cap = 0; cap < 64; cap++)
+        prctl(PR_CAPBSET_DROP, cap, 0, 0, 0);
+    struct omp_cap_header hdr = {0x20080522u, 0};
+    struct omp_cap_data data[2] = {{0, 0, 0}, {0, 0, 0}};
+    if (syscall(SYS_capget, &hdr, data) == 0) {
+        data[0].inheritable = 0;
+        data[1].inheritable = 0;
+        syscall(SYS_capset, &hdr, data);
+    }
+    prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
+}
 
 int mount(const char *source, const char *target, const char *filesystemtype, unsigned long mountflags, const void *data) {
     if (!real_mount) real_mount = dlsym(RTLD_NEXT, "mount");
@@ -528,9 +558,28 @@ int mount(const char *source, const char *target, const char *filesystemtype, un
     int res = real_mount ? real_mount(source, target, filesystemtype, mountflags, data) : -1;
     if (res != 0 && real_mount && filesystemtype && strcmp(filesystemtype, "proc") == 0
         && (errno == EPERM || errno == EACCES)) {
+        drop_caps();
         return real_mount("tmpfs", target, "tmpfs", MS_RDONLY | MS_NOSUID | MS_NODEV | MS_NOEXEC, "mode=0555");
     }
     return res;
+}
+
+int execvp(const char *file, char *const argv[]) {
+    if (!real_execvp) real_execvp = dlsym(RTLD_NEXT, "execvp");
+    if (!real_execvp) {
+        errno = ENOSYS;
+        return -1;
+    }
+    const char *base = strrchr(file, '/');
+    base = base ? base + 1 : file;
+    if (strcmp(base, "setpriv") == 0 && argv && argv[1] && argv[2] && argv[3] && argv[4]
+        && strcmp(argv[1], "--bounding-set=-all") == 0
+        && strcmp(argv[2], "--inh-caps=-all") == 0
+        && strcmp(argv[3], "--no-new-privs") == 0) {
+        drop_caps();
+        return real_execvp(argv[4], &argv[4]);
+    }
+    return real_execvp(file, argv);
 }
 """,
         encoding="utf-8",
