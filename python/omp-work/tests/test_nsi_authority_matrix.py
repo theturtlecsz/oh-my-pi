@@ -166,10 +166,14 @@ def test_authority_module_and_package_export_the_gate():
     assert authority.__all__ == [
         "AuthorityRefusal",
         "check_claim_authority",
+        "check_decision_authority",
+        "check_waiver_policy",
         "refuse_markdown_canonical_state",
     ]
     assert AuthorityRefusal is authority.AuthorityRefusal
     assert check_claim_authority is authority.check_claim_authority
+    assert check_decision_authority is authority.check_decision_authority
+    assert check_waiver_policy is authority.check_waiver_policy
     assert refuse_markdown_canonical_state is authority.refuse_markdown_canonical_state
 
     import omp_work.contracts.nsi.v1 as pkg
@@ -178,6 +182,8 @@ def test_authority_module_and_package_export_the_gate():
     assert exported["authority"] is authority
     assert exported["AuthorityRefusal"] is AuthorityRefusal
     assert exported["refuse_markdown_canonical_state"] is refuse_markdown_canonical_state
+    assert pkg.check_decision_authority is check_decision_authority
+    assert pkg.check_waiver_policy is check_waiver_policy
 
 
 @pytest.mark.parametrize("content", RECORDS)
@@ -1110,3 +1116,160 @@ def test_every_span_requires_grounding_including_optional_proposal_evidence():
     claim = models.IntakeClaim.model_validate({**CLAIM, "evidence": [SPAN, {**SPAN, "artifact_id": "missing"}]})
     with pytest.raises(AuthorityRefusal):
         check_claim_authority(claim, claim.asserted_by, predicates=_evidence_predicates(), **_repository_context())
+
+
+def _typed_decision():
+    return models.OwnerDecision.model_validate(DECISION)
+
+
+def _typed_waiver(**patch):
+    return models.WaiverDefinition.model_validate({**WAIVER, **patch})
+
+
+def _typed_gap(**patch):
+    return models.Gap.model_validate({**GAP, **patch})
+
+
+def test_only_matching_owner_authorizes_typed_decisions_and_waivers():
+    decision = _typed_decision()
+    waiver = _typed_waiver()
+    owner = models.ActorRef(id="owner-1", kind="owner")
+    originals = (deepcopy(decision), deepcopy(waiver), deepcopy(owner))
+
+    check_decision_authority(decision, owner)
+    check_decision_authority(waiver, owner)
+    check_decision_authority(DECISION, {"id": "owner-1", "kind": "owner"})
+    check_decision_authority(WAIVER, {"id": "owner-1", "kind": "owner"})
+    assert (decision, waiver, owner) == originals
+
+    # The owner reference stored on the record is not a caller.
+    for record in (decision, waiver):
+        with pytest.raises(AuthorityRefusal):
+            check_decision_authority(record, record.actor if type(record) is models.OwnerDecision else record.granted_by)
+        with pytest.raises(AuthorityRefusal):
+            check_decision_authority(record, models.OwnerRef(id="owner-1", kind="owner"))
+
+    with pytest.raises(AuthorityRefusal):
+        check_decision_authority(decision, models.ActorRef(id="owner-2", kind="owner"))
+    with pytest.raises(AuthorityRefusal):
+        check_decision_authority(waiver, models.ActorRef(id="owner-2", kind="owner"))
+
+    # A non-owner is refused even when it copies the owner's id.
+    for kind in ("model", "tool", "service", "rule_engine"):
+        for actor_id in ("owner-1", f"{kind}-1"):
+            caller = models.ActorRef(id=actor_id, kind=kind)
+            with pytest.raises(AuthorityRefusal):
+                check_decision_authority(decision, caller)
+            with pytest.raises(AuthorityRefusal):
+                check_decision_authority(waiver, caller)
+
+    for content in (MUTATION, CLAIM, GAP, PROSE, None):
+        with pytest.raises(AuthorityRefusal):
+            check_decision_authority(content, owner)
+
+
+@pytest.mark.parametrize("dimension_id", [
+    "dimension-1",
+    "minor",
+    "terminology",
+    "non_functional_qualities",
+    "completion_signals",
+])
+def test_critical_gap_refuses_owner_looking_waiver(dimension_id):
+    # Criticality is the materiality field. Dimension ids, category labels,
+    # and a completeness score written into the reason do not permit a waiver.
+    gap = _typed_gap(
+        dimension_id=dimension_id,
+        materiality="critical",
+        waiver_policy="never",
+        reason="completeness score 1.0",
+    )
+    with pytest.raises(AuthorityRefusal):
+        check_waiver_policy(_typed_waiver(), gap)
+
+
+def test_waiver_policy_reuses_validate_waiver_and_admits_permitted_gap():
+    gap = _typed_gap()
+    # Declared run and revision are the binding. They are not a live service revision.
+    waiver = _typed_waiver(
+        reason="completeness score 0.0; owner accepts the gap",
+        run_id="not-a-service-revision",
+        revision=18,
+    )
+    originals = (deepcopy(waiver), deepcopy(gap))
+    check_waiver_policy(waiver, gap)
+    check_waiver_policy(
+        {**WAIVER, "run_id": "not-a-service-revision", "revision": 18},
+        GAP,
+    )
+    assert (waiver, gap) == originals
+
+    minor_gap = _typed_gap(materiality="minor")
+    check_waiver_policy(_typed_waiver(materiality="minor"), minor_gap)
+    # A critical-looking label stays waivable when materiality is not critical.
+    labeled = _typed_gap(
+        dimension_id="critical",
+        premise_id="critical-premise",
+        reason="labeled critical",
+    )
+    check_waiver_policy(
+        _typed_waiver(dimension_id="critical", premise_id="critical-premise"),
+        labeled,
+    )
+
+    never_gap = _typed_gap(waiver_policy="never")
+    with pytest.raises(AuthorityRefusal):
+        check_waiver_policy(waiver, never_gap)
+    with pytest.raises(AuthorityRefusal):
+        check_waiver_policy(_typed_waiver(waiver_policy="never"), gap)
+    with pytest.raises(AuthorityRefusal):
+        check_waiver_policy(_typed_waiver(materiality="minor"), gap)
+    for field, value in (("premise_id", "other-premise"), ("dimension_id", "other-dimension")):
+        with pytest.raises(AuthorityRefusal):
+            check_waiver_policy(waiver, _typed_gap(**{field: value}))
+    for patch in ({"reason": "   "}, {"reason": "\n"}, {"decision_id": ""}, {"decision_id": "   "}):
+        with pytest.raises(AuthorityRefusal):
+            check_waiver_policy(_typed_waiver(**patch), gap)
+    with pytest.raises(AuthorityRefusal):
+        check_waiver_policy(
+            {**WAIVER, "granted_by": {"id": "model-1", "kind": "model"}},
+            GAP,
+        )
+    for content in (DECISION, GAP, PROSE, None):
+        with pytest.raises(AuthorityRefusal):
+            check_waiver_policy(content, gap)
+
+
+def test_raw_forged_score_and_actor_fields_refuse():
+    owner = {"id": "owner-1", "kind": "owner"}
+    forged_waiver = {**WAIVER, "score": 1.0, "actor": owner}
+    forged_gap = {**GAP, "score": 1.0, "actor": owner, "category": "terminology"}
+    critical_scored = {
+        **GAP,
+        "materiality": "critical",
+        "waiver_policy": "owner_with_reason",
+        "score": 1.0,
+        "actor": owner,
+    }
+    for waiver, gap in (
+        (forged_waiver, GAP),
+        (WAIVER, forged_gap),
+        (WAIVER, critical_scored),
+        (forged_waiver, forged_gap),
+    ):
+        with pytest.raises(AuthorityRefusal):
+            check_waiver_policy(waiver, gap)
+    with pytest.raises(AuthorityRefusal):
+        check_decision_authority(forged_waiver, owner)
+    with pytest.raises(AuthorityRefusal):
+        check_decision_authority({**DECISION, "score": 1.0}, owner)
+    with pytest.raises(AuthorityRefusal):
+        check_decision_authority(DECISION, {**owner, "score": 1.0})
+
+    stored = _typed_gap()
+    stored.__dict__["score"] = 1.0
+    stored.__dict__["actor"] = owner
+    with pytest.raises(AuthorityRefusal):
+        check_waiver_policy(_typed_waiver(), stored)
+    assert stored.__dict__["score"] == 1.0
+    assert stored.__dict__["actor"] is owner

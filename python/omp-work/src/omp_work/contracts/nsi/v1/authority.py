@@ -10,7 +10,7 @@ from typing import NoReturn, TypeVar
 from pydantic import ValidationError
 
 from . import models
-from .validate import validate_instance
+from .validate import validate_instance, validate_waiver
 
 T = TypeVar("T")
 
@@ -242,6 +242,67 @@ def check_claim_authority(
                 raise AuthorityRefusal("evidence quote does not match repository bytes")
 
 
+def _project_decision_or_waiver(record: object) -> dict[str, object]:
+    """Project an OwnerDecision or WaiverDefinition. Any other value is refused."""
+    if type(record) is models.OwnerDecision or type(record) is models.WaiverDefinition:
+        return _project_concrete_record(record, type(record))
+    if type(record) is dict:
+        for expected in (models.OwnerDecision, models.WaiverDefinition):
+            try:
+                return _project_concrete_record(record, expected)
+            except AuthorityRefusal:
+                continue
+    raise AuthorityRefusal("expected valid typed or wire OwnerDecision or WaiverDefinition")
+
+
+def check_decision_authority(decision: object, actor: object) -> None:
+    """Authorize a decision or waiver only for the owner named on that record.
+
+    ``decision`` is an OwnerDecision or a WaiverDefinition, typed or closed
+    wire. The caller must be an ActorRef of kind owner whose id and kind match
+    ``decision.actor`` or ``waiver.granted_by``. An OwnerRef stored on the
+    record does not authorize a model, tool, service, or rule_engine caller,
+    and it cannot stand in for the caller.
+    """
+    projected_actor = _project_concrete_record(actor, models.ActorRef)
+    projected = _project_decision_or_waiver(decision)
+    record_owner = projected["granted_by"] if "granted_by" in projected else projected["actor"]
+    if (
+        projected_actor["kind"] != "owner"
+        or projected_actor["id"] != record_owner["id"]
+        or projected_actor["kind"] != record_owner["kind"]
+    ):
+        raise AuthorityRefusal("only the matching owner can authorize this decision or waiver")
+
+
+def check_waiver_policy(waiver: object, gap: object) -> None:
+    """Apply one owner waiver to one gap, or refuse it.
+
+    A critical gap is refused from its ``materiality`` field. Dimension ids,
+    category labels, and completeness scores are not read and cannot permit
+    the waiver. ``validate_waiver`` enforces never-policy, the same premise,
+    dimension, and materiality, owner provenance, and a nonblank reason and
+    decision id. Those failures are raised as ``AuthorityRefusal``.
+
+    The run and revision passed to ``validate_waiver`` are the waiver's own
+    declared ``run_id`` and ``revision``. This check does not compare them
+    to a live service revision.
+    """
+    projected_waiver = _project_concrete_record(waiver, models.WaiverDefinition)
+    projected_gap = _project_concrete_record(gap, models.Gap)
+    try:
+        typed_waiver = models.WaiverDefinition.model_validate(projected_waiver)
+        typed_gap = models.Gap.model_validate(projected_gap)
+        validate_waiver(
+            typed_waiver,
+            typed_gap,
+            run_id=typed_waiver.run_id,
+            revision=typed_waiver.revision,
+        )
+    except ValueError as exc:
+        raise AuthorityRefusal(str(exc)) from exc
+
+
 def refuse_markdown_canonical_state(content: T, *, context: object = None) -> T:
     """Return ``content`` unchanged when it is trusted NSI canonical state.
 
@@ -268,5 +329,7 @@ def refuse_markdown_canonical_state(content: T, *, context: object = None) -> T:
 __all__ = [
     "AuthorityRefusal",
     "check_claim_authority",
+    "check_decision_authority",
+    "check_waiver_policy",
     "refuse_markdown_canonical_state",
 ]
