@@ -33,6 +33,8 @@ LIMITS = ResourceLimits(100, 1000, Decimal("10"))
 def study_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "study_id": "root", "parent_id": None, "depth": 0,
+        "recipe": {"min_metric": 0.0},
+        "spec": {"state_fields": ["score"], "nested": {"name": "semantic"}},
         "method_version": "r13.v1", "method_sha256": "a" * 64,
         "lower_researcher_sha256": "b" * 64, "objective": "Improve search",
         "evaluator_component_sha256": "c" * 64,
@@ -63,7 +65,7 @@ def grant(**overrides: object) -> CallerGrant:
 
 def child(**overrides: object) -> RecursiveStudy:
     return RecursiveStudy.model_validate(study_payload(**{
-        "study_id": "child", "parent_id": "root", "depth": 1,
+        "study_id": "child", "parent_id": "root", "depth": 1, "recipe": {"min_metric": 0.1},
         "dev": [{"task_id": "dev-2", "content_sha256": "4" * 64}],
         "confirmation": [{"task_id": "confirm-2", "content_sha256": "5" * 64}],
         **overrides,
@@ -82,7 +84,7 @@ def proposal(metric: float = 0.5, **overrides: object) -> RecursiveProposal:
 def test_mutation_cannot_change_sealed_history_or_nested_inputs() -> None:
     payload = study_payload()
     root = RecursiveStudy.model_validate(payload)
-    spec = {"state_fields": ["score"]}
+    spec = {"state_fields": ["score"], "nested": {"name": "semantic"}}
     sealed = proposal(spec=spec)
     state = RecursionState(studies=(root,), grant=grant(), proposal_history=(sealed,))
     before = state.model_dump_json()
@@ -152,7 +154,7 @@ def test_grant_pins_signed_payload_and_refuses_unbound_authority() -> None:
     for field in ("caller_id", "policy_id", "decision_id", "signature_sha256"):
         with pytest.raises(ValidationError):
             grant(**{field: ""})
-    with pytest.raises(ValidationError, match="exceeds caller grant"):
+    with pytest.raises(ValidationError, match="grant_bounds"):
         RecursionState(studies=(RecursiveStudy.model_validate(study_payload()),),
                        grant=grant(limits=ResourceLimits(99, 1000, Decimal(10))))
 
@@ -166,10 +168,10 @@ def test_renaming_equivalence_and_distinct_thresholds_survive_json_roundtrip() -
     distinct = proposal(0.6, proposal_id="distinct")
     nested_change = proposal(spec={"state_fields": ["score"], "nested": {"name": "different"}})
     state = RecursionState(studies=(RecursiveStudy.model_validate(study_payload()),), grant=grant(),
-                           proposal_history=(first, renamed, distinct))
+                           proposal_history=(first, distinct))
     restored = RecursionState.model_validate_json(state.model_dump_json())
-    a, b, c = restored.proposal_history
-    assert a.equivalence_sha256 == b.equivalence_sha256
+    a, c = restored.proposal_history
+    assert a.equivalence_sha256 == renamed.equivalence_sha256
     assert a.equivalence_sha256 != c.equivalence_sha256
     assert a.equivalence_sha256 != nested_change.equivalence_sha256
     assert a.recipe == b'{"min_metric":0.5,"name":"first"}'
@@ -247,15 +249,15 @@ def test_invalid_usage_cannot_reduce_or_poison_tree_totals(usage: dict) -> None:
 def test_root_and_descendant_caps_refuse_more_children() -> None:
     root = RecursiveStudy.model_validate(study_payload(max_depth=0))
     assert RecursionState(studies=(root,), grant=grant()).refuse_reason(START) == "max_depth"
-    with pytest.raises(ValidationError, match="root bounds"):
+    with pytest.raises(ValidationError, match="max_depth"):
         RecursionState(studies=(root, child()), grant=grant())
     root = RecursiveStudy.model_validate(study_payload(max_descendants=1))
-    state = RecursionState(studies=(root, child()), grant=grant())
+    state = RecursionState(studies=(root, child(max_descendants=1)), grant=grant())
     assert state.refuse_reason(START) == "max_descendants"
-    with pytest.raises(ValidationError, match="one root"):
+    with pytest.raises(ValidationError, match="second_root"):
         RecursionState(studies=(root, RecursiveStudy.model_validate(study_payload(study_id="root-2"))),
                        grant=grant())
-    with pytest.raises(ValidationError, match="duplicate study ID"):
+    with pytest.raises(ValidationError, match="reused_study_id"):
         RecursionState(studies=(root, root), grant=grant())
 
 
@@ -507,7 +509,7 @@ def test_invalid_explicit_root_depth_refused_without_admitting_history() -> None
 
 def grandchild(**overrides: object) -> RecursiveStudy:
     return child(**{
-        "study_id": "grandchild", "parent_id": "child", "depth": 2,
+        "study_id": "grandchild", "parent_id": "child", "depth": 2, "recipe": {"min_metric": 0.2},
         "dev": [{"task_id": "fresh-dev", "content_sha256": "6" * 64}],
         "confirmation": [{"task_id": "fresh-confirm", "content_sha256": "7" * 64}],
         **overrides,
@@ -891,7 +893,7 @@ def test_bookkeeping_labels_are_not_replacement_or_new_content() -> None:
     state = admitted_proposal()
     relabeled = proposal(proposal_id="relabeled",
                          recipe={"id": "x", "name": "x", "label": "x", "min_metric": 0.7},
-                         spec={"id": "x", "name": "x", "label": "x", "state_fields": ["other"]})
+                         spec={"id": "x", "name": "x", "label": "x", "state_fields": ["score"], "nested": {"name": "semantic"}})
     result = admit_prop(state, relabeled)
     assert result.terminal_reason is None
     first, second = result.proposal_history
@@ -1072,3 +1074,125 @@ def test_reloaded_state_admits_only_with_live_authority(tmp_path: Path) -> None:
     admitted = admit_prop(restored, proposal(0.6, proposal_id="proposal-2"))
     assert admitted.terminal_reason is None
     assert [item.proposal_id for item in admitted.proposal_history] == ["proposal-1", "proposal-2"]
+
+
+@pytest.mark.parametrize("kind", ["study", "proposal"])
+@pytest.mark.parametrize("spec", [
+    {"state_fields": ["changed"], "nested": {"name": "semantic"}},
+    {"state_fields": ["score"], "nested": {"name": "changed"}},
+])
+def test_only_threshold_may_vary_from_study_baseline(kind: str, spec: dict) -> None:
+    state = admitted_proposal()
+    if kind == "study":
+        result = admit(state, child(spec=spec))
+    else:
+        result = admit_prop(state, proposal(0.5, proposal_id="changed", spec=spec))
+    assert_refusal(state, result, "spec_changed")
+
+
+@pytest.mark.parametrize("kind", ["study", "proposal"])
+def test_renamed_study_baseline_terminates_recursion(kind: str) -> None:
+    state = admitted_root()
+    recipe = {"name": "renamed", "min_metric": 0}
+    spec = {"label": "renamed", "state_fields": ["score"], "nested": {"name": "semantic"}}
+    if kind == "study":
+        result = admit(state, child(recipe=recipe, spec=spec))
+    else:
+        result = admit_prop(state, proposal(recipe=recipe, spec=spec))
+    assert_refusal(state, result, "equivalent_proposal")
+
+
+def test_study_recipe_checks_all_prior_proposals_after_reload(tmp_path: Path) -> None:
+    state = admitted_proposal()
+    snapshot = tmp_path / "state.json"
+    snapshot.write_text(state.model_dump_json())
+    restored = RecursionState.model_validate_json(snapshot.read_text())
+    renamed = child(recipe={"label": "renamed", "min_metric": 0.5})
+    assert_refusal(restored, admit(restored, renamed), "equivalent_proposal")
+    assert admit(restored, child(recipe={"min_metric": 0.6})).terminal_reason is None
+
+
+@pytest.mark.parametrize("metrics", [(1, 1.0), (0.0, -0.0), (9007199254740992, 9007199254740993)])
+def test_threshold_identity_matches_generated_strategy(metrics: tuple) -> None:
+    first, equivalent = metrics
+    state = admit_prop(admitted_root(), proposal(first))
+    if first == 0:
+        # Zero already equals root baseline.
+        assert state.terminal_reason == "equivalent_proposal"
+    else:
+        assert state.terminal_reason is None
+        assert_refusal(state, admit_prop(state, proposal(equivalent, proposal_id="renamed")),
+                       "equivalent_proposal")
+
+
+@pytest.mark.parametrize("field,value", [
+    ("objective", "replacement"), ("method_sha256", "9" * 64),
+    ("lower_researcher_sha256", "9" * 64), ("protocol_sha256", "9" * 64),
+    ("evaluator_component_sha256", "9" * 64), ("evaluator_artifact_sha256", "9" * 64),
+    ("upstream_assets", [{"identity": "changed", "content_sha256": "f" * 64}]),
+    ("max_descendants", 0), ("max_depth", 1),
+    ("limits", {"max_wall_clock_seconds": 1, "max_model_tokens": 1000, "max_usd": "10"}),
+    ("recipe", '{"min_metric":0}'),
+    ("spec", '{"state_fields":["changed"]}'),
+])
+def test_restore_rejects_child_binding_and_ancestor_cap_bypass(
+    tmp_path: Path, field: str, value: object,
+) -> None:
+    state = admit(admit(admitted_root(), child()), grandchild())
+    assert state.terminal_reason is None
+    payload = json.loads(state.model_dump_json())
+    payload["studies"][1][field] = value
+    snapshot = tmp_path / "state.json"
+    snapshot.write_text(json.dumps(payload))
+    with pytest.raises(ValidationError):
+        RecursionState.model_validate_json(snapshot.read_text())
+
+
+@pytest.mark.parametrize("corruption", ["replacement", "grant", "spec", "duplicate", "baseline"])
+def test_restore_rejects_invalid_proposal_history(tmp_path: Path, corruption: str) -> None:
+    payload = _snapshot_payload()
+    retained = payload["proposal_history"][0]
+    if corruption in {"replacement", "grant", "spec"}:
+        key = {"replacement": "objective", "grant": "grant", "spec": "state_fields"}[corruption]
+        retained["spec"] = json.dumps({key: "replacement"})
+    elif corruption == "duplicate":
+        payload["proposal_history"].append({**retained, "proposal_id": "renamed"})
+    else:
+        retained["recipe"] = '{"min_metric":0}'
+    snapshot = tmp_path / "state.json"
+    snapshot.write_text(json.dumps(payload))
+    with pytest.raises(ValidationError):
+        RecursionState.model_validate_json(snapshot.read_text())
+
+
+def test_rejected_duplicate_reload_keeps_identity_and_terminal_reason(tmp_path: Path) -> None:
+    prior = admitted_proposal()
+    rejected = admit_prop(prior, proposal(proposal_id="renamed"))
+    assert rejected.terminal_reason == "equivalent_proposal"
+    snapshot = tmp_path / "state.json"
+    snapshot.write_text(rejected.model_dump_json())
+    restored = RecursionState.model_validate_json(snapshot.read_text())
+    assert restored == rejected
+    assert restored.proposal_history[0].equivalence_sha256 == prior.proposal_history[0].equivalence_sha256
+    assert admit_prop(restored, proposal(0.9, proposal_id="distinct")) == restored
+    assert admit(restored, child()) == restored
+
+
+def test_restore_counts_descendants_under_zero_cap_even_when_child_bounds_fit(tmp_path: Path) -> None:
+    state = admit(admit(admitted_root(), child()), grandchild(max_descendants=0))
+    assert state.terminal_reason is None
+    payload = json.loads(state.model_dump_json())
+    payload["studies"][1]["max_descendants"] = 0
+    snapshot = tmp_path / "state.json"
+    snapshot.write_text(json.dumps(payload))
+    with pytest.raises(ValidationError, match="max_descendants"):
+        RecursionState.model_validate_json(snapshot.read_text())
+
+
+@pytest.mark.parametrize("kind", ["study", "proposal"])
+def test_baseline_recipe_and_spec_must_be_explicit(kind: str) -> None:
+    payload = study_payload() if kind == "study" else proposal().model_dump()
+    model = RecursiveStudy if kind == "study" else RecursiveProposal
+    for field in ("recipe", "spec"):
+        with pytest.raises(ValidationError, match=field):
+            model.model_validate({key: value for key, value in payload.items() if key != field})

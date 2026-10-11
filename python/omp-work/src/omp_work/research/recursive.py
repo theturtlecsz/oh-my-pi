@@ -85,7 +85,72 @@ class UpstreamAsset(StrictModel):
     content_sha256: hex64
 
 
-class RecursiveStudy(_WindowCaps):
+def _reject_constant(value: str) -> None:
+    raise ValueError(f"non-finite JSON value: {value}")
+
+
+def seal_json(value: object) -> bytes:
+    """Snapshot a nonempty JSON object as immutable canonical UTF-8 bytes."""
+    if isinstance(value, (str, bytes)):
+        value = json.loads(value, parse_constant=_reject_constant)
+    if not isinstance(value, dict) or not value:
+        raise ValueError("recipe/spec must be a nonempty JSON object")
+    # Validate JSON types and finite numbers before canonical's default=str can
+    # turn arbitrary Python objects into a different, apparently valid recipe.
+    try:
+        encoded = json.dumps(value, allow_nan=False, ensure_ascii=False)
+    except TypeError as error:
+        raise ValueError("recipe/spec must contain only JSON values") from error
+    return canonical.canonical_json(json.loads(encoded)).encode("utf-8")
+
+
+def _semantic(payload: bytes) -> dict[str, object]:
+    return {key: value for key, value in json.loads(payload).items() if key not in _BOOKKEEPING}
+
+
+class _R13Inputs(StrictModel):
+    recipe: bytes
+    spec: bytes
+
+    _seal = field_validator("recipe", "spec", mode="before")(seal_json)
+
+    @model_validator(mode="after")
+    def r13_recipe(self) -> _R13Inputs:
+        recipe = json.loads(self.recipe)
+        parameters = {key: value for key, value in recipe.items() if key not in _BOOKKEEPING}
+        if set(parameters) != {"min_metric"}:
+            raise ValueError("R13 recipe supports min_metric only")
+        metric = parameters["min_metric"]
+        if isinstance(metric, bool) or not isinstance(metric, (int, float)):
+            raise ValueError("min_metric must be a finite number")
+        try:
+            finite = math.isfinite(float(metric))
+        except OverflowError:
+            finite = False
+        if not finite:
+            raise ValueError("min_metric must be a finite number")
+        return self
+
+    @property
+    def spec_sha256(self) -> str:
+        return canonical.sha256(_semantic(self.spec))
+
+    @property
+    def equivalence_sha256(self) -> str:
+        # generation_job converts thresholds to float; identity must do the same.
+        metric = float(json.loads(self.recipe)["min_metric"])
+        return canonical.sha256({
+            "recipe": {"min_metric": 0.0 if metric == 0 else metric},
+            "spec": _semantic(self.spec),
+        })
+
+
+class RecursiveProposal(_R13Inputs):
+    proposal_id: _Nonempty
+    study_id: _Nonempty
+
+
+class RecursiveStudy(_WindowCaps, _R13Inputs):
     study_id: _Nonempty
     parent_id: _Nonempty | None
     depth: _Count
@@ -151,52 +216,6 @@ def _disjoint_cohorts(studies: tuple[RecursiveStudy, ...]) -> None:
         raise ValueError("whole-cohort content digests must be disjoint across cohorts/history")
 
 
-def _reject_constant(value: str) -> None:
-    raise ValueError(f"non-finite JSON value: {value}")
-
-
-def seal_json(value: object) -> bytes:
-    """Snapshot a nonempty JSON object as immutable canonical UTF-8 bytes."""
-    if isinstance(value, (str, bytes)):
-        value = json.loads(value, parse_constant=_reject_constant)
-    if not isinstance(value, dict) or not value:
-        raise ValueError("recipe/spec must be a nonempty JSON object")
-    # Validate JSON types and finite numbers before canonical's default=str can
-    # turn arbitrary Python objects into a different, apparently valid recipe.
-    try:
-        encoded = json.dumps(value, allow_nan=False, ensure_ascii=False)
-    except TypeError as error:
-        raise ValueError("recipe/spec must contain only JSON values") from error
-    return canonical.canonical_json(json.loads(encoded)).encode("utf-8")
-
-
-class RecursiveProposal(StrictModel):
-    proposal_id: _Nonempty
-    study_id: _Nonempty
-    recipe: bytes
-    spec: bytes
-
-    _seal = field_validator("recipe", "spec", mode="before")(seal_json)
-
-    @model_validator(mode="after")
-    def r13_recipe(self) -> RecursiveProposal:
-        recipe = json.loads(self.recipe)
-        parameters = {key: value for key, value in recipe.items() if key not in _BOOKKEEPING}
-        if set(parameters) != {"min_metric"}:
-            raise ValueError("R13 recipe supports min_metric only")
-        metric = parameters["min_metric"]
-        if isinstance(metric, bool) or not isinstance(metric, (int, float)) or not math.isfinite(metric):
-            raise ValueError("min_metric must be a finite number")
-        return self
-
-    @property
-    def equivalence_sha256(self) -> str:
-        return canonical.sha256({
-            field: {key: value for key, value in json.loads(payload).items() if key not in _BOOKKEEPING}
-            for field, payload in (("recipe", self.recipe), ("spec", self.spec))
-        })
-
-
 class RecursiveUsage(StrictModel):
     study_id: _Nonempty
     compute_seconds: float = Field(ge=0, allow_inf_nan=False)
@@ -218,43 +237,20 @@ class RecursionState(StrictModel):
             if self.proposal_history or self.usage:
                 raise ValueError("proposal/usage references unknown study")
             return self
-        root = self.studies[0]
-        if root.parent_id is not None:
-            raise ValueError("history must start with its root")
-        known: dict[str, RecursiveStudy] = {}
-        for study in self.studies:
-            if study.study_id in known:
-                raise ValueError("duplicate study ID")
-            if study is not root:
-                parent = known.get(study.parent_id)
-                if parent is None or study.depth != parent.depth + 1:
-                    raise ValueError("history requires one root and ordered parent/depth bindings")
-            if (
-                study.depth > root.max_depth
-                or study.window_start < root.window_start
-                or study.window_end > root.window_end
-            ):
-                raise ValueError("study exceeds root bounds")
-            known[study.study_id] = study
-        _disjoint_cohorts(self.studies)
-        if len(self.studies) - 1 > root.max_descendants:
-            raise ValueError("history exceeds max_descendants")
-        grant = self.grant
-        if (
-            root.window_start < grant.window_start
-            or root.window_end > grant.window_end
-            or root.max_depth > grant.max_depth
-            or root.max_descendants > grant.max_descendants
-            or root.limits.max_wall_clock_seconds > grant.limits.max_wall_clock_seconds
-            or root.limits.max_model_tokens > grant.limits.max_model_tokens
-            or root.limits.max_usd > grant.limits.max_usd
-        ):
-            raise ValueError("root exceeds caller grant")
-        proposal_ids = [proposal.proposal_id for proposal in self.proposal_history]
-        if len(set(proposal_ids)) != len(proposal_ids):
-            raise ValueError("duplicate proposal ID")
+        for index, study in enumerate(self.studies):
+            reason = _tree_reason(self.studies[:index], study, self.grant)
+            if reason:
+                raise ValueError(reason)
+            reason = _content_reason(self.studies[:index], self.proposal_history, study)
+            if reason:
+                raise ValueError(reason)
+        known = {study.study_id for study in self.studies}
         if any(item.study_id not in known for item in self.proposal_history + self.usage):
             raise ValueError("proposal/usage references unknown study")
+        for index, proposal in enumerate(self.proposal_history):
+            reason = _content_reason(self.studies, self.proposal_history[:index], proposal)
+            if reason:
+                raise ValueError(reason)
         return self
 
     def refuse_reason(self, now: datetime) -> str | None:
@@ -430,7 +426,8 @@ def _admission_gate(
         return "invalid_authority_context"
     if not grant.window_start <= now < grant.window_end:
         return "outside_window"
-    # Revalidate restored snapshots; their records cannot authorize a new call.
+    # Live authority is supplied again; retained state must satisfy the same
+    # structural invariants as JSON restoration, including proposal history.
     for index, admitted in enumerate(state.studies):
         try:
             admitted = RecursiveStudy.model_validate(admitted.model_dump())
@@ -439,6 +436,10 @@ def _admission_gate(
         reason = _tree_reason(state.studies[:index], admitted, grant)
         if reason:
             return reason
+    try:
+        RecursionState.model_validate(state.model_dump())
+    except (ValidationError, AttributeError):
+        return "invalid_history"
     return None
 
 
@@ -490,6 +491,9 @@ def admit_study(
     reason = _tree_reason(state.studies, study, state.grant)
     if reason:
         return _refuse(state, reason)
+    reason = _content_reason(state.studies, state.proposal_history, study)
+    if reason:
+        return _refuse(state, reason)
     assert isinstance(now, datetime)
     reason = _study_live_reason(state, study, now)
     if reason:
@@ -516,14 +520,45 @@ def terminate(state: RecursionState, reason: str) -> RecursionState:
 _GRANT_KEYS = frozenset(CallerGrant.model_fields) | {"grant"}
 
 
-def _replacement_reason(proposal: RecursiveProposal) -> str | None:
-    """Proposals vary recipe/spec content only; pinned bindings and grant fields refuse."""
+def _replacement_reason(proposal: _R13Inputs) -> str | None:
+    """R13 inputs cannot carry replacements for pinned bindings or grant fields."""
     for payload in (proposal.recipe, proposal.spec):
         keys = set(json.loads(payload)) - _BOOKKEEPING
         if keys & frozenset(_PINNED_BINDINGS):
             return "binding_changed"
         if keys & _GRANT_KEYS:
             return "grant_changed"
+    return None
+
+
+def _content_reason(
+    studies: tuple[RecursiveStudy, ...],
+    history: tuple[RecursiveProposal, ...],
+    candidate: RecursiveStudy | RecursiveProposal,
+) -> str | None:
+    """Shared baseline and identity contract for admission and restoration."""
+    reason = _replacement_reason(candidate)
+    if reason:
+        return reason
+    if isinstance(candidate, RecursiveProposal) and any(
+        item.proposal_id == candidate.proposal_id for item in history
+    ):
+        return "reused_proposal_id"
+    known = {item.study_id: item for item in studies}
+    cursor = candidate.parent_id if isinstance(candidate, RecursiveStudy) else candidate.study_id
+    ancestors: list[RecursiveStudy] = []
+    while cursor is not None:
+        ancestor = known[cursor]
+        ancestors.append(ancestor)
+        cursor = ancestor.parent_id
+    baselines = studies if isinstance(candidate, RecursiveProposal) else tuple(ancestors)
+    if any(
+        item.equivalence_sha256 == candidate.equivalence_sha256
+        for item in (*baselines, *history)
+    ):
+        return "equivalent_proposal"
+    if studies and candidate.spec_sha256 != studies[0].spec_sha256:
+        return "spec_changed"
     return None
 
 
@@ -561,26 +596,15 @@ def admit_proposal(
     study = {item.study_id: item for item in state.studies}.get(proposal.study_id)
     if study is None:
         return _refuse(state, "unadmitted_study")
-    reason = _replacement_reason(proposal)
+    reason = _content_reason(state.studies, state.proposal_history, proposal)
     if reason is not None:
         return _refuse(state, reason)
-    if any(item.proposal_id == proposal.proposal_id for item in state.proposal_history):
-        return _refuse(state, "reused_proposal_id")
-    if any(
-        item.equivalence_sha256 == proposal.equivalence_sha256 for item in state.proposal_history
-    ):
-        return _refuse(state, "equivalent_proposal")
     assert isinstance(now, datetime)
     reason = _study_live_reason(state, study, now)
     if reason is not None:
         return _refuse(state, reason)
     try:
-        mechanism.generation_job(
-            {key: value for key, value in json.loads(proposal.spec).items()
-             if key not in _BOOKKEEPING},
-            {key: value for key, value in json.loads(proposal.recipe).items()
-             if key not in _BOOKKEEPING},
-        )
+        mechanism.generation_job(_semantic(proposal.spec), _semantic(proposal.recipe))
     except (ValueError, TypeError, KeyError, OverflowError):
         return _refuse(state, "invalid_admission")
     try:
