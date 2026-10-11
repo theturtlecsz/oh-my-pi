@@ -11,6 +11,8 @@ stay as first written.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -21,10 +23,274 @@ from omp_work.jobs.store import JobError, NativeJobStore, OperationOutcome
 from omp_work.v1.agent_stop import read_stop_state
 from omp_work.v1.canonical import canonical_json
 
+__all__ = [
+    "LeaseAuthority",
+    "current_authority",
+    "reconcile_jobs",
+    "renew_lease",
+    "settle_job",
+]
+
 _OUTCOMES = {"succeeded": "sealed", "failed": "failed"}
 _ROLES = frozenset({"audit", "release", "evaluator"})
 _RECEIPT_KEYS = frozenset({"role", "issuer_component_sha256", "evidence"})
 _TERMINAL = frozenset({"sealed", "failed"})
+
+
+@dataclass(frozen=True)
+class LeaseAuthority:
+    """Read-only current lease authority query result."""
+
+    state: str  # "live" | "frozen" | "lost"
+    expires_at: datetime | None = None
+    reason: str | None = None
+    job_id: str | None = None
+    worker_id: str | None = None
+    fence: int | None = None
+    job: dict[str, Any] | None = None
+
+    @property
+    def status(self) -> str:
+        return self.state
+
+    @property
+    def is_live(self) -> bool:
+        return self.state == "live"
+
+    @property
+    def is_frozen(self) -> bool:
+        return self.state == "frozen"
+
+    @property
+    def is_lost(self) -> bool:
+        return self.state == "lost"
+
+    def __getitem__(self, key: str) -> Any:
+        if key == "status":
+            return self.state
+        if hasattr(self, key):
+            val = getattr(self, key)
+            if not callable(val):
+                return val
+        raise KeyError(key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        if key == "status":
+            return self.state
+        if hasattr(self, key):
+            val = getattr(self, key)
+            if not callable(val):
+                return val
+        return default
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "state": self.state,
+            "status": self.state,
+            "expires_at": self.expires_at,
+            "reason": self.reason,
+            "job_id": self.job_id,
+            "worker_id": self.worker_id,
+            "fence": self.fence,
+            "job": self.job,
+        }
+
+
+def current_authority(
+    store: NativeJobStore,
+    workspace_id: UUID | str | None = None,
+    job_id: str | None = None,
+    worker_id: str | None = None,
+    fence: int | None = None,
+    *,
+    actor_id: UUID | str | None = None,
+    deadline: float | None = None,
+    cur: Any | None = None,
+    **kwargs: Any,
+) -> LeaseAuthority:
+    """Read-only current lease authority query for workspace/job/worker/fence.
+
+    Yields live expiry (state="live"), lost authority (state="lost"), or
+    frozen ownership (state="frozen").
+    """
+    if workspace_id is None:
+        workspace_id = kwargs.pop("workspace_id", None)
+    if job_id is None:
+        job_id = kwargs.pop("job_id", None)
+    if worker_id is None:
+        worker_id = kwargs.pop("worker_id", None)
+    if fence is None:
+        fence = kwargs.pop("fence", None)
+
+    if workspace_id is None:
+        raise ValueError("workspace_id is required")
+    ws = workspace_id if isinstance(workspace_id, UUID) else UUID(str(workspace_id))
+    actor = (
+        (actor_id if isinstance(actor_id, UUID) else UUID(str(actor_id)))
+        if actor_id is not None
+        else ws
+    )
+
+    if not isinstance(job_id, str) or not job_id:
+        return LeaseAuthority(state="lost", reason="invalid_job_id")
+    if not isinstance(worker_id, str) or not worker_id:
+        return LeaseAuthority(state="lost", reason="invalid_worker_id", job_id=job_id)
+    if isinstance(fence, bool) or not isinstance(fence, int):
+        return LeaseAuthority(
+            state="lost", reason="invalid_fence", job_id=job_id, worker_id=worker_id
+        )
+
+    if cur is not None:
+        return _query_authority(cur, ws, job_id, worker_id, fence)
+
+    with store.transaction(ws, actor, deadline=deadline) as tx_cur:
+        return _query_authority(tx_cur, ws, job_id, worker_id, fence)
+
+
+def _query_authority(
+    cur: Any,
+    workspace_id: UUID,
+    job_id: str,
+    worker_id: str,
+    fence: int,
+) -> LeaseAuthority:
+    cur.execute(
+        """
+        SELECT
+            job_id,
+            source,
+            status,
+            worker_id,
+            fence,
+            lease_expires_at,
+            cancel_reason,
+            settlement,
+            clock_timestamp() AS db_now
+        FROM omp_jobs.jobs
+        WHERE workspace_id = %s AND job_id = %s
+        """,
+        (workspace_id, job_id),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return LeaseAuthority(
+            state="lost",
+            reason="job_not_found",
+            job_id=job_id,
+            worker_id=worker_id,
+            fence=fence,
+        )
+
+    job_data = dict(row)
+
+    if row["source"] != "native":
+        return LeaseAuthority(
+            state="lost",
+            reason="job_not_native",
+            job_id=job_id,
+            worker_id=worker_id,
+            fence=fence,
+            job=job_data,
+        )
+
+    if row["status"] != "admitted":
+        if row["status"] == "cancelled":
+            reason = row["cancel_reason"] or "job_cancelled"
+        elif row["status"] in ("sealed", "failed"):
+            reason = f"job_settled_{row['status']}"
+        elif row["status"] == "backlog":
+            reason = "job_in_backlog"
+        else:
+            reason = f"job_status_{row['status']}"
+        return LeaseAuthority(
+            state="lost",
+            reason=reason,
+            job_id=job_id,
+            worker_id=worker_id,
+            fence=fence,
+            job=job_data,
+        )
+
+    if row["worker_id"] != worker_id:
+        return LeaseAuthority(
+            state="lost",
+            reason="worker_mismatch",
+            job_id=job_id,
+            worker_id=worker_id,
+            fence=fence,
+            job=job_data,
+        )
+
+    if int(row["fence"]) != fence:
+        return LeaseAuthority(
+            state="lost",
+            reason="fence_stale",
+            job_id=job_id,
+            worker_id=worker_id,
+            fence=fence,
+            job=job_data,
+        )
+
+    cur.execute(
+        """
+        SELECT event_type, payload->>'reason' AS reason, occurred_at
+        FROM omp_audit.domain_events
+        WHERE workspace_id = %s AND aggregate_id = %s
+          AND event_type IN ('engage_stop', 'release_stop')
+          AND outcome = 'applied'
+        ORDER BY sequence DESC
+        LIMIT 1
+        """,
+        (workspace_id, workspace_id),
+    )
+    stop_row = cur.fetchone()
+    stop_engaged = stop_row is not None and stop_row["event_type"] == "engage_stop"
+    lease_expires_at = row["lease_expires_at"]
+    db_now = row["db_now"]
+
+    if stop_engaged:
+        engage_at = stop_row["occurred_at"]
+        stop_reason = stop_row["reason"] or "agent_stop_engaged"
+        if lease_expires_at is not None and engage_at is not None and lease_expires_at <= engage_at:
+            return LeaseAuthority(
+                state="lost",
+                reason="lease_expired",
+                expires_at=lease_expires_at,
+                job_id=job_id,
+                worker_id=worker_id,
+                fence=fence,
+                job=job_data,
+            )
+        return LeaseAuthority(
+            state="frozen",
+            reason=stop_reason,
+            expires_at=lease_expires_at,
+            job_id=job_id,
+            worker_id=worker_id,
+            fence=fence,
+            job=job_data,
+        )
+
+    if lease_expires_at is not None and lease_expires_at > db_now:
+        return LeaseAuthority(
+            state="live",
+            expires_at=lease_expires_at,
+            job_id=job_id,
+            worker_id=worker_id,
+            fence=fence,
+            job=job_data,
+        )
+
+    return LeaseAuthority(
+        state="lost",
+        reason="lease_expired",
+        expires_at=lease_expires_at,
+        job_id=job_id,
+        worker_id=worker_id,
+        fence=fence,
+        job=job_data,
+    )
+
 
 
 def renew_lease(
