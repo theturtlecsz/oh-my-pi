@@ -515,8 +515,10 @@ def _ensure_worker_unshare_supported(temp_dir: Path) -> dict[str, str]:
     shim_c.write_text(
         """#define _GNU_SOURCE
 #include <dlfcn.h>
+#include <errno.h>
 #include <string.h>
 #include <stdlib.h>
+#include <sys/mount.h>
 
 static int (*real_mount)(const char *, const char *, const char *, unsigned long, const void *) = NULL;
 
@@ -524,7 +526,10 @@ int mount(const char *source, const char *target, const char *filesystemtype, un
     if (!real_mount) real_mount = dlsym(RTLD_NEXT, "mount");
     unsetenv("LD_PRELOAD");
     int res = real_mount ? real_mount(source, target, filesystemtype, mountflags, data) : -1;
-    if (res != 0 && filesystemtype && strcmp(filesystemtype, "proc") == 0) return 0;
+    if (res != 0 && real_mount && filesystemtype && strcmp(filesystemtype, "proc") == 0
+        && (errno == EPERM || errno == EACCES)) {
+        return real_mount("tmpfs", target, "tmpfs", MS_RDONLY | MS_NOSUID | MS_NODEV | MS_NOEXEC, "mode=0555");
+    }
     return res;
 }
 """,
