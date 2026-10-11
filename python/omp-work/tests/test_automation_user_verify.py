@@ -49,14 +49,8 @@ def setup_env(tmp_path: Path) -> dict[str, Any]:
     owner_home = tmp_path / "owner_home"
     owner_home.mkdir(mode=0o700)
 
+    # Absent on purpose: the sudo check passes only when this file does not exist.
     admin_cmds_file = tmp_path / "admin-commands.txt"
-    allowed_cmds = [
-        "/usr/local/libexec/ompbot/robomp-ctl up",
-        "/usr/local/libexec/ompbot/robomp-ctl down",
-        "/usr/local/libexec/ompbot/robomp-ctl restart",
-        "/usr/local/libexec/ompbot/robomp-ctl ps",
-    ]
-    admin_cmds_file.write_text("\n".join(allowed_cmds) + "\n", encoding="utf-8")
 
     docker_socket = tmp_path / "docker.sock"
     docker_socket.touch()
@@ -139,7 +133,7 @@ def setup_env(tmp_path: Path) -> dict[str, Any]:
         '        printf "%s\\n" "$FAKE_SUDO_OUTPUT"\n'
         "        exit 0\n"
         "    fi\n"
-        '    printf "User ompbot may run the following commands on host:\\n    (root) NOPASSWD: /usr/local/libexec/ompbot/robomp-ctl up, /usr/local/libexec/ompbot/robomp-ctl down, /usr/local/libexec/ompbot/robomp-ctl restart, /usr/local/libexec/ompbot/robomp-ctl ps\\n"\n'
+        '    printf "User ompbot may run the following commands on host:\\n    (root) NOPASSWD: /usr/local/libexec/omp-owner-action\\n"\n'
         "    exit 0\n"
         "fi\n"
         "exit 1\n",
@@ -254,10 +248,7 @@ def test_fail_sudo_extra_command(setup_env: dict[str, Any]) -> None:
     extra_env = {
         "FAKE_SUDO_OUTPUT": (
             "User ompbot may run the following commands on host:\n"
-            "    (root) NOPASSWD: /usr/local/libexec/ompbot/robomp-ctl up, "
-            "/usr/local/libexec/ompbot/robomp-ctl down, "
-            "/usr/local/libexec/ompbot/robomp-ctl restart, "
-            "/usr/local/libexec/ompbot/robomp-ctl ps, /bin/sh"
+            "    (root) NOPASSWD: /usr/local/libexec/omp-owner-action, /bin/sh"
         )
     }
     proc = run_verify(setup_env, extra_env=extra_env)
@@ -317,6 +308,36 @@ def test_fail_bearer_actor_kind_owner(setup_env: dict[str, Any]) -> None:
     assert data["ledger_principal"]["ok"] is False
     for k, v in data.items():
         if k != "ledger_principal":
+            assert v["ok"] is True, f"Unexpected failure in '{k}': {v['detail']}"
+
+
+def test_fail_sudo_runas_is_not_the_owner(setup_env: dict[str, Any]) -> None:
+    extra_env = {
+        "FAKE_SUDO_OUTPUT": (
+            "User ompbot may run the following commands on host:\n"
+            "    (thetu) NOPASSWD: /usr/local/libexec/omp-owner-action"
+        )
+    }
+    proc = run_verify(setup_env, extra_env=extra_env)
+    assert proc.returncode == 1
+    data = json.loads(proc.stdout)
+    assert data["sudo_named_only"]["ok"] is False
+    for k, v in data.items():
+        if k != "sudo_named_only":
+            assert v["ok"] is True, f"Unexpected failure in '{k}': {v['detail']}"
+
+
+def test_fail_admin_commands_file_present(setup_env: dict[str, Any]) -> None:
+    setup_env["admin_cmds_file"].write_text(
+        "/usr/local/libexec/omp-owner-action\n",
+        encoding="utf-8",
+    )
+    proc = run_verify(setup_env)
+    assert proc.returncode == 1
+    data = json.loads(proc.stdout)
+    assert data["sudo_named_only"]["ok"] is False
+    for k, v in data.items():
+        if k != "sudo_named_only":
             assert v["ok"] is True, f"Unexpected failure in '{k}': {v['detail']}"
 
 

@@ -1,0 +1,271 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omp.dev/contracts/nsi/v1/contract.schema.json",
+  "$ref": "#/$defs/IntakeContract",
+  "$defs": {
+    "RequirementClause": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "category", "text", "claim_ids", "dimension_ids"],
+      "properties": {
+        "id": {"type": "string"},
+        "category": {"$ref": "https://omp.dev/contracts/nsi/v1/taxonomy.schema.json#/$defs/IntakeCategory"},
+        "text": {"type": "string", "minLength": 1},
+        "claim_ids": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "dimension_ids": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "AcceptanceCriterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "requirement_ids", "description", "verification_method", "expected_result"],
+      "properties": {
+        "id": {"type": "string"},
+        "requirement_ids": {
+          "type": "array",
+          "items": {"type": "string"},
+          "minItems": 1
+        },
+        "description": {"type": "string", "minLength": 1},
+        "verification_method": {"type": "string"},
+        "expected_result": {"$ref": "https://omp.dev/contracts/nsi/v1/claim.schema.json#/$defs/TypedValue"}
+      }
+    },
+    "Formalization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "requirement_ids", "language", "expression", "scope", "assumptions", "content_hash"],
+      "properties": {
+        "id": {"type": "string"},
+        "requirement_ids": {
+          "type": "array",
+          "items": {"type": "string"},
+          "minItems": 1
+        },
+        "language": {"type": "string"},
+        "expression": {"type": "string"},
+        "scope": {"type": "string"},
+        "assumptions": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "content_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      }
+    },
+    "FormalCheckResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "formalization_id", "formalization_hash", "status", "scope", "evidence_ids", "checked_by", "created_at"],
+      "properties": {
+        "id": {"type": "string"},
+        "formalization_id": {"type": "string"},
+        "formalization_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "status": {
+          "type": "string",
+          "enum": ["true", "false", "unknown"]
+        },
+        "scope": {"type": "string"},
+        "evidence_ids": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "checked_by": {"$ref": "https://omp.dev/contracts/nsi/v1/authority.schema.json#/$defs/ActorRef"},
+        "created_at": {"type": "string"}
+      }
+    },
+    "Binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_id", "revision", "contract_hash", "claim_set_hash", "rule_bundle_hash", "schema_hash", "source_hash"],
+      "properties": {
+        "run_id": {},
+        "revision": {},
+        "contract_hash": {},
+        "claim_set_hash": {},
+        "rule_bundle_hash": {},
+        "schema_hash": {},
+        "source_hash": {}
+      },
+      "allOf": [
+        {"$ref": "#/$defs/Binding/$defs/Fields"}
+      ],
+      "$defs": {
+        "Fields": {
+          "type": "object",
+          "required": ["run_id", "revision", "contract_hash", "claim_set_hash", "rule_bundle_hash", "schema_hash", "source_hash"],
+          "properties": {
+            "run_id": {"type": "string"},
+            "revision": {"type": "integer", "minimum": 0},
+            "contract_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+            "claim_set_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+            "rule_bundle_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+            "schema_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+            "source_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+          }
+        }
+      },
+      "$comment": "Fields stays extensible for allOf composition; Binding and receipts close their complete property sets."
+    },
+    "RatifiedFormalBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_id", "revision", "contract_hash", "claim_set_hash", "rule_bundle_hash", "schema_hash", "source_hash", "formalization_id", "formalization_hash", "check_result_id", "ratified_by", "ratification_receipt_id"],
+      "properties": {
+        "run_id": {},
+        "revision": {},
+        "contract_hash": {},
+        "claim_set_hash": {},
+        "rule_bundle_hash": {},
+        "schema_hash": {},
+        "source_hash": {},
+        "formalization_id": {"type": "string"},
+        "formalization_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "check_result_id": {"type": "string"},
+        "ratified_by": {"$ref": "https://omp.dev/contracts/nsi/v1/authority.schema.json#/$defs/OwnerRef"},
+        "ratification_receipt_id": {"type": "string"}
+      },
+      "allOf": [
+        {"$ref": "#/$defs/Binding/$defs/Fields"}
+      ]
+    },
+    "IntakeContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requirements", "acceptance_criteria", "formalizations", "waivers"],
+      "properties": {
+        "requirements": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/RequirementClause"}
+        },
+        "acceptance_criteria": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/AcceptanceCriterion"}
+        },
+        "formalizations": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/Formalization"}
+        },
+        "waivers": {
+          "type": "array",
+          "items": {"$ref": "https://omp.dev/contracts/nsi/v1/authority.schema.json#/$defs/WaiverDefinition"}
+        }
+      }
+    },
+    "IntakeReadinessAssessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_id", "revision", "contract_hash", "claim_set_hash", "rule_bundle_hash", "schema_hash", "source_hash", "status", "gaps", "conflicts", "derivation_receipt_ids", "assessed_by", "created_at"],
+      "properties": {
+        "run_id": {},
+        "revision": {},
+        "contract_hash": {},
+        "claim_set_hash": {},
+        "rule_bundle_hash": {},
+        "schema_hash": {},
+        "source_hash": {},
+        "status": {
+          "type": "string",
+          "enum": ["READY_FOR_RATIFICATION", "NEEDS_SPEC", "CONFLICTED"]
+        },
+        "gaps": {
+          "type": "array",
+          "items": {"$ref": "https://omp.dev/contracts/nsi/v1/status.schema.json#/$defs/Gap"}
+        },
+        "conflicts": {
+          "type": "array",
+          "items": {"$ref": "https://omp.dev/contracts/nsi/v1/status.schema.json#/$defs/Conflict"}
+        },
+        "derivation_receipt_ids": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "assessed_by": {"$ref": "https://omp.dev/contracts/nsi/v1/authority.schema.json#/$defs/RuleEngineRef"},
+        "created_at": {"type": "string"}
+      },
+      "allOf": [
+        {"$ref": "#/$defs/Binding/$defs/Fields"}
+      ]
+    },
+    "RatificationReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_id", "revision", "contract_hash", "claim_set_hash", "rule_bundle_hash", "schema_hash", "source_hash", "assessment_id", "formal_binding_ids", "ratified_by", "created_at"],
+      "properties": {
+        "run_id": {},
+        "revision": {},
+        "contract_hash": {},
+        "claim_set_hash": {},
+        "rule_bundle_hash": {},
+        "schema_hash": {},
+        "source_hash": {},
+        "assessment_id": {"type": "string"},
+        "formal_binding_ids": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "ratified_by": {"$ref": "https://omp.dev/contracts/nsi/v1/authority.schema.json#/$defs/OwnerRef"},
+        "created_at": {"type": "string"}
+      },
+      "allOf": [
+        {"$ref": "#/$defs/Binding/$defs/Fields"}
+      ]
+    },
+    "IntakeReadinessReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_id", "revision", "contract_hash", "claim_set_hash", "rule_bundle_hash", "schema_hash", "source_hash", "status", "ratification_receipt_id", "formal_binding_ids", "derivation_receipt_ids", "issued_by", "created_at"],
+      "properties": {
+        "run_id": {},
+        "revision": {},
+        "contract_hash": {},
+        "claim_set_hash": {},
+        "rule_bundle_hash": {},
+        "schema_hash": {},
+        "source_hash": {},
+        "status": {"type": "string", "const": "ELIGIBLE_FOR_PUBLICATION"},
+        "ratification_receipt_id": {"type": "string"},
+        "formal_binding_ids": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "derivation_receipt_ids": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "issued_by": {"$ref": "https://omp.dev/contracts/nsi/v1/authority.schema.json#/$defs/RuleEngineRef"},
+        "created_at": {"type": "string"}
+      },
+      "allOf": [
+        {"$ref": "#/$defs/Binding/$defs/Fields"}
+      ]
+    },
+    "IntakePublicationReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_id", "revision", "contract_hash", "claim_set_hash", "rule_bundle_hash", "schema_hash", "source_hash", "state", "ratification_receipt_id", "readiness_receipt_id", "publishedBy", "created_at"],
+      "properties": {
+        "run_id": {},
+        "revision": {},
+        "contract_hash": {},
+        "claim_set_hash": {},
+        "rule_bundle_hash": {},
+        "schema_hash": {},
+        "source_hash": {},
+        "state": {"type": "string", "const": "published"},
+        "ratification_receipt_id": {"type": "string"},
+        "readiness_receipt_id": {"type": "string"},
+        "publishedBy": {"$ref": "https://omp.dev/contracts/nsi/v1/authority.schema.json#/$defs/OwnerRef"},
+        "created_at": {"type": "string"}
+      },
+      "allOf": [
+        {"$ref": "#/$defs/Binding/$defs/Fields"}
+      ]
+    }
+  }
+}

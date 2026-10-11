@@ -56,7 +56,7 @@ describe("unattended lockdown report - runtime defaults", () => {
 		}
 	});
 
-	test("divergence is adds for 01-04, modified for 05, with (applied: OMP-396-s02) on 05 only", async () => {
+	test("divergence is adds for 01-04, modified for 05, with applied refs for 02-05", async () => {
 		const runtimeMd = await Bun.file(runtimePath).text();
 		const rows = parseLockRows(runtimeMd);
 
@@ -64,9 +64,14 @@ describe("unattended lockdown report - runtime defaults", () => {
 
 		for (let i = 0; i < 4; i++) {
 			const div = rows[i]["Upstream divergence"].trim();
-			expect(div).toBe("adds");
+			expect(div.startsWith("adds")).toBe(true);
 			expect(div).not.toContain("OMP-396-s02");
 		}
+
+		expect(rows[0]["Upstream divergence"].trim()).toBe("adds");
+		expect(rows[1]["Upstream divergence"].trim()).toBe("adds (applied: OMP-532-s04)");
+		expect(rows[2]["Upstream divergence"].trim()).toBe("adds (applied: OMP-532-s01, OMP-532-s02, OMP-532-s06)");
+		expect(rows[3]["Upstream divergence"].trim()).toBe("adds (applied: OMP-532-s03)");
 
 		const div05 = rows[4]["Upstream divergence"].trim();
 		expect(div05.startsWith("modified")).toBe(true);

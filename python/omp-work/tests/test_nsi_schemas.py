@@ -1,0 +1,897 @@
+"""NSI authority, taxonomy, claim, status, and contract schemas reject invalid records."""
+
+import json
+import tomllib
+from copy import deepcopy
+from pathlib import Path
+
+import pytest
+from jsonschema import Draft202012Validator, ValidationError
+from referencing import Registry, Resource
+
+
+SCHEMA = json.loads(
+    (Path(__file__).parents[1] / "src/omp_work/contracts/nsi/v1/authority.schema.json")
+    .read_text()
+)
+VALIDATOR = Draft202012Validator(SCHEMA)
+RULE = {"actor_kind": "owner", "allowed_operations": ["propose", "approve"]}
+MUTATION = {
+    "operation_id": "operation-1",
+    "run_id": "run-1",
+    "expected_revision": 0,
+    "actor": {"id": "model-1", "kind": "model"},
+    "operation": "propose",
+    "payload": {},
+}
+WAIVER = {
+    "id": "waiver-1",
+    "run_id": "run-1",
+    "revision": 0,
+    "premise_id": "premise-1",
+    "dimension_id": "dimension-1",
+    "materiality": "material",
+    "waiver_policy": "owner_with_reason",
+    "granted_by": {"id": "owner-1", "kind": "owner"},
+    "reason": "Owner accepts this gap.",
+    "decision_id": "decision-1",
+    "created_at": "2026-10-10T00:00:00Z",
+}
+
+
+@pytest.mark.parametrize("record", [RULE, MUTATION, WAIVER])
+def test_authority_root_accepts_records_and_rejects_missing_or_extra_fields(record):
+    Draft202012Validator.check_schema(SCHEMA)
+    VALIDATOR.validate(record)
+    for field in record:
+        incomplete = dict(record)
+        del incomplete[field]
+        with pytest.raises(ValidationError):
+            VALIDATOR.validate(incomplete)
+    with pytest.raises(ValidationError):
+        VALIDATOR.validate({**record, "unexpected": True})
+
+
+@pytest.mark.parametrize("kind", ["owner", "service", "model", "tool", "rule_engine"])
+def test_only_models_are_restricted_to_proposals(kind):
+    record = deepcopy(MUTATION)
+    record["actor"]["kind"] = kind
+    VALIDATOR.validate(record)
+    record["operation"] = "publish"
+    if kind == "model":
+        with pytest.raises(ValidationError):
+            VALIDATOR.validate(record)
+    else:
+        VALIDATOR.validate(record)
+    if kind == "owner":
+        record["operation"] = "ratify"
+        VALIDATOR.validate(record)
+
+
+@pytest.mark.parametrize(
+    "record,field,value",
+    [
+        (RULE, "actor_kind", "unknown"),
+        (RULE, "allowed_operations", []),
+        (RULE, "allowed_operations", ["propose", "propose"]),
+        (RULE, "allowed_operations", [1]),
+        (MUTATION, "expected_revision", -1),
+        (MUTATION, "expected_revision", 0.5),
+        (MUTATION, "actor", {"id": "", "kind": "model"}),
+        (MUTATION, "actor", {"id": "x", "kind": "unknown"}),
+        (MUTATION, "actor", {"id": "x", "kind": "model", "extra": True}),
+        (MUTATION, "payload", []),
+        (MUTATION, "payload", {"extra": True}),
+        (WAIVER, "revision", -1),
+        (WAIVER, "revision", 0.5),
+        (WAIVER, "materiality", "critical"),
+        (WAIVER, "waiver_policy", "unknown"),
+        (WAIVER, "granted_by", {"id": "service-1", "kind": "service"}),
+        (WAIVER, "granted_by", {"id": "", "kind": "owner"}),
+        (WAIVER, "granted_by", {"id": "x", "kind": "owner", "extra": True}),
+        (WAIVER, "reason", ""),
+    ],
+)
+def test_authority_root_rejects_invalid_authority_records(record, field, value):
+    with pytest.raises(ValidationError):
+        VALIDATOR.validate({**record, field: value})
+
+
+def test_waiver_accepts_minor_materiality_and_never_policy():
+    VALIDATOR.validate({**WAIVER, "materiality": "minor", "waiver_policy": "never"})
+
+
+@pytest.mark.parametrize("definition,kind", [("OwnerRef", "owner"), ("RuleEngineRef", "rule_engine")])
+def test_specialized_actor_refs_reject_wrong_kind_empty_id_and_open_fields(definition, kind):
+    validator = Draft202012Validator({**SCHEMA, "oneOf": [{"$ref": f"#/$defs/{definition}"}]})
+    validator.validate({"id": "actor-1", "kind": kind})
+    for invalid in (
+        {"id": "actor-1", "kind": "model"},
+        {"id": "", "kind": kind},
+        {"id": "actor-1"},
+        {"kind": kind},
+        {"id": "actor-1", "kind": kind, "extra": True},
+    ):
+        with pytest.raises(ValidationError):
+            validator.validate(invalid)
+
+
+TAXONOMY_SCHEMA = json.loads(
+    (Path(__file__).parents[1] / "src/omp_work/contracts/nsi/v1/taxonomy.schema.json")
+    .read_text()
+)
+TAXONOMY_VALIDATOR = Draft202012Validator(
+    TAXONOMY_SCHEMA,
+    registry=Registry().with_resource(SCHEMA["$id"], Resource.from_contents(SCHEMA)),
+)
+ENTITY = {"id": "entity-1", "type": "requirement"}
+PREDICATE = {
+    "id": "depends_on",
+    "title": "Depends on",
+    "subject_types": ["requirement"],
+    "object_types": ["service"],
+    "cardinality": "many",
+    "exclusivity": False,
+    "transitivity": True,
+    "authority": ["owner", "rule_engine"],
+}
+DIMENSION = {
+    "id": "availability",
+    "title": "Availability",
+    "category": "non_functional_qualities",
+    "applicability": {"entity_types": [], "predicate_ids": []},
+    "required_premises": ["uptime_target"],
+    "materiality": "material",
+    "waiver_policy": "owner_with_reason",
+}
+
+
+@pytest.mark.parametrize(
+    "definition,record",
+    [("EntityRef", ENTITY), ("PredicateDefinition", PREDICATE),
+     ("RequirementDimensionDefinition", DIMENSION)],
+)
+def test_taxonomy_root_and_definitions_require_closed_complete_records(definition, record):
+    Draft202012Validator.check_schema(TAXONOMY_SCHEMA)
+    definition_validator = TAXONOMY_VALIDATOR.evolve(
+        schema={**TAXONOMY_SCHEMA, "oneOf": [{"$ref": f"#/$defs/{definition}"}]}
+    )
+    for validator in (TAXONOMY_VALIDATOR, definition_validator):
+        validator.validate(record)
+        for field in record:
+            incomplete = dict(record)
+            del incomplete[field]
+            with pytest.raises(ValidationError):
+                validator.validate(incomplete)
+        with pytest.raises(ValidationError):
+            validator.validate({**record, "unexpected": True})
+
+
+def test_intake_categories_accept_exactly_the_eleven_supported_categories():
+    categories = [
+        "functional_scope_and_behavior", "domain_and_data_model",
+        "interaction_and_ux_flow", "non_functional_qualities",
+        "integrations_and_external_dependencies", "edge_cases_and_failure_handling",
+        "constraints_and_tradeoffs", "terminology", "completion_signals",
+        "placeholders_and_ambiguities", "scope_boundaries",
+    ]
+    assert sorted(TAXONOMY_SCHEMA["$defs"]["IntakeCategory"]["enum"]) == sorted(categories)
+    validator = TAXONOMY_VALIDATOR.evolve(
+        schema={**TAXONOMY_SCHEMA, "oneOf": [{"$ref": "#/$defs/IntakeCategory"}]}
+    )
+    for category in categories:
+        validator.validate(category)
+        TAXONOMY_VALIDATOR.validate({**DIMENSION, "category": category})
+    with pytest.raises(ValidationError):
+        validator.validate("unknown")
+
+
+@pytest.mark.parametrize(
+    "record,field,value",
+    [
+        (ENTITY, "id", ""),
+        (ENTITY, "type", ""),
+        (PREDICATE, "subject_types", []),
+        (PREDICATE, "subject_types", ["requirement", "requirement"]),
+        (PREDICATE, "subject_types", [1]),
+        (PREDICATE, "object_types", []),
+        (PREDICATE, "object_types", ["service", "service"]),
+        (PREDICATE, "object_types", [1]),
+        (PREDICATE, "cardinality", "unknown"),
+        (PREDICATE, "exclusivity", 1),
+        (PREDICATE, "transitivity", "true"),
+        (PREDICATE, "authority", []),
+        (PREDICATE, "authority", ["unknown"]),
+        (DIMENSION, "category", "unknown"),
+        (DIMENSION, "applicability", {"entity_types": []}),
+        (DIMENSION, "applicability", {"predicate_ids": []}),
+        (DIMENSION, "applicability", {"entity_types": [], "predicate_ids": [], "extra": True}),
+        (DIMENSION, "applicability", {"entity_types": [1], "predicate_ids": []}),
+        (DIMENSION, "applicability", {"entity_types": [], "predicate_ids": [1]}),
+        (DIMENSION, "required_premises", []),
+        (DIMENSION, "required_premises", [1]),
+        (DIMENSION, "materiality", "unknown"),
+        (DIMENSION, "waiver_policy", "unknown"),
+    ],
+)
+def test_taxonomy_rejects_invalid_types_bounds_and_authority_refs(record, field, value):
+    with pytest.raises(ValidationError):
+        TAXONOMY_VALIDATOR.validate({**record, field: value})
+
+
+@pytest.mark.parametrize("materiality", ["critical", "material", "minor"])
+def test_critical_dimensions_cannot_be_waived(materiality):
+    TAXONOMY_VALIDATOR.validate({**DIMENSION, "materiality": materiality, "waiver_policy": "never"})
+    record = {**DIMENSION, "materiality": materiality}
+    if materiality == "critical":
+        with pytest.raises(ValidationError):
+            TAXONOMY_VALIDATOR.validate(record)
+    else:
+        TAXONOMY_VALIDATOR.validate(record)
+
+
+def test_predicates_accept_single_cardinality_and_shared_actor_kinds():
+    TAXONOMY_VALIDATOR.validate({
+        **PREDICATE, "cardinality": "one", "exclusivity": True, "transitivity": False,
+        "authority": ["owner", "service", "model", "tool", "rule_engine"],
+    })
+
+
+CLAIM_SCHEMA = json.loads(
+    (Path(__file__).parents[1] / "src/omp_work/contracts/nsi/v1/claim.schema.json")
+    .read_text()
+)
+CLAIM_VALIDATOR = Draft202012Validator(
+    CLAIM_SCHEMA,
+    registry=Registry().with_resources(
+        (schema["$id"], Resource.from_contents(schema))
+        for schema in (SCHEMA, TAXONOMY_SCHEMA)
+    ),
+)
+CLAIM = {
+    "id": "claim-1",
+    "category": "non_functional_qualities",
+    "subject": ENTITY,
+    "predicate_id": "uptime_target",
+    "value": {"type": "number", "value": 99.9},
+    "origin": "model_proposal",
+    "state": "proposed",
+    "modality": "desired",
+    "polarity": "positive",
+    "truth": "unknown",
+    "asserted_by": {"id": "model-1", "kind": "model"},
+    "evidence": [],
+    "premise_ids": [],
+}
+ARTIFACT = {
+    "id": "artifact-1",
+    "uri": "https://example.com/requirements",
+    "content_hash": "a" * 64,
+    "revision": "revision-1",
+    "actor": {"id": "tool-1", "kind": "tool"},
+    "media_type": "text/plain",
+}
+SPAN = {"artifact_id": "artifact-1", "start_byte": 0, "end_byte": 12}
+
+
+def claim_definition_validator(definition):
+    return CLAIM_VALIDATOR.evolve(
+        schema={**CLAIM_SCHEMA, "$ref": f"#/$defs/{definition}"}
+    )
+
+
+@pytest.mark.parametrize(
+    "definition,record",
+    [("IntakeClaim", CLAIM), ("EvidenceArtifact", ARTIFACT), ("EvidenceSpan", SPAN)],
+)
+def test_claim_records_require_complete_closed_wire_shapes(definition, record):
+    Draft202012Validator.check_schema(CLAIM_SCHEMA)
+    validator = claim_definition_validator(definition)
+    validator.validate(record)
+    if definition == "IntakeClaim":
+        CLAIM_VALIDATOR.validate(record)
+    for field in record:
+        incomplete = dict(record)
+        del incomplete[field]
+        with pytest.raises(ValidationError):
+            validator.validate(incomplete)
+    with pytest.raises(ValidationError):
+        validator.validate({**record, "unexpected": True})
+
+
+@pytest.mark.parametrize(
+    "definition,values",
+    [
+        ("ClaimOrigin", ["owner_statement", "policy_rule", "repository_observation",
+                         "tool_receipt", "model_proposal", "rule_derivation"]),
+        ("ClaimState", ["proposed", "admitted", "rejected", "superseded"]),
+        ("ClaimModality", ["observed", "desired", "required", "prohibited", "possible", "unknown"]),
+        ("Polarity", ["positive", "negative"]),
+    ],
+)
+def test_claim_enums_accept_exact_wire_vocabulary(definition, values):
+    assert sorted(CLAIM_SCHEMA["$defs"][definition]["enum"]) == sorted(values)
+    validator = claim_definition_validator(definition)
+    for value in values:
+        validator.validate(value)
+    with pytest.raises(ValidationError):
+        validator.validate("unsupported")
+
+
+@pytest.mark.parametrize(
+    "kind,valid,invalid",
+    [("string", "", 1), ("integer", 3, True), ("integer", 0, 1.5),
+     ("number", 1.5, True), ("boolean", False, 0), ("null", None, "null"),
+     ("entity", ENTITY, {"id": "entity-1"})],
+)
+def test_typed_values_enforce_tagged_json_types_and_entity_refs(kind, valid, invalid):
+    validator = claim_definition_validator("TypedValue")
+    record = {"type": kind, "value": valid}
+    validator.validate(record)
+    CLAIM_VALIDATOR.validate({**CLAIM, "value": record})
+    for bad in ({"type": kind, "value": invalid}, {"value": valid},
+                {"type": kind}, {**record, "extra": True}):
+        with pytest.raises(ValidationError):
+            validator.validate(bad)
+
+
+@pytest.mark.parametrize(
+    "definition,record,field,value",
+    [
+        ("EvidenceArtifact", ARTIFACT, "id", ""),
+        ("EvidenceArtifact", ARTIFACT, "uri", 1),
+        ("EvidenceArtifact", ARTIFACT, "content_hash", "a" * 63),
+        ("EvidenceArtifact", ARTIFACT, "content_hash", "A" * 64),
+        ("EvidenceArtifact", ARTIFACT, "content_hash", "g" * 64),
+        ("EvidenceArtifact", ARTIFACT, "revision", ""),
+        ("EvidenceArtifact", ARTIFACT, "actor", {"id": "tool-1", "kind": "unknown"}),
+        ("EvidenceArtifact", ARTIFACT, "media_type", ""),
+        ("EvidenceSpan", SPAN, "artifact_id", ""),
+        ("EvidenceSpan", SPAN, "start_byte", -1),
+        ("EvidenceSpan", SPAN, "end_byte", -1),
+        ("EvidenceSpan", SPAN, "start_byte", 0.5),
+        ("EvidenceSpan", SPAN, "end_byte", True),
+        ("EvidenceSpan", SPAN, "quote", ""),
+        ("IntakeClaim", CLAIM, "category", "unknown"),
+        ("IntakeClaim", CLAIM, "subject", {"id": "entity-1", "type": ""}),
+        ("IntakeClaim", CLAIM, "truth", True),
+        ("IntakeClaim", CLAIM, "truth", "unsupported"),
+        ("IntakeClaim", CLAIM, "premise_ids", [1]),
+        ("IntakeClaim", CLAIM, "evidence", [{**SPAN, "start_byte": -1}]),
+        ("IntakeClaim", CLAIM, "admitted_by", {"id": "model-1", "kind": "model"}),
+    ],
+)
+def test_claim_records_reject_invalid_evidence_and_cross_file_refs(definition, record, field, value):
+    with pytest.raises(ValidationError):
+        claim_definition_validator(definition).validate({**record, field: value})
+
+
+@pytest.mark.parametrize(
+    "origin,required_kind",
+    [("model_proposal", "model"), ("owner_statement", "owner"),
+     ("rule_derivation", "rule_engine"), ("policy_rule", None),
+     ("repository_observation", None), ("tool_receipt", None)],
+)
+def test_claim_origin_constrains_asserting_actor(origin, required_kind):
+    for kind in ("owner", "service", "model", "tool", "rule_engine"):
+        record = {**CLAIM, "origin": origin, "asserted_by": {"id": "actor-1", "kind": kind}}
+        if required_kind is not None and kind != required_kind:
+            with pytest.raises(ValidationError):
+                CLAIM_VALIDATOR.validate(record)
+        else:
+            CLAIM_VALIDATOR.validate(record)
+
+
+@pytest.mark.parametrize("state", ["proposed", "admitted", "rejected", "superseded"])
+def test_admission_requires_authority_and_rule_engine_evidence(state):
+    record = {**CLAIM, "state": state}
+    if state == "admitted":
+        with pytest.raises(ValidationError):
+            CLAIM_VALIDATOR.validate(record)
+    else:
+        CLAIM_VALIDATOR.validate(record)
+    CLAIM_VALIDATOR.validate({**record, "admitted_by": {"id": "owner-1", "kind": "owner"}})
+    rule_record = {**record, "admitted_by": {"id": "engine-1", "kind": "rule_engine"}}
+    if state == "admitted":
+        with pytest.raises(ValidationError):
+            CLAIM_VALIDATOR.validate(rule_record)
+    else:
+        CLAIM_VALIDATOR.validate(rule_record)
+    CLAIM_VALIDATOR.validate({**rule_record, "evidence": [SPAN]})
+    CLAIM_VALIDATOR.validate({**rule_record, "evidence": [{**SPAN, "quote": "Requirements"}]})
+
+
+STATUS_SCHEMA = json.loads(
+    (Path(__file__).parents[1] / "src/omp_work/contracts/nsi/v1/status.schema.json")
+    .read_text()
+)
+STATUS_VALIDATOR = Draft202012Validator(
+    STATUS_SCHEMA,
+    registry=Registry().with_resources(
+        (schema["$id"], Resource.from_contents(schema))
+        for schema in (SCHEMA, TAXONOMY_SCHEMA, CLAIM_SCHEMA)
+    ),
+)
+SHA256 = "a" * 64
+RECEIPT = {
+    "id": "receipt-1",
+    "run_id": "run-1",
+    "revision": 0,
+    "contract_hash": SHA256,
+    "claim_set_hash": SHA256,
+    "rule_bundle_hash": SHA256,
+    "schema_hash": SHA256,
+    "source_hash": SHA256,
+    "rule_id": "rule-1",
+    "premise_ids": ["premise-1"],
+    "conclusion_ids": ["conclusion-1"],
+    "derived_by": {"id": "engine-1", "kind": "rule_engine"},
+    "created_at": "2026-10-10T00:00:00Z",
+}
+GAP = {
+    "id": "gap-1",
+    "dimension_id": "dimension-1",
+    "premise_id": "premise-1",
+    "reason": "Required premise is unknown.",
+    "materiality": "material",
+    "waiver_policy": "owner_with_reason",
+}
+CONFLICT = {
+    "id": "conflict-1",
+    "claim_ids": ["claim-1", "claim-2"],
+    "predicate_id": "uptime_target",
+    "reason": "Admitted claims contradict.",
+}
+QUESTION = {
+    "id": "question-1",
+    "question": "What uptime is required?",
+    "gap_ids": ["gap-1"],
+    "conflict_ids": [],
+    "category": "non_functional_qualities",
+}
+DECISION = {
+    "id": "decision-1",
+    "run_id": "run-1",
+    "revision": 0,
+    "actor": {"id": "owner-1", "kind": "owner"},
+    "question_id": "question-1",
+    "answer": {"type": "string", "value": "99.9"},
+    "reason": "Owner confirmed the target.",
+    "created_at": "2026-10-10T00:00:00Z",
+}
+INTAKE_RUN_STATES = [
+    "collecting", "reasoning", "needs_spec", "conflicted", "ready_for_ratification",
+    "ratified", "published", "stale", "invalid", "superseded",
+]
+
+
+@pytest.mark.parametrize(
+    "definition,record",
+    [("DerivationReceipt", RECEIPT), ("Gap", GAP), ("Conflict", CONFLICT),
+     ("ClarificationQuestion", QUESTION), ("OwnerDecision", DECISION)],
+)
+def test_status_root_and_definitions_require_closed_complete_records(definition, record):
+    Draft202012Validator.check_schema(STATUS_SCHEMA)
+    definition_validator = STATUS_VALIDATOR.evolve(
+        schema={**STATUS_SCHEMA, "oneOf": [{"$ref": f"#/$defs/{definition}"}]}
+    )
+    for validator in (STATUS_VALIDATOR, definition_validator):
+        validator.validate(record)
+        for field in record:
+            incomplete = dict(record)
+            del incomplete[field]
+            with pytest.raises(ValidationError):
+                validator.validate(incomplete)
+        with pytest.raises(ValidationError):
+            validator.validate({**record, "unexpected": True})
+
+
+def test_intake_run_state_accepts_exactly_the_ten_lifecycle_states():
+    assert STATUS_SCHEMA["$defs"]["IntakeRunState"]["enum"] == INTAKE_RUN_STATES
+    validator = STATUS_VALIDATOR.evolve(
+        schema={**STATUS_SCHEMA, "oneOf": [{"$ref": "#/$defs/IntakeRunState"}]}
+    )
+    for state in INTAKE_RUN_STATES:
+        validator.validate(state)
+    with pytest.raises(ValidationError):
+        validator.validate("unknown")
+    with pytest.raises(ValidationError):
+        STATUS_VALIDATOR.validate("collecting")
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["contract_hash", "claim_set_hash", "rule_bundle_hash", "schema_hash", "source_hash"],
+)
+@pytest.mark.parametrize("value", ["a" * 63, "a" * 65, "A" * 64, "g" * 64, ""])
+def test_receipt_hashes_are_lowercase_sha256(field, value):
+    with pytest.raises(ValidationError):
+        STATUS_VALIDATOR.validate({**RECEIPT, field: value})
+
+
+@pytest.mark.parametrize(
+    "record,field,value",
+    [
+        (RECEIPT, "revision", -1),
+        (RECEIPT, "revision", 0.5),
+        (RECEIPT, "premise_ids", [1]),
+        (RECEIPT, "conclusion_ids", [1]),
+        (RECEIPT, "derived_by", {"id": "engine-1", "kind": "owner"}),
+        (RECEIPT, "derived_by", {"id": "", "kind": "rule_engine"}),
+        (RECEIPT, "derived_by", {"id": "engine-1", "kind": "rule_engine", "extra": True}),
+        (GAP, "reason", ""),
+        (GAP, "materiality", "unknown"),
+        (GAP, "waiver_policy", "unknown"),
+        (CONFLICT, "claim_ids", ["claim-1"]),
+        (CONFLICT, "claim_ids", []),
+        (CONFLICT, "claim_ids", ["claim-1", "claim-1"]),
+        (CONFLICT, "claim_ids", ["claim-1", 2]),
+        (QUESTION, "question", ""),
+        (QUESTION, "gap_ids", [1]),
+        (QUESTION, "conflict_ids", [1]),
+        (QUESTION, "category", "unknown"),
+        (DECISION, "revision", -1),
+        (DECISION, "revision", 0.5),
+        (DECISION, "actor", {"id": "engine-1", "kind": "rule_engine"}),
+        (DECISION, "actor", {"id": "", "kind": "owner"}),
+        (DECISION, "actor", {"id": "owner-1", "kind": "owner", "extra": True}),
+        (DECISION, "answer", {"type": "string"}),
+        (DECISION, "answer", {"type": "entity", "value": {"id": "entity-1"}}),
+        (DECISION, "reason", 1),
+        (DECISION, "created_at", 1),
+    ],
+)
+def test_status_records_reject_invalid_bounds_hashes_and_cross_file_refs(record, field, value):
+    with pytest.raises(ValidationError):
+        STATUS_VALIDATOR.validate({**record, field: value})
+
+
+@pytest.mark.parametrize("materiality", ["critical", "material", "minor"])
+def test_critical_gaps_cannot_be_waived(materiality):
+    STATUS_VALIDATOR.validate({**GAP, "materiality": materiality, "waiver_policy": "never"})
+    record = {**GAP, "materiality": materiality, "waiver_policy": "owner_with_reason"}
+    if materiality == "critical":
+        with pytest.raises(ValidationError):
+            STATUS_VALIDATOR.validate(record)
+    else:
+        STATUS_VALIDATOR.validate(record)
+
+
+def test_status_records_accept_empty_lists_plain_timestamps_and_typed_answers():
+    STATUS_VALIDATOR.validate({
+        **RECEIPT,
+        "contract_hash": "0123456789abcdef" * 4,
+        "claim_set_hash": "fedcba9876543210" * 4,
+        "premise_ids": [],
+        "conclusion_ids": [],
+        "created_at": "not-a-timestamp",
+    })
+    STATUS_VALIDATOR.validate({**QUESTION, "gap_ids": [], "conflict_ids": []})
+    STATUS_VALIDATOR.validate({**CONFLICT, "claim_ids": ["claim-1", "claim-2", "claim-3"], "reason": ""})
+    STATUS_VALIDATOR.validate({**DECISION, "reason": "", "created_at": "not-a-timestamp"})
+    for category in TAXONOMY_SCHEMA["$defs"]["IntakeCategory"]["enum"]:
+        STATUS_VALIDATOR.validate({**QUESTION, "category": category})
+    for answer in (
+        {"type": "string", "value": ""},
+        {"type": "integer", "value": 0},
+        {"type": "number", "value": 1.5},
+        {"type": "boolean", "value": False},
+        {"type": "null", "value": None},
+        {"type": "entity", "value": {"id": "entity-1", "type": "requirement"}},
+    ):
+        STATUS_VALIDATOR.validate({**DECISION, "answer": answer})
+
+
+CONTRACT_SCHEMA = json.loads(
+    (Path(__file__).parents[1] / "src/omp_work/contracts/nsi/v1/contract.schema.json")
+    .read_text()
+)
+CONTRACT_VALIDATOR = Draft202012Validator(
+    CONTRACT_SCHEMA,
+    registry=Registry().with_resources(
+        (schema["$id"], Resource.from_contents(schema))
+        for schema in (SCHEMA, TAXONOMY_SCHEMA, CLAIM_SCHEMA, STATUS_SCHEMA)
+    ),
+)
+BINDING = {
+    "run_id": "run-1", "revision": 0,
+    "contract_hash": SHA256, "claim_set_hash": SHA256,
+    "rule_bundle_hash": SHA256, "schema_hash": SHA256, "source_hash": SHA256,
+}
+REQUIREMENT = {
+    "id": "requirement-1", "category": "non_functional_qualities",
+    "text": "Availability must reach 99.9%.",
+    "claim_ids": ["claim-1"], "dimension_ids": ["availability"],
+}
+CRITERION = {
+    "id": "criterion-1", "requirement_ids": ["requirement-1"],
+    "description": "Measure availability.", "verification_method": "monitoring",
+    "expected_result": {"type": "number", "value": 99.9},
+}
+FORMALIZATION = {
+    "id": "formalization-1", "requirement_ids": ["requirement-1"],
+    "language": "logic", "expression": "availability >= 99.9",
+    "scope": "service", "assumptions": [], "content_hash": SHA256,
+}
+FORMAL_CHECK = {
+    "id": "check-1", "formalization_id": "formalization-1",
+    "formalization_hash": SHA256, "status": "true", "scope": "service",
+    "evidence_ids": [], "checked_by": {"id": "tool-1", "kind": "tool"},
+    "created_at": "2026-10-10T00:00:00Z",
+}
+RATIFIED_BINDING = {
+    **BINDING, "formalization_id": "formalization-1", "formalization_hash": SHA256,
+    "check_result_id": "check-1", "ratified_by": {"id": "owner-1", "kind": "owner"},
+    "ratification_receipt_id": "ratification-1",
+}
+CONTRACT = {
+    "requirements": [REQUIREMENT], "acceptance_criteria": [CRITERION],
+    "formalizations": [FORMALIZATION], "waivers": [WAIVER],
+}
+ASSESSMENT = {
+    **BINDING, "status": "READY_FOR_RATIFICATION", "gaps": [GAP],
+    "conflicts": [CONFLICT], "derivation_receipt_ids": ["receipt-1"],
+    "assessed_by": {"id": "engine-1", "kind": "rule_engine"},
+    "created_at": "2026-10-10T00:00:00Z",
+}
+RATIFICATION = {
+    **BINDING, "assessment_id": "assessment-1", "formal_binding_ids": ["binding-1"],
+    "ratified_by": {"id": "owner-1", "kind": "owner"},
+    "created_at": "2026-10-10T00:00:00Z",
+}
+READINESS = {
+    **BINDING, "status": "ELIGIBLE_FOR_PUBLICATION",
+    "ratification_receipt_id": "ratification-1", "formal_binding_ids": ["binding-1"],
+    "derivation_receipt_ids": ["receipt-1"],
+    "issued_by": {"id": "engine-1", "kind": "rule_engine"},
+    "created_at": "2026-10-10T00:00:00Z",
+}
+PUBLICATION = {
+    **BINDING, "state": "published", "ratification_receipt_id": "ratification-1",
+    "readiness_receipt_id": "readiness-1", "publishedBy": {"id": "owner-1", "kind": "owner"},
+    "created_at": "2026-10-10T00:00:00Z",
+}
+CONTRACT_RECORDS = [
+    ("RequirementClause", REQUIREMENT), ("AcceptanceCriterion", CRITERION),
+    ("Formalization", FORMALIZATION), ("FormalCheckResult", FORMAL_CHECK),
+    ("Binding", BINDING), ("RatifiedFormalBinding", RATIFIED_BINDING),
+    ("IntakeContract", CONTRACT), ("IntakeReadinessAssessment", ASSESSMENT),
+    ("RatificationReceipt", RATIFICATION), ("IntakeReadinessReceipt", READINESS),
+    ("IntakePublicationReceipt", PUBLICATION),
+]
+
+
+def contract_definition_validator(definition):
+    return CONTRACT_VALIDATOR.evolve(
+        schema={**CONTRACT_SCHEMA, "$ref": f"#/$defs/{definition}"}
+    )
+
+
+@pytest.mark.parametrize("definition,record", CONTRACT_RECORDS)
+def test_contract_records_require_closed_complete_wire_shapes(definition, record):
+    Draft202012Validator.check_schema(CONTRACT_SCHEMA)
+    validator = contract_definition_validator(definition)
+    validator.validate(record)
+    if definition == "IntakeContract":
+        CONTRACT_VALIDATOR.validate(record)
+    for field in record:
+        incomplete = dict(record)
+        del incomplete[field]
+        with pytest.raises(ValidationError):
+            validator.validate(incomplete)
+    with pytest.raises(ValidationError):
+        validator.validate({**record, "unexpected": True})
+
+
+@pytest.mark.parametrize(
+    "definition,record",
+    [(name, record) for name, record in CONTRACT_RECORDS if "run_id" in record],
+)
+def test_every_bound_record_rejects_invalid_revision_and_hashes(definition, record):
+    validator = contract_definition_validator(definition)
+    for revision in (-1, 0.5, True):
+        with pytest.raises(ValidationError):
+            validator.validate({**record, "revision": revision})
+    for field in ("contract_hash", "claim_set_hash", "rule_bundle_hash", "schema_hash", "source_hash"):
+        for invalid in ("a" * 63, "a" * 65, "A" * 64, "g" * 64, 123):
+            with pytest.raises(ValidationError):
+                validator.validate({**record, field: invalid})
+
+
+@pytest.mark.parametrize(
+    "definition,record,field,value",
+    [
+        ("RequirementClause", REQUIREMENT, "text", ""),
+        ("RequirementClause", REQUIREMENT, "category", "unknown"),
+        ("RequirementClause", REQUIREMENT, "claim_ids", [1]),
+        ("RequirementClause", REQUIREMENT, "dimension_ids", [1]),
+        ("AcceptanceCriterion", CRITERION, "requirement_ids", []),
+        ("AcceptanceCriterion", CRITERION, "requirement_ids", [1]),
+        ("AcceptanceCriterion", CRITERION, "description", ""),
+        ("AcceptanceCriterion", CRITERION, "expected_result", {"type": "number", "value": "99.9"}),
+        ("Formalization", FORMALIZATION, "requirement_ids", []),
+        ("Formalization", FORMALIZATION, "assumptions", [1]),
+        ("Formalization", FORMALIZATION, "content_hash", "A" * 64),
+        ("FormalCheckResult", FORMAL_CHECK, "formalization_hash", "a" * 63),
+        ("FormalCheckResult", FORMAL_CHECK, "status", True),
+        ("FormalCheckResult", FORMAL_CHECK, "checked_by", {"id": "tool-1", "kind": "unknown"}),
+        ("FormalCheckResult", FORMAL_CHECK, "created_at", 123),
+        ("RatifiedFormalBinding", RATIFIED_BINDING, "formalization_hash", "g" * 64),
+        ("RatifiedFormalBinding", RATIFIED_BINDING, "ratified_by", {"id": "model-1", "kind": "model"}),
+        ("IntakeContract", CONTRACT, "requirements", [{**REQUIREMENT, "text": ""}]),
+        ("IntakeContract", CONTRACT, "acceptance_criteria", [{**CRITERION, "requirement_ids": []}]),
+        ("IntakeContract", CONTRACT, "formalizations", [{**FORMALIZATION, "content_hash": "invalid"}]),
+        ("IntakeContract", CONTRACT, "waivers", [{**WAIVER, "reason": ""}]),
+        ("IntakeReadinessAssessment", ASSESSMENT, "status", "ELIGIBLE_FOR_PUBLICATION"),
+        ("IntakeReadinessAssessment", ASSESSMENT, "gaps", [{**GAP, "reason": ""}]),
+        ("IntakeReadinessAssessment", ASSESSMENT, "conflicts", [{**CONFLICT, "claim_ids": ["claim-1"]}]),
+        ("IntakeReadinessAssessment", ASSESSMENT, "assessed_by", {"id": "owner-1", "kind": "owner"}),
+        ("RatificationReceipt", RATIFICATION, "ratified_by", {"id": "engine-1", "kind": "rule_engine"}),
+        ("IntakeReadinessReceipt", READINESS, "status", "READY_FOR_RATIFICATION"),
+        ("IntakeReadinessReceipt", READINESS, "issued_by", {"id": "owner-1", "kind": "owner"}),
+        ("IntakePublicationReceipt", PUBLICATION, "state", "ratified"),
+        ("IntakePublicationReceipt", PUBLICATION, "publishedBy", {"id": "model-1", "kind": "model"}),
+    ],
+)
+def test_contract_rejects_invalid_content_receipt_states_and_authority(definition, record, field, value):
+    with pytest.raises(ValidationError):
+        contract_definition_validator(definition).validate({**record, field: value})
+
+
+def test_contract_root_rejects_receipts_and_accepts_empty_collections():
+    CONTRACT_VALIDATOR.validate({field: [] for field in CONTRACT})
+    with pytest.raises(ValidationError):
+        CONTRACT_VALIDATOR.validate(PUBLICATION)
+
+
+@pytest.mark.parametrize("status", ["true", "false", "unknown"])
+def test_formal_checks_accept_three_valued_results(status):
+    contract_definition_validator("FormalCheckResult").validate({**FORMAL_CHECK, "status": status})
+
+
+@pytest.mark.parametrize("status", ["READY_FOR_RATIFICATION", "NEEDS_SPEC", "CONFLICTED"])
+def test_assessments_accept_readiness_outcomes(status):
+    contract_definition_validator("IntakeReadinessAssessment").validate({**ASSESSMENT, "status": status})
+
+
+@pytest.mark.parametrize(
+    "definition,record",
+    [(name, record) for name, record in CONTRACT_RECORDS
+     if name == "RequirementClause" or "created_at" in record],
+)
+def test_contract_preserves_allowed_empty_lists_and_plain_timestamp_strings(definition, record):
+    changed = {
+        field: ([] if isinstance(value, list) and field != "requirement_ids" else value)
+        for field, value in record.items()
+    }
+    if "created_at" in changed:
+        changed["created_at"] = "not-a-timestamp"
+    contract_definition_validator(definition).validate(changed)
+
+
+NSI_SCHEMAS = {
+    "authority": SCHEMA,
+    "taxonomy": TAXONOMY_SCHEMA,
+    "claim": CLAIM_SCHEMA,
+    "status": STATUS_SCHEMA,
+    "contract": CONTRACT_SCHEMA,
+}
+NSI_REGISTRY = Registry().with_resources(
+    (schema["$id"], Resource.from_contents(schema))
+    for schema in NSI_SCHEMAS.values()
+)
+
+
+def nsi_validator(document, definition=None):
+    schema = NSI_SCHEMAS[document]
+    if definition is not None:
+        schema = {"$ref": f"{schema['$id']}#/$defs/{definition}"}
+    return Draft202012Validator(schema, registry=NSI_REGISTRY)
+
+
+def test_all_five_nsi_documents_are_valid_draft_2020_12_schemas():
+    schema_dir = Path(__file__).parents[1] / "src/omp_work/contracts/nsi/v1"
+    assert {path.name for path in schema_dir.glob("*.json")} == {
+        f"{name}.schema.json" for name in NSI_SCHEMAS
+    }
+    for name, schema in NSI_SCHEMAS.items():
+        assert schema["$id"] == f"https://omp.dev/contracts/nsi/v1/{name}.schema.json"
+        Draft202012Validator.check_schema(schema)
+
+
+def test_every_nsi_definition_accepts_a_conforming_wire_instance():
+    instances = {
+        "authority": {
+            "ActorKind": "model",
+            "ActorRef": MUTATION["actor"],
+            "OwnerRef": WAIVER["granted_by"],
+            "RuleEngineRef": RECEIPT["derived_by"],
+            "WaiverPolicy": "owner_with_reason",
+            "WaiverDefinition": WAIVER,
+            "AuthorityMatrixRule": RULE,
+            "MutationEnvelope": MUTATION,
+        },
+        "taxonomy": {
+            "IntakeCategory": "non_functional_qualities",
+            "EntityRef": ENTITY,
+            "PredicateDefinition": PREDICATE,
+            "RequirementDimensionDefinition": DIMENSION,
+        },
+        "claim": {
+            "ClaimOrigin": "model_proposal",
+            "ClaimState": "proposed",
+            "ClaimModality": "desired",
+            "Polarity": "positive",
+            "TypedValue": CLAIM["value"],
+            "EvidenceArtifact": ARTIFACT,
+            "EvidenceSpan": SPAN,
+            "IntakeClaim": CLAIM,
+        },
+        "status": {
+            "IntakeRunState": "collecting",
+            "DerivationReceipt": RECEIPT,
+            "Gap": GAP,
+            "Conflict": CONFLICT,
+            "ClarificationQuestion": QUESTION,
+            "OwnerDecision": DECISION,
+        },
+        "contract": dict(CONTRACT_RECORDS),
+    }
+    for document, records in instances.items():
+        assert records.keys() == NSI_SCHEMAS[document]["$defs"].keys()
+        for definition, instance in records.items():
+            nsi_validator(document, definition).validate(instance)
+    nsi_validator("contract", "Binding/$defs/Fields").validate(BINDING)
+
+
+def test_nsi_enum_sizes_and_members_match_wire_vocabularies():
+    for document, definition, count in (
+        ("taxonomy", "IntakeCategory", 11),
+        ("status", "IntakeRunState", 10),
+        ("authority", "ActorKind", 5),
+        ("claim", "ClaimOrigin", 6),
+        ("claim", "ClaimModality", 6),
+        ("claim", "ClaimState", 4),
+        ("claim", "Polarity", 2),
+    ):
+        values = NSI_SCHEMAS[document]["$defs"][definition]["enum"]
+        assert len(values) == count
+        validator = nsi_validator(document, definition)
+        for value in values:
+            validator.validate(value)
+        with pytest.raises(ValidationError):
+            validator.validate("unsupported")
+
+
+def test_readiness_receipts_forbid_gaps_but_assessments_require_them():
+    receipt_validator = nsi_validator("contract", "IntakeReadinessReceipt")
+    receipt_validator.validate(READINESS)
+    for gaps in ([], [GAP]):
+        with pytest.raises(ValidationError):
+            receipt_validator.validate({**READINESS, "gaps": gaps})
+
+    assessment_validator = nsi_validator("contract", "IntakeReadinessAssessment")
+    assessment_validator.validate(ASSESSMENT)
+    assessment_validator.validate({**ASSESSMENT, "gaps": []})
+    without_gaps = dict(ASSESSMENT)
+    del without_gaps["gaps"]
+    with pytest.raises(ValidationError):
+        assessment_validator.validate(without_gaps)
+
+
+def test_package_data_includes_nsi_schema_json_files():
+    project_dir = Path(__file__).parents[1]
+    config = tomllib.loads((project_dir / "pyproject.toml").read_text())
+    globs = config["tool"]["setuptools"]["package-data"]["omp_work"]
+    assert "contracts/nsi/v1/*.json" in globs
+
+
+def test_each_nsi_root_accepts_its_conforming_wire_record():
+    for document, instance in (
+        ("taxonomy", ENTITY),
+        ("claim", CLAIM),
+        ("status", GAP),
+        ("contract", CONTRACT),
+        ("authority", MUTATION),
+    ):
+        nsi_validator(document).validate(instance)

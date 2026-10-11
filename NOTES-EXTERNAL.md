@@ -568,3 +568,51 @@ The owner limited this task to focused test files. Flood will run the normal tes
 - [ ] `bun check` passes
 - [x] Tested locally
 - [x] CHANGELOG updated with the required attribution (internal defect task, no external PR number)
+
+---
+
+# OMP-447 stop-button drill (OMP-405-s08), Grok Bot dropped
+
+Status: **NOT RUN — the live drill changes host services, credentials, and flood state outside this worktree.** This session did not rotate a token, engage the workspace stop, stop or start a unit, edit `~/flood/tasks/`, or call `flood.py mark-done`.
+
+Owner ruling 2026-10-10: Grok Bot is no longer used. Drop every Grok Bot part of this item. No Grok Bot run, push, credential, endpoint, or repository (`grokbot`). OMP-490, OMP-503, and OMP-514 stay cancelled. The rest of OMP-405-s08 stands.
+
+## Why the live drill stayed outside this worktree
+
+- `systemctl --user is-active flood.service` is `active`. That unit is the flood orchestrator (`flood.py run --forever`). Its drop-in `~/.config/systemd/user/flood.service.d/zz-omp-agent-stop-killmode.conf` sets `KillMode=control-group`. Stopping it ends every flood job. `flood.py` records that a stop of this unit already killed in-flight jobs on 2026-10-10.
+- `~/.config/omp-work/` is empty. There is no owner bearer here. `ops capabilities init` rotates the owner token on the live ledger.
+- `omp-webui` is not checked out. `docs/webui-oversight.md` already says the owner applies the Stop control there; nothing in this repository does.
+- `flood.py mark-done` writes flood state under `~/flood`, outside this worktree.
+- `/home/thetu` on this host is not the owner home from drill run 1. `/home/thetu/.local/state/omp-work/omp-447-drill-20261002T1434Z.txt` is absent. Loopback `:54322` is listening; this session did not call it.
+
+Observed only, and not a drill: ompbot `flood.service` has `50-omp-agent-stop.conf` (`ExecCondition` = `python -m omp_work stop check`, `TimeoutStopSec=20`) and `zz-omp-agent-stop-killmode.conf`. `flood-operator.service` is inactive and has only `50-omp-agent-stop.conf`. `omp-agent-stop.service` and `continuous-admit.service` are not installed for ompbot.
+
+## Drill run 1 still stands (operator, 2026-10-02 14:34Z)
+
+Evidence path named by the task: `/home/thetu/.local/state/omp-work/omp-447-drill-20261002T1434Z.txt`. That file is not on this host, so this note does not re-verify its bytes.
+
+Passed then: WebUI Stop set `stopped=true` and the units went inactive within 1 s; a start while stopped was skipped (`ExecCondition`); a release with the grokbot credential was forbidden; Stop from the grokbot credential worked; the owner release worked and flood started again. `media-watch-agent.service` was left out on purpose (OMP-527, Media Discovery).
+
+Failed then: an omp prompt was not refused while stopped (OMP-536); `continuous-admit`'s worker kept running because of `KillMode=process`, and the unit failed in a loop until the operator restarted the worker (OMP-537).
+
+The code for those two failures is already on this branch. `session-system/extensions/workflow/agent-stop.ts` refuses a prompt from `before_agent_start` while the stop is engaged. `stop install-guards` writes `zz-omp-agent-stop-killmode.conf` (`KillMode=control-group`) when a unit or an earlier drop-in sets `KillMode=process` or `KillMode=none`. The rerun is what checks them on the host. The grokbot pass lines from run 1 are not repeated.
+
+## Operator procedure
+
+The procedure is `docs/runbooks/agent-stop-drill.md`. Copy that file onto `~/flood/tasks/OMP-405-s08.md` and run it as the owner user, in a quiet moment, after `deploy-omp.sh` has deployed main with OMP-405 s01–s07 and OMP-536. This session did not run it. The drill stops flood.
+
+The WebUI Stop control needs its own client principal (`docs/webui-oversight.md`). The daemon's `OMP_WORK_CAPABILITY_FILE` is that file. The owner bearer in `client.json` is the release credential. Mint the client when the file is missing or its scopes are wrong:
+
+```sh
+uv run --project python/omp-work omp-work ops capabilities client --name client --workspace-id "$W"
+```
+
+The file's scopes are `work.client`, `work.read`, and `work.stop`. The command has no `--stop-only` flag. Grok Bot stays out of the drill: no `ops capabilities grokbot`, no capability named grokbot, and no grokbot bearer on Stop or on `stop release`.
+
+## Mark done, after the transcript file exists
+
+```
+python3 ~/flood/flood.py mark-done OMP-405-s08 --ref <omp-webui SHA>:<drill output file>
+```
+
+Done when the drill file shows: `stopped` true and `flood.service` and `continuous-admit.service` inactive within 30 s of Stop from the WebUI, with no process left in those units; a start skipped while stopped; the omp prompt refused while stopped; the units running only after the owner release and the following start; the WebUI client scopes `work.client`, `work.read`, and `work.stop`; no Grok Bot step in the transcript.

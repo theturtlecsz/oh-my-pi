@@ -177,6 +177,8 @@ a stop ends its jobs.
 python -m omp_work stop install-guards --unit flood.service --unit flood-operator.service --unit continuous-admit.service --interval 5
 ```
 
+The live stop-button drill is `docs/runbooks/agent-stop-drill.md` (OMP-447). It mints the WebUI client capability with `ops capabilities client --name client` (scopes `work.read`, `work.client`, `work.stop`) and leaves Grok Bot credentials out of the drill.
+
 ### continuous-admit
 
 Economy continuous_admit (sole durable life-owner), as of 2026-10-02 16:05Z.

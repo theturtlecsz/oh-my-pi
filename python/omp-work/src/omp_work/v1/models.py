@@ -2624,6 +2624,7 @@ class Approval(StrictModel):
         "OMP-430",
         "OMP-520",
         "OMP-514",
+        "OMP-318",
     ]
     attestation: hex64 | None = None
 

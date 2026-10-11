@@ -1,4 +1,4 @@
-"""parallel-test.sh proves the automation user can run flood, robomp, and agents."""
+"""parallel-test.sh proves the automation user can run flood and agents."""
 
 from __future__ import annotations
 
@@ -85,16 +85,7 @@ exit 0
     )
     write_exec(
         bin_dir / "sudo",
-        log_header
-        + """last=
-for arg in "$@"; do
-  last=$arg
-done
-if [ "$last" = "ps" ]; then
-  printf '%s\\n' 'NAME STATUS' 'robomp-1 Up'
-fi
-exit 0
-""",
+        log_header + "exit 0\n",
     )
     agent = (
         log_header
@@ -123,8 +114,6 @@ exit 0
 def run_probe(staged: dict, tmp_path: Path, owner: str, evidence: Path | None = None):
     evidence = evidence or (tmp_path / "evidence")
     evidence.mkdir(exist_ok=True)
-    admin = tmp_path / "admin-commands"
-    admin.write_text("robomp-ctl\n", encoding="utf-8")
     flood_dir = tmp_path / "flood"
     flood_dir.mkdir(exist_ok=True)
     config = tmp_path / "flood-config.json"
@@ -136,8 +125,6 @@ def run_probe(staged: dict, tmp_path: Path, owner: str, evidence: Path | None = 
             str(staged["script"]),
             "--owner",
             owner,
-            "--admin-commands",
-            str(admin),
             "--repo",
             repo,
             "--flood-dir",
@@ -153,65 +140,62 @@ def run_probe(staged: dict, tmp_path: Path, owner: str, evidence: Path | None = 
         text=True,
         check=False,
     )
-    return result, evidence, admin, flood_dir, config, repo
+    return result, evidence, flood_dir, config, repo
 
 
 @NEEDS_NON_ROOT
 def test_all_stubs_pass(tmp_path: Path) -> None:
     (tmp_path / "cwd").mkdir()
     staged = stage(tmp_path)
-    result, evidence, admin, flood_dir, config, repo = run_probe(staged, tmp_path, "root")
+    result, evidence, flood_dir, config, repo = run_probe(staged, tmp_path, "root")
     assert result.returncode == 0, result.stderr
     summary = json.loads((evidence / "summary.json").read_text(encoding="utf-8"))
     assert summary == {
         "verify": 0,
         "github": 0,
-        "robomp": 0,
         "omp": 0,
         "claude": 0,
         "flood": 0,
     }
-    user = staged["user"]
-    ctl = f"/usr/local/libexec/{user}/robomp-ctl"
     assert argv_rows(staged["argv_log"]) == [
-        ("verify", ["--owner", "root", "--admin-commands", str(admin)]),
+        ("verify", ["--owner", "root"]),
         ("gh", ["auth", "token"]),
         ("github", ["--repo", repo, "--branch", "main"]),
-        ("sudo", ["-n", ctl, "up"]),
-        ("sudo", ["-n", ctl, "ps"]),
         ("omp", ["-p", "Reply with exactly: OK"]),
         ("claude", ["-p", "Reply with exactly: OK"]),
         ("timeout", ["3600", "python3", str(flood_dir / "flood.py"), "run", "--config", str(config)]),
-        ("sudo", ["-n", ctl, "down"]),
     ]
-    for step in ("verify", "github", "robomp", "omp", "claude", "flood"):
+    for step in ("verify", "github", "omp", "claude", "flood"):
         assert (evidence / f"{step}.log").is_file()
+    assert not (evidence / "robomp.log").exists()
 
 
 @NEEDS_NON_ROOT
-def test_verify_failure_continues_and_stops_robomp(tmp_path: Path) -> None:
+def test_verify_failure_continues(tmp_path: Path) -> None:
     staged = stage(tmp_path)
     staged["env"]["VERIFY_RC"] = "1"
-    result, evidence, _, _, _, _ = run_probe(staged, tmp_path, "root")
+    result, evidence, _, _, _ = run_probe(staged, tmp_path, "root")
     assert result.returncode == 1, result.stderr
     summary = json.loads((evidence / "summary.json").read_text(encoding="utf-8"))
     assert summary["verify"] != 0
+    assert summary["github"] == 0
+    assert summary["omp"] == 0
+    assert summary["claude"] == 0
+    assert summary["flood"] == 0
     names = [name for name, _args in argv_rows(staged["argv_log"])]
     assert names.index("verify") < names.index("github")
     assert "gh" in names
     assert "omp" in names
     assert "claude" in names
     assert "timeout" in names
-    assert names.count("sudo") >= 3
-    assert argv_rows(staged["argv_log"])[-1][1][-1] == "down"
-    assert any(args[-1] == "down" and "robomp-ctl" in args[-2] for _name, args in argv_rows(staged["argv_log"]))
+    assert "sudo" not in names
 
 
 def test_refuses_when_run_as_owner(tmp_path: Path) -> None:
     staged = stage(tmp_path)
     evidence = tmp_path / "evidence"
     owner = pwd.getpwuid(os.geteuid()).pw_name
-    result, evidence, _, _, _, _ = run_probe(staged, tmp_path, owner, evidence)
+    result, evidence, _, _, _ = run_probe(staged, tmp_path, owner, evidence)
     assert result.returncode == 2, result.stderr
     assert list(evidence.iterdir()) == []
     assert staged["argv_log"].read_text(encoding="utf-8") == ""
@@ -253,8 +237,6 @@ exec /usr/bin/getent "$@"
             str(script),
             "--owner",
             "root",
-            "--admin-commands",
-            str(tmp_path / "admin-commands"),
             "--repo",
             "acme/widgets",
             "--flood-dir",
@@ -278,13 +260,12 @@ exec /usr/bin/getent "$@"
 def test_agent_reply_without_ok_fails_that_step_only(tmp_path: Path) -> None:
     staged = stage(tmp_path)
     staged["env"]["AGENT_REPLY"] = "nope"
-    result, evidence, _, _, _, _ = run_probe(staged, tmp_path, "root")
+    result, evidence, _, _, _ = run_probe(staged, tmp_path, "root")
     assert result.returncode == 1, result.stderr
     summary = json.loads((evidence / "summary.json").read_text(encoding="utf-8"))
     assert summary["verify"] == 0
     assert summary["github"] == 0
-    assert summary["robomp"] == 0
     assert summary["omp"] != 0
     assert summary["claude"] != 0
     assert summary["flood"] == 0
-    assert argv_rows(staged["argv_log"])[-1][1][-1] == "down"
+    assert "robomp" not in summary
