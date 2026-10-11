@@ -115,7 +115,7 @@ def test_untrusted_actor_kind_is_forbidden(kind):
     assert exc.value.code == "forbidden"
 
 
-@pytest.mark.parametrize("kind", ["register_intake_evidence", "record_intake_claim"])
+@pytest.mark.parametrize("kind", ["record_intake_claim"])
 def test_follow_on_stubs_report_unavailable(service, write_repository, kind):
     workspace_id, _ = write_repository
     with connection(service, workspace_id) as conn, conn.cursor() as cur:
@@ -312,6 +312,269 @@ def test_follow_on_journal_uses_head_mission_for_events_and_conflicts(service, h
             "FROM omp_audit.domain_events WHERE workspace_id=%s AND operation_id=%s",
             (workspace_id, command.operation_id),
         ).fetchone() == ("mission", mission_id, actor_id, "agent", event)
+
+
+def evidence_payload(actor_id, artifact_kind, *, text="aé🙂", expected_revision=1,
+                     artifact_id="artifact-added", uri="https://example.test/evidence",
+                     revision="source-revision-7", content_hash=None):
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return {
+        "run_id": "run-1",
+        "expected_revision": expected_revision,
+        "artifact": {
+            "id": artifact_id,
+            "uri": uri,
+            "content_hash": digest if content_hash is None else content_hash,
+            "revision": revision,
+            "actor": {"id": str(actor_id), "kind": artifact_kind},
+            "media_type": "text/plain",
+        },
+        "source": {"text": text, "sha256": digest},
+    }
+
+
+def evidence_command(actor_id, artifact_kind, **kwargs):
+    return {"type": "register_intake_evidence", "payload": evidence_payload(actor_id, artifact_kind, **kwargs)}
+
+
+def evidence_envelope(workspace_id, actor_id, artifact_kind, **kwargs):
+    return CommandEnvelope.model_validate(dict(
+        api_version="work.omp.dev/v1", workspace_id=workspace_id,
+        operation_id=uuid4(), request_id=uuid4(), correlation_id=uuid4(),
+        command=evidence_command(actor_id, artifact_kind, **kwargs),
+    ))
+
+
+def test_evidence_without_matching_head_is_stale_before_lock(service, write_repository):
+    workspace_id, mission_id = write_repository
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        with pytest.raises(WorkStoreError) as missing:
+            execute_intake(cur, evidence_envelope(workspace_id, OWNER, "owner"), OWNER, "owner")
+        assert missing.value.code == "stale_intake"
+        assert conn.execute("SELECT count(*) FROM omp_work.intake_heads").fetchone() == (0,)
+        execute_intake(cur, envelope(workspace_id, mission_id), OWNER, "owner")
+        with pytest.raises(WorkStoreError) as ahead:
+            execute_intake(cur, evidence_envelope(workspace_id, OWNER, "owner", expected_revision=2),
+                           OWNER, "owner")
+        assert ahead.value.code == "stale_intake"
+        assert conn.execute("SELECT current_revision FROM omp_work.intake_heads").fetchone() == (0,)
+        assert conn.execute("SELECT revision FROM omp_work.intake_revisions").fetchall() == [(0,)]
+
+
+def test_model_principal_with_owner_artifact_is_forbidden(service, http_intake):
+    workspace_id, mission_id = http_intake
+    assert _command(service, workspace_id,
+                    envelope(workspace_id, mission_id).command.model_dump(mode="json"))[0] == 200
+    _, token = intake_capability(service, workspace_id, kind="model")
+    status, body = _command(
+        service, workspace_id, evidence_command(OWNER, "owner"), token=token,
+    )
+    assert status == 403
+    assert body["error"]["code"] == "forbidden"
+    with connection(service, workspace_id) as conn:
+        assert conn.execute("SELECT current_revision FROM omp_work.intake_heads").fetchone() == (0,)
+        assert conn.execute(
+            "SELECT event_type FROM omp_audit.domain_events WHERE workspace_id=%s", (workspace_id,),
+        ).fetchall() == [("start_intake",)]
+
+
+def test_bad_content_hash_is_forbidden(service, http_intake):
+    workspace_id, mission_id = http_intake
+    assert _command(service, workspace_id,
+                    envelope(workspace_id, mission_id).command.model_dump(mode="json"))[0] == 200
+    status, body = _command(
+        service, workspace_id, evidence_command(OWNER, "owner", content_hash="b" * 64),
+    )
+    assert status == 403
+    assert body["error"]["code"] == "forbidden"
+    with connection(service, workspace_id) as conn:
+        assert conn.execute("SELECT current_revision FROM omp_work.intake_heads").fetchone() == (0,)
+        assert conn.execute("SELECT count(*) FROM omp_work.intake_revisions").fetchone() == (1,)
+
+
+def test_owner_evidence_get_preserves_unicode_hash_kind_and_source_revision(service, http_intake):
+    workspace_id, mission_id = http_intake
+    text = "aé🙂"
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    assert _command(service, workspace_id,
+                    envelope(workspace_id, mission_id).command.model_dump(mode="json"))[0] == 200
+    command = evidence_command(OWNER, "owner", text=text, revision="source-revision-7")
+    operation_id = uuid4()
+    status, body = _command(service, workspace_id, command, operation_id=operation_id)
+    assert status == 200
+    assert body["result"] == {
+        "type": "register_intake_evidence", "run_id": "run-1",
+        "expected_revision": 1, "revision": 2,
+    }
+    response = service.client.get(
+        f"/v1/workspaces/{workspace_id}/intake/run-1", headers=_owner_headers(workspace_id),
+    )
+    assert response.status_code == 200
+    view = response.json()
+    artifact = view["snapshot"]["artifacts"][0]
+    assert artifact["content_hash"] == view["provenance"]["source_sha256"] == digest
+    assert artifact["actor"] == {"id": str(OWNER), "kind": "owner"}
+    assert artifact["revision"] == "source-revision-7"
+    assert view["snapshot"]["revision"] == 1
+    status, replay = _command(service, workspace_id, command, operation_id=operation_id)
+    assert status == 200
+    assert replay["receipt"]["state"] == "replayed"
+    assert replay["result"] == body["result"]
+    with connection(service, workspace_id) as conn:
+        assert conn.execute(
+            "SELECT revision FROM omp_work.intake_revisions ORDER BY revision",
+        ).fetchall() == [(0,), (1,)]
+        events = conn.execute(
+            "SELECT event_type,payload FROM omp_audit.domain_events WHERE workspace_id=%s ORDER BY sequence",
+            (workspace_id,),
+        ).fetchall()
+        assert [event_type for event_type, _payload in events] == ["start_intake", "register_intake_evidence"]
+        assert set(events[1][1]) == {"type", "run_id", "expected_revision", "revision"}
+        assert "mission_id" not in events[1][1]
+        assert events[1][1] == body["result"]
+
+
+def test_agent_evidence_stores_model_and_journals_agent(service, http_intake):
+    workspace_id, mission_id = http_intake
+    assert _command(service, workspace_id,
+                    envelope(workspace_id, mission_id).command.model_dump(mode="json"))[0] == 200
+    actor_id, token = intake_capability(service, workspace_id, kind="agent")
+    status, body = _command(service, workspace_id, evidence_command(actor_id, "model"), token=token)
+    assert status == 200
+    assert body["result"]["expected_revision"] == 1
+    assert body["result"]["revision"] == 2
+    response = service.client.get(
+        f"/v1/workspaces/{workspace_id}/intake/run-1", headers=_owner_headers(workspace_id),
+    )
+    assert response.status_code == 200
+    artifact = response.json()["snapshot"]["artifacts"][0]
+    assert artifact["actor"] == {"id": str(actor_id), "kind": "model"}
+    with connection(service, workspace_id) as conn:
+        assert conn.execute(
+            "SELECT event_type,actor_id,actor_kind FROM omp_audit.domain_events "
+            "WHERE workspace_id=%s AND event_type='register_intake_evidence'",
+            (workspace_id,),
+        ).fetchone() == ("register_intake_evidence", actor_id, "agent")
+
+
+def test_evidence_collision_journals_mission_on_both_events(service, http_intake):
+    workspace_id, mission_id = http_intake
+    actor_id, token = intake_capability(service, workspace_id, kind="agent")
+    assert _command(service, workspace_id,
+                    envelope(workspace_id, mission_id).command.model_dump(mode="json"),
+                    token=token)[0] == 200
+    operation_id = uuid4()
+    command = evidence_command(actor_id, "model", text="first")
+    assert _command(service, workspace_id, command, token=token, operation_id=operation_id)[0] == 200
+    status, conflict = _command(
+        service, workspace_id, evidence_command(actor_id, "model", text="second"),
+        token=token, operation_id=operation_id,
+    )
+    assert status == 409
+    assert conflict["error"]["code"] == "idempotency_conflict"
+    with connection(service, workspace_id) as conn:
+        assert conn.execute(
+            "SELECT event_type,aggregate_type FROM omp_audit.domain_events "
+            "WHERE workspace_id=%s AND operation_id=%s ORDER BY sequence",
+            (workspace_id, operation_id),
+        ).fetchall() == [
+            ("register_intake_evidence", "mission"),
+            ("idempotency_conflict", "mission"),
+        ]
+
+
+def test_reused_expected_revision_is_stale_after_head_advances(service, http_intake):
+    workspace_id, mission_id = http_intake
+    assert _command(service, workspace_id,
+                    envelope(workspace_id, mission_id).command.model_dump(mode="json"))[0] == 200
+    status, body = _command(service, workspace_id, evidence_command(OWNER, "owner", text="first"))
+    assert status == 200
+    assert body["result"]["expected_revision"] == 1
+    assert body["result"]["revision"] == 2
+    status, stale = _command(
+        service, workspace_id,
+        evidence_command(OWNER, "owner", text="second", artifact_id="artifact-next"),
+    )
+    assert status == 409
+    assert stale["error"]["code"] == "stale_intake"
+    with connection(service, workspace_id) as conn:
+        assert conn.execute("SELECT current_revision FROM omp_work.intake_heads").fetchone() == (1,)
+        assert conn.execute(
+            "SELECT revision FROM omp_work.intake_revisions ORDER BY revision",
+        ).fetchall() == [(0,), (1,)]
+        response = service.client.get(
+            f"/v1/workspaces/{workspace_id}/intake/run-1", headers=_owner_headers(workspace_id),
+        )
+        assert response.status_code == 200
+        assert response.json()["revision"] == 2
+
+
+def test_evidence_copies_records_recomputes_hashes_and_rejects_rebind(service, write_repository):
+    workspace_id, mission_id = write_repository
+    text = "copied-source"
+    raw = text.encode("utf-8")
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        execute_intake(cur, envelope(workspace_id, mission_id), OWNER, "owner")
+        seeded = revision_body(workspace_id, revision=1)
+        seeded["snapshot"]["state"] = "reasoning"
+        seeded["binding"]["rule_bundle_hash"] = "1" * 64
+        seeded["binding"]["schema_hash"] = "2" * 64
+        seeded["binding"]["contract_hash"] = "3" * 64
+        claim = seeded["snapshot"]["claims"][0]
+        seeded["evidence_links"] = [dict(
+            claim_id=claim["id"], relation="supports", **claim["evidence"][0],
+        )]
+        append_revision(cur, lock_revision(
+            cur, workspace_id=workspace_id, run_id="run-1", expected_revision=0,
+            mission_id=mission_id, operation_id=uuid4(),
+        ), seeded, operation_id=uuid4())
+        previous = read_revision(cur, workspace_id=workspace_id, run_id="run-1", revision=1)
+        assert previous.body.decisions and previous.body.derivations
+        result, event = execute_intake(
+            cur, evidence_envelope(workspace_id, OWNER, "owner", text=text, expected_revision=2),
+            OWNER, "owner",
+        )
+        assert result == event == {
+            "type": "register_intake_evidence", "run_id": "run-1",
+            "expected_revision": 2, "revision": 3,
+        }
+        assert "mission_id" not in event
+        stored = read_revision(cur, workspace_id=workspace_id, run_id="run-1", revision=2)
+        assert stored.snapshot.state == previous.snapshot.state == "reasoning"
+        assert stored.snapshot.entities == previous.snapshot.entities
+        assert stored.snapshot.ontology == previous.snapshot.ontology
+        assert stored.snapshot.claims == previous.snapshot.claims
+        assert stored.snapshot.artifacts[:-1] == previous.snapshot.artifacts
+        added = stored.snapshot.artifacts[-1]
+        assert added.revision == "source-revision-7"
+        assert added.actor.kind == "owner"
+        assert stored.artifact_bytes[added.id] == raw
+        for artifact_id, data in previous.artifact_bytes.items():
+            assert stored.artifact_bytes[artifact_id] == bytes(data)
+        assert [(link.claim_id, link.artifact_id, link.start_byte, link.end_byte, link.relation)
+                for link in stored.body.evidence_links] == [
+            (link.claim_id, link.artifact_id, link.start_byte, link.end_byte, link.relation)
+            for link in previous.body.evidence_links]
+        assert any(link.relation == "supports" for link in stored.body.evidence_links)
+        assert stored.body.decisions == stored.body.assessments == stored.body.derivations == []
+        assert (stored.body.binding.rule_bundle_hash, stored.body.binding.schema_hash,
+                stored.body.binding.contract_hash) == ("1" * 64, "2" * 64, "3" * 64)
+        assert (stored.body.binding.claim_set_hash, stored.body.binding.source_hash) == revision_hashes(
+            stored.snapshot, stored.artifact_bytes,
+        )
+        with pytest.raises(WorkStoreError) as duplicate:
+            execute_intake(cur, evidence_envelope(
+                workspace_id, OWNER, "owner", text="other-id", expected_revision=3,
+                artifact_id=added.id, uri="https://example.test/other",
+            ), OWNER, "owner")
+        assert duplicate.value.code == "invalid_request"
+        with pytest.raises(WorkStoreError) as rebound:
+            execute_intake(cur, evidence_envelope(
+                workspace_id, OWNER, "owner", text="other-bytes", expected_revision=3,
+                artifact_id="artifact-rebind", uri=added.uri,
+            ), OWNER, "owner")
+        assert rebound.value.code == "invalid_request"
+        assert conn.execute("SELECT current_revision FROM omp_work.intake_heads").fetchone() == (2,)
 
 
 def test_follow_on_journal_rejects_missing_head_instead_of_using_result_mission(service, http_intake):
