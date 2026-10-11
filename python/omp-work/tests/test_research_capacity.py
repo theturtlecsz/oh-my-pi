@@ -15,7 +15,7 @@ import pytest
 from psycopg.rows import dict_row
 
 from native_jobs_support import native_jobs  # noqa: F401  (fixture)
-from omp_work.jobs import NativeJobStore
+from omp_work.jobs import JobError, NativeJobStore
 from omp_work.research.capacity import CapacityRefused, ResearchCapacity
 
 pytest_plugins = ("test_workflow_service",)
@@ -205,3 +205,59 @@ def test_enqueue_compute_when_headroom_remains(native_jobs) -> None:
         assert row["worker_id"] is None
         assert row["work_id"] == work_id
         assert row["trial_id"] == trial_id
+
+
+_RESOURCE_DIAGNOSTIC = (
+    "resources must be cpu, memory_mib, gpu, and model_calls integers >= 0",
+)
+
+
+def test_malformed_resources_raise_flat_diagnostics_and_write_no_row(native_jobs) -> None:
+    """A bad resource vector is invalid_request with one string diagnostic.
+
+    Diagnostics stay ``tuple[str, ...]`` for a wrong shape and for a negative,
+    boolean, or non-integer value, so joining them does not raise. No case
+    writes a job row.
+    """
+    store = NativeJobStore(native_jobs.service.config)
+    gate = ResearchCapacity(store, native_jobs.workspace_id, native_jobs.actor_id)
+    gate.register(
+        str(uuid4()),
+        f"cpu-{uuid4()}",
+        native_jobs.components["worker"],
+        ["compute.cpu"],
+        2,
+    )
+    work_id = UUID(native_jobs.item["work_id"])
+    cases: list[object] = [
+        None,
+        [],
+        {},
+        {"cpu": 1},
+        {**_resources(), "disk": 1},
+        _resources(cpu=-1),
+        {"cpu": True, "memory_mib": 0, "gpu": 0, "model_calls": 0},
+        {"cpu": 1.5, "memory_mib": 0, "gpu": 0, "model_calls": 0},
+        {"cpu": "1", "memory_mib": 0, "gpu": 0, "model_calls": 0},
+    ]
+    job_ids: list[str] = []
+    for resources in cases:
+        job_id = f"job-{uuid4()}"
+        job_ids.append(job_id)
+        required = ["compute.cpu"]
+        with pytest.raises(JobError) as refused:
+            gate.enqueue(
+                str(uuid4()),
+                job_id,
+                work_id,
+                required,
+                resources,  # type: ignore[arg-type]
+                30,
+            )
+        error = refused.value
+        assert error.code == "invalid_request"
+        assert error.diagnostics == _RESOURCE_DIAGNOSTIC
+        assert all(isinstance(item, str) for item in error.diagnostics)
+        assert _RESOURCE_DIAGNOSTIC[0] in " ".join(error.diagnostics)
+        assert required == ["compute.cpu"]
+    assert _job_rows(native_jobs, job_ids) == []

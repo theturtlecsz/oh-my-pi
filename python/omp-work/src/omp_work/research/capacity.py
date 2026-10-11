@@ -129,11 +129,11 @@ class ResearchCapacity:
 
 def _weight(resources: object) -> int:
     if not isinstance(resources, dict) or set(resources) != set(_RESOURCE_KEYS):
-        raise JobError("invalid_request", (_RESOURCE_ERROR,))
+        raise JobError("invalid_request", _RESOURCE_ERROR)
     total = 0
     for key in _RESOURCE_KEYS:
         value = resources[key]
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            raise JobError("invalid_request", (_RESOURCE_ERROR,))
+            raise JobError("invalid_request", _RESOURCE_ERROR)
         total += value
     return total
