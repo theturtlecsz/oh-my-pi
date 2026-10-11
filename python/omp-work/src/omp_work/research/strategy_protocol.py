@@ -93,7 +93,10 @@ def load_strategy(source: str) -> Callable[..., tuple[Any, Any]]:
     _reject_forbidden(tree)
     _require_interface(tree)
     namespace: dict[str, Any] = {"__builtins__": dict(_SAFE_BUILTINS)}
-    exec(compile(tree, "<strategy>", "exec"), namespace)
+    compiled = compile(tree, "<strategy>", "exec")
+    # AST-gated source runs under the allowlisted builtins above.
+    # pylint: disable-next=exec-used
+    exec(compiled, namespace)  # nosec B102
     propose = namespace.get("propose")
     if not callable(propose):
         raise ValueError("wrong_interface")
