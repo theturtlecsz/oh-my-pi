@@ -8,10 +8,12 @@ lease or insert a second time.
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+import psycopg
 from psycopg.types.json import Jsonb
 
 from omp_work.jobs.budget import (
@@ -50,6 +52,7 @@ def enqueue_job(
     lease_seconds: int,
     parent_job_id: str | None = None,
     trial_id: UUID | None = None,
+    cur: psycopg.Cursor[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Insert one native backlog job, or replay an identical ``job_id``.
 
@@ -61,6 +64,12 @@ def enqueue_job(
     proposed trial of this work whose campaign is admitted or running.
     The same ``job_id`` with the same identity replays; any other row with
     that id is ``idempotency_conflict``.
+
+    A supplied cursor must carry the workspace/actor identity in a caller-owned
+    transaction. No transaction is opened, committed, or rolled back here.
+    Budget refusals raise after recording their effects on that cursor; the
+    caller decides whether to commit them. Without a cursor, budget refusals
+    retain their committed cancellation and operation records before raising.
     """
     capabilities = _capabilities(required_capabilities)
     vector = _require_resources(resources)
@@ -97,7 +106,10 @@ def enqueue_job(
         "lease_seconds": lease_seconds,
     }
 
-    with store.transaction(workspace_id, actor_id) as cur:
+    transaction = (
+        nullcontext(cur) if cur is not None else store.transaction(workspace_id, actor_id)
+    )
+    with transaction as cur:
 
         def apply() -> dict[str, object]:
             existing = _existing_job(store, cur, workspace_id, job_id, request)
