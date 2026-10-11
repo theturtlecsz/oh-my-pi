@@ -4,6 +4,7 @@ Contract defended:
 - validate_slices rejects an implementer dependency edge that only orders the slice: it is
   valid only when a shared non-union file overlaps or the dependent's work text explicitly
   consumes a named producer file/artifact.
+- Negation covers coordinated verbs/targets and post-target predicates within one clause.
 - Consumption verbs bind to producer tokens within one clause; hypothetical/reference/unrelated
   prose stays local, and words inside path/artifact tokens cannot qualify consumption.
 - Both endpoints' exclusions filter shared edits and consumed files/outputs before evidence.
@@ -424,6 +425,20 @@ def test_legitimate_serial_chain_passes(staged_flood, tmp_path):
     ("Read src/unrelated.ts; src/a.ts stays unchanged.", False),
     ("Implement independent widget.", False),
     ("Import src/a.ts.", True),
+    ("Importing src/a.ts is not required.", False),
+    ("Importing src/a.ts not required.", False),
+    ("Importing src/a.ts is required.", True),
+    ("Importing src/a.ts required.", True),
+    ("Reading src/a.ts is not required.", False),
+    ("Reading src/a.ts is required.", True),
+    ("Consuming src/a.ts not required.", False),
+    ("Consuming src/a.ts required.", True),
+    ("Extending src/a.ts is not required.", False),
+    ("Extending src/a.ts is required.", True),
+    ("Do not read src/local.ts or import src/a.ts.", False),
+    ("Read src/local.ts or import src/a.ts.", True),
+    ("Do not read src/local.ts and import src/a.ts.", False),
+    ("Read src/local.ts and import src/a.ts.", True),
     ("Read src/unrelated.ts. src/a.ts stays unchanged.", False),
     ("Read src/unrelated.ts\nsrc/a.ts stays unchanged.", False),
     ("Read src/unrelated.ts, src/a.ts.", True),
@@ -462,6 +477,13 @@ def test_affirmative_consumption_only(staged_flood, tmp_path, work, affirmative)
 
 @pytest.mark.parametrize("work,affirmative", [
     ("Does not import src/a.ts. Import src/a.ts.", True),
+    ("Importing src/a.ts is not required. Import src/a.ts.", True),
+    ("Importing src/a.ts not required. Import src/a.ts.", True),
+    ("Do not read src/local.ts or import src/a.ts. Import src/a.ts.", True),
+    ("Do not read src/local.ts and import src/a.ts. Import src/a.ts.", True),
+    ("Importing src/a.ts is not required, but import src/a.ts.", True),
+    ("Import src/a.ts and never read src/local.ts.", True),
+    ("Do not read src/local.ts and import src/a.ts; import src/a.ts.", True),
     ("Cannot import src/a.ts. Read src/a.ts.", True),
     ("Neither slice imports src/a.ts. Consume src/a.ts.", True),
     ("It fails to import src/a.ts. Extend src/a.ts.", True),
@@ -504,6 +526,63 @@ def test_clause_bounds(staged_flood, tmp_path, work, affirmative):
             "edit a file ITEM-s01 also edits, or name a file or output of ITEM-s01 "
             "that this slice reads, imports, consumes or extends"
         ], f"Order-only edge should fail: {work!r}: {violations}"
+
+
+@pytest.mark.parametrize("work,producer_files,affirmative", [
+    ("Do not read src/a.ts or src/b.ts.", ["src/a.ts", "src/b.ts"], False),
+    ("Read src/a.ts or src/b.ts.", ["src/a.ts", "src/b.ts"], True),
+    ("Do not read src/a.ts and src/b.ts.", ["src/a.ts", "src/b.ts"], False),
+    ("Read src/a.ts and src/b.ts.", ["src/a.ts", "src/b.ts"], True),
+    ("Do not read src/local.ts or import src/a.ts.", ["src/local.ts", "src/a.ts"], False),
+    ("Read src/local.ts or import src/a.ts.", ["src/local.ts", "src/a.ts"], True),
+    ("Do not read src/a.ts and consume src/b.ts.", ["src/a.ts", "src/b.ts"], False),
+    ("Read src/a.ts and consume src/b.ts.", ["src/a.ts", "src/b.ts"], True),
+    ("Reading src/a.ts and src/b.ts is not required.", ["src/a.ts", "src/b.ts"], False),
+    ("Reading src/a.ts and src/b.ts is required.", ["src/a.ts", "src/b.ts"], True),
+    ("Reading src/a.ts and consuming src/b.ts not required.", ["src/a.ts", "src/b.ts"], False),
+    ("Reading src/a.ts and consuming src/b.ts required.", ["src/a.ts", "src/b.ts"], True),
+])
+def test_negation_covers_each_coordinated_producer(
+        staged_flood, tmp_path, work, producer_files, affirmative):
+    """Negated verbs/target lists cannot justify either producer's dependency edge."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path)
+    write_slice(pdir, "ITEM-s01", files=[producer_files[0]])
+    write_slice(pdir, "ITEM-s02", files=[producer_files[1]])
+    write_slice(pdir, "ITEM-s03", deps=["ITEM-s01", "ITEM-s02"], files=["src/c.ts"],
+                body=f"{work}\nDone when: test_ITEM_s03.py passes.\nDo not touch: none")
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    assert violations == ([] if affirmative else [
+        f"ITEM-s03: depends_on {producer} orders the slice only; leave depends_on empty, "
+        f"edit a file {producer} also edits, or name a file or output of {producer} "
+        "that this slice reads, imports, consumes or extends"
+        for producer in ("ITEM-s01", "ITEM-s02")
+    ])
+
+
+@pytest.mark.parametrize("work,affirmative", [
+    ("Do not apply omp584-dependencies.patch.", False),
+    ("Apply omp584-dependencies.patch.", True),
+    ("Applying omp584-dependencies.patch is not required.", False),
+    ("Applying omp584-dependencies.patch is required.", True),
+    ("Applying omp584-dependencies.patch not required.", False),
+    ("Applying omp584-dependencies.patch required.", True),
+    ("Do not extend src/local.ts or apply omp584-dependencies.patch.", False),
+    ("Extend src/local.ts or apply omp584-dependencies.patch.", True),
+])
+def test_named_patch_application_requires_affirmative_evidence(staged_flood, tmp_path, work, affirmative):
+    """Named patch outputs require affirmative application, including post-target predicates."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path)
+    write_slice(pdir, "ITEM-s01", files=["src/producer.ts"], outputs=["omp584-dependencies.patch"])
+    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/consumer.ts"],
+                body=f"{work}\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    assert violations == ([] if affirmative else [
+        "ITEM-s02: depends_on ITEM-s01 orders the slice only; leave depends_on empty, "
+        "edit a file ITEM-s01 also edits, or name a file or output of ITEM-s01 "
+        "that this slice reads, imports, consumes or extends"
+    ])
 
 
 @pytest.mark.parametrize("token,verb,artifact", [
