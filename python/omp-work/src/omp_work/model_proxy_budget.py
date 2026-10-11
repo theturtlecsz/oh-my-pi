@@ -68,25 +68,27 @@ __all__ = [
 # is deliberately absent: an admission nested inside another admission would
 # deadlock against its own held budget locks anyway.
 class _ProcessGate:
-    lock = threading.Lock()
-    transition = threading.Lock()
+    transition = threading.Condition()
     owner: object | None = None
     # Call identity -> replay admission whose commit failed before admit returned.
     retained_replay: dict[str, ModelCallAdmission] = {}
-    retained_mu = threading.Lock()
 
 
-def _acquire_process_gate(token: object) -> None:
-    """Install ``token`` as the gate owner. Transitions are serialized."""
-    _ProcessGate.lock.acquire()
-    try:
-        with _ProcessGate.transition:
-            if _ProcessGate.owner is not None:
-                raise RuntimeError("process gate acquired without an owner transition")
-            _ProcessGate.owner = token
-    except BaseException:
-        _ProcessGate.lock.release()
-        raise
+def _acquire_process_gate(token: object, identity: str) -> ModelCallAdmission | None:
+    """Wait for either ownership or a retained replay of this identity.
+
+    Publication and acquisition share one condition: a caller already waiting
+    when replay commit fails must wake to resolve or conflict with that owner.
+    """
+    with _ProcessGate.transition:
+        while True:
+            retained = _ProcessGate.retained_replay.get(identity)
+            if retained is not None:
+                return retained
+            if _ProcessGate.owner is None:
+                _ProcessGate.owner = token
+                return None
+            _ProcessGate.transition.wait()
 
 
 def _release_process_gate(token: object) -> None:
@@ -94,8 +96,8 @@ def _release_process_gate(token: object) -> None:
     with _ProcessGate.transition:
         if _ProcessGate.owner is not token:
             return
-        _ProcessGate.lock.release()
         _ProcessGate.owner = None
+        _ProcessGate.transition.notify_all()
 
 
 class _OneShotExitStack(contextlib.ExitStack):
@@ -136,9 +138,11 @@ class _LifecycleOwner:
         self._claimed = False
 
     @classmethod
-    def acquire(cls) -> _LifecycleOwner:
+    def acquire(cls, identity: str) -> _LifecycleOwner | ModelCallAdmission:
         token = object()
-        _acquire_process_gate(token)
+        retained = _acquire_process_gate(token, identity)
+        if retained is not None:
+            return retained
         return cls(token, _OneShotExitStack())
 
     def claim(self) -> bool:
@@ -324,12 +328,10 @@ class ModelProxyBudget:
         # Capture complete intent without request headers or credentials.
         receipt_request = {"workspace_id": str(workspace_uuid), "fingerprint": fingerprint}
 
-        # Resolve a retained replay owner before taking the gate it still holds.
-        retained_owner = _lookup_replay_owner(identity)
-        if retained_owner is not None:
-            return retained_owner._resolve_retained_replay(receipt_request)
-
-        owner = _LifecycleOwner.acquire()
+        # Acquisition also wakes for retained-owner publication while waiting.
+        owner = _LifecycleOwner.acquire(identity)
+        if isinstance(owner, ModelCallAdmission):
+            return owner._resolve_retained_replay(receipt_request)
         retained = False
         try:
             cur = owner.stack.enter_context(
@@ -849,12 +851,6 @@ class ModelCallAdmission:
             self._owner.release()
 
 
-def _lookup_replay_owner(identity: str) -> ModelCallAdmission | None:
-    with _ProcessGate.retained_mu:
-        found = _ProcessGate.retained_replay.get(identity)
-    return found
-
-
 def _keep_replay_owner(
     identity: str, admission: ModelCallAdmission, receipt: dict[str, object]
 ) -> bool:
@@ -867,7 +863,7 @@ def _keep_replay_owner(
     payload = canonical_json(settlement) if isinstance(settlement, dict) else "{}"
     admission._state.closed = True
     admission._state.unresolved = _Settlement(payload, None)
-    with _ProcessGate.retained_mu:
+    with _ProcessGate.transition:
         current = _ProcessGate.retained_replay.get(identity)
         if (
             current is not None
@@ -876,11 +872,12 @@ def _keep_replay_owner(
         ):
             return False
         _ProcessGate.retained_replay[identity] = admission
+        _ProcessGate.transition.notify_all()
         return True
 
 
 def _drop_replay_owner(identity: str, admission: ModelCallAdmission) -> None:
-    with _ProcessGate.retained_mu:
+    with _ProcessGate.transition:
         if _ProcessGate.retained_replay.get(identity) is admission:
             del _ProcessGate.retained_replay[identity]
 

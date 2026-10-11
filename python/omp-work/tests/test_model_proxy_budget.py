@@ -22,6 +22,7 @@ from uuid import UUID, uuid4
 
 import psycopg
 import pytest
+from omp_work import model_proxy_budget as budget_module
 from omp_work.jobs.admission import enqueue_job
 from omp_work.jobs.budget import item_spend, root_work_id
 from omp_work.jobs.store import JobError, NativeJobStore
@@ -1629,6 +1630,115 @@ def test_stale_owner_cleanup_cannot_release_another_gate(admission_context):
     assert second.closed and not second.settled
     assert outcomes == ["admitted"]
     assert _admission_counts(ctx) == charged
+
+
+@pytest.mark.parametrize("changed_intent", [False, True])
+def test_waiting_admit_observes_replay_owner_publication(
+    admission_context, monkeypatch, changed_intent
+):
+    """A retry already waiting at replay commit resolves or conflicts without a third retry."""
+    ctx = admission_context
+    prepared = _prepared("1")
+    request_id = "waiting-replay-owner"
+    payload = dict(actual_usd="1", input_tokens=1)
+    sends = []
+    with _admit(ctx, prepared, request_id=request_id) as admission:
+        sends.append("upstream")
+        first = admission.settle(**payload)
+    charged = _admission_counts(ctx)
+    assert charged == (1, 1, 1, 2)
+    unrelated = _item(ctx, "waiting replay unrelated")
+    at_exit, allow_exit = threading.Event(), threading.Event()
+    waiting, retry_done = threading.Event(), threading.Event()
+    outcomes, retries = [], []
+    original_transaction = ctx.budget._jobs.transaction
+    original_wait = budget_module._ProcessGate.transition.wait
+
+    @contextmanager
+    def failing_exit(workspace_id, actor_id):
+        with original_transaction(workspace_id, actor_id) as cur:
+            yield cur
+            if threading.current_thread() is replay_thread:
+                at_exit.set()
+                assert allow_exit.wait(5), "replay exit not released"
+        if threading.current_thread() is replay_thread:
+            raise RuntimeError("replay commit failed")
+
+    def observed_wait(timeout=None):
+        if threading.current_thread() is retry_thread:
+            # The condition is held here; publication cannot overtake this wait.
+            waiting.set()
+        return original_wait(timeout)
+
+    def replay():
+        try:
+            _admit(ctx, prepared, request_id=request_id)
+        except BaseException as exc:
+            outcomes.append(exc)
+
+    def retry():
+        found = None
+        try:
+            body = replace(prepared, body=b'{"changed":true}') if changed_intent else prepared
+            found = ModelProxyBudget(ctx.service.config).admit(
+                ctx.workspace_id, ctx.actor_id, ctx.project_id, None, ctx.work_id,
+                None, None, None, request_id, None, body,
+            )
+            if not found.settled:
+                sends.append("upstream")
+            retries.append(found)
+        except BaseException as exc:
+            retries.append(exc)
+        finally:
+            if found is not None and not found.closed:
+                found.abort()
+            retry_done.set()
+
+    replay_thread = threading.Thread(target=replay)
+    retry_thread = threading.Thread(target=retry)
+    waiter = None
+    with monkeypatch.context() as patch:
+        patch.setattr(ctx.budget._jobs, "transaction", failing_exit)
+        patch.setattr(budget_module._ProcessGate.transition, "wait", observed_wait)
+        try:
+            replay_thread.start()
+            assert at_exit.wait(5)
+            retry_thread.start()
+            assert waiting.wait(2)
+            assert not retry_done.wait(0.2), "retry bypassed held replay gate"
+            allow_exit.set()
+            replay_thread.join(timeout=5)
+            assert not replay_thread.is_alive()
+            assert len(outcomes) == 1 and str(outcomes[0]) == "replay commit failed"
+            assert retry_done.wait(5), "waiting retry missed retained-owner publication"
+            retry_thread.join(timeout=5)
+            assert len(retries) == 1
+            if changed_intent:
+                assert isinstance(retries[0], ModelProxyBudgetError)
+                assert retries[0].code == "idempotency_conflict"
+                waiter, started, finished, waiter_outcomes = _start_gate_waiter(
+                    ctx, unrelated, "waiting-replay-unrelated"
+                )
+                assert started.wait(2)
+                assert not finished.wait(0.2), "conflict released original ownership"
+            else:
+                assert retries[0].settled and retries[0].closed
+                assert retries[0].settle(**payload) == first
+            assert sends == ["upstream"] and _admission_counts(ctx) == charged
+        finally:
+            allow_exit.set()
+            replay_thread.join(timeout=7)
+            # Supported retry resolves any retained owner, including on assertion failure.
+            with _admit(ctx, prepared, request_id=request_id) as cleaned:
+                assert cleaned.settled
+            if retry_thread.ident is not None:
+                retry_thread.join(timeout=7)
+            if waiter is not None:
+                waiter.join(timeout=7)
+    assert not replay_thread.is_alive() and not retry_thread.is_alive()
+    if waiter is not None:
+        assert not waiter.is_alive() and waiter_outcomes == ["admitted"]
+    assert sends == ["upstream"] and _admission_counts(ctx) == charged
 
 
 @pytest.mark.parametrize("fault", ["rollback-before-commit", "commit-then-raise"])
