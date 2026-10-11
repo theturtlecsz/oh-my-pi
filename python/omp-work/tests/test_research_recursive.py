@@ -1,9 +1,11 @@
 """Immutable recursion bindings, history isolation, and R13 proposal identity."""
 
+from collections.abc import Callable
 from dataclasses import FrozenInstanceError, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import json
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -15,7 +17,9 @@ from omp_work.research.recursive import (
     RecursiveProposal,
     RecursiveStudy,
     RecursiveUsage,
+    admit_proposal,
     admit_study,
+    terminate,
 )
 from omp_work.standing_change import ChangeAuthority
 from omp_work.standing_policy import ActionRequest, RepositoryRecord, StandingPolicy
@@ -720,3 +724,351 @@ def test_fresh_disjoint_multitask_cohorts_admit_with_canonical_content_binding()
     assert result.terminal_reason is None
     assert [item.study_id for item in result.studies] == ["root", "child"]
     assert RecursionState.model_validate_json(result.model_dump_json()) == result
+
+
+def admit_prop(state: RecursionState, candidate: RecursiveProposal, **context: object) -> RecursionState:
+    return admit_proposal(state, candidate, state.grant, **{**live_context(), **context})
+
+
+def admitted_proposal(**overrides: object) -> RecursionState:
+    return admit_prop(admitted_root(), proposal(**overrides))
+
+
+def test_distinct_min_metric_proposals_admit_and_roundtrip(tmp_path: Path) -> None:
+    state = admitted_proposal()
+    assert state.terminal_reason is None
+    distinct = proposal(0.6, proposal_id="proposal-2",
+                        recipe={"label": "renamed", "min_metric": 0.6})
+    assert distinct.equivalence_sha256 != state.proposal_history[0].equivalence_sha256
+    result = admit_prop(state, distinct)
+    assert result.terminal_reason is None
+    assert [item.proposal_id for item in result.proposal_history] == ["proposal-1", "proposal-2"]
+    snapshot = tmp_path / "state.json"
+    snapshot.write_text(result.model_dump_json())
+    restored = RecursionState.model_validate_json(snapshot.read_text())
+    assert restored == result
+    assert [item.equivalence_sha256 for item in restored.proposal_history] == [
+        item.equivalence_sha256 for item in result.proposal_history
+    ]
+
+
+def test_renamed_duplicate_of_ancestor_proposal_terminates() -> None:
+    state = admit_prop(admit(admitted_root(), child()), proposal())
+    renamed = proposal(proposal_id="renamed", study_id="child",
+                       recipe={"name": "renamed", "min_metric": 0.5},
+                       spec={"label": "renamed", "state_fields": ["score"],
+                             "nested": {"name": "semantic"}})
+    assert renamed.equivalence_sha256 == state.proposal_history[0].equivalence_sha256
+    refused = admit_prop(state, renamed)
+    assert_refusal(state, refused, "equivalent_proposal")
+    assert admit_prop(refused, proposal(0.9, proposal_id="later")) == refused
+
+
+def test_renamed_duplicate_of_completed_history_terminates() -> None:
+    state = admit(admitted_root(), child(window_end=START + timedelta(seconds=1)))
+    state = admit_prop(state, proposal(study_id="child"))
+    assert state.terminal_reason is None
+    renamed = proposal(proposal_id="renamed", study_id="root",
+                       recipe={"id": "new", "min_metric": 0.5})
+    refused = admit_prop(state, renamed, now=START + timedelta(seconds=2))
+    assert_refusal(state, refused, "equivalent_proposal")
+
+
+def test_renamed_duplicate_across_sibling_branches_terminates() -> None:
+    state = admit(admitted_root(), child())
+    state = admit_prop(state, proposal(study_id="child"))
+    sibling = child(study_id="sibling",
+                    dev=[{"task_id": "sibling-dev", "content_sha256": "6" * 64}],
+                    confirmation=[{"task_id": "sibling-confirm", "content_sha256": "7" * 64}])
+    state = admit(state, sibling)
+    assert state.terminal_reason is None
+    renamed = proposal(proposal_id="renamed", study_id="sibling",
+                       recipe={"name": "other", "min_metric": 0.5})
+    assert_refusal(state, admit_prop(state, renamed), "equivalent_proposal")
+
+
+def test_reused_proposal_id_terminates_even_with_distinct_content() -> None:
+    state = admitted_proposal()
+    duplicate_id = proposal(0.9, proposal_id="proposal-1")
+    assert duplicate_id.equivalence_sha256 != state.proposal_history[0].equivalence_sha256
+    assert_refusal(state, admit_prop(state, duplicate_id), "reused_proposal_id")
+
+
+def test_proposal_requires_admitted_study() -> None:
+    empty = RecursionState(grant=grant())
+    assert_refusal(empty, admit_prop(empty, proposal()), "unadmitted_study")
+    state = admitted_root()
+    assert_refusal(state, admit_prop(state, proposal(study_id="missing")), "unadmitted_study")
+
+
+@pytest.mark.parametrize("field", ["grant", "policy", "authority", "action", "repositories", "now"])
+def test_every_proposal_admission_requires_live_context(field: str) -> None:
+    state = RecursionState.model_validate_json(admitted_root().model_dump_json())
+    context = {**live_context(), "grant": state.grant, field: None}
+    result = admit_proposal(state, proposal(), **context)
+    assert_refusal(state, result, "utc_now_required" if field == "now" else "authority_context_required")
+
+
+@pytest.mark.parametrize("authority,reason", [
+    (ChangeAuthority("task-agent", "decision-1", "owner"), "worker_not_permitted"),
+    (ChangeAuthority("automation", "decision-1", "owner"), "worker_not_permitted"),
+    (ChangeAuthority("unknown", "decision-1", "owner"), "unknown_actor"),
+    (ChangeAuthority("owner", None, "owner"), "decision_required"),
+    (ChangeAuthority("owner", "decision-1", "client"), "owner_signature_required"),
+    (ChangeAuthority("owner", "other", "owner"), "authority_binding_mismatch"),
+])
+def test_proposal_requires_owner_authority(authority: ChangeAuthority, reason: str) -> None:
+    state = admitted_root()
+    assert_refusal(state, admit_prop(state, proposal(), authority=authority), reason)
+
+
+def test_proposal_admission_requires_the_original_grant() -> None:
+    state = admitted_root()
+    result = admit_proposal(state, proposal(), grant(decision_id="other"), **live_context())
+    assert_refusal(state, result, "grant_changed")
+
+
+@pytest.mark.parametrize("now,reason", [
+    (START.replace(tzinfo=None), "utc_now_required"),
+    (START.astimezone(timezone(timedelta(hours=1))), "utc_now_required"),
+    (START - timedelta(microseconds=1), "outside_window"),
+    (END, "policy_not_covered"),
+])
+def test_proposal_admission_checks_utc_and_half_open_window(now: datetime, reason: str) -> None:
+    state = admitted_root()
+    assert_refusal(state, admit_prop(state, proposal(), now=now), reason)
+
+
+def test_proposal_under_expired_study_is_outside_window() -> None:
+    state = admit(admitted_root(), child(window_end=START + timedelta(seconds=1)))
+    refused = admit_prop(state, proposal(study_id="child"), now=START + timedelta(seconds=2))
+    assert_refusal(state, refused, "outside_window")
+    admitted = admit_prop(state, proposal(study_id="root"), now=START + timedelta(seconds=2))
+    assert admitted.terminal_reason is None
+    assert [item.study_id for item in admitted.proposal_history] == ["root"]
+
+
+def test_proposal_admission_shares_tree_cumulative_quota() -> None:
+    state = RecursionState.model_validate({
+        **admitted_root().model_dump(),
+        "usage": (RecursiveUsage(study_id="root", compute_seconds=100, tokens=0, usd=0),),
+    })
+    assert_refusal(state, admit_prop(state, proposal()), "quota_exhausted")
+
+
+@pytest.mark.parametrize("key,reason", [
+    ("objective", "binding_changed"),
+    ("evaluator_component_sha256", "binding_changed"),
+    ("evaluator_artifact_sha256", "binding_changed"),
+    ("protocol_sha256", "binding_changed"),
+    ("method_version", "binding_changed"),
+    ("method_sha256", "binding_changed"),
+    ("lower_researcher_sha256", "binding_changed"),
+    ("upstream_assets", "binding_changed"),
+    ("caller_id", "grant_changed"),
+    ("policy_id", "grant_changed"),
+    ("decision_id", "grant_changed"),
+    ("signature_sha256", "grant_changed"),
+    ("window_start", "grant_changed"),
+    ("window_end", "grant_changed"),
+    ("max_depth", "grant_changed"),
+    ("max_descendants", "grant_changed"),
+    ("limits", "grant_changed"),
+    ("grant", "grant_changed"),
+])
+def test_proposal_cannot_replace_pinned_bindings_or_grant(key: str, reason: str) -> None:
+    state = admitted_root()
+    spec = {"state_fields": ["score"], key: "replacement"}
+    assert_refusal(state, admit_prop(state, proposal(spec=spec)), reason)
+
+
+def test_recipe_cannot_carry_replacement_keys() -> None:
+    with pytest.raises(ValidationError):
+        proposal(recipe={"min_metric": 0.5, "objective": "replace"})
+
+
+def test_bookkeeping_labels_are_not_replacement_or_new_content() -> None:
+    state = admitted_proposal()
+    relabeled = proposal(proposal_id="relabeled",
+                         recipe={"id": "x", "name": "x", "label": "x", "min_metric": 0.7},
+                         spec={"id": "x", "name": "x", "label": "x", "state_fields": ["other"]})
+    result = admit_prop(state, relabeled)
+    assert result.terminal_reason is None
+    first, second = result.proposal_history
+    assert first.equivalence_sha256 != second.equivalence_sha256
+
+
+def test_invalid_proposal_record_cannot_admit() -> None:
+    state = admitted_root()
+    invalid = RecursiveProposal.model_construct(
+        proposal_id="raw", study_id="root", recipe=b'{"min_metric":0.5}', spec=b"{}",
+    )
+    assert_refusal(state, admit_prop(state, invalid), "invalid_admission")
+
+
+def test_refused_proposal_terminates_without_removing_prior_state() -> None:
+    state = admit(admitted_root(), child())
+    state = admit_prop(state, proposal(study_id="child"))
+    state = RecursionState.model_validate({
+        **state.model_dump(),
+        "usage": (RecursiveUsage(study_id="root", compute_seconds=1, tokens=1, usd=1),),
+    })
+    renamed = proposal(proposal_id="renamed", study_id="root",
+                       recipe={"name": "renamed", "min_metric": 0.5})
+    refused = admit_prop(state, renamed)
+    assert_refusal(state, refused, "equivalent_proposal")
+    assert admit_prop(refused, proposal(0.9, proposal_id="later")) == refused
+    assert admit(refused, grandchild()) == refused
+
+
+def test_terminate_latches_reason_and_blocks_all_admission(tmp_path: Path) -> None:
+    state = admit(admitted_root(), child())
+    state = RecursionState.model_validate({
+        **state.model_dump(), "proposal_history": (proposal(),),
+        "usage": (RecursiveUsage(study_id="child", compute_seconds=1, tokens=1, usd=1),),
+    })
+    stopped = terminate(state, "operator_stop")
+    assert stopped.terminal_reason == "operator_stop"
+    assert stopped.studies == state.studies
+    assert stopped.proposal_history == state.proposal_history
+    assert stopped.usage == state.usage
+    assert terminate(stopped, "second_reason").terminal_reason == "operator_stop"
+    assert admit(stopped, grandchild()) == stopped
+    assert admit_prop(stopped, proposal(0.9, proposal_id="later")) == stopped
+    halted = terminate(RecursionState(grant=grant()), "halt")
+    assert halted.refuse_reason(START) == "halt"
+    assert admit(halted, RecursiveStudy.model_validate(study_payload())) == halted
+    snapshot = tmp_path / "state.json"
+    snapshot.write_text(stopped.model_dump_json())
+    restored = RecursionState.model_validate_json(snapshot.read_text())
+    assert restored == stopped
+    assert restored.refuse_reason(START) == "operator_stop"
+    assert admit(restored, grandchild()) == restored
+    assert admit_prop(restored, proposal(0.9, proposal_id="later")) == restored
+
+
+@pytest.mark.parametrize("reason", ["", "   ", None, 1])
+def test_terminate_requires_a_nonempty_reason(reason: object) -> None:
+    with pytest.raises(ValueError):
+        terminate(admitted_root(), reason)  # type: ignore[arg-type]
+
+
+def _snapshot_payload() -> dict[str, object]:
+    state = RecursionState.model_validate({
+        **admit(admitted_root(), child()).model_dump(),
+        "proposal_history": (proposal(),),
+        "usage": (RecursiveUsage(study_id="child", compute_seconds=1, tokens=1, usd=1),),
+    })
+    return json.loads(state.model_dump_json())
+
+
+def _break_ancestry(payload: dict) -> None:
+    payload["studies"][1]["parent_id"] = "missing"
+
+
+def _drop_root(payload: dict) -> None:
+    del payload["studies"][0]
+
+
+def _add_second_root(payload: dict) -> None:
+    payload["studies"].append({**payload["studies"][0], "study_id": "root-2"})
+
+
+def _exceed_descendants(payload: dict) -> None:
+    payload["studies"][0]["max_descendants"] = 0
+
+
+def _duplicate_study_id(payload: dict) -> None:
+    payload["studies"][1]["study_id"] = "root"
+
+
+def _reuse_cohort(payload: dict) -> None:
+    payload["studies"][1]["dev"] = payload["studies"][0]["dev"]
+    payload["studies"][1]["dev_sha256"] = payload["studies"][0]["dev_sha256"]
+
+
+def _duplicate_proposal_id(payload: dict) -> None:
+    payload["proposal_history"].append(dict(payload["proposal_history"][0]))
+
+
+def _unknown_proposal_study(payload: dict) -> None:
+    payload["proposal_history"][0]["study_id"] = "missing"
+
+
+def _unknown_usage_study(payload: dict) -> None:
+    payload["usage"][0]["study_id"] = "missing"
+
+
+def _negative_usage_seconds(payload: dict) -> None:
+    payload["usage"][0]["compute_seconds"] = -1
+
+
+def _negative_usage_tokens(payload: dict) -> None:
+    payload["usage"][0]["tokens"] = -1
+
+
+def _negative_usage_usd(payload: dict) -> None:
+    payload["usage"][0]["usd"] = "-1"
+
+
+def _nonfinite_usage_usd(payload: dict) -> None:
+    payload["usage"][0]["usd"] = "NaN"
+
+
+def _shrink_grant_window(payload: dict) -> None:
+    payload["grant"]["window_end"] = (START + timedelta(minutes=30)).isoformat()
+
+
+def _empty_terminal_reason(payload: dict) -> None:
+    payload["terminal_reason"] = ""
+
+
+@pytest.mark.parametrize("tamper", [
+    _break_ancestry, _drop_root, _add_second_root, _exceed_descendants,
+    _duplicate_study_id, _reuse_cohort, _duplicate_proposal_id,
+    _unknown_proposal_study, _unknown_usage_study, _negative_usage_seconds,
+    _negative_usage_tokens, _negative_usage_usd, _nonfinite_usage_usd,
+    _shrink_grant_window, _empty_terminal_reason,
+], ids=lambda tamper: tamper.__name__)
+def test_malformed_restoration_refused(tmp_path: Path, tamper: Callable[[dict], None]) -> None:
+    payload = _snapshot_payload()
+    tamper(payload)
+    snapshot = tmp_path / "state.json"
+    snapshot.write_text(json.dumps(payload))
+    with pytest.raises(ValidationError):
+        RecursionState.model_validate_json(snapshot.read_text())
+
+
+def test_restoration_roundtrip_preserves_terminal_behavior_and_identities(tmp_path: Path) -> None:
+    state = admit(admitted_root(), child())
+    state = admit_prop(state, proposal(study_id="child"))
+    state = RecursionState.model_validate({
+        **state.model_dump(),
+        "usage": (RecursiveUsage(study_id="child", compute_seconds=1, tokens=1, usd=1),),
+    })
+    state = terminate(state, "operator_stop")
+    snapshot = tmp_path / "state.json"
+    snapshot.write_text(state.model_dump_json())
+    restored = RecursionState.model_validate_json(snapshot.read_text())
+    assert restored == state
+    assert restored.terminal_reason == "operator_stop"
+    assert restored.refuse_reason(START) == "operator_stop"
+    assert restored.grant == state.grant
+    assert restored.studies[0].method_sha256 == "a" * 64
+    assert [item.equivalence_sha256 for item in restored.proposal_history] == [
+        state.proposal_history[0].equivalence_sha256
+    ]
+    assert [item.study_id for item in restored.usage] == ["child"]
+
+
+def test_reloaded_state_admits_only_with_live_authority(tmp_path: Path) -> None:
+    state = admitted_proposal()
+    snapshot = tmp_path / "state.json"
+    snapshot.write_text(state.model_dump_json())
+    restored = RecursionState.model_validate_json(snapshot.read_text())
+    assert restored == state
+    assert_refusal(restored, admit_study(restored, child(), restored.grant), "utc_now_required")
+    assert admit(restored, child()).terminal_reason is None
+    admitted = admit_prop(restored, proposal(0.6, proposal_id="proposal-2"))
+    assert admitted.terminal_reason is None
+    assert [item.proposal_id for item in admitted.proposal_history] == ["proposal-1", "proposal-2"]

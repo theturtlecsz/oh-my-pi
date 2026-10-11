@@ -1,9 +1,11 @@
 """Immutable inputs and history for bounded R13 recursive research.
 
-These records do not generate children. Admission always checks live standing
-authority; artifacts and restored history are never authority. Method identity
-pins the generator, while
+These records do not generate children. Admission of studies and proposals
+always checks live standing authority; artifacts and restored history are never
+authority. Method identity pins the generator, while
 proposal equivalence pins recipe/spec content independently of display names.
+Termination latches a reason without removing admitted studies, proposals, or
+usage, and blocks every later admission.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from typing import Annotated
 
 from pydantic import AwareDatetime, Field, ValidationError, field_validator, model_validator
 
+from omp_work.research import mechanism
 from omp_work.research.accounting import ResourceLimits
 from omp_work.standing_change import (
     ChangeAuthority, ChangeKind, StandingChangeRefused, authorize_standing_change,
@@ -359,6 +362,106 @@ def _tree_reason(
     return None
 
 
+def _refuse(state: RecursionState, reason: str) -> RecursionState:
+    """Latch the first terminal reason without removing any admitted state."""
+    return state.model_copy(update={"terminal_reason": state.terminal_reason or reason})
+
+
+def _admission_gate(
+    state: RecursionState,
+    grant: CallerGrant | None,
+    policy: StandingPolicy | None,
+    authority: ChangeAuthority | None,
+    action: ActionRequest | None,
+    repositories: Mapping[str, RepositoryRecord] | Sequence[RepositoryRecord] | None,
+    now: datetime | None,
+) -> str | None:
+    """Live authority/window gate shared by study and proposal admission.
+
+    Snapshots carry none of this context; every admission supplies the original
+    signed grant and live authority again.
+    """
+    if not isinstance(now, datetime) or now.utcoffset() != timedelta(0):
+        return "utc_now_required"
+    if (
+        not isinstance(grant, CallerGrant)
+        or not isinstance(policy, StandingPolicy)
+        or not isinstance(authority, ChangeAuthority)
+        or not isinstance(action, ActionRequest)
+        or not isinstance(repositories, (Mapping, Sequence))
+        or isinstance(repositories, (str, bytes))
+    ):
+        return "authority_context_required"
+    records = repositories.values() if isinstance(repositories, Mapping) else repositories
+    if any(not isinstance(record, RepositoryRecord) for record in records):
+        return "invalid_repositories"
+    try:
+        grant = CallerGrant.model_validate(grant.model_dump())
+    except (ValidationError, AttributeError):
+        return "invalid_admission"
+    if grant != state.grant:
+        return "grant_changed"
+    try:
+        authorize_standing_change(ChangeKind.create, authority)
+        validate_policy(policy, repositories)
+        if (
+            str(policy.policy_id) != grant.policy_id
+            or str(policy.decision_id) != grant.decision_id
+            or str(authority.decision_id) != grant.decision_id
+        ):
+            return "authority_binding_mismatch"
+        if (
+            policy.action_class != "spend_beyond_threshold"
+            or policy.money_limit_usd is None
+            or not policy.money_limit_usd.is_finite()
+            or grant.limits.max_usd > policy.money_limit_usd
+            or policy.expires_at is None
+            or policy.expires_at.utcoffset() != timedelta(0)
+            or grant.window_end > policy.expires_at
+        ):
+            return "policy_grant_bounds"
+        if action.amount_usd is None or not action.amount_usd.is_finite():
+            return "invalid_action"
+        if not covers(policy, action, repositories, now):
+            return "policy_not_covered"
+    except (StandingChangeRefused, PolicyRefused) as error:
+        return error.code
+    except (ValueError, TypeError, AttributeError, InvalidOperation):
+        return "invalid_authority_context"
+    if not grant.window_start <= now < grant.window_end:
+        return "outside_window"
+    # Revalidate restored snapshots; their records cannot authorize a new call.
+    for index, admitted in enumerate(state.studies):
+        try:
+            admitted = RecursiveStudy.model_validate(admitted.model_dump())
+        except (ValidationError, AttributeError):
+            return "invalid_history"
+        reason = _tree_reason(state.studies[:index], admitted, grant)
+        if reason:
+            return reason
+    return None
+
+
+def _study_live_reason(state: RecursionState, study: RecursiveStudy, now: datetime) -> str | None:
+    """Half-open window and tree-cumulative quota gate from a study to the root."""
+    known = {item.study_id: item for item in state.studies}
+    current = study
+    while True:
+        if not current.window_start <= now < current.window_end:
+            return "outside_window"
+        descendants = _subtree_ids(state.studies, current.study_id)
+        usage = [item for item in state.usage if item.study_id in descendants]
+        if (
+            sum(item.compute_seconds for item in usage) >= current.limits.max_wall_clock_seconds
+            or sum(item.tokens for item in usage) >= current.limits.max_model_tokens
+            or sum((item.usd for item in usage), Decimal(0)) >= current.limits.max_usd
+        ):
+            return "quota_exhausted"
+        if current.parent_id is None:
+            return None
+        current = known[current.parent_id]
+
+
 def admit_study(
     state: RecursionState,
     study: RecursiveStudy,
@@ -375,92 +478,114 @@ def admit_study(
     Every call supplies the original signed grant and live authority context.
     No parent-spec, artifact, standalone-child or snapshot overload exists.
     """
-    def refuse(reason: str) -> RecursionState:
-        return state.model_copy(update={"terminal_reason": state.terminal_reason or reason})
-
     if state.terminal_reason is not None:
         return state
-    if not isinstance(now, datetime) or now.utcoffset() != timedelta(0):
-        return refuse("utc_now_required")
-    if (
-        not isinstance(grant, CallerGrant)
-        or not isinstance(policy, StandingPolicy)
-        or not isinstance(authority, ChangeAuthority)
-        or not isinstance(action, ActionRequest)
-        or not isinstance(repositories, (Mapping, Sequence))
-        or isinstance(repositories, (str, bytes))
-    ):
-        return refuse("authority_context_required")
-    records = repositories.values() if isinstance(repositories, Mapping) else repositories
-    if any(not isinstance(record, RepositoryRecord) for record in records):
-        return refuse("invalid_repositories")
+    reason = _admission_gate(state, grant, policy, authority, action, repositories, now)
+    if reason is not None:
+        return _refuse(state, reason)
     try:
-        grant = CallerGrant.model_validate(grant.model_dump())
         study = RecursiveStudy.model_validate(study.model_dump())
     except (ValidationError, AttributeError):
-        return refuse("invalid_admission")
-    if grant != state.grant:
-        return refuse("grant_changed")
-    try:
-        authorize_standing_change(ChangeKind.create, authority)
-        validate_policy(policy, repositories)
-        if (
-            str(policy.policy_id) != grant.policy_id
-            or str(policy.decision_id) != grant.decision_id
-            or str(authority.decision_id) != grant.decision_id
-        ):
-            return refuse("authority_binding_mismatch")
-        if (
-            policy.action_class != "spend_beyond_threshold"
-            or policy.money_limit_usd is None
-            or not policy.money_limit_usd.is_finite()
-            or grant.limits.max_usd > policy.money_limit_usd
-            or policy.expires_at is None
-            or policy.expires_at.utcoffset() != timedelta(0)
-            or grant.window_end > policy.expires_at
-        ):
-            return refuse("policy_grant_bounds")
-        if action.amount_usd is None or not action.amount_usd.is_finite():
-            return refuse("invalid_action")
-        if not covers(policy, action, repositories, now):
-            return refuse("policy_not_covered")
-    except (StandingChangeRefused, PolicyRefused) as error:
-        return refuse(error.code)
-    except (ValueError, TypeError, AttributeError, InvalidOperation):
-        return refuse("invalid_authority_context")
-    if not grant.window_start <= now < grant.window_end:
-        return refuse("outside_window")
-    # Revalidate restored snapshots; their records cannot authorize a new call.
-    for index, admitted in enumerate(state.studies):
-        try:
-            admitted = RecursiveStudy.model_validate(admitted.model_dump())
-        except (ValidationError, AttributeError):
-            return refuse("invalid_history")
-        reason = _tree_reason(state.studies[:index], admitted, grant)
-        if reason:
-            return refuse(reason)
-    reason = _tree_reason(state.studies, study, grant)
+        return _refuse(state, "invalid_admission")
+    reason = _tree_reason(state.studies, study, state.grant)
     if reason:
-        return refuse(reason)
-    known = {item.study_id: item for item in state.studies}
-    current = study
-    while True:
-        if not current.window_start <= now < current.window_end:
-            return refuse("outside_window")
-        descendants = _subtree_ids(state.studies, current.study_id)
-        usage = [item for item in state.usage if item.study_id in descendants]
-        if (
-            sum(item.compute_seconds for item in usage) >= current.limits.max_wall_clock_seconds
-            or sum(item.tokens for item in usage) >= current.limits.max_model_tokens
-            or sum((item.usd for item in usage), Decimal(0)) >= current.limits.max_usd
-        ):
-            return refuse("quota_exhausted")
-        if current.parent_id is None:
-            break
-        current = known[current.parent_id]
+        return _refuse(state, reason)
+    assert isinstance(now, datetime)
+    reason = _study_live_reason(state, study, now)
+    if reason:
+        return _refuse(state, reason)
     try:
         return RecursionState.model_validate({
             **state.model_dump(), "studies": (*state.studies, study),
         })
     except ValidationError:
-        return refuse("invalid_history")
+        return _refuse(state, "invalid_history")
+
+
+def terminate(state: RecursionState, reason: str) -> RecursionState:
+    """Latch a terminal reason, preserving studies, proposals, usage, and any prior reason.
+
+    Termination blocks every later admission and generates no fallback or
+    automatic children; restored snapshots carry the latched reason.
+    """
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("terminal reason must be a nonempty string")
+    return _refuse(state, reason)
+
+
+_GRANT_KEYS = frozenset(CallerGrant.model_fields) | {"grant"}
+
+
+def _replacement_reason(proposal: RecursiveProposal) -> str | None:
+    """Proposals vary recipe/spec content only; pinned bindings and grant fields refuse."""
+    for payload in (proposal.recipe, proposal.spec):
+        keys = set(json.loads(payload)) - _BOOKKEEPING
+        if keys & frozenset(_PINNED_BINDINGS):
+            return "binding_changed"
+        if keys & _GRANT_KEYS:
+            return "grant_changed"
+    return None
+
+
+def admit_proposal(
+    state: RecursionState,
+    proposal: RecursiveProposal,
+    grant: CallerGrant | None = None,
+    *,
+    policy: StandingPolicy | None = None,
+    authority: ChangeAuthority | None = None,
+    action: ActionRequest | None = None,
+    repositories: Mapping[str, RepositoryRecord] | Sequence[RepositoryRecord] | None = None,
+    now: datetime | None = None,
+) -> RecursionState:
+    """Admit one R13 proposal or terminate with a reason, retaining all prior history.
+
+    Shares the live authority/window gate with study admission; the proposal's
+    study must already be admitted and in window. Equivalence is
+    content-canonical and independent of labels and IDs, so a renamed duplicate
+    of any prior proposal — including completed or refused history —
+    terminates; a distinct finite min_metric remains eligible under the other
+    gates. Admission derives only the deterministic mechanism generation job:
+    no synthesis, execution, activation, or fallback runs here, and no child is
+    generated.
+    """
+    if state.terminal_reason is not None:
+        return state
+    reason = _admission_gate(state, grant, policy, authority, action, repositories, now)
+    if reason is not None:
+        return _refuse(state, reason)
+    try:
+        proposal = RecursiveProposal.model_validate(proposal.model_dump())
+    except (ValidationError, AttributeError):
+        return _refuse(state, "invalid_admission")
+    study = {item.study_id: item for item in state.studies}.get(proposal.study_id)
+    if study is None:
+        return _refuse(state, "unadmitted_study")
+    reason = _replacement_reason(proposal)
+    if reason is not None:
+        return _refuse(state, reason)
+    if any(item.proposal_id == proposal.proposal_id for item in state.proposal_history):
+        return _refuse(state, "reused_proposal_id")
+    if any(
+        item.equivalence_sha256 == proposal.equivalence_sha256 for item in state.proposal_history
+    ):
+        return _refuse(state, "equivalent_proposal")
+    assert isinstance(now, datetime)
+    reason = _study_live_reason(state, study, now)
+    if reason is not None:
+        return _refuse(state, reason)
+    try:
+        mechanism.generation_job(
+            {key: value for key, value in json.loads(proposal.spec).items()
+             if key not in _BOOKKEEPING},
+            {key: value for key, value in json.loads(proposal.recipe).items()
+             if key not in _BOOKKEEPING},
+        )
+    except (ValueError, TypeError, KeyError, OverflowError):
+        return _refuse(state, "invalid_admission")
+    try:
+        return RecursionState.model_validate({
+            **state.model_dump(), "proposal_history": (*state.proposal_history, proposal),
+        })
+    except ValidationError:
+        return _refuse(state, "invalid_history")
