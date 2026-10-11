@@ -3,12 +3,16 @@
 import json
 import os
 from pathlib import Path
+import site
 import subprocess
 import sys
+from unittest.mock import Mock
 
 import pytest
 
+import omp_work
 from omp_work import egress_research_jail as jail
+from omp_work.orchestrator import worker_sandbox
 from omp_work.egress_policy import Identity, MemoryRecorder
 
 from omp_work.egress_sandbox import SandboxUnavailable, _mount_config, run_sandboxed
@@ -231,3 +235,114 @@ def test_worker_without_readonly_flag_keeps_writable_worktree(namespace_support,
     probe = "from pathlib import Path; Path('/work/tracked').write_text('updated'); print('{}')"
     assert _run_verifier_probe(verifier_paths, probe) == {}
     assert (worktree / "tracked").read_text() == "updated"
+
+
+@pytest.fixture
+def verifier_launch(tmp_path, monkeypatch):
+    root = tmp_path / "jobs"
+    worktree = root / "job"
+    (worktree / ".omp").mkdir(parents=True)
+    commondir = tmp_path / "repo" / ".git"
+    gitdir = commondir / "worktrees" / "job"
+    gitdir.mkdir(parents=True)
+    (gitdir / "commondir").write_text("../..")
+    (worktree / ".git").write_text(f"gitdir: {gitdir}")
+    monkeypatch.setenv("OMP_WORKTREES_DIR", str(root))
+    home = tmp_path / "home"
+    parent = home / "runtime"
+    (parent / "omp_work").mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setattr(omp_work, "__file__", str(parent / "omp_work" / "__init__.py"))
+    monkeypatch.setattr(site, "getsitepackages", lambda: [])
+    spy = Mock(return_value=0)
+    monkeypatch.setattr(worker_sandbox, "run_sandboxed", spy)
+
+    def launch():
+        return worker_sandbox.run_worker(
+            ["/usr/bin/python3", "-m", "omp_work.orchestrator.verifier"],
+            worktree=worktree, token="verifier-token",
+            workservice_socket=("127.0.0.1", 8000), identity="verifier", timeout=5,
+        )
+
+    return launch, spy, parent, worktree, commondir, gitdir
+
+
+def test_real_verifier_uses_live_deduplicated_runtime_roots(verifier_launch, tmp_path, monkeypatch):
+    launch, spy, parent, worktree, commondir, gitdir = verifier_launch
+    packages = tmp_path / "site-packages"
+    packages.mkdir()
+    monkeypatch.setattr(site, "getsitepackages", lambda: [str(packages), str(parent), str(packages)])
+    monkeypatch.setenv("PYTHONPATH", "/work")
+    monkeypatch.setenv("PYTHONSAFEPATH", "poison")
+
+    assert launch() == 0
+
+    spy.assert_called_once()
+    env = spy.call_args.args[4]
+    roots = (parent, packages)
+    assert env["PYTHONPATH"].split(os.pathsep) == [str(root) for root in roots]
+    assert env["PYTHONPATH"].split(os.pathsep)[0] == str(Path(omp_work.__file__).resolve().parent.parent)
+    assert env["PYTHONSAFEPATH"] == "1"
+    assert set(env) == {*BASE_ENV, "PYTHONPATH", "PYTHONSAFEPATH"}
+    assert "/work" not in env["PYTHONPATH"]
+    assert str(worktree) not in env["PYTHONPATH"]
+    assert spy.call_args.kwargs["ro_dirs"] == (commondir, gitdir, *roots)
+    assert spy.call_args.kwargs["ro_dirs"][2:] == roots
+    assert spy.call_args.kwargs["verifier_runtime"] is True
+    assert spy.call_args.kwargs["worktree_readonly"] is True
+    assert spy.call_args.kwargs["audit_dir"] == worktree / ".omp"
+
+
+@pytest.mark.parametrize("root", ["/", "home", "cwd", "rel", "user-site", "/work", "worktree"])
+def test_verifier_refuses_unsafe_site_root_before_launch(verifier_launch, monkeypatch, root):
+    launch, spy, _parent, worktree, _commondir, _gitdir = verifier_launch
+    root = {"home": str(Path.home()), "cwd": str(Path.cwd()),
+            "user-site": site.getusersitepackages(), "worktree": str(worktree)}.get(root, root)
+    monkeypatch.setattr(site, "getsitepackages", lambda: [root])
+
+    with pytest.raises(worker_sandbox.WorkerSandboxRefused) as exc:
+        launch()
+
+    assert exc.value.code == "runtime_not_allowed"
+    spy.assert_not_called()
+
+
+@pytest.mark.parametrize("package_file", ["/omp_work/__init__.py", "missing"])
+def test_verifier_refuses_root_or_missing_package_parent(verifier_launch, tmp_path, monkeypatch, package_file):
+    launch, spy, _parent, _worktree, _commondir, _gitdir = verifier_launch
+    if package_file == "missing":
+        package_file = str(tmp_path / "missing" / "omp_work" / "__init__.py")
+    monkeypatch.setattr(omp_work, "__file__", package_file)
+
+    with pytest.raises(worker_sandbox.WorkerSandboxRefused) as exc:
+        launch()
+
+    assert exc.value.code == "runtime_not_allowed"
+    spy.assert_not_called()
+
+
+def test_verifier_omits_missing_site_directory(verifier_launch, tmp_path, monkeypatch):
+    launch, spy, parent, _worktree, _commondir, _gitdir = verifier_launch
+    monkeypatch.setattr(site, "getsitepackages", lambda: [str(tmp_path / "missing-site")])
+
+    assert launch() == 0
+
+    spy.assert_called_once()
+    assert spy.call_args.args[4]["PYTHONPATH"] == str(parent)
+    assert spy.call_args.kwargs["ro_dirs"][2:] == (parent,)
+
+
+def test_verifier_rejects_audit_symlink_before_runtime_discovery(verifier_launch, tmp_path, monkeypatch):
+    launch, spy, _parent, worktree, _commondir, _gitdir = verifier_launch
+    audit = worktree / ".omp"
+    audit.rmdir()
+    audit.symlink_to(tmp_path, target_is_directory=True)
+    discovery = Mock(return_value=[])
+    monkeypatch.setattr(site, "getsitepackages", discovery)
+
+    with pytest.raises(worker_sandbox.WorkerSandboxRefused) as exc:
+        launch()
+
+    assert exc.value.code == "audit_dir_not_allowed"
+    discovery.assert_not_called()
+    spy.assert_not_called()
