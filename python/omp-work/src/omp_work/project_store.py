@@ -1278,8 +1278,14 @@ class ProjectStoreMixin:
         mission_id: UUID | None,
         amount_usd: Decimal,
         now: datetime,
+        *,
+        reject_exhausted: bool = False,
     ) -> SpendDecision:
-        """Authorize and hold budget locks until the caller's transaction ends."""
+        """Authorize and hold budget locks until the caller's transaction ends.
+
+        Model admission sets reject_exhausted to refuse even zero-bound calls
+        once any effective budget is spent out.
+        """
         if read_stop_state(cur, workspace_id)["stopped"]:
             raise ProjectAuthorityRefused("agent_stop_engaged")
         self._require_project(cur, workspace_id, project_id)
@@ -1294,6 +1300,11 @@ class ProjectStoreMixin:
         spent = self._spent_by_budget(
             cur, workspace_id, project_id, mission_id, mission_budget, project_budget
         )
+        if reject_exhausted and any(
+            spent.get(budget.budget_id, Decimal(0)) >= budget.ceiling_usd
+            for budget in budgets
+        ):
+            raise ProjectAuthorityRefused("ceiling_exceeded")
         decision = authorize_spend(
             budgets,
             spent,

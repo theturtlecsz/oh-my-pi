@@ -20,13 +20,13 @@ from __future__ import annotations
 
 import contextlib
 import threading
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Self
 from uuid import UUID
 
 import psycopg
-from psycopg.rows import dict_row
 
 from omp_work.jobs.budget import item_budget, item_spend, root_work_id
 from omp_work.jobs.store import NativeJobStore
@@ -136,21 +136,10 @@ class ModelProxyBudget:
         operation_id = operation_id or f"model_call:{request_id}"
 
         _GATE.acquire()
-        conn: psycopg.Connection[dict[str, Any]] | None = None
+        transaction = contextlib.ExitStack()
         try:
-            conn = psycopg.connect(
-                **self._config.connection_kwargs("omp_work_app"),
-                row_factory=dict_row,
-                autocommit=False,
-            )
-            cur = conn.cursor(row_factory=dict_row)
-            # Mirror the store's session: least-privilege search_path and the
-            # transaction-scoped RLS claims the workspace/actor policies read.
-            cur.execute("SET LOCAL search_path = pg_catalog")
-            cur.execute(
-                "SELECT set_config('omp.workspace_id', %s, true),"
-                " set_config('omp.actor_id', %s, true)",
-                (str(workspace_uuid), str(actor_uuid)),
+            cur = transaction.enter_context(
+                self._jobs.transaction(workspace_uuid, actor_uuid)
             )
 
             # Fast refuse before any lock. A waiter blocked later is checked
@@ -201,6 +190,7 @@ class ModelProxyBudget:
                         mission_uuid,
                         max_usd,
                         now,
+                        reject_exhausted=True,
                     )
                 except ProjectAuthorityRefused as refused:
                     raise ModelProxyBudgetError(refused.code, str(refused)) from refused
@@ -218,13 +208,10 @@ class ModelProxyBudget:
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                 (f"omp_work.item_budget:{workspace_uuid}:{budget_work_id}",),
             )
-            task_key: str | None = None
-            if task_ceiling is not None:
-                task_key = f"omp_work.task_budget:{workspace_uuid}:{work_uuid}"
-                cur.execute(
-                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                    (task_key,),
-                )
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"omp_work.task_budget:{workspace_uuid}:{work_uuid}",),
+            )
 
             _revalidate(
                 cur,
@@ -242,11 +229,12 @@ class ModelProxyBudget:
 
             return ModelCallAdmission(
                 budget=self,
-                conn=conn,
-                cur=cur,
+                _transaction=transaction,
+                _cur=cur,
                 workspace_id=workspace_uuid,
                 actor_id=actor_uuid,
                 work_id=work_uuid,
+                root_work_id=budget_work_id,
                 project_id=project_uuid,
                 mission_id=mission_uuid,
                 job_id=job_id,
@@ -258,57 +246,50 @@ class ModelProxyBudget:
                 prepared=prepared,
                 decision=decision,
             )
-        except Exception:
-            if conn is not None:
-                with contextlib.suppress(psycopg.Error):
-                    conn.rollback()
-                with contextlib.suppress(psycopg.Error):
-                    conn.close()
-            _GATE.release()
+        except BaseException as error:
+            try:
+                transaction.__exit__(type(error), error, error.__traceback__)
+            finally:
+                _GATE.release()
             raise
 
 
-class ModelCallAdmission:
-    """An admitted model call whose budget locks are held until settlement."""
+@dataclass
+class _AdmissionState:
+    settled: bool = False
+    closed: bool = False
 
-    def __init__(
-        self,
-        *,
-        budget: ModelProxyBudget,
-        conn: psycopg.Connection[dict[str, Any]],
-        cur: psycopg.Cursor[dict[str, Any]],
-        workspace_id: UUID,
-        actor_id: UUID,
-        work_id: UUID,
-        project_id: UUID | None,
-        mission_id: UUID | None,
-        job_id: str | None,
-        worker_id: str | None,
-        fence: int | None,
-        request_id: str,
-        operation_id: str,
-        role: str,
-        prepared: Prepared,
-        decision: SpendDecision | None,
-    ) -> None:
-        self.budget = budget
-        self.conn = conn
-        self.workspace_id = workspace_id
-        self.actor_id = actor_id
-        self.work_id = work_id
-        self.project_id = project_id
-        self.mission_id = mission_id
-        self.job_id = job_id
-        self.worker_id = worker_id
-        self.fence = fence
-        self.request_id = request_id
-        self.operation_id = operation_id
-        self.role = role
-        self.prepared = prepared
-        self.decision = decision
-        self._cur = cur
-        self.settled = False
-        self.closed = False
+
+@dataclass(frozen=True, slots=True)
+class ModelCallAdmission:
+    """Immutable admitted identity; transaction holds locks until settlement."""
+
+    budget: ModelProxyBudget
+    _transaction: contextlib.ExitStack
+    _cur: psycopg.Cursor[dict[str, Any]]
+    workspace_id: UUID
+    actor_id: UUID
+    work_id: UUID
+    root_work_id: UUID
+    project_id: UUID | None
+    mission_id: UUID | None
+    job_id: str | None
+    worker_id: str | None
+    fence: int | None
+    request_id: str
+    operation_id: str
+    role: str
+    prepared: Prepared
+    decision: SpendDecision | None
+    _state: _AdmissionState = field(default_factory=_AdmissionState, init=False)
+
+    @property
+    def settled(self) -> bool:
+        return self._state.settled
+
+    @property
+    def closed(self) -> bool:
+        return self._state.closed
 
     @property
     def cursor(self) -> psycopg.Cursor[dict[str, Any]]:
@@ -371,14 +352,11 @@ class ModelCallAdmission:
                 model=model or self.prepared.route.model,
                 price_version=price_version,
             )
-            self.conn.commit()
-            self.settled = True
-        except Exception:
-            with contextlib.suppress(psycopg.Error):
-                self.conn.rollback()
             self._close()
+            self._state.settled = True
+        except BaseException as error:
+            self._close(error)
             raise
-        self._close()
         return {"status": "settled", "actual_usd": usd, "usage": usage}
 
     def settle_unmeasurable_failure(
@@ -404,14 +382,11 @@ class ModelCallAdmission:
                 model=self.prepared.route.model,
                 price_version=None,
             )
-            self.conn.commit()
-            self.settled = True
-        except Exception:
-            with contextlib.suppress(psycopg.Error):
-                self.conn.rollback()
             self._close()
+            self._state.settled = True
+        except BaseException as error:
+            self._close(error)
             raise
-        self._close()
         detail = str(error) if error is not None else "unmeasurable upstream failure"
         raise ModelProxyBudgetError("unmeasurable_failure", detail)
 
@@ -419,9 +394,7 @@ class ModelCallAdmission:
         """Abort before any send: roll back, write no ledgers, and free the locks."""
         if self.closed:
             return
-        with contextlib.suppress(psycopg.Error):
-            self.conn.rollback()
-        self._close()
+        self._close(ModelProxyBudgetError("aborted_before_send"))
 
     def __enter__(self) -> Self:
         return self
@@ -502,13 +475,17 @@ class ModelCallAdmission:
         )
         return UUID(bytes=bytes.fromhex(digest[:32]))
 
-    def _close(self) -> None:
+    def _close(self, error: BaseException | None = None) -> None:
         if self.closed:
             return
-        self.closed = True
-        with contextlib.suppress(psycopg.Error):
-            self.conn.close()
-        _GATE.release()
+        self._state.closed = True
+        try:
+            if error is None:
+                self._transaction.close()
+            else:
+                self._transaction.__exit__(type(error), error, error.__traceback__)
+        finally:
+            _GATE.release()
 
 
 def _revalidate(
@@ -528,8 +505,15 @@ def _revalidate(
     transaction ``now()``, so a lease that expired while waiting is refused. The
     root work item is re-read and must match the one the advisory lock keyed.
     """
-    if read_stop_state(cur, workspace_id)["stopped"]:
-        raise ModelProxyBudgetError("agent_stop_engaged", "agent stop is engaged")
+    if job_id is not None:
+        # Finish the final potentially blocking lock before evaluating stop or
+        # lease. PostgreSQL may evaluate SELECT projections before FOR UPDATE waits.
+        cur.execute(
+            "SELECT job_id FROM omp_jobs.jobs WHERE workspace_id=%s AND job_id=%s FOR UPDATE",
+            (workspace_id, job_id),
+        )
+        cur.fetchone()
+    _refuse_if_stopped(cur, workspace_id)
     if job_id is None:
         return
     cur.execute(
@@ -538,7 +522,6 @@ def _revalidate(
                (lease_expires_at > clock_timestamp()) AS lease_held
         FROM omp_jobs.jobs
         WHERE workspace_id=%s AND job_id=%s
-        FOR UPDATE
         """,
         (workspace_id, job_id),
     )
@@ -578,12 +561,12 @@ def _enforce_item_cap(
     if budget is None:
         return
     spend = item_spend(cur, workspace_id, work_id)
-    if spend.usd + max_usd > Decimal(budget.usd):
+    if spend.usd >= Decimal(budget.usd) or spend.usd + max_usd > Decimal(budget.usd):
         raise ModelProxyBudgetError(
             "item_budget_exceeded",
             f"item USD cap {budget.usd} exceeded by {spend.usd + max_usd}",
         )
-    if spend.tokens + max_tokens > budget.tokens:
+    if spend.tokens >= budget.tokens or spend.tokens + max_tokens > budget.tokens:
         raise ModelProxyBudgetError(
             "item_budget_exceeded",
             f"item token cap {budget.tokens} exceeded by {spend.tokens + max_tokens}",
@@ -610,7 +593,7 @@ def _enforce_task_cap(
     )
     row = cur.fetchone()
     spent = Decimal(str(row["usd"])) if row is not None else Decimal("0")
-    if spent + max_usd > task_ceiling:
+    if spent >= task_ceiling or spent + max_usd > task_ceiling:
         raise ModelProxyBudgetError(
             "task_ceiling_exceeded",
             f"task USD ceiling {task_ceiling} exceeded by {spent + max_usd}",
@@ -627,7 +610,11 @@ def _refuse_if_stopped(
 def _require_prepared(prepared: object) -> None:
     if not isinstance(prepared, Prepared):
         raise ModelProxyBudgetError("invalid_request", "prepared must be a Prepared")
-    if not isinstance(prepared.max_usd, Decimal) or not prepared.max_usd.is_finite():
+    if (
+        not isinstance(prepared.max_usd, Decimal)
+        or not prepared.max_usd.is_finite()
+        or prepared.max_usd < 0
+    ):
         raise ModelProxyBudgetError("invalid_request", "prepared.max_usd is invalid")
     if (
         isinstance(prepared.max_input_tokens, bool)
