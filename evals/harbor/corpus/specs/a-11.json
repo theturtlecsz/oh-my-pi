@@ -2,7 +2,7 @@
   "task_id": "a-11",
   "category": "seeded_defect",
   "title": "Repair core-dump suppression in the CI TS test runner",
-  "source_commit": "b00b6f91d21163b5ee7c95c7e8977668f3c510d1",
+  "source_commit": "cff53a87401b43f528276440577bfb5fca125c31",
   "defect_patch": "evals/harbor/corpus/specs/a-11.defect.patch",
   "test_target": "scripts/ci-test-ts-core-limit.test.ts",
   "runner": "bun",

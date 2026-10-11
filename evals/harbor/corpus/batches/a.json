@@ -74,7 +74,7 @@
       "task_id": "a-11",
       "category": "seeded_defect",
       "fixture": "../tasks/a-11",
-      "source_commit": "b00b6f91d21163b5ee7c95c7e8977668f3c510d1",
+      "source_commit": "cff53a87401b43f528276440577bfb5fca125c31",
       "rationale": "seeded defect: the core-dump wrapper no longer disables limits for spawned chunks"
     },
     {
@@ -95,8 +95,8 @@
       "task_id": "a-14",
       "category": "migration",
       "fixture": "../tasks/a-14",
-      "source_commit": "a2d815bbe659c3d783e43d37c2589387dc0b120b",
-      "rationale": "real migration 0033: project egress policy store and append-only egress records"
+      "source_commit": "5d9f1f7765d404c2d96aeecaa2449e56a957e616",
+      "rationale": "real migration fix: preserve applied project schema bytes and deliver lookup indexes in a new migration"
     }
   ]
 }

@@ -1,18 +1,18 @@
 {
   "task_id": "a-14",
   "category": "migration",
-  "title": "Add the project egress policy store and migration 0033",
-  "source_commit": "a2d815bbe659c3d783e43d37c2589387dc0b120b",
+  "title": "Restore safe upgrades and project lookup indexes",
+  "source_commit": "5d9f1f7765d404c2d96aeecaa2449e56a957e616",
   "test_target": "python/omp-work/tests/test_jobs_migrate_files.py",
   "runner": "pytest",
   "source_paths": [
-    "python/omp-work/src/omp_work/egress_store.py",
-    "python/omp-work/src/omp_work/operations/migrations/0033_project_egress.sql"
+    "python/omp-work/src/omp_work/operations/migrations/0030_project_records.sql",
+    "python/omp-work/src/omp_work/operations/migrations/0037_project_lookup_indexes.sql"
   ],
-  "instruction": "Add the project egress policy store and its migration. Migration 0033 owns the project egress policy table and the append-only egress records table, one active policy row per project, with the application role allowed to change only the active flag. The store must insert a new policy version once the change against the active row is authorized, clear the active flag on the row it replaces, load the active policy by compiling it with the active standing policies, and never let a project clone's own files contribute to the compiled policy.",
+  "instruction": "After updating, existing work databases reject migration checksums. New databases still need fast mission and history lookups by workspace and project. Please make upgrades work again without changing previously applied schema steps, and ensure both existing and new databases receive the lookup indexes exactly once.",
   "acceptance_criteria": [
-    "migration 0033 adds the active-per-project egress policy table and the append-only egress records table",
-    "a recorded policy version keeps its registries, remotes, and decision",
-    "loading the policy uses the active row and standing policies, never the project clone's files"
+    "Previously applied project-record migration bytes remain compatible with existing databases.",
+    "Mission and history lookup indexes are introduced once through a new migration.",
+    "Main and jobs migration ledgers remain independently enumerable in ordinal order."
   ]
 }
