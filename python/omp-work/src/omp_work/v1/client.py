@@ -17,6 +17,7 @@ from .api_models import (
     EventSubscriptionsPage,
     MissionEventsPage,
     MissionView,
+    ResearchView,
     StopStatusView,
     StoredOperationView,
     WorkflowView,
@@ -87,6 +88,9 @@ class WorkClient:
 
     def workflow(self, key: str) -> WorkflowView:
         return WorkflowView.model_validate(self._get(f"/v1/work-items/{key}/workflow"))
+
+    def research(self, key: str) -> ResearchView:
+        return ResearchView.model_validate(self._get(f"/v1/work-items/{key}/research"))
 
     def tree(self) -> WorkspaceTree:
         return WorkspaceTree.model_validate(
