@@ -756,13 +756,19 @@ class ModelCallAdmission:
 
     def _settle_admitted_bound(self) -> dict[str, object]:
         """Persist the admitted input/output capacity as estimated settlement."""
-        return self.settle(
-            actual_usd=self.prepared.max_usd,
-            input_tokens=self.prepared.max_input_tokens,
-            output_tokens=self.prepared.max_output_tokens,
-            cache_tokens=0,
-            measurement="estimated",
-        )
+        return self.settle(**self._admitted_bound_payload())
+
+    def _admitted_bound_payload(self) -> dict[str, object]:
+        """Build bound accounting only from the captured admission, never caller usage."""
+        return {
+            "actual_usd": self.prepared.max_usd,
+            "input_tokens": self.prepared.max_input_tokens,
+            "output_tokens": self.prepared.max_output_tokens,
+            "cache_tokens": 0,
+            "measurement": "estimated",
+            "model": self.prepared.route.model,
+            "price_version": self.prepared.route.price_version,
+        }
 
     def abort(self) -> None:
         """Abort before any send: roll back, write no ledgers, and free the locks."""
@@ -797,6 +803,18 @@ class ModelCallAdmission:
         model: str,
         price_version: str | None,
     ) -> dict[str, object]:
+        if self.project_id is not None and usd > 0:
+            if decision is None:
+                raise AssertionError("project spend requires a budget decision")
+            self.budget._projects.append_spend_cursor(
+                cur,
+                self.workspace_id,
+                self.project_id,
+                self.mission_id,
+                usd,
+                decision,
+                self._spend_record_id(),
+            )
         usage = record_usage(
             self.budget._jobs,
             operation_id=f"model_call:usage:{self._identity}",
@@ -818,18 +836,6 @@ class ModelCallAdmission:
         # A usage row without this atomic receipt is not a completed settlement.
         if usage.get("status") == "replayed":
             raise ModelProxyBudgetError("idempotency_conflict", "usage exists without call receipt")
-        if self.project_id is not None and usd > 0:
-            if decision is None:
-                raise AssertionError("project spend requires a budget decision")
-            self.budget._projects.append_spend_cursor(
-                cur,
-                self.workspace_id,
-                self.project_id,
-                self.mission_id,
-                usd,
-                decision,
-                self._spend_record_id(),
-            )
         return usage
 
     def _spend_record_id(self) -> UUID:

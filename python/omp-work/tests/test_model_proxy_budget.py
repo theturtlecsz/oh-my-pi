@@ -712,6 +712,52 @@ def test_admission_settle_writes_usage_and_spend_once(admission_context):
         assert decision.allowed
 
 
+@pytest.mark.parametrize("settlement", ["actual", "bound"])
+def test_settlement_usage_sees_uncommitted_spend_on_same_cursor(
+    admission_context, monkeypatch, settlement,
+):
+    """Usage sees its spend before recording; replay commits no duplicate ledgers or receipt."""
+    ctx = admission_context
+    prepared = _prepared("6")
+    admission = _admit(ctx, prepared, request_id="writer-order")
+    recorded = []
+
+    def observe_spend(*args, **kwargs):
+        cur = kwargs["cur"]
+        assert cur is admission.cursor
+        cur.execute(
+            "SELECT amount_usd FROM omp_work.spend_records WHERE workspace_id=%s",
+            (ctx.workspace_id,),
+        )
+        assert cur.fetchall() == [{"amount_usd": Decimal(6)}]
+        # Another connection cannot see any part of the uncommitted settlement.
+        assert _admission_counts(ctx) == (0, 0, 0, 0)
+        recorded.append(record_usage(*args, **kwargs))
+        return recorded[-1]
+
+    def settle(call):
+        if settlement == "bound":
+            with pytest.raises(ModelProxyBudgetError) as exc:
+                call.settle_unmeasurable_failure("provider disconnected")
+            assert exc.value.code == "unmeasurable_failure"
+        else:
+            call.settle(actual_usd="6", input_tokens=10, output_tokens=5, cache_tokens=0)
+
+    try:
+        monkeypatch.setattr(budget_module, "record_usage", observe_spend)
+        settle(admission)
+        assert _admission_counts(ctx) == (1, 1, 1, 2)
+        with _admit(ctx, prepared, request_id="writer-order") as replay:
+            assert replay.settled
+            settle(replay)
+        assert len(recorded) == 1
+        assert _admission_counts(ctx) == (1, 1, 1, 2)
+    finally:
+        monkeypatch.setattr(budget_module, "record_usage", record_usage)
+        if not admission.settled:
+            settle(admission)
+
+
 def test_admission_abort_writes_no_ledgers_and_frees_locks(admission_context):
     """Aborting before a send rolls back, writes nothing, and releases the locks."""
     ctx = admission_context
@@ -1078,8 +1124,9 @@ def test_zero_settlement_retains_tokens_without_spend(admission_context):
         assert cur.fetchone() == {"tokens": 17, "cache_tokens": 2}
 
 
-def test_settlement_failure_rolls_back_usage_receipt_and_cancellation(admission_context, monkeypatch):
-    """Spend insert failure cannot leave usage, receipt, alerts or cancelled jobs behind."""
+@pytest.mark.parametrize("fault", ["spend", "usage"])
+def test_settlement_failure_rolls_back_usage_receipt_and_cancellation(admission_context, monkeypatch, fault):
+    """Writer failure cannot leave spend, usage, receipt, alerts or cancelled jobs behind."""
     ctx = admission_context
     work = _item(ctx, "rollback root", {**_GENEROUS_ITEM, "usd": "1"})
     job = _admitting_job(ctx, work_id=work)
@@ -1090,10 +1137,17 @@ def test_settlement_failure_rolls_back_usage_receipt_and_cancellation(admission_
     def fail(*args, **kwargs):
         raise RuntimeError("spend failed")
 
+    def fail_after_usage(*args, **kwargs):
+        record_usage(*args, **kwargs)
+        raise RuntimeError("usage failed")
+
     admission = _admit(ctx, _prepared("1"), **kw)
     try:
-        monkeypatch.setattr(ctx.budget._projects, "append_spend_cursor", fail)
-        with pytest.raises(RuntimeError, match="spend failed"):
+        if fault == "spend":
+            monkeypatch.setattr(ctx.budget._projects, "append_spend_cursor", fail)
+        else:
+            monkeypatch.setattr(budget_module, "record_usage", fail_after_usage)
+        with pytest.raises(RuntimeError, match=f"{fault} failed"):
             with admission:
                 admission.settle(actual_usd="1")
         assert admission.closed and not admission.settled
@@ -1102,10 +1156,12 @@ def test_settlement_failure_rolls_back_usage_receipt_and_cancellation(admission_
         with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
             assert ctx.jobs.job_view(cur, ctx.workspace_id, job)["status"] == "admitted"
         monkeypatch.setattr(ctx.budget._projects, "append_spend_cursor", append)
+        monkeypatch.setattr(budget_module, "record_usage", record_usage)
         admission.settle(actual_usd="1")
         assert _admission_counts(ctx)[:2] == (1, 1)
     finally:
         monkeypatch.setattr(ctx.budget._projects, "append_spend_cursor", append)
+        monkeypatch.setattr(budget_module, "record_usage", record_usage)
         if not admission.settled:
             admission.settle(actual_usd="1")
 
@@ -2235,13 +2291,13 @@ def test_unmeasurable_failure_commits_bound_receipt_once(admission_context):
     assert _admission_counts(ctx) == (1, 1, 1, 2)
     with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
         cur.execute(
-            "SELECT price_usd, input_tokens, output_tokens, cache_tokens, measurement"
+            "SELECT price_usd, input_tokens, output_tokens, cache_tokens, measurement, model, price_version"
             " FROM omp_jobs.usage_events WHERE workspace_id=%s",
             (ctx.workspace_id,),
         )
         assert cur.fetchone() == {
             "price_usd": Decimal(2), "input_tokens": 10, "output_tokens": 5,
-            "cache_tokens": 0, "measurement": "estimated",
+            "cache_tokens": 0, "measurement": "estimated", "model": "test-model", "price_version": "p1",
         }
         cur.execute(
             "SELECT result FROM omp_jobs.operations"
@@ -2251,7 +2307,7 @@ def test_unmeasurable_failure_commits_bound_receipt_once(admission_context):
         assert cur.fetchone()["result"]["settlement"] == {
             "actual_usd": "2", "input_tokens": 10, "output_tokens": 5,
             "cache_tokens": 0, "measurement": "estimated", "model": "test-model",
-            "price_version": None,
+            "price_version": "p1",
         }
 
 
