@@ -44,9 +44,11 @@ import type {
 	SetResearchCampaignStatePayload,
 	SetResearchCampaignStateResult,
 } from "./research.generated";
+import type { IntakeCommand, IntakeCommandResult } from "./intake-records";
 
 export { WORK_CONTRACT_SHA256 } from "./contract";
 export * from "./intake-nsi";
+export * from "./intake-records";
 export * from "./oversight";
 export * from "./research-views";
 export * from "./research-review";
@@ -870,7 +872,8 @@ export type Command =
 	| { type: "set_research_campaign_state"; payload: SetResearchCampaignStatePayload }
 	| { type: "conclude_research_campaign"; payload: ConcludeResearchCampaignPayload }
 	| { type: "engage_stop"; payload: EngageStopPayload }
-	| { type: "release_stop"; payload: ReleaseStopPayload };
+	| { type: "release_stop"; payload: ReleaseStopPayload }
+	| IntakeCommand;
 
 // ---- command results ----
 
@@ -987,7 +990,8 @@ export type CommandResult =
 	| SetResearchCampaignStateResult
 	| ConcludeResearchCampaignResult
 	| { type: "engage_stop"; stopped: boolean; reason: string }
-	| { type: "release_stop"; stopped: boolean; reason: string };
+	| { type: "release_stop"; stopped: boolean; reason: string }
+	| IntakeCommandResult;
 
 export type ExecutionGrantView = {
 	grant_id: UUID;
