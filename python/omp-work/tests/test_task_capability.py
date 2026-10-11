@@ -179,6 +179,9 @@ def _sample_model(model: type[BaseModel]) -> dict[str, Any]:
             {"receipt_id": str(uuid4()), "kind": kind, "payload_sha256": HEX}
             for kind in ("verification", "audit", "push")
         ]
+    if model.__name__ == "EvidenceArtifact":
+        data["uri"] = "https://example.test/a"
+        data["content_hash"] = HEX
     return data
 
 

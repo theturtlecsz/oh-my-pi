@@ -11,6 +11,7 @@ mixes this in; the host supplies _transaction and the workspace/actor claims.
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -205,6 +206,21 @@ class Tier3Approval:
     target_sha256: str
 
 
+# After an aborted attempt the other creator can still be inside insert and
+# commit. Each of those statements can run for several seconds under load
+# (the race test caps one statement at 5s). One shared window covers that
+# peer; a missing row is not waited out again on the next attempt.
+_ENSURE_PEER_WAIT_S = 12.0
+_ENSURE_PEER_POLL_S = 0.5
+
+
+def _statement_timeout(error: BaseException) -> bool:
+    return (
+        isinstance(error, psycopg.errors.QueryCanceled)
+        and "statement timeout" in str(error)
+    )
+
+
 class ProjectStoreMixin:
     """Project records for PostgresWorkStore.
 
@@ -220,6 +236,10 @@ class ProjectStoreMixin:
             self, workspace_id: UUID, actor_id: UUID, *, serializable: bool = False
         ) -> AbstractContextManager[psycopg.Cursor[dict[str, object]]]: ...
 
+        def _read_transaction(
+            self, workspace_id: UUID, actor_id: UUID
+        ) -> AbstractContextManager[psycopg.Cursor[dict[str, object]]]: ...
+
     def ensure_project(
         self, workspace_id: UUID, actor_id: UUID, key: str, name: str, kind: str
     ) -> UUID:
@@ -227,10 +247,14 @@ class ProjectStoreMixin:
 
         Two concurrent creators of one key both read it as absent, so the whole
         lookup-plus-insert runs serializable: one commits, the other fails with
-        a SerializationFailure and retries with a fresh transaction and lookup,
-        which then reads the committed row. Three attempts, as execute does;
-        the third failure surfaces WorkStoreError("unavailable").
+        a SerializationFailure. A statement timeout aborts the same attempt
+        under load. Either way the caller re-reads the committed row outside
+        that transaction and, when the peer has not committed yet, waits for
+        it. Three attempts, as execute does; the third failure surfaces
+        WorkStoreError("unavailable").
         """
+        last_error: BaseException | None = None
+        peer_deadline: float | None = None
         for attempt in range(1, 4):
             try:
                 with self._transaction(
@@ -247,11 +271,46 @@ class ProjectStoreMixin:
                     )
                     return project_id
             except psycopg.errors.SerializationFailure as error:
-                if attempt == 3:
-                    raise WorkStoreError(
-                        "unavailable", ("retry_exhausted",)
-                    ) from error
+                last_error = error
+            except psycopg.errors.QueryCanceled as error:
+                if not _statement_timeout(error):
+                    raise
+                last_error = error
+            visible = self._visible_project_id(workspace_id, actor_id, key)
+            if visible is not None:
+                return visible
+            if attempt == 3:
+                raise WorkStoreError(
+                    "unavailable", ("retry_exhausted",)
+                ) from last_error
+            # Another serializable attempt now conflicts again and spends the
+            # budget before that commit is visible. Wait once, across attempts.
+            if peer_deadline is None:
+                peer_deadline = time.monotonic() + _ENSURE_PEER_WAIT_S
+            while time.monotonic() < peer_deadline:
+                time.sleep(_ENSURE_PEER_POLL_S)
+                visible = self._visible_project_id(workspace_id, actor_id, key)
+                if visible is not None:
+                    return visible
         raise AssertionError("unreachable")
+
+    def _visible_project_id(
+        self, workspace_id: UUID, actor_id: UUID, key: str
+    ) -> UUID | None:
+        """The committed unarchived project for key, or None when it is not visible.
+
+        Uses the read transaction so a caller that patches ``_transaction`` to
+        inject serialization failures does not turn this re-read into another
+        failure. A statement timeout here is a miss, not a terminal error: the
+        caller still has attempts left.
+        """
+        try:
+            with self._read_transaction(workspace_id, actor_id) as cur:
+                return self._existing_project_id(cur, workspace_id, key)
+        except psycopg.errors.QueryCanceled as error:
+            if not _statement_timeout(error):
+                raise
+            return None
 
     def find_project(
         self, workspace_id: UUID, actor_id: UUID, key: str
@@ -1219,8 +1278,14 @@ class ProjectStoreMixin:
         mission_id: UUID | None,
         amount_usd: Decimal,
         now: datetime,
+        *,
+        reject_exhausted: bool = False,
     ) -> SpendDecision:
-        """Authorize and hold budget locks until the caller's transaction ends."""
+        """Authorize and hold budget locks until the caller's transaction ends.
+
+        Model admission sets reject_exhausted to refuse even zero-bound calls
+        once any effective budget is spent out.
+        """
         if read_stop_state(cur, workspace_id)["stopped"]:
             raise ProjectAuthorityRefused("agent_stop_engaged")
         self._require_project(cur, workspace_id, project_id)
@@ -1235,6 +1300,11 @@ class ProjectStoreMixin:
         spent = self._spent_by_budget(
             cur, workspace_id, project_id, mission_id, mission_budget, project_budget
         )
+        if reject_exhausted and any(
+            spent.get(budget.budget_id, Decimal(0)) >= budget.ceiling_usd
+            for budget in budgets
+        ):
+            raise ProjectAuthorityRefused("ceiling_exceeded")
         decision = authorize_spend(
             budgets,
             spent,

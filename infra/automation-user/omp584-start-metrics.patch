@@ -1,0 +1,46 @@
+--- a/flood.py
++++ b/flood.py
+@@ -36,6 +36,10 @@
+ import urllib.request
+ from pathlib import Path
+ 
++# Identifies the code this process executes: hashed once at import, so a later edit of flood.py on disk
++# does not change what the start events (OMP-584-s03) say the running process is.
++CODE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
++
+ TERMINAL = {"done", "failed", "blocked", "planned", "plan_ready", "owner"}   # owner: waits for mark-done
+ ACTIVE_PHASES = {"implement", "test", "review"}
+ # Terminal identity of whatever launched flood (tmux, a terminal emulator) must not reach jobs:
+@@ -1465,6 +1469,23 @@
+             return "The task follows on stdin.", pf
+         return prompt, None
+ 
++    def start_event(self, tid: str, phase: str) -> dict:
++        """History event for a successful plan/implement start (OMP-584-s03). Pure measurement: every count
++        comes from existing helpers and nothing here decides scheduling."""
++        event = {"phase": f"{phase}-start", "at": now(), "attempt": self.state.task(tid)["attempts"],
++                 "code_sha256": CODE_SHA256}
++        if phase == "implement":
++            jobs = {t: self.state.task(t)["job"] or {} for t in self.running_ids()}
++            load = self.provider_load()
++            event.update(
++                running_implementers=sum(1 for t, j in jobs.items() if j.get("phase") == "implement"
++                                         and j.get("pid") and pid_alive(j["pid"])),
++                slots=self.slots, occupied_slots=self.occupied_slots(), test_slots=self.test_slots,
++                start_gap_sec=float(self.cfg.get("start_gap_sec") or 0),
++                providers={n: {"max_parallel": int(self.providers[n].get("max_parallel", 1)), "load": load.get(n, 0)}
++                           for n in self.eligible_providers({})})
++        return event
++
+     def spawn(self, task: dict, phase: str, provider: str | None, argv: list[str], cwd: Path,
+               max_minutes: float, stdin_file: Path | None = None) -> bool:
+         st = self.state.task(task["id"])
+@@ -1522,6 +1543,8 @@
+                 st["authors"].append(model)
+         if provider:
+             self.state.provider(provider)["runs"] += 1
++        if phase in ("implement", "plan"):
++            st["history"].append(self.start_event(task["id"], phase))
+         self.state.save()
+         log(f"[{task['id']}] {phase} started pid={proc.pid} provider={provider} log={logf.name}")
+         return True

@@ -5,7 +5,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import AwareDatetime, Field, field_validator, model_serializer
+from pydantic import AwareDatetime, Field, field_validator, model_serializer, model_validator
 
 from .models import (
     AuditManifest,
@@ -760,6 +760,64 @@ class RelayOwnerIntentResult(StrictModel):
     relay: RelayProvenance
 
 
+class IntakeWriteResult(StrictModel):
+    run_id: str = Field(min_length=1)
+    revision: int = Field(ge=1)
+    expected_revision: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _validate_revision_advance(self) -> IntakeWriteResult:
+        if self.revision != self.expected_revision + 1:
+            raise ValueError("revision must be expected_revision + 1")
+        return self
+
+
+class StartIntakeResult(IntakeWriteResult):
+    type: Literal["start_intake"]
+    expected_revision: Literal[0]
+
+
+class IntakeFollowOnResult(IntakeWriteResult):
+    expected_revision: int = Field(ge=1)
+
+
+class RegisterIntakeEvidenceResult(IntakeFollowOnResult):
+    type: Literal["register_intake_evidence"]
+
+
+class RecordIntakeClaimResult(IntakeFollowOnResult):
+    type: Literal["record_intake_claim"]
+
+
+class RecordIntakeDecisionResult(IntakeFollowOnResult):
+    type: Literal["record_intake_decision"]
+
+
+class SupersedeIntakeClaimResult(IntakeFollowOnResult):
+    type: Literal["supersede_intake_claim"]
+
+
+class RecordIntakeIssueResult(IntakeFollowOnResult):
+    type: Literal["record_intake_issue"]
+
+
+class LinkIntakeCriterionResult(IntakeFollowOnResult):
+    type: Literal["link_intake_criterion"]
+
+
+class AssessIntakeResult(StrictModel):
+    type: Literal["assess_intake"]
+    run_id: str = Field(min_length=1)
+    revision: int = Field(ge=1)
+    assessed_revision: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def _validate_assessed_revision_equal(self) -> AssessIntakeResult:
+        if self.revision != self.assessed_revision:
+            raise ValueError("revision and assessed_revision must be equal")
+        return self
+
+
 CommandResult = Annotated[
     CreateWorkBatchResult
     | CreateSameSessionChildResult
@@ -814,7 +872,15 @@ CommandResult = Annotated[
     | AnswerMissionDraftResult
     | RecordFindingResult
     | EventSubscriptionResult
-    | RelayOwnerIntentResult,
+    | RelayOwnerIntentResult
+    | StartIntakeResult
+    | RegisterIntakeEvidenceResult
+    | RecordIntakeClaimResult
+    | RecordIntakeDecisionResult
+    | SupersedeIntakeClaimResult
+    | RecordIntakeIssueResult
+    | LinkIntakeCriterionResult
+    | AssessIntakeResult,
     Field(discriminator="type"),
 ]
 

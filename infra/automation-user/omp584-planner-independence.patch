@@ -1,0 +1,27 @@
+--- a/flood.py
++++ b/flood.py
+@@ -35,6 +35,8 @@
+ import time
+ import urllib.request
+ from pathlib import Path
++
++PLANNER_INDEPENDENCE = Path(__file__).with_name("planner-independence.md").read_text(encoding="utf-8")
+ 
+ TERMINAL = {"done", "failed", "blocked", "planned", "plan_ready", "owner"}   # owner: waits for mark-done
+ ACTIVE_PHASES = {"implement", "test", "review"}
+@@ -1610,6 +1612,7 @@
+             "Slices without a dependency run at the same time, and each dependency waits for the other slice's",
+             "full test run and merge. Add a depends_on only when the slices edit the same file or one uses",
+             "something the other creates; otherwise leave depends_on empty. Do not chain slices just for order.",
++            PLANNER_INDEPENDENCE,
+             f"Before you finish, run `python3 {Path(__file__).resolve()} check-plan {tid} --config {self.cfg_file}`",
+             "(the same format check flood applies to your files) and fix every line it prints until it prints OK.",
+             "Together the slices must cover the whole item. Earlier one-sitting attempts at this item failed",
+@@ -1674,6 +1677,7 @@
+             "is not incomplete for that reason; do not fail it for that.",
+             "Answer concretely: (1) does the union of the slices cover the item's spec, and what is missing?",
+             "(2) is each slice independently implementable and verifiable from its own text alone?",
++            PLANNER_INDEPENDENCE,
+             "End your response with exactly one line: 'VERDICT: PASS' or 'VERDICT: FAIL'.",
+         ])
+         pf = self.logs_dir / f"{tid}.plan-review-prompt.{self.state.task(tid)['attempts']}.md"

@@ -2047,6 +2047,39 @@
       "title": "AssessBoundedIntakeResult",
       "type": "object"
     },
+    "AssessIntakeResult": {
+      "additionalProperties": false,
+      "properties": {
+        "assessed_revision": {
+          "minimum": 1,
+          "title": "Assessed Revision",
+          "type": "integer"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "type": {
+          "const": "assess_intake",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "run_id",
+        "revision",
+        "assessed_revision"
+      ],
+      "title": "AssessIntakeResult",
+      "type": "object"
+    },
     "AttestCutoverPlanResult": {
       "additionalProperties": false,
       "properties": {
@@ -5909,6 +5942,39 @@
           "title": "AssessBoundedIntakeResult",
           "type": "object"
         },
+        "AssessIntakeResult": {
+          "additionalProperties": false,
+          "properties": {
+            "assessed_revision": {
+              "minimum": 1,
+              "title": "Assessed Revision",
+              "type": "integer"
+            },
+            "revision": {
+              "minimum": 1,
+              "title": "Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "assess_intake",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "run_id",
+            "revision",
+            "assessed_revision"
+          ],
+          "title": "AssessIntakeResult",
+          "type": "object"
+        },
         "AttestCutoverPlanResult": {
           "additionalProperties": false,
           "properties": {
@@ -8377,6 +8443,39 @@
           "title": "ItemBudget",
           "type": "object"
         },
+        "LinkIntakeCriterionResult": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_revision": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "revision": {
+              "minimum": 1,
+              "title": "Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "link_intake_criterion",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "revision",
+            "expected_revision",
+            "type"
+          ],
+          "title": "LinkIntakeCriterionResult",
+          "type": "object"
+        },
         "MissionApprovedScope": {
           "additionalProperties": false,
           "properties": {
@@ -9297,6 +9396,105 @@
           "title": "RecordFindingResult",
           "type": "object"
         },
+        "RecordIntakeClaimResult": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_revision": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "revision": {
+              "minimum": 1,
+              "title": "Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "record_intake_claim",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "revision",
+            "expected_revision",
+            "type"
+          ],
+          "title": "RecordIntakeClaimResult",
+          "type": "object"
+        },
+        "RecordIntakeDecisionResult": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_revision": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "revision": {
+              "minimum": 1,
+              "title": "Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "record_intake_decision",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "revision",
+            "expected_revision",
+            "type"
+          ],
+          "title": "RecordIntakeDecisionResult",
+          "type": "object"
+        },
+        "RecordIntakeIssueResult": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_revision": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "revision": {
+              "minimum": 1,
+              "title": "Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "record_intake_issue",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "revision",
+            "expected_revision",
+            "type"
+          ],
+          "title": "RecordIntakeIssueResult",
+          "type": "object"
+        },
         "RecordResearchCacheResult": {
           "additionalProperties": false,
           "properties": {
@@ -9357,6 +9555,39 @@
             "observation"
           ],
           "title": "RecordResearchObservationResult",
+          "type": "object"
+        },
+        "RegisterIntakeEvidenceResult": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_revision": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "revision": {
+              "minimum": 1,
+              "title": "Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "register_intake_evidence",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "revision",
+            "expected_revision",
+            "type"
+          ],
+          "title": "RegisterIntakeEvidenceResult",
           "type": "object"
         },
         "RegisterResearchArtifactResult": {
@@ -11290,6 +11521,72 @@
           "title": "StampExecutionPlanResult",
           "type": "object"
         },
+        "StartIntakeResult": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_revision": {
+              "const": 0,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "revision": {
+              "minimum": 1,
+              "title": "Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "start_intake",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "revision",
+            "expected_revision",
+            "type"
+          ],
+          "title": "StartIntakeResult",
+          "type": "object"
+        },
+        "SupersedeIntakeClaimResult": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_revision": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "revision": {
+              "minimum": 1,
+              "title": "Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "supersede_intake_claim",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "revision",
+            "expected_revision",
+            "type"
+          ],
+          "title": "SupersedeIntakeClaimResult",
+          "type": "object"
+        },
         "WorkItemResult": {
           "additionalProperties": false,
           "properties": {
@@ -11407,6 +11704,7 @@
               "append_evidence": "#/$defs/EvidenceResult",
               "approve_mission": "#/$defs/MissionResult",
               "assess_bounded_intake": "#/$defs/AssessBoundedIntakeResult",
+              "assess_intake": "#/$defs/AssessIntakeResult",
               "attest_checkpoint_delivery": "#/$defs/CloseAttemptResult",
               "attest_cutover_plan": "#/$defs/AttestCutoverPlanResult",
               "attest_intake_admission": "#/$defs/AttestIntakeAdmissionResult",
@@ -11430,6 +11728,7 @@
               "draft_mission_intake": "#/$defs/DraftMissionIntakeResult",
               "engage_stop": "#/$defs/EngageStopResult",
               "finalize_candidate": "#/$defs/FinalizeCandidateResult",
+              "link_intake_criterion": "#/$defs/LinkIntakeCriterionResult",
               "link_mission_work": "#/$defs/MissionResult",
               "propose_research_trial": "#/$defs/ProposeResearchTrialResult",
               "publish_bounded_intake": "#/$defs/PublishBoundedIntakeResult",
@@ -11440,9 +11739,13 @@
               "record_external_delivery": "#/$defs/RecordExternalDeliveryResult",
               "record_fable_advice": "#/$defs/RecordFableAdviceResult",
               "record_finding": "#/$defs/RecordFindingResult",
+              "record_intake_claim": "#/$defs/RecordIntakeClaimResult",
+              "record_intake_decision": "#/$defs/RecordIntakeDecisionResult",
+              "record_intake_issue": "#/$defs/RecordIntakeIssueResult",
               "record_project_health": "#/$defs/ProjectHealthResult",
               "record_research_cache": "#/$defs/RecordResearchCacheResult",
               "record_research_observation": "#/$defs/RecordResearchObservationResult",
+              "register_intake_evidence": "#/$defs/RegisterIntakeEvidenceResult",
               "register_research_artifact": "#/$defs/RegisterResearchArtifactResult",
               "register_research_component": "#/$defs/RegisterResearchComponentResult",
               "register_research_dataset": "#/$defs/RegisterResearchDatasetResult",
@@ -11463,7 +11766,9 @@
               "settle_auditor_launch": "#/$defs/CloseAttemptResult",
               "skip_active_item": "#/$defs/SkipActiveItemResult",
               "stamp_execution_plan": "#/$defs/StampExecutionPlanResult",
-              "submit_mission": "#/$defs/MissionResult"
+              "start_intake": "#/$defs/StartIntakeResult",
+              "submit_mission": "#/$defs/MissionResult",
+              "supersede_intake_claim": "#/$defs/SupersedeIntakeClaimResult"
             },
             "propertyName": "type"
           },
@@ -11629,6 +11934,30 @@
             },
             {
               "$ref": "#/$defs/RelayOwnerIntentResult"
+            },
+            {
+              "$ref": "#/$defs/StartIntakeResult"
+            },
+            {
+              "$ref": "#/$defs/RegisterIntakeEvidenceResult"
+            },
+            {
+              "$ref": "#/$defs/RecordIntakeClaimResult"
+            },
+            {
+              "$ref": "#/$defs/RecordIntakeDecisionResult"
+            },
+            {
+              "$ref": "#/$defs/SupersedeIntakeClaimResult"
+            },
+            {
+              "$ref": "#/$defs/RecordIntakeIssueResult"
+            },
+            {
+              "$ref": "#/$defs/LinkIntakeCriterionResult"
+            },
+            {
+              "$ref": "#/$defs/AssessIntakeResult"
             }
           ],
           "title": "Result"
@@ -17255,6 +17584,60 @@
       "title": "IntakeBlockingQuestion",
       "type": "object"
     },
+    "IntakeFollowOnResult": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_revision": {
+          "minimum": 1,
+          "title": "Expected Revision",
+          "type": "integer"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "revision",
+        "expected_revision"
+      ],
+      "title": "IntakeFollowOnResult",
+      "type": "object"
+    },
+    "IntakeWriteResult": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_revision": {
+          "minimum": 0,
+          "title": "Expected Revision",
+          "type": "integer"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "revision",
+        "expected_revision"
+      ],
+      "title": "IntakeWriteResult",
+      "type": "object"
+    },
     "ItemBudget": {
       "additionalProperties": false,
       "properties": {
@@ -17285,6 +17668,39 @@
         "max_subagents"
       ],
       "title": "ItemBudget",
+      "type": "object"
+    },
+    "LinkIntakeCriterionResult": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_revision": {
+          "minimum": 1,
+          "title": "Expected Revision",
+          "type": "integer"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "type": {
+          "const": "link_intake_criterion",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "revision",
+        "expected_revision",
+        "type"
+      ],
+      "title": "LinkIntakeCriterionResult",
       "type": "object"
     },
     "MissionApprovedScope": {
@@ -21145,6 +21561,105 @@
       "title": "RecordFindingResult",
       "type": "object"
     },
+    "RecordIntakeClaimResult": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_revision": {
+          "minimum": 1,
+          "title": "Expected Revision",
+          "type": "integer"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "type": {
+          "const": "record_intake_claim",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "revision",
+        "expected_revision",
+        "type"
+      ],
+      "title": "RecordIntakeClaimResult",
+      "type": "object"
+    },
+    "RecordIntakeDecisionResult": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_revision": {
+          "minimum": 1,
+          "title": "Expected Revision",
+          "type": "integer"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "type": {
+          "const": "record_intake_decision",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "revision",
+        "expected_revision",
+        "type"
+      ],
+      "title": "RecordIntakeDecisionResult",
+      "type": "object"
+    },
+    "RecordIntakeIssueResult": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_revision": {
+          "minimum": 1,
+          "title": "Expected Revision",
+          "type": "integer"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "type": {
+          "const": "record_intake_issue",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "revision",
+        "expected_revision",
+        "type"
+      ],
+      "title": "RecordIntakeIssueResult",
+      "type": "object"
+    },
     "RecordResearchCacheResult": {
       "additionalProperties": false,
       "properties": {
@@ -21311,6 +21826,39 @@
         "observation"
       ],
       "title": "RecordResearchObservationResult",
+      "type": "object"
+    },
+    "RegisterIntakeEvidenceResult": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_revision": {
+          "minimum": 1,
+          "title": "Expected Revision",
+          "type": "integer"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "type": {
+          "const": "register_intake_evidence",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "revision",
+        "expected_revision",
+        "type"
+      ],
+      "title": "RegisterIntakeEvidenceResult",
       "type": "object"
     },
     "RegisterResearchArtifactResult": {
@@ -28592,6 +29140,39 @@
       "title": "StampExecutionPlanResult",
       "type": "object"
     },
+    "StartIntakeResult": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_revision": {
+          "const": 0,
+          "title": "Expected Revision",
+          "type": "integer"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "type": {
+          "const": "start_intake",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "revision",
+        "expected_revision",
+        "type"
+      ],
+      "title": "StartIntakeResult",
+      "type": "object"
+    },
     "StopStatusView": {
       "additionalProperties": false,
       "properties": {
@@ -28988,6 +29569,39 @@
             "questions"
           ],
           "title": "AssessBoundedIntakeResult",
+          "type": "object"
+        },
+        "AssessIntakeResult": {
+          "additionalProperties": false,
+          "properties": {
+            "assessed_revision": {
+              "minimum": 1,
+              "title": "Assessed Revision",
+              "type": "integer"
+            },
+            "revision": {
+              "minimum": 1,
+              "title": "Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "assess_intake",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "run_id",
+            "revision",
+            "assessed_revision"
+          ],
+          "title": "AssessIntakeResult",
           "type": "object"
         },
         "AttestCutoverPlanResult": {
@@ -31458,6 +32072,39 @@
           "title": "ItemBudget",
           "type": "object"
         },
+        "LinkIntakeCriterionResult": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_revision": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "revision": {
+              "minimum": 1,
+              "title": "Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "link_intake_criterion",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "revision",
+            "expected_revision",
+            "type"
+          ],
+          "title": "LinkIntakeCriterionResult",
+          "type": "object"
+        },
         "MissionApprovedScope": {
           "additionalProperties": false,
           "properties": {
@@ -32378,6 +33025,105 @@
           "title": "RecordFindingResult",
           "type": "object"
         },
+        "RecordIntakeClaimResult": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_revision": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "revision": {
+              "minimum": 1,
+              "title": "Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "record_intake_claim",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "revision",
+            "expected_revision",
+            "type"
+          ],
+          "title": "RecordIntakeClaimResult",
+          "type": "object"
+        },
+        "RecordIntakeDecisionResult": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_revision": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "revision": {
+              "minimum": 1,
+              "title": "Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "record_intake_decision",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "revision",
+            "expected_revision",
+            "type"
+          ],
+          "title": "RecordIntakeDecisionResult",
+          "type": "object"
+        },
+        "RecordIntakeIssueResult": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_revision": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "revision": {
+              "minimum": 1,
+              "title": "Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "record_intake_issue",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "revision",
+            "expected_revision",
+            "type"
+          ],
+          "title": "RecordIntakeIssueResult",
+          "type": "object"
+        },
         "RecordResearchCacheResult": {
           "additionalProperties": false,
           "properties": {
@@ -32438,6 +33184,39 @@
             "observation"
           ],
           "title": "RecordResearchObservationResult",
+          "type": "object"
+        },
+        "RegisterIntakeEvidenceResult": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_revision": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "revision": {
+              "minimum": 1,
+              "title": "Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "register_intake_evidence",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "revision",
+            "expected_revision",
+            "type"
+          ],
+          "title": "RegisterIntakeEvidenceResult",
           "type": "object"
         },
         "RegisterResearchArtifactResult": {
@@ -34371,6 +35150,72 @@
           "title": "StampExecutionPlanResult",
           "type": "object"
         },
+        "StartIntakeResult": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_revision": {
+              "const": 0,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "revision": {
+              "minimum": 1,
+              "title": "Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "start_intake",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "revision",
+            "expected_revision",
+            "type"
+          ],
+          "title": "StartIntakeResult",
+          "type": "object"
+        },
+        "SupersedeIntakeClaimResult": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_revision": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "revision": {
+              "minimum": 1,
+              "title": "Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "supersede_intake_claim",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "revision",
+            "expected_revision",
+            "type"
+          ],
+          "title": "SupersedeIntakeClaimResult",
+          "type": "object"
+        },
         "WorkItemResult": {
           "additionalProperties": false,
           "properties": {
@@ -34504,6 +35349,7 @@
                   "append_evidence": "#/$defs/EvidenceResult",
                   "approve_mission": "#/$defs/MissionResult",
                   "assess_bounded_intake": "#/$defs/AssessBoundedIntakeResult",
+                  "assess_intake": "#/$defs/AssessIntakeResult",
                   "attest_checkpoint_delivery": "#/$defs/CloseAttemptResult",
                   "attest_cutover_plan": "#/$defs/AttestCutoverPlanResult",
                   "attest_intake_admission": "#/$defs/AttestIntakeAdmissionResult",
@@ -34527,6 +35373,7 @@
                   "draft_mission_intake": "#/$defs/DraftMissionIntakeResult",
                   "engage_stop": "#/$defs/EngageStopResult",
                   "finalize_candidate": "#/$defs/FinalizeCandidateResult",
+                  "link_intake_criterion": "#/$defs/LinkIntakeCriterionResult",
                   "link_mission_work": "#/$defs/MissionResult",
                   "propose_research_trial": "#/$defs/ProposeResearchTrialResult",
                   "publish_bounded_intake": "#/$defs/PublishBoundedIntakeResult",
@@ -34537,9 +35384,13 @@
                   "record_external_delivery": "#/$defs/RecordExternalDeliveryResult",
                   "record_fable_advice": "#/$defs/RecordFableAdviceResult",
                   "record_finding": "#/$defs/RecordFindingResult",
+                  "record_intake_claim": "#/$defs/RecordIntakeClaimResult",
+                  "record_intake_decision": "#/$defs/RecordIntakeDecisionResult",
+                  "record_intake_issue": "#/$defs/RecordIntakeIssueResult",
                   "record_project_health": "#/$defs/ProjectHealthResult",
                   "record_research_cache": "#/$defs/RecordResearchCacheResult",
                   "record_research_observation": "#/$defs/RecordResearchObservationResult",
+                  "register_intake_evidence": "#/$defs/RegisterIntakeEvidenceResult",
                   "register_research_artifact": "#/$defs/RegisterResearchArtifactResult",
                   "register_research_component": "#/$defs/RegisterResearchComponentResult",
                   "register_research_dataset": "#/$defs/RegisterResearchDatasetResult",
@@ -34560,7 +35411,9 @@
                   "settle_auditor_launch": "#/$defs/CloseAttemptResult",
                   "skip_active_item": "#/$defs/SkipActiveItemResult",
                   "stamp_execution_plan": "#/$defs/StampExecutionPlanResult",
-                  "submit_mission": "#/$defs/MissionResult"
+                  "start_intake": "#/$defs/StartIntakeResult",
+                  "submit_mission": "#/$defs/MissionResult",
+                  "supersede_intake_claim": "#/$defs/SupersedeIntakeClaimResult"
                 },
                 "propertyName": "type"
               },
@@ -34726,6 +35579,30 @@
                 },
                 {
                   "$ref": "#/$defs/RelayOwnerIntentResult"
+                },
+                {
+                  "$ref": "#/$defs/StartIntakeResult"
+                },
+                {
+                  "$ref": "#/$defs/RegisterIntakeEvidenceResult"
+                },
+                {
+                  "$ref": "#/$defs/RecordIntakeClaimResult"
+                },
+                {
+                  "$ref": "#/$defs/RecordIntakeDecisionResult"
+                },
+                {
+                  "$ref": "#/$defs/SupersedeIntakeClaimResult"
+                },
+                {
+                  "$ref": "#/$defs/RecordIntakeIssueResult"
+                },
+                {
+                  "$ref": "#/$defs/LinkIntakeCriterionResult"
+                },
+                {
+                  "$ref": "#/$defs/AssessIntakeResult"
                 }
               ]
             },
@@ -34750,6 +35627,39 @@
       "additionalProperties": false,
       "properties": {},
       "title": "StrictModel",
+      "type": "object"
+    },
+    "SupersedeIntakeClaimResult": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_revision": {
+          "minimum": 1,
+          "title": "Expected Revision",
+          "type": "integer"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "type": {
+          "const": "supersede_intake_claim",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "revision",
+        "expected_revision",
+        "type"
+      ],
+      "title": "SupersedeIntakeClaimResult",
       "type": "object"
     },
     "WorkAlias": {

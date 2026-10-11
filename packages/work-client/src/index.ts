@@ -46,6 +46,7 @@ import type {
 } from "./research.generated";
 
 export { WORK_CONTRACT_SHA256 } from "./contract";
+export * from "./intake-nsi";
 export * from "./oversight";
 export * from "./research-views";
 export * from "./research-review";

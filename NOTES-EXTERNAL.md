@@ -701,3 +701,65 @@ snapshot for the separate failed-run count. Record the actual sample count,
 median, p90, activation timestamp, and pre-batch evidence in the operator's
 existing OMP-344/OMP-583 evidence location. Mark timing acceptance met only when
 the successful median is below 420 s. No such result is claimed here.
+
+# OMP-584-s01: independence gate on flood.py plan validation (flood operator)
+
+Status: **repository tests added; live flood.py not changed, rollout and
+acceptance pending**. This session added
+`python/omp-work/tests/test_flood_independence_gate.py` only. The gate itself
+runs in flood's own copy of `flood.py`
+(`/home/ompbot/flood/flood.py`), which is outside this repository and outside
+implementer authority, so this task stages and tests it without editing it.
+
+## Scope
+
+`python/omp-work/tests/test_flood_independence_gate.py` stages the external
+`flood.py` in pytest's temp dir and executes it there. Three inputs are
+recognized:
+
+- `OMP584_FLOOD_SOURCE=<dir>` names a directory holding an already-patched
+  `flood.py`. The directory is copied into temp and executed unpatched; the
+  selected source is never patched or imported in place; existing bytecode
+  stays unchanged and no original bytecode is generated. Staging tests inject
+  temporary sources, so they run even when no external source is available.
+- Otherwise the explicitly staged raw directory
+  `infra/automation-user/omp584-flood-stage/` is used: a raw `flood.py` plus
+  the eventual `infra/automation-user/omp584-dependencies.patch` are copied into
+  temp and patched there. The original is untouched.
+- When neither exists the gate cases skip. There is no home discovery and no
+  committed copy of `flood.py`.
+
+The tests use only the repo-relative patch path, not a machine-specific home
+path. No fixture accepts an order-only chain and there is no plan-size
+exemption.
+
+## Pending rollout and acceptance
+
+The patch `infra/automation-user/omp584-dependencies.patch` targets the external
+`flood.py` `validate_slices` and both promotion paths. Applying it to the live
+file, committing it in the external git, and observing real post-rollout planner
+behavior is an owner/operator step (OMP-584-s05/s06/s07) and is **not** performed
+here. Until then the gate tests skip by default on a machine with no staged
+source, and no live plan is affected. Synthetic tests do not satisfy rollout
+acceptance; the acceptance evidence must come from real plans after activation.
+
+## Unchanged external test conflict: `tests/test_planner.py`
+
+The live external suite `/home/ompbot/flood/tests/test_planner.py` currently
+encodes plans the new gate rejects. Its
+`test_gate_accepts_a_valid_set_and_rejects_each_violation` builds `ITEM-s01` with no dependency and `ITEM-s02`
+with `depends_on: [ITEM-s01]` whose work text neither shares a non-union file
+nor consumes a named producer path — exactly the disjoint order-only chain the
+gate now refuses. The same holds for the `plan_item`-based promotion tests:
+`test_valid_plan_is_promoted_and_the_parent_finishes_with_its_slices` and
+`test_invalid_plan_is_continued_with_the_violations_then_promoted_by_hand` both
+write that order-only pair through `plan_item`, and
+`test_check_plan_cli_reports_gate_violations_then_ok` relies on the old
+acceptance. After the gate deploys these become invalid.
+
+Per the OMP-584 plan this conflict is recorded, not resolved here: existing
+tests must not be rewritten and no gate exemption may be added. Resolving it is
+the owner/operator's decision when the patch lands (the correct fix is to give
+the second slice a real consumed path or make both roots independent, not to
+weaken the gate). This session changed no external file.
+

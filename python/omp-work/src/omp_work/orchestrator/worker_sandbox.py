@@ -7,6 +7,8 @@ bind of a linked worktree at ``/work`` and any read-only files the caller
 names. The process environment is PATH, LANG, TERM, TZ, OMP_TASK_TOKEN, and
 OMP_WORK_URL. Worker launches may additionally receive OMP_MODEL_PROXY_URL,
 OMP_MODEL_TOKEN, and OMP_WORKER_MANIFEST from explicit caller arguments.
+Verifiers with a real ``.omp`` also receive validated installed import roots
+in PYTHONPATH and PYTHONSAFEPATH=1, mounted read-only after Git metadata.
 Only WorkService and the optional dedicated model relay listen on loopback.
 
 The worktree must be a linked worktree (a ``.git`` file whose gitdir lives
@@ -18,10 +20,12 @@ and any path outside that directory are refused before a sandbox starts.
 from __future__ import annotations
 
 import os
+import site
 from collections.abc import Sequence
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import omp_work
 from omp_work.egress_policy import Identity, MemoryRecorder
 from omp_work.egress_sandbox import _model_endpoint, run_sandboxed
 
@@ -36,7 +40,8 @@ class WorkerSandboxRefused(RuntimeError):
 
     ``code`` is ``identity_not_allowed``, ``worktrees_dir_unconfigured``,
     ``worktree_not_allowed``, ``live_checkout``, ``ro_bind_not_allowed``,
-    ``workservice_not_allowed``, or ``model_proxy_not_allowed``.
+    ``workservice_not_allowed``, ``model_proxy_not_allowed``,
+    ``commondir_not_allowed``, ``audit_dir_not_allowed``, or ``runtime_not_allowed``.
     """
 
     code: str
@@ -95,6 +100,35 @@ def _ro_bind(path: str | Path) -> str:
     return str(raw)
 
 
+def _verifier_git_dirs(worktree: Path) -> tuple[Path, Path]:
+    """Validate Git metadata before exposing it to a verifier."""
+    try:
+        text = (worktree / ".git").read_text(encoding="utf-8").split(":", 1)[1].strip()
+        if not text:
+            raise WorkerSandboxRefused("commondir_not_allowed")
+        gitdir = Path(text)
+        if not gitdir.is_absolute():
+            gitdir = worktree / gitdir
+        gitdir = gitdir.resolve()
+        text = (gitdir / "commondir").read_text(encoding="utf-8").strip()
+        if not text:
+            raise WorkerSandboxRefused("commondir_not_allowed")
+        commondir = Path(text)
+        if not commondir.is_absolute():
+            commondir = gitdir / commondir
+        commondir = commondir.resolve()
+    except (OSError, UnicodeError, IndexError):
+        raise WorkerSandboxRefused("commondir_not_allowed") from None
+    worktrees = commondir / "worktrees"
+    if (
+        any(path == Path("/") or path.parent == Path("/") for path in (commondir, gitdir))
+        or not gitdir.is_relative_to(worktrees)
+        or gitdir == worktrees
+    ):
+        raise WorkerSandboxRefused("commondir_not_allowed")
+    return commondir, gitdir
+
+
 def _workservice(value: object) -> tuple[str, int]:
     """``(host, port)``, ``host:port``, or an ``http://host:port`` URL."""
     if isinstance(value, tuple) and len(value) == 2:
@@ -117,6 +151,37 @@ def _workservice(value: object) -> tuple[str, int]:
         if host != "" and port_text.isdecimal():
             return host, int(port_text)
     raise WorkerSandboxRefused("workservice_not_allowed")
+
+
+def _verifier_runtime_roots(worktree: Path) -> tuple[Path, ...]:
+    """Live installed import directories, excluding broad or worktree mounts."""
+    parent = Path(omp_work.__file__).resolve().parent.parent
+    if not parent.is_dir():
+        raise WorkerSandboxRefused("runtime_not_allowed")
+    worktree = worktree.resolve()
+    sandbox_work = Path("/work").resolve()
+    forbidden = {
+        Path("/"),
+        Path.home().resolve(),
+        Path.cwd().resolve(),
+        Path(site.getusersitepackages()).resolve(),
+    }
+    roots: list[Path] = []
+    for raw in (parent, *site.getsitepackages()):
+        root = Path(raw)
+        if not root.is_absolute():
+            raise WorkerSandboxRefused("runtime_not_allowed")
+        root = root.resolve()
+        if (
+            root in forbidden
+            or root.is_relative_to(sandbox_work)
+            or root.is_relative_to(worktree)
+            or worktree.is_relative_to(root)
+        ):
+            raise WorkerSandboxRefused("runtime_not_allowed")
+        if root.is_dir() and root not in roots:
+            roots.append(root)
+    return tuple(roots)
 
 
 def run_worker(
@@ -153,6 +218,16 @@ def run_worker(
         raise WorkerSandboxRefused("model_proxy_not_allowed")
     root = _worktrees_dir()
     linked = _linked_worktree(worktree, root)
+    audit_dir = None
+    runtime_roots: tuple[Path, ...] = ()
+    if identity == "verifier":
+        commondir, gitdir = _verifier_git_dirs(linked)
+        audit = linked / ".omp"
+        if audit.is_symlink() or (audit.exists() and not audit.is_dir()):
+            raise WorkerSandboxRefused("audit_dir_not_allowed")
+        if audit.is_dir():
+            audit_dir = audit
+            runtime_roots = _verifier_runtime_roots(linked)
     binds = tuple(_ro_bind(item) for item in ro_binds)
     host, port = _workservice(workservice_socket)
     if model_proxy is not None:
@@ -171,6 +246,9 @@ def run_worker(
         "OMP_TASK_TOKEN": token,
         "OMP_WORK_URL": f"http://127.0.0.1:{port}",
     }
+    if audit_dir is not None:
+        env["PYTHONPATH"] = os.pathsep.join(str(root) for root in runtime_roots)
+        env["PYTHONSAFEPATH"] = "1"
     if model_proxy is not None:
         env["OMP_MODEL_PROXY_URL"] = f"http://127.0.0.1:{model_proxy[1]}"
     if model_token is not None:
@@ -196,4 +274,14 @@ def run_worker(
         ro_binds=binds,
         worktree=linked,
         model_proxy=model_proxy,
+        **(
+            {
+                "worktree_readonly": True,
+                "ro_dirs": (commondir, gitdir, *runtime_roots),
+                "audit_dir": audit_dir,
+                "verifier_runtime": True,
+            }
+            if audit_dir is not None
+            else {}
+        ),
     )

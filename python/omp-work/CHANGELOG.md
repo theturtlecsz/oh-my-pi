@@ -4,6 +4,8 @@
 
 ### Added
 
+- Versioned NSI-1 intake schemas and authority matrix distinguish model proposals, rule-engine readiness, and owner ratification/publication while preserving bounded intake compatibility (OMP-521).
+
 - `omp-work projects trusted-paths` writes the trusted folder list to `~/.omp/agent/trusted-projects.json` (OMP-532, L-RT-03).
 - Missions run intake→signed merge.
 - Mission events, resumable event cursors, and signed push subscriptions, including OMP-406 alerts and daily digests (`omp-work events push`).
@@ -58,6 +60,7 @@
 - The orchestrator grant step stamps the execution plan from the request, or fails with `test_command_missing` when the request's test command is empty.
 - managed research trials bind a deliverable only with a trusted, qualified evaluator receipt.
 - The auditor yields a typed, validated AuditResult, and the host shows the service-rendered report (OMP-520).
+- A verifier worktree mounts read-only, linked Git metadata and the trusted `omp_work` import path are readable, and `/work/.omp` is the only writable transport.
 
 ### Changed
 
@@ -78,10 +81,12 @@
 
 ### Fixed
 
+- Verifier runtime roots now reject resolved `/work` and descendants, the worktree, roots inside or containing it, and existing forbidden roots while allowing trees under another directory named `work`; jailed `PYTHONPATH` entries follow the same `/work` and worktree rule. On proc mount `EPERM`/`EACCES`, the shim drops bounding and inheritable capability sets and sets `no_new_privs` in `unshare` before mounting an empty read-only tmpfs; `execvp` launches the payload directly instead of `setpriv`, so `setpriv` never reads `/proc`.
 - Concurrent domain-event appends for the same workspace and aggregate could fork the hash chain because the chain head was read before the workspace advisory lock was taken; the store now acquires the lock first and reads `previous_event_sha256` on a fresh snapshot, so every event links the committed head (OMP-567).
 - `omp_work_readonly` and `omp_work_backup` can read the native jobs tables (workers, operations, outbox) when the jobs migrations ran as `omp_work_migrator` (OMP-554).
 - OMP-552 records the native-jobs review already on main: another workspace's operation id is idempotency_conflict and its result is not loaded; omp_work_readonly and omp_work_backup can SELECT workers, operations, and outbox after ops migrate; append_event assigns seq under FOR UPDATE of the caller's native job; a shared operation id or a worker id held elsewhere does not surface UniqueViolation; a parent outside the workspace is invalid_request and claim_job still leases a later backlog job; 0004 jobs_native_workspace_check rejects a native row with null workspace_id or kind.
 - Concurrent ensure_project calls reuse one unarchived project (OMP-560).
+- ensure_project, after a serialization failure or a statement timeout, re-reads the committed project and waits once for a peer that has not committed yet, instead of spending the three-attempt budget on conflicts with that peer (OMP-585).
 - Signed mission-event push skips a subscription with no push_url, rejects a redirect instead of following it, and treats a non-ASCII signature header as unverified (OMP-415).
 - Parallel job completion now releases leases and reservations in the terminal transaction, preserves a winning terminal result, and can persist a bounded downstream closeout obligation for safe retry after daemon interruption. Cancellation waits for verified worker termination; checkpoint outcomes remain supported.
 - Expired execution grants fence fresh grant-linked commands, work-item relation edits/removals, and focus changes while preserving idempotent replay, delivery/auditor settlement, and explicit owner reconciliation before replacement admission.

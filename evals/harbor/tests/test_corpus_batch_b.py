@@ -8,7 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from omp_harbor_eval.corpus import extract_patch_paths, load_batch
+from omp_harbor_eval.corpus import extract_patch_paths
+from omp_harbor_eval.fixtures import load_fixture
 
 HARBOR_ROOT = Path(__file__).resolve().parents[1]
 CORPUS = HARBOR_ROOT / "corpus"
@@ -26,7 +27,24 @@ NEW_IDS = [f"b-{n:02d}" for n in range(1, 15)]
 
 
 def _entries() -> list[dict]:
-    return list(load_batch(BATCH))
+    entries = json.loads(BATCH.read_text(encoding="utf-8"))["tasks"]
+    for entry in entries:
+        fixture_path = Path(entry["fixture"])
+        fixture_root = HARBOR_ROOT.parents[1] if fixture_path.parts[:2] == ("evals", "harbor") else HARBOR_ROOT
+        fixture_dir = (fixture_root / fixture_path).resolve()
+        assert fixture_dir.is_relative_to(HARBOR_ROOT)
+        assert fixture_dir.name == entry["task_id"]
+        fixture = load_fixture(fixture_dir.parent, entry["task_id"])
+        seed = (fixture_dir / fixture.seed_patch).read_text(encoding="utf-8")
+        solution = (fixture_dir / fixture.solution_patch).read_text(encoding="utf-8")
+        assert seed.strip() and solution.strip()
+        assert seed != solution
+        assert any(rule["type"] == "independent_tests_pass" for rule in fixture.rules)
+        assert entry["rationale"].strip()
+        entry["source_paths"] = extract_patch_paths(solution)
+        assert entry["source_paths"]
+        entry["long_horizon"] = len(entry["source_paths"]) >= 4
+    return entries
 
 
 def _fixture_json(task_id: str) -> dict:
@@ -36,7 +54,9 @@ def _fixture_json(task_id: str) -> dict:
 def test_batch_has_sixteen_entries_with_the_exact_category_counts() -> None:
     entries = _entries()
     assert [e["task_id"] for e in entries] == [*NEW_IDS, "f1", "f2"]
-    assert dict(Counter(e["category"] for e in entries)) == EXPECTED_COUNTS
+    observed_counts = Counter(e["category"] for e in entries)
+    assert dict(observed_counts) == EXPECTED_COUNTS
+    assert sum(observed_counts.values()) == len(entries) == 16
 
 
 def test_f1_and_f2_enter_the_batch_from_the_shared_fixtures() -> None:
@@ -45,6 +65,8 @@ def test_f1_and_f2_enter_the_batch_from_the_shared_fixtures() -> None:
     assert by_id["f2"]["fixture"] == "fixtures/f2"
     assert by_id["f1"]["category"] == "localized_bug"
     assert by_id["f2"]["category"] == "resume"
+    assert by_id["f1"]["source_commit"] is None
+    assert by_id["f2"]["source_commit"] is None
 
 
 def test_at_least_three_new_tasks_are_long_horizon() -> None:
@@ -90,6 +112,9 @@ def test_ambiguous_intake_never_shows_the_withheld_detail(task_id: str) -> None:
 @pytest.mark.parametrize("task_id", NEW_IDS)
 def test_spec_source_paths_match_the_solution_patch(task_id: str) -> None:
     spec = json.loads((CORPUS / "specs" / f"{task_id}.json").read_text(encoding="utf-8"))
+    entry = next(e for e in _entries() if e["task_id"] == task_id)
+    assert entry["source_commit"] == spec["source_commit"]
+    assert entry["category"] == spec["category"]
     document = _fixture_json(task_id)
     solution = (CORPUS / "tasks" / task_id / document["solution_patch"]).read_text(encoding="utf-8")
     assert sorted(spec["source_paths"]) == extract_patch_paths(solution)

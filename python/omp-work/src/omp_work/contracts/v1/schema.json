@@ -2718,7 +2718,8 @@
             "OMP-430",
             "OMP-520",
             "OMP-514",
-            "OMP-318"
+            "OMP-318",
+            "OMP-522"
           ],
           "title": "Issue",
           "type": "string"
@@ -7682,6 +7683,32 @@
           "title": "ActivateExecutionItemPayload",
           "type": "object"
         },
+        "ActorRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "owner",
+                "service",
+                "model",
+                "tool",
+                "rule_engine"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "title": "ActorRef",
+          "type": "object"
+        },
         "AdmitResearchCampaignCommand": {
           "additionalProperties": false,
           "properties": {
@@ -8034,6 +8061,31 @@
             "receipt"
           ],
           "title": "AppendEvidencePayload",
+          "type": "object"
+        },
+        "Applicability": {
+          "additionalProperties": false,
+          "properties": {
+            "entity_types": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Entity Types",
+              "type": "array"
+            },
+            "predicate_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Predicate Ids",
+              "type": "array"
+            }
+          },
+          "required": [
+            "entity_types",
+            "predicate_ids"
+          ],
+          "title": "Applicability",
           "type": "object"
         },
         "ApproveMissionCommand": {
@@ -10275,6 +10327,63 @@
           "title": "EngageStopCommand",
           "type": "object"
         },
+        "EntityRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "type": {
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "type"
+          ],
+          "title": "EntityRef",
+          "type": "object"
+        },
+        "EvidenceArtifact": {
+          "additionalProperties": false,
+          "properties": {
+            "actor": {
+              "$ref": "#/$defs/ActorRef"
+            },
+            "content_hash": {
+              "title": "Content Hash",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "media_type": {
+              "title": "Media Type",
+              "type": "string"
+            },
+            "revision": {
+              "title": "Revision",
+              "type": "string"
+            },
+            "uri": {
+              "title": "Uri",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "uri",
+            "content_hash",
+            "revision",
+            "actor",
+            "media_type"
+          ],
+          "title": "EvidenceArtifact",
+          "type": "object"
+        },
         "EvidenceKind": {
           "enum": [
             "plan",
@@ -10441,6 +10550,42 @@
             "issued_at"
           ],
           "title": "EvidenceReceipt",
+          "type": "object"
+        },
+        "EvidenceSpan": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_id": {
+              "title": "Artifact Id",
+              "type": "string"
+            },
+            "end_byte": {
+              "title": "End Byte",
+              "type": "integer"
+            },
+            "quote": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Quote"
+            },
+            "start_byte": {
+              "title": "Start Byte",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "artifact_id",
+            "start_byte",
+            "end_byte"
+          ],
+          "title": "EvidenceSpan",
           "type": "object"
         },
         "ExecutionGrantItemClaim": {
@@ -10814,6 +10959,185 @@
           "title": "IntakeAcceptanceCriterion",
           "type": "object"
         },
+        "IntakeClaim": {
+          "additionalProperties": false,
+          "properties": {
+            "admitted_by": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/OwnerRef"
+                },
+                {
+                  "$ref": "#/$defs/RuleEngineRef"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Admitted By"
+            },
+            "asserted_by": {
+              "$ref": "#/$defs/ActorRef"
+            },
+            "category": {
+              "enum": [
+                "functional_scope_and_behavior",
+                "domain_and_data_model",
+                "interaction_and_ux_flow",
+                "non_functional_qualities",
+                "integrations_and_external_dependencies",
+                "edge_cases_and_failure_handling",
+                "constraints_and_tradeoffs",
+                "terminology",
+                "completion_signals",
+                "placeholders_and_ambiguities",
+                "scope_boundaries"
+              ],
+              "title": "Category",
+              "type": "string"
+            },
+            "evidence": {
+              "items": {
+                "$ref": "#/$defs/EvidenceSpan"
+              },
+              "title": "Evidence",
+              "type": "array"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "modality": {
+              "enum": [
+                "observed",
+                "desired",
+                "required",
+                "prohibited",
+                "possible",
+                "unknown"
+              ],
+              "title": "Modality",
+              "type": "string"
+            },
+            "origin": {
+              "enum": [
+                "owner_statement",
+                "policy_rule",
+                "repository_observation",
+                "tool_receipt",
+                "model_proposal",
+                "rule_derivation"
+              ],
+              "title": "Origin",
+              "type": "string"
+            },
+            "polarity": {
+              "enum": [
+                "positive",
+                "negative"
+              ],
+              "title": "Polarity",
+              "type": "string"
+            },
+            "predicate_id": {
+              "title": "Predicate Id",
+              "type": "string"
+            },
+            "premise_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Premise Ids",
+              "type": "array"
+            },
+            "state": {
+              "enum": [
+                "proposed",
+                "admitted",
+                "rejected",
+                "superseded"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "subject": {
+              "$ref": "#/$defs/EntityRef"
+            },
+            "truth": {
+              "enum": [
+                "true",
+                "false",
+                "unknown"
+              ],
+              "title": "Truth",
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TypedStringValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedIntegerValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNumberValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedBooleanValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNullValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedEntityValue"
+                }
+              ],
+              "title": "Value"
+            }
+          },
+          "required": [
+            "id",
+            "category",
+            "subject",
+            "predicate_id",
+            "value",
+            "origin",
+            "state",
+            "modality",
+            "polarity",
+            "truth",
+            "asserted_by",
+            "evidence",
+            "premise_ids"
+          ],
+          "title": "IntakeClaim",
+          "type": "object"
+        },
+        "IntakeClaimEvidenceLink": {
+          "additionalProperties": false,
+          "properties": {
+            "relation": {
+              "enum": [
+                "supports",
+                "contradicts",
+                "neither"
+              ],
+              "title": "Relation",
+              "type": "string"
+            },
+            "span": {
+              "$ref": "#/$defs/EvidenceSpan"
+            }
+          },
+          "required": [
+            "span",
+            "relation"
+          ],
+          "title": "IntakeClaimEvidenceLink",
+          "type": "object"
+        },
         "IntakeConstraint": {
           "additionalProperties": false,
           "properties": {
@@ -10892,6 +11216,32 @@
             "statement"
           ],
           "title": "IntakeGoal",
+          "type": "object"
+        },
+        "IntakeOntology": {
+          "additionalProperties": false,
+          "description": "Runtime aggregate of versioned taxonomy definitions.",
+          "properties": {
+            "dimensions": {
+              "items": {
+                "$ref": "#/$defs/RequirementDimensionDefinition"
+              },
+              "title": "Dimensions",
+              "type": "array"
+            },
+            "predicates": {
+              "items": {
+                "$ref": "#/$defs/PredicateDefinition"
+              },
+              "title": "Predicates",
+              "type": "array"
+            }
+          },
+          "required": [
+            "predicates",
+            "dimensions"
+          ],
+          "title": "IntakeOntology",
           "type": "object"
         },
         "IntakeSource": {
@@ -11451,6 +11801,73 @@
           "title": "MissionIntakeScope",
           "type": "object"
         },
+        "OwnerDecision": {
+          "additionalProperties": false,
+          "properties": {
+            "actor": {
+              "$ref": "#/$defs/OwnerRef"
+            },
+            "answer": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TypedStringValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedIntegerValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNumberValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedBooleanValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNullValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedEntityValue"
+                }
+              ],
+              "title": "Answer"
+            },
+            "created_at": {
+              "title": "Created At",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "question_id": {
+              "title": "Question Id",
+              "type": "string"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            },
+            "revision": {
+              "title": "Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "run_id",
+            "revision",
+            "actor",
+            "question_id",
+            "answer",
+            "reason",
+            "created_at"
+          ],
+          "title": "OwnerDecision",
+          "type": "object"
+        },
         "OwnerInstruction": {
           "additionalProperties": false,
           "description": "The owner's words and the message they arrived on.",
@@ -11470,6 +11887,95 @@
             "provenance"
           ],
           "title": "OwnerInstruction",
+          "type": "object"
+        },
+        "OwnerRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "owner",
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "title": "OwnerRef",
+          "type": "object"
+        },
+        "PredicateDefinition": {
+          "additionalProperties": false,
+          "properties": {
+            "authority": {
+              "items": {
+                "enum": [
+                  "owner",
+                  "service",
+                  "model",
+                  "tool",
+                  "rule_engine"
+                ],
+                "type": "string"
+              },
+              "title": "Authority",
+              "type": "array"
+            },
+            "cardinality": {
+              "enum": [
+                "one",
+                "many"
+              ],
+              "title": "Cardinality",
+              "type": "string"
+            },
+            "exclusivity": {
+              "title": "Exclusivity",
+              "type": "boolean"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "object_types": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Object Types",
+              "type": "array"
+            },
+            "subject_types": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Subject Types",
+              "type": "array"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            },
+            "transitivity": {
+              "title": "Transitivity",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "id",
+            "title",
+            "subject_types",
+            "object_types",
+            "cardinality",
+            "exclusivity",
+            "transitivity",
+            "authority"
+          ],
+          "title": "PredicateDefinition",
           "type": "object"
         },
         "PromoteImportBatchCommand": {
@@ -12238,6 +12744,139 @@
           "title": "RecordFindingCommand",
           "type": "object"
         },
+        "RecordIntakeClaimCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/RecordIntakeClaimPayload"
+            },
+            "type": {
+              "const": "record_intake_claim",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "RecordIntakeClaimCommand",
+          "type": "object"
+        },
+        "RecordIntakeClaimPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "claim": {
+              "$ref": "#/$defs/IntakeClaim"
+            },
+            "evidence_links": {
+              "items": {
+                "$ref": "#/$defs/IntakeClaimEvidenceLink"
+              },
+              "title": "Evidence Links",
+              "type": "array"
+            },
+            "expected_revision": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "expected_revision",
+            "claim",
+            "evidence_links"
+          ],
+          "title": "RecordIntakeClaimPayload",
+          "type": "object"
+        },
+        "RecordIntakeDecisionCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/RecordIntakeDecisionPayload"
+            },
+            "type": {
+              "const": "record_intake_decision",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "RecordIntakeDecisionCommand",
+          "type": "object"
+        },
+        "RecordIntakeDecisionPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "claim_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Claim Ids",
+              "type": "array"
+            },
+            "decision": {
+              "$ref": "#/$defs/OwnerDecision"
+            },
+            "expected_revision": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "instruction": {
+              "$ref": "#/$defs/OwnerInstruction"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            },
+            "superseded_decision_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Superseded Decision Id"
+            },
+            "verified_relay_operation_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Verified Relay Operation Id"
+            }
+          },
+          "required": [
+            "run_id",
+            "expected_revision",
+            "decision",
+            "claim_ids",
+            "instruction"
+          ],
+          "title": "RecordIntakeDecisionPayload",
+          "type": "object"
+        },
         "RecordProjectHealthCommand": {
           "additionalProperties": false,
           "properties": {
@@ -12432,6 +13071,54 @@
             "observed_at"
           ],
           "title": "RecordResearchObservationPayload",
+          "type": "object"
+        },
+        "RegisterIntakeEvidenceCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/RegisterIntakeEvidencePayload"
+            },
+            "type": {
+              "const": "register_intake_evidence",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "RegisterIntakeEvidenceCommand",
+          "type": "object"
+        },
+        "RegisterIntakeEvidencePayload": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact": {
+              "$ref": "#/$defs/EvidenceArtifact"
+            },
+            "expected_revision": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/IntakeSource"
+            }
+          },
+          "required": [
+            "run_id",
+            "expected_revision",
+            "artifact",
+            "source"
+          ],
+          "title": "RegisterIntakeEvidencePayload",
           "type": "object"
         },
         "RegisterResearchArtifactCommand": {
@@ -12873,6 +13560,74 @@
             "relation"
           ],
           "title": "RemoveRelationPayload",
+          "type": "object"
+        },
+        "RequirementDimensionDefinition": {
+          "additionalProperties": false,
+          "properties": {
+            "applicability": {
+              "$ref": "#/$defs/Applicability"
+            },
+            "category": {
+              "enum": [
+                "functional_scope_and_behavior",
+                "domain_and_data_model",
+                "interaction_and_ux_flow",
+                "non_functional_qualities",
+                "integrations_and_external_dependencies",
+                "edge_cases_and_failure_handling",
+                "constraints_and_tradeoffs",
+                "terminology",
+                "completion_signals",
+                "placeholders_and_ambiguities",
+                "scope_boundaries"
+              ],
+              "title": "Category",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "materiality": {
+              "enum": [
+                "critical",
+                "material",
+                "minor"
+              ],
+              "title": "Materiality",
+              "type": "string"
+            },
+            "required_premises": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Required Premises",
+              "type": "array"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            },
+            "waiver_policy": {
+              "enum": [
+                "never",
+                "owner_with_reason"
+              ],
+              "title": "Waiver Policy",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "title",
+            "category",
+            "applicability",
+            "required_premises",
+            "materiality",
+            "waiver_policy"
+          ],
+          "title": "RequirementDimensionDefinition",
           "type": "object"
         },
         "ResearchAction": {
@@ -13703,6 +14458,26 @@
           "title": "RiderProof",
           "type": "object"
         },
+        "RuleEngineRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "rule_engine",
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "title": "RuleEngineRef",
+          "type": "object"
+        },
         "SealAuditManifestCommand": {
           "additionalProperties": false,
           "properties": {
@@ -14404,6 +15179,64 @@
           "title": "StampExecutionPlanPayload",
           "type": "object"
         },
+        "StartIntakeCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/StartIntakePayload"
+            },
+            "type": {
+              "const": "start_intake",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "StartIntakeCommand",
+          "type": "object"
+        },
+        "StartIntakePayload": {
+          "additionalProperties": false,
+          "properties": {
+            "entities": {
+              "items": {
+                "$ref": "#/$defs/EntityRef"
+              },
+              "title": "Entities",
+              "type": "array"
+            },
+            "expected_revision": {
+              "const": 0,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "mission_id": {
+              "format": "uuid",
+              "title": "Mission Id",
+              "type": "string"
+            },
+            "ontology": {
+              "$ref": "#/$defs/IntakeOntology"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "expected_revision",
+            "mission_id",
+            "ontology",
+            "entities"
+          ],
+          "title": "StartIntakePayload",
+          "type": "object"
+        },
         "StopReasonPayload": {
           "additionalProperties": false,
           "properties": {
@@ -14456,6 +15289,132 @@
             "draft"
           ],
           "title": "SubmitMissionPayload",
+          "type": "object"
+        },
+        "TypedBooleanValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "boolean",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedBooleanValue",
+          "type": "object"
+        },
+        "TypedEntityValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "entity",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/EntityRef"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedEntityValue",
+          "type": "object"
+        },
+        "TypedIntegerValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "integer",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedIntegerValue",
+          "type": "object"
+        },
+        "TypedNullValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "null",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "null"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedNullValue",
+          "type": "object"
+        },
+        "TypedNumberValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "number",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "integer"
+                }
+              ],
+              "title": "Value"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedNumberValue",
+          "type": "object"
+        },
+        "TypedStringValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "string",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedStringValue",
           "type": "object"
         },
         "UnknownIntakeValue": {
@@ -14593,9 +15552,12 @@
               "record_external_delivery": "#/$defs/RecordExternalDeliveryCommand",
               "record_fable_advice": "#/$defs/RecordFableAdviceCommand",
               "record_finding": "#/$defs/RecordFindingCommand",
+              "record_intake_claim": "#/$defs/RecordIntakeClaimCommand",
+              "record_intake_decision": "#/$defs/RecordIntakeDecisionCommand",
               "record_project_health": "#/$defs/RecordProjectHealthCommand",
               "record_research_cache": "#/$defs/RecordResearchCacheCommand",
               "record_research_observation": "#/$defs/RecordResearchObservationCommand",
+              "register_intake_evidence": "#/$defs/RegisterIntakeEvidenceCommand",
               "register_research_artifact": "#/$defs/RegisterResearchArtifactCommand",
               "register_research_component": "#/$defs/RegisterResearchComponentCommand",
               "register_research_dataset": "#/$defs/RegisterResearchDatasetCommand",
@@ -14617,6 +15579,7 @@
               "skip_active_item": "#/$defs/SkipActiveItemCommand",
               "stage_import_batch": "#/$defs/StageImportBatchCommand",
               "stamp_execution_plan": "#/$defs/StampExecutionPlanCommand",
+              "start_intake": "#/$defs/StartIntakeCommand",
               "submit_mission": "#/$defs/SubmitMissionCommand"
             },
             "propertyName": "type"
@@ -14729,6 +15692,18 @@
             },
             {
               "$ref": "#/$defs/AnswerIntakeDecisionCommand"
+            },
+            {
+              "$ref": "#/$defs/StartIntakeCommand"
+            },
+            {
+              "$ref": "#/$defs/RegisterIntakeEvidenceCommand"
+            },
+            {
+              "$ref": "#/$defs/RecordIntakeClaimCommand"
+            },
+            {
+              "$ref": "#/$defs/RecordIntakeDecisionCommand"
             },
             {
               "$ref": "#/$defs/RegisterResearchArtifactCommand"
@@ -22665,6 +23640,67 @@
       "title": "IntakeClaim",
       "type": "object"
     },
+    "IntakeClaimEvidenceLink": {
+      "$defs": {
+        "EvidenceSpan": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_id": {
+              "title": "Artifact Id",
+              "type": "string"
+            },
+            "end_byte": {
+              "title": "End Byte",
+              "type": "integer"
+            },
+            "quote": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Quote"
+            },
+            "start_byte": {
+              "title": "Start Byte",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "artifact_id",
+            "start_byte",
+            "end_byte"
+          ],
+          "title": "EvidenceSpan",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "relation": {
+          "enum": [
+            "supports",
+            "contradicts",
+            "neither"
+          ],
+          "title": "Relation",
+          "type": "string"
+        },
+        "span": {
+          "$ref": "#/$defs/EvidenceSpan"
+        }
+      },
+      "required": [
+        "span",
+        "relation"
+      ],
+      "title": "IntakeClaimEvidenceLink",
+      "type": "object"
+    },
     "IntakeConstraint": {
       "$defs": {
         "KnownIntakeValue": {
@@ -22788,6 +23824,27 @@
         "statement"
       ],
       "title": "IntakeGoal",
+      "type": "object"
+    },
+    "IntakeRevisionPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_revision": {
+          "minimum": 1,
+          "title": "Expected Revision",
+          "type": "integer"
+        },
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "expected_revision"
+      ],
+      "title": "IntakeRevisionPayload",
       "type": "object"
     },
     "IntakeSource": {
@@ -26246,6 +27303,1660 @@
       "title": "RecordFindingCommand",
       "type": "object"
     },
+    "RecordIntakeClaimCommand": {
+      "$defs": {
+        "ActorRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "owner",
+                "service",
+                "model",
+                "tool",
+                "rule_engine"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "title": "ActorRef",
+          "type": "object"
+        },
+        "EntityRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "type": {
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "type"
+          ],
+          "title": "EntityRef",
+          "type": "object"
+        },
+        "EvidenceSpan": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_id": {
+              "title": "Artifact Id",
+              "type": "string"
+            },
+            "end_byte": {
+              "title": "End Byte",
+              "type": "integer"
+            },
+            "quote": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Quote"
+            },
+            "start_byte": {
+              "title": "Start Byte",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "artifact_id",
+            "start_byte",
+            "end_byte"
+          ],
+          "title": "EvidenceSpan",
+          "type": "object"
+        },
+        "IntakeClaim": {
+          "additionalProperties": false,
+          "properties": {
+            "admitted_by": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/OwnerRef"
+                },
+                {
+                  "$ref": "#/$defs/RuleEngineRef"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Admitted By"
+            },
+            "asserted_by": {
+              "$ref": "#/$defs/ActorRef"
+            },
+            "category": {
+              "enum": [
+                "functional_scope_and_behavior",
+                "domain_and_data_model",
+                "interaction_and_ux_flow",
+                "non_functional_qualities",
+                "integrations_and_external_dependencies",
+                "edge_cases_and_failure_handling",
+                "constraints_and_tradeoffs",
+                "terminology",
+                "completion_signals",
+                "placeholders_and_ambiguities",
+                "scope_boundaries"
+              ],
+              "title": "Category",
+              "type": "string"
+            },
+            "evidence": {
+              "items": {
+                "$ref": "#/$defs/EvidenceSpan"
+              },
+              "title": "Evidence",
+              "type": "array"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "modality": {
+              "enum": [
+                "observed",
+                "desired",
+                "required",
+                "prohibited",
+                "possible",
+                "unknown"
+              ],
+              "title": "Modality",
+              "type": "string"
+            },
+            "origin": {
+              "enum": [
+                "owner_statement",
+                "policy_rule",
+                "repository_observation",
+                "tool_receipt",
+                "model_proposal",
+                "rule_derivation"
+              ],
+              "title": "Origin",
+              "type": "string"
+            },
+            "polarity": {
+              "enum": [
+                "positive",
+                "negative"
+              ],
+              "title": "Polarity",
+              "type": "string"
+            },
+            "predicate_id": {
+              "title": "Predicate Id",
+              "type": "string"
+            },
+            "premise_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Premise Ids",
+              "type": "array"
+            },
+            "state": {
+              "enum": [
+                "proposed",
+                "admitted",
+                "rejected",
+                "superseded"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "subject": {
+              "$ref": "#/$defs/EntityRef"
+            },
+            "truth": {
+              "enum": [
+                "true",
+                "false",
+                "unknown"
+              ],
+              "title": "Truth",
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TypedStringValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedIntegerValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNumberValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedBooleanValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNullValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedEntityValue"
+                }
+              ],
+              "title": "Value"
+            }
+          },
+          "required": [
+            "id",
+            "category",
+            "subject",
+            "predicate_id",
+            "value",
+            "origin",
+            "state",
+            "modality",
+            "polarity",
+            "truth",
+            "asserted_by",
+            "evidence",
+            "premise_ids"
+          ],
+          "title": "IntakeClaim",
+          "type": "object"
+        },
+        "IntakeClaimEvidenceLink": {
+          "additionalProperties": false,
+          "properties": {
+            "relation": {
+              "enum": [
+                "supports",
+                "contradicts",
+                "neither"
+              ],
+              "title": "Relation",
+              "type": "string"
+            },
+            "span": {
+              "$ref": "#/$defs/EvidenceSpan"
+            }
+          },
+          "required": [
+            "span",
+            "relation"
+          ],
+          "title": "IntakeClaimEvidenceLink",
+          "type": "object"
+        },
+        "OwnerRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "owner",
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "title": "OwnerRef",
+          "type": "object"
+        },
+        "RecordIntakeClaimPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "claim": {
+              "$ref": "#/$defs/IntakeClaim"
+            },
+            "evidence_links": {
+              "items": {
+                "$ref": "#/$defs/IntakeClaimEvidenceLink"
+              },
+              "title": "Evidence Links",
+              "type": "array"
+            },
+            "expected_revision": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "expected_revision",
+            "claim",
+            "evidence_links"
+          ],
+          "title": "RecordIntakeClaimPayload",
+          "type": "object"
+        },
+        "RuleEngineRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "rule_engine",
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "title": "RuleEngineRef",
+          "type": "object"
+        },
+        "TypedBooleanValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "boolean",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedBooleanValue",
+          "type": "object"
+        },
+        "TypedEntityValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "entity",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/EntityRef"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedEntityValue",
+          "type": "object"
+        },
+        "TypedIntegerValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "integer",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedIntegerValue",
+          "type": "object"
+        },
+        "TypedNullValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "null",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "null"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedNullValue",
+          "type": "object"
+        },
+        "TypedNumberValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "number",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "integer"
+                }
+              ],
+              "title": "Value"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedNumberValue",
+          "type": "object"
+        },
+        "TypedStringValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "string",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedStringValue",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/RecordIntakeClaimPayload"
+        },
+        "type": {
+          "const": "record_intake_claim",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "RecordIntakeClaimCommand",
+      "type": "object"
+    },
+    "RecordIntakeClaimPayload": {
+      "$defs": {
+        "ActorRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "owner",
+                "service",
+                "model",
+                "tool",
+                "rule_engine"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "title": "ActorRef",
+          "type": "object"
+        },
+        "EntityRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "type": {
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "type"
+          ],
+          "title": "EntityRef",
+          "type": "object"
+        },
+        "EvidenceSpan": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_id": {
+              "title": "Artifact Id",
+              "type": "string"
+            },
+            "end_byte": {
+              "title": "End Byte",
+              "type": "integer"
+            },
+            "quote": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Quote"
+            },
+            "start_byte": {
+              "title": "Start Byte",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "artifact_id",
+            "start_byte",
+            "end_byte"
+          ],
+          "title": "EvidenceSpan",
+          "type": "object"
+        },
+        "IntakeClaim": {
+          "additionalProperties": false,
+          "properties": {
+            "admitted_by": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/OwnerRef"
+                },
+                {
+                  "$ref": "#/$defs/RuleEngineRef"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Admitted By"
+            },
+            "asserted_by": {
+              "$ref": "#/$defs/ActorRef"
+            },
+            "category": {
+              "enum": [
+                "functional_scope_and_behavior",
+                "domain_and_data_model",
+                "interaction_and_ux_flow",
+                "non_functional_qualities",
+                "integrations_and_external_dependencies",
+                "edge_cases_and_failure_handling",
+                "constraints_and_tradeoffs",
+                "terminology",
+                "completion_signals",
+                "placeholders_and_ambiguities",
+                "scope_boundaries"
+              ],
+              "title": "Category",
+              "type": "string"
+            },
+            "evidence": {
+              "items": {
+                "$ref": "#/$defs/EvidenceSpan"
+              },
+              "title": "Evidence",
+              "type": "array"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "modality": {
+              "enum": [
+                "observed",
+                "desired",
+                "required",
+                "prohibited",
+                "possible",
+                "unknown"
+              ],
+              "title": "Modality",
+              "type": "string"
+            },
+            "origin": {
+              "enum": [
+                "owner_statement",
+                "policy_rule",
+                "repository_observation",
+                "tool_receipt",
+                "model_proposal",
+                "rule_derivation"
+              ],
+              "title": "Origin",
+              "type": "string"
+            },
+            "polarity": {
+              "enum": [
+                "positive",
+                "negative"
+              ],
+              "title": "Polarity",
+              "type": "string"
+            },
+            "predicate_id": {
+              "title": "Predicate Id",
+              "type": "string"
+            },
+            "premise_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Premise Ids",
+              "type": "array"
+            },
+            "state": {
+              "enum": [
+                "proposed",
+                "admitted",
+                "rejected",
+                "superseded"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "subject": {
+              "$ref": "#/$defs/EntityRef"
+            },
+            "truth": {
+              "enum": [
+                "true",
+                "false",
+                "unknown"
+              ],
+              "title": "Truth",
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TypedStringValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedIntegerValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNumberValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedBooleanValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNullValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedEntityValue"
+                }
+              ],
+              "title": "Value"
+            }
+          },
+          "required": [
+            "id",
+            "category",
+            "subject",
+            "predicate_id",
+            "value",
+            "origin",
+            "state",
+            "modality",
+            "polarity",
+            "truth",
+            "asserted_by",
+            "evidence",
+            "premise_ids"
+          ],
+          "title": "IntakeClaim",
+          "type": "object"
+        },
+        "IntakeClaimEvidenceLink": {
+          "additionalProperties": false,
+          "properties": {
+            "relation": {
+              "enum": [
+                "supports",
+                "contradicts",
+                "neither"
+              ],
+              "title": "Relation",
+              "type": "string"
+            },
+            "span": {
+              "$ref": "#/$defs/EvidenceSpan"
+            }
+          },
+          "required": [
+            "span",
+            "relation"
+          ],
+          "title": "IntakeClaimEvidenceLink",
+          "type": "object"
+        },
+        "OwnerRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "owner",
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "title": "OwnerRef",
+          "type": "object"
+        },
+        "RuleEngineRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "rule_engine",
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "title": "RuleEngineRef",
+          "type": "object"
+        },
+        "TypedBooleanValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "boolean",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedBooleanValue",
+          "type": "object"
+        },
+        "TypedEntityValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "entity",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/EntityRef"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedEntityValue",
+          "type": "object"
+        },
+        "TypedIntegerValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "integer",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedIntegerValue",
+          "type": "object"
+        },
+        "TypedNullValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "null",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "null"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedNullValue",
+          "type": "object"
+        },
+        "TypedNumberValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "number",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "integer"
+                }
+              ],
+              "title": "Value"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedNumberValue",
+          "type": "object"
+        },
+        "TypedStringValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "string",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedStringValue",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "claim": {
+          "$ref": "#/$defs/IntakeClaim"
+        },
+        "evidence_links": {
+          "items": {
+            "$ref": "#/$defs/IntakeClaimEvidenceLink"
+          },
+          "title": "Evidence Links",
+          "type": "array"
+        },
+        "expected_revision": {
+          "minimum": 1,
+          "title": "Expected Revision",
+          "type": "integer"
+        },
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "expected_revision",
+        "claim",
+        "evidence_links"
+      ],
+      "title": "RecordIntakeClaimPayload",
+      "type": "object"
+    },
+    "RecordIntakeDecisionCommand": {
+      "$defs": {
+        "EntityRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "type": {
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "type"
+          ],
+          "title": "EntityRef",
+          "type": "object"
+        },
+        "InstructionProvenance": {
+          "additionalProperties": false,
+          "description": "Where an owner instruction was received.",
+          "properties": {
+            "channel": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Channel",
+              "type": "string"
+            },
+            "message_ref": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Message Ref",
+              "type": "string"
+            },
+            "received_at": {
+              "format": "date-time",
+              "title": "Received At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "channel",
+            "message_ref",
+            "received_at"
+          ],
+          "title": "InstructionProvenance",
+          "type": "object"
+        },
+        "OwnerDecision": {
+          "additionalProperties": false,
+          "properties": {
+            "actor": {
+              "$ref": "#/$defs/OwnerRef"
+            },
+            "answer": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TypedStringValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedIntegerValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNumberValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedBooleanValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNullValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedEntityValue"
+                }
+              ],
+              "title": "Answer"
+            },
+            "created_at": {
+              "title": "Created At",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "question_id": {
+              "title": "Question Id",
+              "type": "string"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            },
+            "revision": {
+              "title": "Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "run_id",
+            "revision",
+            "actor",
+            "question_id",
+            "answer",
+            "reason",
+            "created_at"
+          ],
+          "title": "OwnerDecision",
+          "type": "object"
+        },
+        "OwnerInstruction": {
+          "additionalProperties": false,
+          "description": "The owner's words and the message they arrived on.",
+          "properties": {
+            "provenance": {
+              "$ref": "#/$defs/InstructionProvenance"
+            },
+            "text": {
+              "maxLength": 8000,
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "provenance"
+          ],
+          "title": "OwnerInstruction",
+          "type": "object"
+        },
+        "OwnerRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "owner",
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "title": "OwnerRef",
+          "type": "object"
+        },
+        "RecordIntakeDecisionPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "claim_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Claim Ids",
+              "type": "array"
+            },
+            "decision": {
+              "$ref": "#/$defs/OwnerDecision"
+            },
+            "expected_revision": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "instruction": {
+              "$ref": "#/$defs/OwnerInstruction"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            },
+            "superseded_decision_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Superseded Decision Id"
+            },
+            "verified_relay_operation_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Verified Relay Operation Id"
+            }
+          },
+          "required": [
+            "run_id",
+            "expected_revision",
+            "decision",
+            "claim_ids",
+            "instruction"
+          ],
+          "title": "RecordIntakeDecisionPayload",
+          "type": "object"
+        },
+        "TypedBooleanValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "boolean",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedBooleanValue",
+          "type": "object"
+        },
+        "TypedEntityValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "entity",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/EntityRef"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedEntityValue",
+          "type": "object"
+        },
+        "TypedIntegerValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "integer",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedIntegerValue",
+          "type": "object"
+        },
+        "TypedNullValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "null",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "null"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedNullValue",
+          "type": "object"
+        },
+        "TypedNumberValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "number",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "integer"
+                }
+              ],
+              "title": "Value"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedNumberValue",
+          "type": "object"
+        },
+        "TypedStringValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "string",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedStringValue",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/RecordIntakeDecisionPayload"
+        },
+        "type": {
+          "const": "record_intake_decision",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "RecordIntakeDecisionCommand",
+      "type": "object"
+    },
+    "RecordIntakeDecisionPayload": {
+      "$defs": {
+        "EntityRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "type": {
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "type"
+          ],
+          "title": "EntityRef",
+          "type": "object"
+        },
+        "InstructionProvenance": {
+          "additionalProperties": false,
+          "description": "Where an owner instruction was received.",
+          "properties": {
+            "channel": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Channel",
+              "type": "string"
+            },
+            "message_ref": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Message Ref",
+              "type": "string"
+            },
+            "received_at": {
+              "format": "date-time",
+              "title": "Received At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "channel",
+            "message_ref",
+            "received_at"
+          ],
+          "title": "InstructionProvenance",
+          "type": "object"
+        },
+        "OwnerDecision": {
+          "additionalProperties": false,
+          "properties": {
+            "actor": {
+              "$ref": "#/$defs/OwnerRef"
+            },
+            "answer": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TypedStringValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedIntegerValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNumberValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedBooleanValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNullValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedEntityValue"
+                }
+              ],
+              "title": "Answer"
+            },
+            "created_at": {
+              "title": "Created At",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "question_id": {
+              "title": "Question Id",
+              "type": "string"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            },
+            "revision": {
+              "title": "Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "run_id",
+            "revision",
+            "actor",
+            "question_id",
+            "answer",
+            "reason",
+            "created_at"
+          ],
+          "title": "OwnerDecision",
+          "type": "object"
+        },
+        "OwnerInstruction": {
+          "additionalProperties": false,
+          "description": "The owner's words and the message they arrived on.",
+          "properties": {
+            "provenance": {
+              "$ref": "#/$defs/InstructionProvenance"
+            },
+            "text": {
+              "maxLength": 8000,
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "provenance"
+          ],
+          "title": "OwnerInstruction",
+          "type": "object"
+        },
+        "OwnerRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "owner",
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "title": "OwnerRef",
+          "type": "object"
+        },
+        "TypedBooleanValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "boolean",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedBooleanValue",
+          "type": "object"
+        },
+        "TypedEntityValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "entity",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/EntityRef"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedEntityValue",
+          "type": "object"
+        },
+        "TypedIntegerValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "integer",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedIntegerValue",
+          "type": "object"
+        },
+        "TypedNullValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "null",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "null"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedNullValue",
+          "type": "object"
+        },
+        "TypedNumberValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "number",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "integer"
+                }
+              ],
+              "title": "Value"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedNumberValue",
+          "type": "object"
+        },
+        "TypedStringValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "string",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedStringValue",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "claim_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Claim Ids",
+          "type": "array"
+        },
+        "decision": {
+          "$ref": "#/$defs/OwnerDecision"
+        },
+        "expected_revision": {
+          "minimum": 1,
+          "title": "Expected Revision",
+          "type": "integer"
+        },
+        "instruction": {
+          "$ref": "#/$defs/OwnerInstruction"
+        },
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "superseded_decision_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Superseded Decision Id"
+        },
+        "verified_relay_operation_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verified Relay Operation Id"
+        }
+      },
+      "required": [
+        "run_id",
+        "expected_revision",
+        "decision",
+        "claim_ids",
+        "instruction"
+      ],
+      "title": "RecordIntakeDecisionPayload",
+      "type": "object"
+    },
     "RecordProjectHealthCommand": {
       "$defs": {
         "RecordProjectHealthPayload": {
@@ -26585,6 +29296,333 @@
         "observed_at"
       ],
       "title": "RecordResearchObservationPayload",
+      "type": "object"
+    },
+    "RegisterIntakeEvidenceCommand": {
+      "$defs": {
+        "ActorRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "owner",
+                "service",
+                "model",
+                "tool",
+                "rule_engine"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "title": "ActorRef",
+          "type": "object"
+        },
+        "EvidenceArtifact": {
+          "additionalProperties": false,
+          "properties": {
+            "actor": {
+              "$ref": "#/$defs/ActorRef"
+            },
+            "content_hash": {
+              "title": "Content Hash",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "media_type": {
+              "title": "Media Type",
+              "type": "string"
+            },
+            "revision": {
+              "title": "Revision",
+              "type": "string"
+            },
+            "uri": {
+              "title": "Uri",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "uri",
+            "content_hash",
+            "revision",
+            "actor",
+            "media_type"
+          ],
+          "title": "EvidenceArtifact",
+          "type": "object"
+        },
+        "IntakeSource": {
+          "additionalProperties": false,
+          "properties": {
+            "sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Sha256",
+              "type": "string"
+            },
+            "spans": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeSourceSpan"
+              },
+              "title": "Spans",
+              "type": "array"
+            },
+            "text": {
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "sha256"
+          ],
+          "title": "IntakeSource",
+          "type": "object"
+        },
+        "IntakeSourceSpan": {
+          "additionalProperties": false,
+          "properties": {
+            "end": {
+              "title": "End",
+              "type": "integer"
+            },
+            "exact_text_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Exact Text Sha256",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "start": {
+              "minimum": 0,
+              "title": "Start",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "start",
+            "end",
+            "exact_text_sha256"
+          ],
+          "title": "IntakeSourceSpan",
+          "type": "object"
+        },
+        "RegisterIntakeEvidencePayload": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact": {
+              "$ref": "#/$defs/EvidenceArtifact"
+            },
+            "expected_revision": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/IntakeSource"
+            }
+          },
+          "required": [
+            "run_id",
+            "expected_revision",
+            "artifact",
+            "source"
+          ],
+          "title": "RegisterIntakeEvidencePayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/RegisterIntakeEvidencePayload"
+        },
+        "type": {
+          "const": "register_intake_evidence",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "RegisterIntakeEvidenceCommand",
+      "type": "object"
+    },
+    "RegisterIntakeEvidencePayload": {
+      "$defs": {
+        "ActorRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "owner",
+                "service",
+                "model",
+                "tool",
+                "rule_engine"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "title": "ActorRef",
+          "type": "object"
+        },
+        "EvidenceArtifact": {
+          "additionalProperties": false,
+          "properties": {
+            "actor": {
+              "$ref": "#/$defs/ActorRef"
+            },
+            "content_hash": {
+              "title": "Content Hash",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "media_type": {
+              "title": "Media Type",
+              "type": "string"
+            },
+            "revision": {
+              "title": "Revision",
+              "type": "string"
+            },
+            "uri": {
+              "title": "Uri",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "uri",
+            "content_hash",
+            "revision",
+            "actor",
+            "media_type"
+          ],
+          "title": "EvidenceArtifact",
+          "type": "object"
+        },
+        "IntakeSource": {
+          "additionalProperties": false,
+          "properties": {
+            "sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Sha256",
+              "type": "string"
+            },
+            "spans": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeSourceSpan"
+              },
+              "title": "Spans",
+              "type": "array"
+            },
+            "text": {
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "sha256"
+          ],
+          "title": "IntakeSource",
+          "type": "object"
+        },
+        "IntakeSourceSpan": {
+          "additionalProperties": false,
+          "properties": {
+            "end": {
+              "title": "End",
+              "type": "integer"
+            },
+            "exact_text_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Exact Text Sha256",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "start": {
+              "minimum": 0,
+              "title": "Start",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "start",
+            "end",
+            "exact_text_sha256"
+          ],
+          "title": "IntakeSourceSpan",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/EvidenceArtifact"
+        },
+        "expected_revision": {
+          "minimum": 1,
+          "title": "Expected Revision",
+          "type": "integer"
+        },
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/IntakeSource"
+        }
+      },
+      "required": [
+        "run_id",
+        "expected_revision",
+        "artifact",
+        "source"
+      ],
+      "title": "RegisterIntakeEvidencePayload",
       "type": "object"
     },
     "RegisterResearchArtifactCommand": {
@@ -33447,6 +36485,521 @@
         "judge_sha256"
       ],
       "title": "StampExecutionPlanPayload",
+      "type": "object"
+    },
+    "StartIntakeCommand": {
+      "$defs": {
+        "Applicability": {
+          "additionalProperties": false,
+          "properties": {
+            "entity_types": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Entity Types",
+              "type": "array"
+            },
+            "predicate_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Predicate Ids",
+              "type": "array"
+            }
+          },
+          "required": [
+            "entity_types",
+            "predicate_ids"
+          ],
+          "title": "Applicability",
+          "type": "object"
+        },
+        "EntityRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "type": {
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "type"
+          ],
+          "title": "EntityRef",
+          "type": "object"
+        },
+        "IntakeOntology": {
+          "additionalProperties": false,
+          "description": "Runtime aggregate of versioned taxonomy definitions.",
+          "properties": {
+            "dimensions": {
+              "items": {
+                "$ref": "#/$defs/RequirementDimensionDefinition"
+              },
+              "title": "Dimensions",
+              "type": "array"
+            },
+            "predicates": {
+              "items": {
+                "$ref": "#/$defs/PredicateDefinition"
+              },
+              "title": "Predicates",
+              "type": "array"
+            }
+          },
+          "required": [
+            "predicates",
+            "dimensions"
+          ],
+          "title": "IntakeOntology",
+          "type": "object"
+        },
+        "PredicateDefinition": {
+          "additionalProperties": false,
+          "properties": {
+            "authority": {
+              "items": {
+                "enum": [
+                  "owner",
+                  "service",
+                  "model",
+                  "tool",
+                  "rule_engine"
+                ],
+                "type": "string"
+              },
+              "title": "Authority",
+              "type": "array"
+            },
+            "cardinality": {
+              "enum": [
+                "one",
+                "many"
+              ],
+              "title": "Cardinality",
+              "type": "string"
+            },
+            "exclusivity": {
+              "title": "Exclusivity",
+              "type": "boolean"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "object_types": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Object Types",
+              "type": "array"
+            },
+            "subject_types": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Subject Types",
+              "type": "array"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            },
+            "transitivity": {
+              "title": "Transitivity",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "id",
+            "title",
+            "subject_types",
+            "object_types",
+            "cardinality",
+            "exclusivity",
+            "transitivity",
+            "authority"
+          ],
+          "title": "PredicateDefinition",
+          "type": "object"
+        },
+        "RequirementDimensionDefinition": {
+          "additionalProperties": false,
+          "properties": {
+            "applicability": {
+              "$ref": "#/$defs/Applicability"
+            },
+            "category": {
+              "enum": [
+                "functional_scope_and_behavior",
+                "domain_and_data_model",
+                "interaction_and_ux_flow",
+                "non_functional_qualities",
+                "integrations_and_external_dependencies",
+                "edge_cases_and_failure_handling",
+                "constraints_and_tradeoffs",
+                "terminology",
+                "completion_signals",
+                "placeholders_and_ambiguities",
+                "scope_boundaries"
+              ],
+              "title": "Category",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "materiality": {
+              "enum": [
+                "critical",
+                "material",
+                "minor"
+              ],
+              "title": "Materiality",
+              "type": "string"
+            },
+            "required_premises": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Required Premises",
+              "type": "array"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            },
+            "waiver_policy": {
+              "enum": [
+                "never",
+                "owner_with_reason"
+              ],
+              "title": "Waiver Policy",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "title",
+            "category",
+            "applicability",
+            "required_premises",
+            "materiality",
+            "waiver_policy"
+          ],
+          "title": "RequirementDimensionDefinition",
+          "type": "object"
+        },
+        "StartIntakePayload": {
+          "additionalProperties": false,
+          "properties": {
+            "entities": {
+              "items": {
+                "$ref": "#/$defs/EntityRef"
+              },
+              "title": "Entities",
+              "type": "array"
+            },
+            "expected_revision": {
+              "const": 0,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "mission_id": {
+              "format": "uuid",
+              "title": "Mission Id",
+              "type": "string"
+            },
+            "ontology": {
+              "$ref": "#/$defs/IntakeOntology"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "expected_revision",
+            "mission_id",
+            "ontology",
+            "entities"
+          ],
+          "title": "StartIntakePayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/StartIntakePayload"
+        },
+        "type": {
+          "const": "start_intake",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "StartIntakeCommand",
+      "type": "object"
+    },
+    "StartIntakePayload": {
+      "$defs": {
+        "Applicability": {
+          "additionalProperties": false,
+          "properties": {
+            "entity_types": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Entity Types",
+              "type": "array"
+            },
+            "predicate_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Predicate Ids",
+              "type": "array"
+            }
+          },
+          "required": [
+            "entity_types",
+            "predicate_ids"
+          ],
+          "title": "Applicability",
+          "type": "object"
+        },
+        "EntityRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "type": {
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "type"
+          ],
+          "title": "EntityRef",
+          "type": "object"
+        },
+        "IntakeOntology": {
+          "additionalProperties": false,
+          "description": "Runtime aggregate of versioned taxonomy definitions.",
+          "properties": {
+            "dimensions": {
+              "items": {
+                "$ref": "#/$defs/RequirementDimensionDefinition"
+              },
+              "title": "Dimensions",
+              "type": "array"
+            },
+            "predicates": {
+              "items": {
+                "$ref": "#/$defs/PredicateDefinition"
+              },
+              "title": "Predicates",
+              "type": "array"
+            }
+          },
+          "required": [
+            "predicates",
+            "dimensions"
+          ],
+          "title": "IntakeOntology",
+          "type": "object"
+        },
+        "PredicateDefinition": {
+          "additionalProperties": false,
+          "properties": {
+            "authority": {
+              "items": {
+                "enum": [
+                  "owner",
+                  "service",
+                  "model",
+                  "tool",
+                  "rule_engine"
+                ],
+                "type": "string"
+              },
+              "title": "Authority",
+              "type": "array"
+            },
+            "cardinality": {
+              "enum": [
+                "one",
+                "many"
+              ],
+              "title": "Cardinality",
+              "type": "string"
+            },
+            "exclusivity": {
+              "title": "Exclusivity",
+              "type": "boolean"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "object_types": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Object Types",
+              "type": "array"
+            },
+            "subject_types": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Subject Types",
+              "type": "array"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            },
+            "transitivity": {
+              "title": "Transitivity",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "id",
+            "title",
+            "subject_types",
+            "object_types",
+            "cardinality",
+            "exclusivity",
+            "transitivity",
+            "authority"
+          ],
+          "title": "PredicateDefinition",
+          "type": "object"
+        },
+        "RequirementDimensionDefinition": {
+          "additionalProperties": false,
+          "properties": {
+            "applicability": {
+              "$ref": "#/$defs/Applicability"
+            },
+            "category": {
+              "enum": [
+                "functional_scope_and_behavior",
+                "domain_and_data_model",
+                "interaction_and_ux_flow",
+                "non_functional_qualities",
+                "integrations_and_external_dependencies",
+                "edge_cases_and_failure_handling",
+                "constraints_and_tradeoffs",
+                "terminology",
+                "completion_signals",
+                "placeholders_and_ambiguities",
+                "scope_boundaries"
+              ],
+              "title": "Category",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "materiality": {
+              "enum": [
+                "critical",
+                "material",
+                "minor"
+              ],
+              "title": "Materiality",
+              "type": "string"
+            },
+            "required_premises": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Required Premises",
+              "type": "array"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            },
+            "waiver_policy": {
+              "enum": [
+                "never",
+                "owner_with_reason"
+              ],
+              "title": "Waiver Policy",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "title",
+            "category",
+            "applicability",
+            "required_premises",
+            "materiality",
+            "waiver_policy"
+          ],
+          "title": "RequirementDimensionDefinition",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "entities": {
+          "items": {
+            "$ref": "#/$defs/EntityRef"
+          },
+          "title": "Entities",
+          "type": "array"
+        },
+        "expected_revision": {
+          "const": 0,
+          "title": "Expected Revision",
+          "type": "integer"
+        },
+        "mission_id": {
+          "format": "uuid",
+          "title": "Mission Id",
+          "type": "string"
+        },
+        "ontology": {
+          "$ref": "#/$defs/IntakeOntology"
+        },
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "expected_revision",
+        "mission_id",
+        "ontology",
+        "entities"
+      ],
+      "title": "StartIntakePayload",
       "type": "object"
     },
     "StopReasonPayload": {

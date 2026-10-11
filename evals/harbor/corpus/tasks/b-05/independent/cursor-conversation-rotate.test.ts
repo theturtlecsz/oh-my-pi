@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import * as http2 from "node:http2";
-import { streamCursor } from "@oh-my-pi/pi-ai/providers/cursor";
-import type { Context, Model } from "@oh-my-pi/pi-ai/types";
+import { streamCursor } from "../src/providers/cursor";
+import type { Context, Model } from "../src/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import {
 	AgentClientMessageSchema,

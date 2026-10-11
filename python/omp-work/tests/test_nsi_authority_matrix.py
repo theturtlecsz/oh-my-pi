@@ -166,10 +166,18 @@ def test_authority_module_and_package_export_the_gate():
     assert authority.__all__ == [
         "AuthorityRefusal",
         "check_claim_authority",
+        "check_decision_authority",
+        "check_ratification_authority",
+        "check_readiness_authority",
+        "check_waiver_policy",
         "refuse_markdown_canonical_state",
     ]
     assert AuthorityRefusal is authority.AuthorityRefusal
     assert check_claim_authority is authority.check_claim_authority
+    assert check_decision_authority is authority.check_decision_authority
+    assert check_ratification_authority is authority.check_ratification_authority
+    assert check_readiness_authority is authority.check_readiness_authority
+    assert check_waiver_policy is authority.check_waiver_policy
     assert refuse_markdown_canonical_state is authority.refuse_markdown_canonical_state
 
     import omp_work.contracts.nsi.v1 as pkg
@@ -178,6 +186,10 @@ def test_authority_module_and_package_export_the_gate():
     assert exported["authority"] is authority
     assert exported["AuthorityRefusal"] is AuthorityRefusal
     assert exported["refuse_markdown_canonical_state"] is refuse_markdown_canonical_state
+    assert pkg.check_decision_authority is check_decision_authority
+    assert pkg.check_ratification_authority is check_ratification_authority
+    assert pkg.check_readiness_authority is check_readiness_authority
+    assert pkg.check_waiver_policy is check_waiver_policy
 
 
 @pytest.mark.parametrize("content", RECORDS)
@@ -1110,3 +1122,537 @@ def test_every_span_requires_grounding_including_optional_proposal_evidence():
     claim = models.IntakeClaim.model_validate({**CLAIM, "evidence": [SPAN, {**SPAN, "artifact_id": "missing"}]})
     with pytest.raises(AuthorityRefusal):
         check_claim_authority(claim, claim.asserted_by, predicates=_evidence_predicates(), **_repository_context())
+
+
+def _typed_decision():
+    return models.OwnerDecision.model_validate(DECISION)
+
+
+def _typed_waiver(**patch):
+    return models.WaiverDefinition.model_validate({**WAIVER, **patch})
+
+
+def _typed_gap(**patch):
+    return models.Gap.model_validate({**GAP, **patch})
+
+
+def test_only_matching_owner_authorizes_typed_decisions_and_waivers():
+    decision = _typed_decision()
+    waiver = _typed_waiver()
+    owner = models.ActorRef(id="owner-1", kind="owner")
+    originals = (deepcopy(decision), deepcopy(waiver), deepcopy(owner))
+
+    check_decision_authority(decision, owner)
+    check_decision_authority(waiver, owner)
+    check_decision_authority(DECISION, {"id": "owner-1", "kind": "owner"})
+    check_decision_authority(WAIVER, {"id": "owner-1", "kind": "owner"})
+    assert (decision, waiver, owner) == originals
+
+    # The owner reference stored on the record is not a caller.
+    for record in (decision, waiver):
+        with pytest.raises(AuthorityRefusal):
+            check_decision_authority(record, record.actor if type(record) is models.OwnerDecision else record.granted_by)
+        with pytest.raises(AuthorityRefusal):
+            check_decision_authority(record, models.OwnerRef(id="owner-1", kind="owner"))
+
+    with pytest.raises(AuthorityRefusal):
+        check_decision_authority(decision, models.ActorRef(id="owner-2", kind="owner"))
+    with pytest.raises(AuthorityRefusal):
+        check_decision_authority(waiver, models.ActorRef(id="owner-2", kind="owner"))
+
+    # A non-owner is refused even when it copies the owner's id.
+    for kind in ("model", "tool", "service", "rule_engine"):
+        for actor_id in ("owner-1", f"{kind}-1"):
+            caller = models.ActorRef(id=actor_id, kind=kind)
+            with pytest.raises(AuthorityRefusal):
+                check_decision_authority(decision, caller)
+            with pytest.raises(AuthorityRefusal):
+                check_decision_authority(waiver, caller)
+
+    for content in (MUTATION, CLAIM, GAP, PROSE, None):
+        with pytest.raises(AuthorityRefusal):
+            check_decision_authority(content, owner)
+
+
+@pytest.mark.parametrize("dimension_id", [
+    "dimension-1",
+    "minor",
+    "terminology",
+    "non_functional_qualities",
+    "completion_signals",
+])
+def test_critical_gap_refuses_owner_looking_waiver(dimension_id):
+    # Criticality is the materiality field. Dimension ids, category labels,
+    # and a completeness score written into the reason do not permit a waiver.
+    gap = _typed_gap(
+        dimension_id=dimension_id,
+        materiality="critical",
+        waiver_policy="never",
+        reason="completeness score 1.0",
+    )
+    with pytest.raises(AuthorityRefusal):
+        check_waiver_policy(_typed_waiver(), gap)
+
+
+def test_waiver_policy_reuses_validate_waiver_and_admits_permitted_gap():
+    gap = _typed_gap()
+    # Declared run and revision are the binding. They are not a live service revision.
+    waiver = _typed_waiver(
+        reason="completeness score 0.0; owner accepts the gap",
+        run_id="not-a-service-revision",
+        revision=18,
+    )
+    originals = (deepcopy(waiver), deepcopy(gap))
+    check_waiver_policy(waiver, gap)
+    check_waiver_policy(
+        {**WAIVER, "run_id": "not-a-service-revision", "revision": 18},
+        GAP,
+    )
+    assert (waiver, gap) == originals
+
+    minor_gap = _typed_gap(materiality="minor")
+    check_waiver_policy(_typed_waiver(materiality="minor"), minor_gap)
+    # A critical-looking label stays waivable when materiality is not critical.
+    labeled = _typed_gap(
+        dimension_id="critical",
+        premise_id="critical-premise",
+        reason="labeled critical",
+    )
+    check_waiver_policy(
+        _typed_waiver(dimension_id="critical", premise_id="critical-premise"),
+        labeled,
+    )
+
+    never_gap = _typed_gap(waiver_policy="never")
+    with pytest.raises(AuthorityRefusal):
+        check_waiver_policy(waiver, never_gap)
+    with pytest.raises(AuthorityRefusal):
+        check_waiver_policy(_typed_waiver(waiver_policy="never"), gap)
+    with pytest.raises(AuthorityRefusal):
+        check_waiver_policy(_typed_waiver(materiality="minor"), gap)
+    for field, value in (("premise_id", "other-premise"), ("dimension_id", "other-dimension")):
+        with pytest.raises(AuthorityRefusal):
+            check_waiver_policy(waiver, _typed_gap(**{field: value}))
+    for patch in ({"reason": "   "}, {"reason": "\n"}, {"decision_id": ""}, {"decision_id": "   "}):
+        with pytest.raises(AuthorityRefusal):
+            check_waiver_policy(_typed_waiver(**patch), gap)
+    with pytest.raises(AuthorityRefusal):
+        check_waiver_policy(
+            {**WAIVER, "granted_by": {"id": "model-1", "kind": "model"}},
+            GAP,
+        )
+    for content in (DECISION, GAP, PROSE, None):
+        with pytest.raises(AuthorityRefusal):
+            check_waiver_policy(content, gap)
+
+
+def test_raw_forged_score_and_actor_fields_refuse():
+    owner = {"id": "owner-1", "kind": "owner"}
+    forged_waiver = {**WAIVER, "score": 1.0, "actor": owner}
+    forged_gap = {**GAP, "score": 1.0, "actor": owner, "category": "terminology"}
+    critical_scored = {
+        **GAP,
+        "materiality": "critical",
+        "waiver_policy": "owner_with_reason",
+        "score": 1.0,
+        "actor": owner,
+    }
+    for waiver, gap in (
+        (forged_waiver, GAP),
+        (WAIVER, forged_gap),
+        (WAIVER, critical_scored),
+        (forged_waiver, forged_gap),
+    ):
+        with pytest.raises(AuthorityRefusal):
+            check_waiver_policy(waiver, gap)
+    with pytest.raises(AuthorityRefusal):
+        check_decision_authority(forged_waiver, owner)
+    with pytest.raises(AuthorityRefusal):
+        check_decision_authority({**DECISION, "score": 1.0}, owner)
+    with pytest.raises(AuthorityRefusal):
+        check_decision_authority(DECISION, {**owner, "score": 1.0})
+
+    stored = _typed_gap()
+    stored.__dict__["score"] = 1.0
+    stored.__dict__["actor"] = owner
+    with pytest.raises(AuthorityRefusal):
+        check_waiver_policy(_typed_waiver(), stored)
+    assert stored.__dict__["score"] == 1.0
+    assert stored.__dict__["actor"] is owner
+
+
+def _typed_assessment(**patch):
+    return models.IntakeReadinessAssessment.model_validate({**ASSESSMENT, **patch})
+
+
+def _typed_ratification(**patch):
+    return models.RatificationReceipt.model_validate({**RATIFICATION, **patch})
+
+
+def _typed_readiness(**patch):
+    return models.IntakeReadinessReceipt.model_validate({**READINESS, **patch})
+
+
+def test_valid_owner_ratification_followed_by_service_and_engine_readiness():
+    owner = models.ActorRef(id="owner-1", kind="owner")
+    engine = models.ActorRef(id="engine-1", kind="rule_engine")
+    service = models.ActorRef(id="service-1", kind="service")
+    rat = _typed_ratification()
+    asm = _typed_assessment()
+    rdn = _typed_readiness()
+    originals = (deepcopy(rat), deepcopy(asm), deepcopy(rdn), deepcopy(owner), deepcopy(engine), deepcopy(service))
+
+    # Typed records
+    check_ratification_authority(rat, owner, assessments={"assessment-1": asm})
+    check_readiness_authority(rdn, engine, ratifications={"ratification-1": rat})
+    check_readiness_authority(rdn, service, ratifications={"ratification-1": rat})
+
+    # Closed wire
+    check_ratification_authority(
+        RATIFICATION,
+        {"id": "owner-1", "kind": "owner"},
+        assessments={"assessment-1": ASSESSMENT},
+    )
+    check_readiness_authority(
+        READINESS,
+        {"id": "engine-1", "kind": "rule_engine"},
+        ratifications={"ratification-1": RATIFICATION},
+    )
+    check_readiness_authority(
+        READINESS,
+        {"id": "service-1", "kind": "service"},
+        ratifications={"ratification-1": RATIFICATION},
+    )
+
+    # Mixed typed and wire
+    check_ratification_authority(rat, {"id": "owner-1", "kind": "owner"}, assessments={"assessment-1": ASSESSMENT})
+    check_ratification_authority(RATIFICATION, owner, assessments={"assessment-1": asm})
+    check_readiness_authority(rdn, {"id": "engine-1", "kind": "rule_engine"}, ratifications={"ratification-1": RATIFICATION})
+    check_readiness_authority(READINESS, engine, ratifications={"ratification-1": rat})
+    check_readiness_authority(rdn, {"id": "service-1", "kind": "service"}, ratifications={"ratification-1": RATIFICATION})
+    check_readiness_authority(READINESS, service, ratifications={"ratification-1": rat})
+
+    # Immutability
+    assert (rat, asm, rdn, owner, engine, service) == originals
+
+
+def test_phase_and_authority_separation_between_ratification_and_readiness():
+    owner = models.ActorRef(id="owner-1", kind="owner")
+    engine = models.ActorRef(id="engine-1", kind="rule_engine")
+    rat = _typed_ratification()
+    asm = _typed_assessment()
+    rdn = _typed_readiness()
+
+    # Owner attempting readiness
+    with pytest.raises(AuthorityRefusal):
+        check_readiness_authority(rdn, owner, ratifications={"ratification-1": rat})
+    with pytest.raises(AuthorityRefusal):
+        check_readiness_authority(READINESS, {"id": "owner-1", "kind": "owner"}, ratifications={"ratification-1": RATIFICATION})
+    with pytest.raises(AuthorityRefusal):
+        check_readiness_authority(rdn, models.ActorRef(id="engine-1", kind="owner"), ratifications={"ratification-1": rat})
+
+    # Engine attempting ratification
+    with pytest.raises(AuthorityRefusal):
+        check_ratification_authority(rat, engine, assessments={"assessment-1": asm})
+    with pytest.raises(AuthorityRefusal):
+        check_ratification_authority(RATIFICATION, {"id": "engine-1", "kind": "rule_engine"}, assessments={"assessment-1": ASSESSMENT})
+    with pytest.raises(AuthorityRefusal):
+        check_ratification_authority(rat, models.ActorRef(id="owner-1", kind="rule_engine"), assessments={"assessment-1": asm})
+
+    # Ratification alone never issues readiness
+    with pytest.raises(AuthorityRefusal):
+        check_readiness_authority(rat, engine, ratifications={"ratification-1": rat})
+    with pytest.raises(AuthorityRefusal):
+        check_readiness_authority(RATIFICATION, engine, ratifications={"ratification-1": rat})
+
+    # READY_FOR_RATIFICATION cannot substitute for ELIGIBLE_FOR_PUBLICATION
+    with pytest.raises(AuthorityRefusal):
+        check_readiness_authority(asm, engine, ratifications={"ratification-1": rat})
+    with pytest.raises(AuthorityRefusal):
+        check_readiness_authority(ASSESSMENT, engine, ratifications={"ratification-1": rat})
+    with pytest.raises(AuthorityRefusal):
+        check_readiness_authority({**READINESS, "status": "READY_FOR_RATIFICATION"}, engine, ratifications={"ratification-1": rat})
+
+    # Readiness cannot substitute for ratification
+    with pytest.raises(AuthorityRefusal):
+        check_ratification_authority(rdn, owner, assessments={"assessment-1": asm})
+    with pytest.raises(AuthorityRefusal):
+        check_ratification_authority(READINESS, owner, assessments={"assessment-1": asm})
+
+
+def test_model_and_raw_client_refuse_typed_owner_and_engine_receipts():
+    owner = models.ActorRef(id="owner-1", kind="owner")
+    engine = models.ActorRef(id="engine-1", kind="rule_engine")
+    rat = _typed_ratification()
+    asm = _typed_assessment()
+    rdn = _typed_readiness()
+
+    # Model and tool callers
+    for kind in ("model", "tool"):
+        for actor_id in ("owner-1", "engine-1", f"{kind}-1"):
+            caller = models.ActorRef(id=actor_id, kind=kind)
+            with pytest.raises(AuthorityRefusal):
+                check_ratification_authority(rat, caller, assessments={"assessment-1": asm})
+            with pytest.raises(AuthorityRefusal):
+                check_readiness_authority(rdn, caller, ratifications={"ratification-1": rat})
+
+    # Raw clients
+    for raw in (
+        {"id": "client-1", "kind": "client"},
+        {"id": "client-1"},
+        "client-1",
+        None,
+        123,
+    ):
+        with pytest.raises(AuthorityRefusal):
+            check_ratification_authority(rat, raw, assessments={"assessment-1": asm})
+        with pytest.raises(AuthorityRefusal):
+            check_readiness_authority(rdn, raw, ratifications={"ratification-1": rat})
+
+    # The stored owner or rule engine reference is not a caller
+    with pytest.raises(AuthorityRefusal):
+        check_ratification_authority(rat, rat.ratified_by, assessments={"assessment-1": asm})
+    with pytest.raises(AuthorityRefusal):
+        check_ratification_authority(rat, models.OwnerRef(id="owner-1", kind="owner"), assessments={"assessment-1": asm})
+    with pytest.raises(AuthorityRefusal):
+        check_readiness_authority(rdn, rdn.issued_by, ratifications={"ratification-1": rat})
+    with pytest.raises(AuthorityRefusal):
+        check_readiness_authority(rdn, models.RuleEngineRef(id="engine-1", kind="rule_engine"), ratifications={"ratification-1": rat})
+
+    # Mismatched identity
+    with pytest.raises(AuthorityRefusal):
+        check_ratification_authority(rat, models.ActorRef(id="owner-2", kind="owner"), assessments={"assessment-1": asm})
+    with pytest.raises(AuthorityRefusal):
+        check_readiness_authority(rdn, models.ActorRef(id="engine-2", kind="rule_engine"), ratifications={"ratification-1": rat})
+
+    # Non-record content
+    for content in (MUTATION, CLAIM, GAP, PROSE, None):
+        with pytest.raises(AuthorityRefusal):
+            check_ratification_authority(content, owner, assessments={"assessment-1": asm})
+        with pytest.raises(AuthorityRefusal):
+            check_readiness_authority(content, engine, ratifications={"ratification-1": rat})
+
+
+def test_missing_and_wrong_status_assessment_refuses_ratification():
+    owner = models.ActorRef(id="owner-1", kind="owner")
+    rat = _typed_ratification()
+    asm = _typed_assessment()
+
+    # Missing context
+    with pytest.raises(AuthorityRefusal):
+        check_ratification_authority(rat, owner)
+    with pytest.raises(AuthorityRefusal):
+        check_ratification_authority(rat, owner, assessments=None)
+    with pytest.raises(AuthorityRefusal):
+        check_ratification_authority(rat, owner, assessments={})
+    with pytest.raises(AuthorityRefusal):
+        check_ratification_authority(rat, owner, assessments=MappingProxyType({}))
+    with pytest.raises(AuthorityRefusal):
+        check_ratification_authority(rat, owner, assessments={"other-id": asm})
+
+    # Missing or blank assessment reference
+    for patch in ({"assessment_id": ""}, {"assessment_id": "   "}):
+        with pytest.raises(AuthorityRefusal):
+            check_ratification_authority(_typed_ratification(**patch), owner, assessments={"assessment-1": asm})
+
+    # Wrong status
+    for status in ("NEEDS_SPEC", "CONFLICTED"):
+        with pytest.raises(AuthorityRefusal):
+            check_ratification_authority(rat, owner, assessments={"assessment-1": _typed_assessment(status=status)})
+        with pytest.raises(AuthorityRefusal):
+            check_ratification_authority(
+                RATIFICATION,
+                {"id": "owner-1", "kind": "owner"},
+                assessments={"assessment-1": {**ASSESSMENT, "status": status}},
+            )
+
+    # Receipt substituted for assessment
+    with pytest.raises(AuthorityRefusal):
+        check_ratification_authority(rat, owner, assessments={"assessment-1": _typed_readiness()})
+    with pytest.raises(AuthorityRefusal):
+        check_ratification_authority(rat, owner, assessments={"assessment-1": _typed_ratification()})
+    with pytest.raises(AuthorityRefusal):
+        check_ratification_authority(rat, owner, assessments={"assessment-1": READINESS})
+    with pytest.raises(AuthorityRefusal):
+        check_ratification_authority(rat, owner, assessments={"assessment-1": RATIFICATION})
+    with pytest.raises(AuthorityRefusal):
+        check_ratification_authority(rat, owner, assessments={"assessment-1": PROSE})
+
+
+@pytest.mark.parametrize("field,mismatched", [
+    ("run_id", "run-2"),
+    ("revision", 1),
+    ("contract_hash", "0" * 64),
+    ("claim_set_hash", "0" * 64),
+    ("rule_bundle_hash", "0" * 64),
+    ("schema_hash", "0" * 64),
+    ("source_hash", "0" * 64),
+])
+def test_each_binding_field_mismatch_refuses_ratification(field, mismatched):
+    owner = models.ActorRef(id="owner-1", kind="owner")
+    asm = _typed_assessment()
+    rat = _typed_ratification()
+
+    with pytest.raises(AuthorityRefusal):
+        check_ratification_authority(
+            _typed_ratification(**{field: mismatched}),
+            owner,
+            assessments={"assessment-1": asm},
+        )
+    with pytest.raises(AuthorityRefusal):
+        check_ratification_authority(
+            rat,
+            owner,
+            assessments={"assessment-1": _typed_assessment(**{field: mismatched})},
+        )
+
+
+def test_unresolved_ratification_and_field_mismatches_refuse_readiness():
+    engine = models.ActorRef(id="engine-1", kind="rule_engine")
+    rdn = _typed_readiness()
+    rat = _typed_ratification()
+
+    # Missing context
+    with pytest.raises(AuthorityRefusal):
+        check_readiness_authority(rdn, engine)
+    with pytest.raises(AuthorityRefusal):
+        check_readiness_authority(rdn, engine, ratifications=None)
+    with pytest.raises(AuthorityRefusal):
+        check_readiness_authority(rdn, engine, ratifications={})
+    with pytest.raises(AuthorityRefusal):
+        check_readiness_authority(rdn, engine, ratifications=MappingProxyType({}))
+    with pytest.raises(AuthorityRefusal):
+        check_readiness_authority(rdn, engine, ratifications={"other-id": rat})
+
+    # Missing or blank ratification reference
+    for patch in ({"ratification_receipt_id": ""}, {"ratification_receipt_id": "   "}):
+        with pytest.raises(AuthorityRefusal):
+            check_readiness_authority(_typed_readiness(**patch), engine, ratifications={"ratification-1": rat})
+
+    # Assessment substituted for ratification
+    with pytest.raises(AuthorityRefusal):
+        check_readiness_authority(rdn, engine, ratifications={"ratification-1": _typed_assessment()})
+    with pytest.raises(AuthorityRefusal):
+        check_readiness_authority(rdn, engine, ratifications={"ratification-1": ASSESSMENT})
+    with pytest.raises(AuthorityRefusal):
+        check_readiness_authority(rdn, engine, ratifications={"ratification-1": PROSE})
+
+    # Non-owner ratified_by in ratification
+    with pytest.raises(AuthorityRefusal):
+        check_readiness_authority(
+            rdn,
+            engine,
+            ratifications={"ratification-1": {**RATIFICATION, "ratified_by": {"id": "engine-1", "kind": "rule_engine"}}},
+        )
+
+    # formal_binding_ids mismatch
+    with pytest.raises(AuthorityRefusal):
+        check_readiness_authority(
+            _typed_readiness(formal_binding_ids=["binding-2"]),
+            engine,
+            ratifications={"ratification-1": rat},
+        )
+    with pytest.raises(AuthorityRefusal):
+        check_readiness_authority(
+            _typed_readiness(formal_binding_ids=[]),
+            engine,
+            ratifications={"ratification-1": rat},
+        )
+    with pytest.raises(AuthorityRefusal):
+        check_readiness_authority(
+            _typed_readiness(formal_binding_ids=["binding-1", "binding-2"]),
+            engine,
+            ratifications={"ratification-1": rat},
+        )
+
+
+@pytest.mark.parametrize("field,mismatched", [
+    ("run_id", "run-2"),
+    ("revision", 1),
+    ("contract_hash", "0" * 64),
+    ("claim_set_hash", "0" * 64),
+    ("rule_bundle_hash", "0" * 64),
+    ("schema_hash", "0" * 64),
+    ("source_hash", "0" * 64),
+])
+def test_each_binding_field_mismatch_refuses_readiness(field, mismatched):
+    engine = models.ActorRef(id="engine-1", kind="rule_engine")
+    rdn = _typed_readiness()
+    rat = _typed_ratification()
+
+    with pytest.raises(AuthorityRefusal):
+        check_readiness_authority(
+            _typed_readiness(**{field: mismatched}),
+            engine,
+            ratifications={"ratification-1": rat},
+        )
+    with pytest.raises(AuthorityRefusal):
+        check_readiness_authority(
+            rdn,
+            engine,
+            ratifications={"ratification-1": _typed_ratification(**{field: mismatched})},
+        )
+
+
+def test_forged_fields_on_ratification_assessment_and_readiness_refuse():
+    owner = {"id": "owner-1", "kind": "owner"}
+    engine = {"id": "engine-1", "kind": "rule_engine"}
+
+    forged_ratification = {**RATIFICATION, "score": 1.0}
+    forged_assessment = {**ASSESSMENT, "score": 1.0}
+    forged_readiness = {**READINESS, "score": 1.0}
+
+    with pytest.raises(AuthorityRefusal):
+        check_ratification_authority(
+            forged_ratification,
+            owner,
+            assessments={"assessment-1": ASSESSMENT},
+        )
+    with pytest.raises(AuthorityRefusal):
+        check_ratification_authority(
+            RATIFICATION,
+            owner,
+            assessments={"assessment-1": forged_assessment},
+        )
+    with pytest.raises(AuthorityRefusal):
+        check_readiness_authority(
+            forged_readiness,
+            engine,
+            ratifications={"ratification-1": RATIFICATION},
+        )
+    with pytest.raises(AuthorityRefusal):
+        check_readiness_authority(
+            READINESS,
+            engine,
+            ratifications={"ratification-1": forged_ratification},
+        )
+
+    stored_rat = _typed_ratification()
+    stored_rat.__dict__["score"] = 1.0
+    with pytest.raises(AuthorityRefusal):
+        check_ratification_authority(
+            stored_rat,
+            models.ActorRef(id="owner-1", kind="owner"),
+            assessments={"assessment-1": _typed_assessment()},
+        )
+    assert stored_rat.__dict__["score"] == 1.0
+
+    stored_asm = _typed_assessment()
+    stored_asm.__dict__["score"] = 1.0
+    with pytest.raises(AuthorityRefusal):
+        check_ratification_authority(
+            _typed_ratification(),
+            models.ActorRef(id="owner-1", kind="owner"),
+            assessments={"assessment-1": stored_asm},
+        )
+    assert stored_asm.__dict__["score"] == 1.0
+
+    stored_rdn = _typed_readiness()
+    stored_rdn.__dict__["score"] = 1.0
+    with pytest.raises(AuthorityRefusal):
+        check_readiness_authority(
+            stored_rdn,
+            models.ActorRef(id="engine-1", kind="rule_engine"),
+            ratifications={"ratification-1": _typed_ratification()},
+        )
+    assert stored_rdn.__dict__["score"] == 1.0

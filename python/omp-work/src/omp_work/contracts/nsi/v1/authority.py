@@ -10,7 +10,7 @@ from typing import NoReturn, TypeVar
 from pydantic import ValidationError
 
 from . import models
-from .validate import validate_instance
+from .validate import validate_instance, validate_waiver
 
 T = TypeVar("T")
 
@@ -242,6 +242,67 @@ def check_claim_authority(
                 raise AuthorityRefusal("evidence quote does not match repository bytes")
 
 
+def _project_decision_or_waiver(record: object) -> dict[str, object]:
+    """Project an OwnerDecision or WaiverDefinition. Any other value is refused."""
+    if type(record) is models.OwnerDecision or type(record) is models.WaiverDefinition:
+        return _project_concrete_record(record, type(record))
+    if type(record) is dict:
+        for expected in (models.OwnerDecision, models.WaiverDefinition):
+            try:
+                return _project_concrete_record(record, expected)
+            except AuthorityRefusal:
+                continue
+    raise AuthorityRefusal("expected valid typed or wire OwnerDecision or WaiverDefinition")
+
+
+def check_decision_authority(decision: object, actor: object) -> None:
+    """Authorize a decision or waiver only for the owner named on that record.
+
+    ``decision`` is an OwnerDecision or a WaiverDefinition, typed or closed
+    wire. The caller must be an ActorRef of kind owner whose id and kind match
+    ``decision.actor`` or ``waiver.granted_by``. An OwnerRef stored on the
+    record does not authorize a model, tool, service, or rule_engine caller,
+    and it cannot stand in for the caller.
+    """
+    projected_actor = _project_concrete_record(actor, models.ActorRef)
+    projected = _project_decision_or_waiver(decision)
+    record_owner = projected["granted_by"] if "granted_by" in projected else projected["actor"]
+    if (
+        projected_actor["kind"] != "owner"
+        or projected_actor["id"] != record_owner["id"]
+        or projected_actor["kind"] != record_owner["kind"]
+    ):
+        raise AuthorityRefusal("only the matching owner can authorize this decision or waiver")
+
+
+def check_waiver_policy(waiver: object, gap: object) -> None:
+    """Apply one owner waiver to one gap, or refuse it.
+
+    A critical gap is refused from its ``materiality`` field. Dimension ids,
+    category labels, and completeness scores are not read and cannot permit
+    the waiver. ``validate_waiver`` enforces never-policy, the same premise,
+    dimension, and materiality, owner provenance, and a nonblank reason and
+    decision id. Those failures are raised as ``AuthorityRefusal``.
+
+    The run and revision passed to ``validate_waiver`` are the waiver's own
+    declared ``run_id`` and ``revision``. This check does not compare them
+    to a live service revision.
+    """
+    projected_waiver = _project_concrete_record(waiver, models.WaiverDefinition)
+    projected_gap = _project_concrete_record(gap, models.Gap)
+    try:
+        typed_waiver = models.WaiverDefinition.model_validate(projected_waiver)
+        typed_gap = models.Gap.model_validate(projected_gap)
+        validate_waiver(
+            typed_waiver,
+            typed_gap,
+            run_id=typed_waiver.run_id,
+            revision=typed_waiver.revision,
+        )
+    except ValueError as exc:
+        raise AuthorityRefusal(str(exc)) from exc
+
+
 def refuse_markdown_canonical_state(content: T, *, context: object = None) -> T:
     """Return ``content`` unchanged when it is trusted NSI canonical state.
 
@@ -265,8 +326,120 @@ def refuse_markdown_canonical_state(content: T, *, context: object = None) -> T:
     return content
 
 
+_BINDING_FIELDS = (
+    "run_id",
+    "revision",
+    "contract_hash",
+    "claim_set_hash",
+    "rule_bundle_hash",
+    "schema_hash",
+    "source_hash",
+)
+
+
+def check_ratification_authority(
+    ratification: object,
+    actor: object,
+    *,
+    assessments: Mapping[str, object] | None = None,
+) -> None:
+    """Authorize an owner ratification receipt against a ready assessment.
+
+    Only a matching owner caller can authorize ratification. The assessment_id
+    resolves to an IntakeReadinessAssessment with status READY_FOR_RATIFICATION.
+    The run_id, revision, and all five Binding hashes must match. Missing
+    references, substituted receipts, NEEDS_SPEC/CONFLICTED assessments, and
+    stale closure hashes raise AuthorityRefusal.
+    """
+    projected_ratification = _project_concrete_record(ratification, models.RatificationReceipt)
+    projected_actor = _project_concrete_record(actor, models.ActorRef)
+
+    ratified_by = projected_ratification["ratified_by"]
+    if (
+        projected_actor["kind"] != "owner"
+        or projected_actor["id"] != ratified_by["id"]
+        or projected_actor["kind"] != ratified_by["kind"]
+    ):
+        raise AuthorityRefusal("only the matching owner can authorize this ratification")
+
+    if not isinstance(assessments, Mapping):
+        raise AuthorityRefusal("missing or unresolved readiness assessments")
+
+    assessment_id = projected_ratification["assessment_id"]
+    if not isinstance(assessment_id, str) or not assessment_id.strip():
+        raise AuthorityRefusal("missing assessment reference")
+    if assessment_id not in assessments:
+        raise AuthorityRefusal(f"unresolved assessment: {assessment_id}")
+
+    raw_assessment = assessments[assessment_id]
+    projected_assessment = _project_concrete_record(raw_assessment, models.IntakeReadinessAssessment)
+
+    if projected_assessment["status"] != "READY_FOR_RATIFICATION":
+        raise AuthorityRefusal(
+            f"assessment status must be READY_FOR_RATIFICATION, got {projected_assessment['status']}"
+        )
+
+    for field in _BINDING_FIELDS:
+        if projected_ratification[field] != projected_assessment[field]:
+            raise AuthorityRefusal(f"ratification {field} mismatch with assessment")
+
+
+def check_readiness_authority(
+    receipt: object,
+    actor: object,
+    *,
+    ratifications: Mapping[str, object] | None = None,
+) -> None:
+    """Authorize an intake readiness receipt against a trusted owner ratification.
+
+    IntakeReadinessReceipt can only be authorized by a service or rule_engine
+    caller. When called by a rule_engine, its identity must match issued_by.
+    A service caller preserves the receipt's RuleEngineRef. The
+    ratification_receipt_id resolves to a trusted owner RatificationReceipt.
+    The entire Binding (run_id, revision, and 5 hashes) and formal_binding_ids
+    must match. Ratification alone never issues readiness, and
+    READY_FOR_RATIFICATION cannot substitute for ELIGIBLE_FOR_PUBLICATION.
+    """
+    projected_receipt = _project_concrete_record(receipt, models.IntakeReadinessReceipt)
+    projected_actor = _project_concrete_record(actor, models.ActorRef)
+
+    if projected_actor["kind"] not in ("service", "rule_engine"):
+        raise AuthorityRefusal("readiness receipt can only be authorized by service or rule_engine")
+
+    issued_by = projected_receipt["issued_by"]
+    if projected_actor["kind"] == "rule_engine":
+        if projected_actor["id"] != issued_by["id"] or projected_actor["kind"] != issued_by["kind"]:
+            raise AuthorityRefusal("rule_engine caller identity must match issued_by")
+
+    if not isinstance(ratifications, Mapping):
+        raise AuthorityRefusal("missing or unresolved ratification context")
+
+    ratification_receipt_id = projected_receipt["ratification_receipt_id"]
+    if not isinstance(ratification_receipt_id, str) or not ratification_receipt_id.strip():
+        raise AuthorityRefusal("missing ratification reference")
+    if ratification_receipt_id not in ratifications:
+        raise AuthorityRefusal(f"unresolved ratification receipt: {ratification_receipt_id}")
+
+    raw_ratification = ratifications[ratification_receipt_id]
+    projected_ratification = _project_concrete_record(raw_ratification, models.RatificationReceipt)
+
+    if projected_ratification["ratified_by"]["kind"] != "owner":
+        raise AuthorityRefusal("ratification must be ratified by an owner")
+
+    for field in _BINDING_FIELDS:
+        if projected_receipt[field] != projected_ratification[field]:
+            raise AuthorityRefusal(f"readiness {field} mismatch with ratification")
+
+    if projected_receipt["formal_binding_ids"] != projected_ratification["formal_binding_ids"]:
+        raise AuthorityRefusal("formal_binding_ids mismatch between readiness and ratification")
+
+
 __all__ = [
     "AuthorityRefusal",
     "check_claim_authority",
+    "check_decision_authority",
+    "check_ratification_authority",
+    "check_readiness_authority",
+    "check_waiver_policy",
     "refuse_markdown_canonical_state",
 ]
