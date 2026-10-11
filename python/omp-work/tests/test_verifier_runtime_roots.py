@@ -94,3 +94,25 @@ def test_missing_install_parent_is_refused(
     with pytest.raises(worker_sandbox.WorkerSandboxRefused) as exc:
         worker_sandbox._verifier_runtime_roots(worktree)
     assert exc.value.code == "runtime_not_allowed"
+
+
+@pytest.mark.parametrize("child", [False, True])
+def test_resolved_work_mount_is_refused(
+    runtime: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    child: bool,
+) -> None:
+    _, worktree = runtime
+    mount = tmp_path / "sandbox-work"
+    root = mount / "pkg" if child else mount
+    root.mkdir(parents=True)
+    resolve = Path.resolve
+
+    def resolve_work(path: Path, strict: bool = False) -> Path:
+        # Model a host /work symlink without changing paths outside the fixture.
+        return mount if path == Path("/work") else resolve(path, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", resolve_work)
+    monkeypatch.setattr(site, "getsitepackages", lambda: [str(root)])
+    with pytest.raises(worker_sandbox.WorkerSandboxRefused) as exc:
+        worker_sandbox._verifier_runtime_roots(worktree)
+    assert exc.value.code == "runtime_not_allowed"

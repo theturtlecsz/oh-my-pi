@@ -159,6 +159,7 @@ def _verifier_runtime_roots(worktree: Path) -> tuple[Path, ...]:
     if not parent.is_dir():
         raise WorkerSandboxRefused("runtime_not_allowed")
     worktree = worktree.resolve()
+    sandbox_work = Path("/work").resolve()
     forbidden = {
         Path("/"),
         Path.home().resolve(),
@@ -173,7 +174,7 @@ def _verifier_runtime_roots(worktree: Path) -> tuple[Path, ...]:
         root = root.resolve()
         if (
             root in forbidden
-            or root.is_relative_to(Path("/work"))
+            or root.is_relative_to(sandbox_work)
             or root.is_relative_to(worktree)
             or worktree.is_relative_to(root)
         ):
