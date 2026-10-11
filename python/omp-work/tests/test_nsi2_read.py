@@ -8,11 +8,47 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from omp_work import contract_sha256
+from omp_work import _COMMAND_TYPES, _READS, _manifest_paths, contract_sha256, load_contract
 from omp_work.operations.config import OperationsConfig
 from omp_work.v1.api_models import IntakeRecordView
+from omp_work.v1.models import Approval
 from omp_work.v1.server import create_app
 from omp_work.v1.store import WorkStoreError
+
+
+def test_intake_wire_is_in_contract_and_approval_closure() -> None:
+    contract = load_contract()
+    for command in (
+        "start_intake",
+        "register_intake_evidence",
+        "record_intake_claim",
+        "record_intake_decision",
+        "supersede_intake_claim",
+        "record_intake_issue",
+        "link_intake_criterion",
+        "assess_intake",
+    ):
+        assert command in _COMMAND_TYPES
+        assert command in contract.command_types
+
+    read = "GET /v1/workspaces/{workspace_id}/intake/{run_id}"
+    assert read in _READS
+    assert read in contract.reads
+    assert contract.reads[contract.reads.index(read) + 1] == (
+        "GET /v1/workspaces/{workspace_id}/missions/{mission_id}"
+    )
+
+    paths = _manifest_paths()
+    assert "api-schema.json" in paths
+    assert "decisions/0022-intake-provenance.md" in paths
+    approval = Approval.model_validate({
+        "contract_version": contract.contract_version,
+        "contract_sha256": contract_sha256(),
+        "approved_by": "owner",
+        "approved_at": "2026-10-11T00:00:00Z",
+        "issue": "OMP-522",
+    })
+    assert approval.issue == "OMP-522"
 
 
 def default_view_dump(workspace_id: UUID, run_id: str = "run-1", revision: int = 1) -> dict[str, Any]:
@@ -353,4 +389,3 @@ def test_store_error_status_mapping(
     assert response.status_code == expected_status
     payload = response.json()
     assert payload["error"]["code"] == store_code
-
