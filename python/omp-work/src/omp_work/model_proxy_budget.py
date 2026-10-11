@@ -46,6 +46,8 @@ __all__ = [
     "ModelCallAdmission",
     "ModelProxyBudget",
     "ModelProxyBudgetError",
+    "acquire_captured_locks",
+    "lock_captured_identity",
 ]
 
 # One gate for every ModelProxyBudget in the process. Held from the first
@@ -77,6 +79,35 @@ class ModelProxyBudget:
         self._config = config
         self._jobs = jobs if jobs is not None else NativeJobStore(config)
         self._projects = projects if projects is not None else PostgresWorkStore(config)
+
+    def lock_captured_identity(
+        self,
+        cur: psycopg.Cursor[dict[str, Any]],
+        workspace_id: UUID | str,
+        receipt_id: str,
+        project_id: UUID | str | None = None,
+        mission_id: UUID | str | None = None,
+        root_work_id: UUID | str | None = None,
+        work_id: UUID | str | None = None,
+        job_id: str | None = None,
+        *,
+        projects: ProjectStoreMixin | None = None,
+    ) -> None:
+        """Acquire all spend and identity locks for a captured admission identity."""
+        lock_captured_identity(
+            cur,
+            workspace_id,
+            receipt_id,
+            project_id=project_id,
+            mission_id=mission_id,
+            root_work_id=root_work_id,
+            work_id=work_id,
+            job_id=job_id,
+            projects=projects if projects is not None else self._projects,
+        )
+
+    acquire_captured_locks = lock_captured_identity
+    acquire_locks = lock_captured_identity
 
     def admit(
         self,
@@ -226,27 +257,26 @@ class ModelProxyBudget:
                     )
                 project_uuid = UUID(str(mission_row["project_id"]))
 
+            budget_work_id = work_uuid
+            root_before: UUID | None = None
+            if job_id is not None:
+                root_before = root_work_id(cur, workspace_uuid, job_id)
+                if root_before is not None:
+                    budget_work_id = root_before
+
+            self.lock_captured_identity(
+                cur,
+                workspace_uuid,
+                receipt_id,
+                project_id=project_uuid,
+                mission_id=mission_uuid,
+                root_work_id=budget_work_id,
+                work_id=work_uuid,
+                job_id=job_id,
+            )
+
             decision: SpendDecision | None = None
             if project_uuid is not None:
-                cur.execute(
-                    "SELECT project_id FROM omp_work.projects"
-                    " WHERE workspace_id=%s AND project_id=%s FOR UPDATE",
-                    (workspace_uuid, project_uuid),
-                )
-                if cur.fetchone() is None:
-                    raise ModelProxyBudgetError(
-                        "project_not_found", f"no project with id {project_uuid}"
-                    )
-                if mission_uuid is not None:
-                    cur.execute(
-                        "SELECT mission_id FROM omp_work.project_missions"
-                        " WHERE workspace_id=%s AND project_id=%s AND mission_id=%s FOR UPDATE",
-                        (workspace_uuid, project_uuid, mission_uuid),
-                    )
-                    if cur.fetchone() is None:
-                        raise ModelProxyBudgetError(
-                            "mission_not_found", f"no mission with id {mission_uuid}"
-                        )
                 # Locks the mission budget then the project budget, in the
                 # existing spend order, and pins them until settlement.
                 try:
@@ -261,24 +291,6 @@ class ModelProxyBudget:
                     )
                 except ProjectAuthorityRefused as refused:
                     raise ModelProxyBudgetError(refused.code, str(refused)) from refused
-
-            budget_work_id = work_uuid
-            root_before: UUID | None = None
-            if job_id is not None:
-                root_before = root_work_id(cur, workspace_uuid, job_id)
-                if root_before is not None:
-                    budget_work_id = root_before
-
-            # Shared advisory locks, taken before the job row so a job lock is
-            # never held while waiting for them.
-            cur.execute(
-                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                (f"omp_work.item_budget:{workspace_uuid}:{budget_work_id}",),
-            )
-            cur.execute(
-                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                (f"omp_work.task_budget:{workspace_uuid}:{work_uuid}",),
-            )
 
             _revalidate(
                 cur,
@@ -559,6 +571,130 @@ class ModelCallAdmission:
             _GATE.release()
 
 
+class _LockHelper(ProjectStoreMixin):
+    """Fallback mixin instance for locking mission and budget rows."""
+
+
+_DEFAULT_PROJECT_LOCKS = _LockHelper()
+
+
+def _lock_job(
+    cur: psycopg.Cursor[dict[str, Any]],
+    workspace_id: UUID,
+    job_id: str | None,
+) -> None:
+    """Lock the job row FOR UPDATE if a job is present."""
+    if job_id is None:
+        return
+    cur.execute(
+        "SELECT job_id FROM omp_jobs.jobs WHERE workspace_id=%s AND job_id=%s FOR UPDATE",
+        (workspace_id, job_id),
+    )
+    if cur.fetchone() is None:
+        raise ModelProxyBudgetError("job_fence_stale", f"job {job_id} not found")
+
+
+def lock_captured_identity(
+    cur: psycopg.Cursor[dict[str, Any]],
+    workspace_id: UUID | str,
+    receipt_id: str,
+    project_id: UUID | str | None = None,
+    mission_id: UUID | str | None = None,
+    root_work_id: UUID | str | None = None,
+    work_id: UUID | str | None = None,
+    job_id: str | None = None,
+    *,
+    projects: ProjectStoreMixin | None = None,
+) -> None:
+    """Acquire all spend and identity locks for a captured admission identity.
+
+    Locks in order:
+    1. Receipt operation advisory lock
+    2. Project and mission rows (FOR UPDATE)
+    3. Mission budget then project budget rows (FOR UPDATE, via ProjectStoreMixin)
+    4. Captured root-item and task advisory locks
+    5. Job row if present (FOR UPDATE)
+
+    This helper does not authorize spend or validate stop/cap/lease status,
+    so it can be reused across admission and settlement.
+    """
+    if isinstance(workspace_id, ProjectStoreMixin):
+        projects = workspace_id
+        workspace_id = receipt_id
+        receipt_id = str(project_id)
+        project_id = mission_id
+        mission_id = root_work_id
+        root_work_id = work_id
+        work_id = job_id
+        job_id = None
+
+    workspace_uuid = _as_uuid("workspace_id", workspace_id)
+    cur.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended('omp_jobs.operation:' || %s, 0))",
+        (receipt_id,),
+    )
+
+    project_uuid = _as_uuid("project_id", project_id)
+    mission_uuid = _as_uuid("mission_id", mission_id)
+
+    if project_uuid is None and mission_uuid is not None:
+        cur.execute(
+            "SELECT project_id FROM omp_work.project_missions"
+            " WHERE workspace_id=%s AND mission_id=%s",
+            (workspace_uuid, mission_uuid),
+        )
+        mission_row = cur.fetchone()
+        if mission_row is None:
+            raise ModelProxyBudgetError(
+                "mission_not_found", f"no mission with id {mission_uuid}"
+            )
+        project_uuid = UUID(str(mission_row["project_id"]))
+
+    projects_helper = projects if projects is not None else _DEFAULT_PROJECT_LOCKS
+
+    if project_uuid is not None:
+        cur.execute(
+            "SELECT project_id FROM omp_work.projects"
+            " WHERE workspace_id=%s AND project_id=%s FOR UPDATE",
+            (workspace_uuid, project_uuid),
+        )
+        if cur.fetchone() is None:
+            raise ModelProxyBudgetError(
+                "project_not_found", f"no project with id {project_uuid}"
+            )
+        if mission_uuid is not None:
+            projects_helper._lock_mission(cur, workspace_uuid, project_uuid, mission_uuid)
+            if cur.fetchone() is None:
+                raise ModelProxyBudgetError(
+                    "mission_not_found", f"no mission with id {mission_uuid}"
+                )
+            projects_helper._load_budget_locked(cur, workspace_uuid, project_uuid, mission_uuid)
+        projects_helper._load_budget_locked(cur, workspace_uuid, project_uuid, None)
+
+    task_uuid = _as_uuid("work_id", work_id)
+    root_uuid = _as_uuid("root_work_id", root_work_id)
+    if task_uuid is None:
+        if root_uuid is None:
+            raise ModelProxyBudgetError("invalid_request", "work_id is required")
+        task_uuid = root_uuid
+    if root_uuid is None:
+        root_uuid = task_uuid
+
+    cur.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+        (f"omp_work.item_budget:{workspace_uuid}:{root_uuid}",),
+    )
+    cur.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+        (f"omp_work.task_budget:{workspace_uuid}:{task_uuid}",),
+    )
+
+    _lock_job(cur, workspace_uuid, job_id)
+
+
+acquire_captured_locks = lock_captured_identity
+
+
 def _decimal_text(value: Decimal) -> str:
     if value == 0:
         return "0"
@@ -583,14 +719,6 @@ def _revalidate(
     transaction ``now()``, so a lease that expired while waiting is refused. The
     root work item is re-read and must match the one the advisory lock keyed.
     """
-    if job_id is not None:
-        # Finish the final potentially blocking lock before evaluating stop or
-        # lease. PostgreSQL may evaluate SELECT projections before FOR UPDATE waits.
-        cur.execute(
-            "SELECT job_id FROM omp_jobs.jobs WHERE workspace_id=%s AND job_id=%s FOR UPDATE",
-            (workspace_id, job_id),
-        )
-        cur.fetchone()
     _refuse_if_stopped(cur, workspace_id)
     if job_id is None:
         return

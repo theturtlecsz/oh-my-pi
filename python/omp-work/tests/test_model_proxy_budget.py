@@ -23,12 +23,13 @@ from uuid import UUID, uuid4
 import psycopg
 import pytest
 from omp_work.jobs.admission import enqueue_job
-from omp_work.jobs.budget import item_spend
+from omp_work.jobs.budget import item_spend, root_work_id
 from omp_work.jobs.store import JobError, NativeJobStore
 from omp_work.jobs.usage import record_usage
 from omp_work.model_proxy_budget import (
     ModelProxyBudget,
     ModelProxyBudgetError,
+    lock_captured_identity,
 )
 from omp_work.model_proxy_upstream import GEMINI, ModelRoute, Prepared
 from omp_work.operations.jobs_migrate import apply_jobs_migrations
@@ -1190,3 +1191,232 @@ def test_unmeasurable_failure_commits_bound_receipt_once(admission_context):
             "cache_tokens": 0, "measurement": "estimated", "model": "test-model",
             "price_version": None,
         }
+
+
+def test_lock_captured_identity_independent_transaction_probes(admission_context):
+    """Independent-transaction lock probes prove all keys block until rollback."""
+    ctx = admission_context
+    mission_id = uuid4()
+    ctx.projects.link_mission(
+        ctx.workspace_id,
+        ctx.actor_id,
+        ctx.project_id,
+        mission_id,
+        "probe mission",
+        "running",
+    )
+    ctx.projects.set_spend_budget(
+        ctx.workspace_id,
+        ctx.actor_id,
+        ctx.project_id,
+        mission_id,
+        SpendBudget("mission-budget", Decimal("50000"), Decimal("50000")),
+        ChangeAuthority("owner", uuid4(), "owner"),
+    )
+
+    root_work_id = _item(ctx, "probe root item", _GENEROUS_ITEM)
+    task_work_id = _item(ctx, "probe task item", _GENEROUS_ITEM)
+    assert root_work_id != task_work_id
+
+    job_id = _admitting_job(ctx, work_id=task_work_id)
+    receipt_id = f"probe:receipt:{uuid4()}"
+
+    kwargs = ctx.service.config.connection_kwargs("postgres")
+    holder_conn = psycopg.connect(**kwargs, autocommit=False, row_factory=dict_row)
+    probe_conn = psycopg.connect(**kwargs, autocommit=True, row_factory=dict_row)
+
+    root_item_lock_key = f"omp_work.item_budget:{ctx.workspace_id}:{root_work_id}"
+    task_lock_key = f"omp_work.task_budget:{ctx.workspace_id}:{task_work_id}"
+
+    probes = [
+        (
+            "receipt_operation",
+            "SELECT pg_advisory_lock(hashtextextended('omp_jobs.operation:' || %s, 0))",
+            (receipt_id,),
+            "SELECT pg_advisory_unlock(hashtextextended('omp_jobs.operation:' || %s, 0))",
+            True,
+        ),
+        (
+            "project_row",
+            "SELECT project_id FROM omp_work.projects WHERE workspace_id=%s AND project_id=%s FOR UPDATE",
+            (ctx.workspace_id, ctx.project_id),
+            None,
+            False,
+        ),
+        (
+            "mission_row",
+            "SELECT mission_id FROM omp_work.project_missions WHERE workspace_id=%s AND project_id=%s AND mission_id=%s FOR UPDATE",
+            (ctx.workspace_id, ctx.project_id, mission_id),
+            None,
+            False,
+        ),
+        (
+            "mission_budget",
+            "SELECT budget_id FROM omp_work.spend_budgets WHERE workspace_id=%s AND project_id=%s AND mission_id=%s AND active FOR UPDATE",
+            (ctx.workspace_id, ctx.project_id, mission_id),
+            None,
+            False,
+        ),
+        (
+            "project_budget",
+            "SELECT budget_id FROM omp_work.spend_budgets WHERE workspace_id=%s AND project_id=%s AND mission_id IS NULL AND active FOR UPDATE",
+            (ctx.workspace_id, ctx.project_id),
+            None,
+            False,
+        ),
+        (
+            "root_item_advisory",
+            "SELECT pg_advisory_lock(hashtextextended(%s, 0))",
+            (root_item_lock_key,),
+            "SELECT pg_advisory_unlock(hashtextextended(%s, 0))",
+            True,
+        ),
+        (
+            "task_advisory",
+            "SELECT pg_advisory_lock(hashtextextended(%s, 0))",
+            (task_lock_key,),
+            "SELECT pg_advisory_unlock(hashtextextended(%s, 0))",
+            True,
+        ),
+        (
+            "job_row",
+            "SELECT job_id FROM omp_jobs.jobs WHERE workspace_id=%s AND job_id=%s FOR UPDATE",
+            (ctx.workspace_id, job_id),
+            None,
+            False,
+        ),
+    ]
+
+    try:
+        holder_cur = holder_conn.cursor()
+        lock_captured_identity(
+            holder_cur,
+            workspace_id=ctx.workspace_id,
+            receipt_id=receipt_id,
+            project_id=ctx.project_id,
+            mission_id=mission_id,
+            root_work_id=root_work_id,
+            work_id=task_work_id,
+            job_id=job_id,
+            projects=ctx.projects,
+        )
+
+        probe_conn.execute("SET lock_timeout = '150ms'")
+        for _name, query, args, _unlock, is_advisory in probes:
+            with pytest.raises(psycopg.errors.LockNotAvailable):
+                if is_advisory:
+                    probe_conn.execute(query, args)
+                else:
+                    with probe_conn.transaction():
+                        probe_conn.execute(query, args)
+
+        # Roll back the holder transaction: all locks are released
+        holder_conn.rollback()
+
+        # Each probe must now succeed after rollback
+        for _name, query, args, unlock_query, is_advisory in probes:
+            if is_advisory:
+                probe_conn.execute(query, args)
+                assert unlock_query is not None
+                probe_conn.execute(unlock_query, args)
+            else:
+                with probe_conn.transaction():
+                    row = probe_conn.execute(query, args).fetchone()
+                    assert row is not None
+    finally:
+        holder_conn.close()
+        probe_conn.close()
+
+
+def test_lock_captured_identity_locks_captured_root_not_recomputed(admission_context):
+    """Captured root key, not subsequently recomputed root, is locked."""
+    ctx = admission_context
+    root1 = _item(ctx, "captured root", _GENEROUS_ITEM)
+    root2 = _item(ctx, "recomputed root", _GENEROUS_ITEM)
+    task = _item(ctx, "task item", _GENEROUS_ITEM)
+    assert root1 != root2 != task
+
+    job_parent = _admitting_job(ctx, work_id=root2)
+    job = _admitting_job(ctx, work_id=task, parent_job_id=job_parent)
+
+    receipt_id = f"captured-root-test:{uuid4()}"
+    kwargs = ctx.service.config.connection_kwargs("postgres")
+    holder = psycopg.connect(**kwargs, autocommit=False, row_factory=dict_row)
+    probe = psycopg.connect(**kwargs, autocommit=True)
+    try:
+        probe.execute("SET lock_timeout = '150ms'")
+        holder_cur = holder.cursor()
+        # In the database, the job's currently computed root is root2
+        assert root_work_id(holder_cur, ctx.workspace_id, job) == root2
+
+        # Invoking with captured root_work_id=root1 locks captured root1, not recomputed root2
+        lock_captured_identity(
+            holder_cur,
+            workspace_id=ctx.workspace_id,
+            receipt_id=receipt_id,
+            project_id=ctx.project_id,
+            root_work_id=root1,
+            work_id=task,
+            job_id=job,
+            projects=ctx.projects,
+        )
+
+        # Captured root1 key is locked: competing probe times out
+        key1 = f"omp_work.item_budget:{ctx.workspace_id}:{root1}"
+        with pytest.raises(psycopg.errors.LockNotAvailable):
+            probe.execute("SELECT pg_advisory_lock(hashtextextended(%s, 0))", (key1,))
+
+        # Recomputed root2 key is NOT locked: competing probe succeeds immediately
+        key2 = f"omp_work.item_budget:{ctx.workspace_id}:{root2}"
+        probe.execute("SELECT pg_advisory_lock(hashtextextended(%s, 0))", (key2,))
+        probe.execute("SELECT pg_advisory_unlock(hashtextextended(%s, 0))", (key2,))
+    finally:
+        holder.close()
+        probe.close()
+
+
+def test_lock_captured_identity_runs_after_stop_without_authorizing_spend(admission_context):
+    """Lock-only helper can run after stop without authorizing spend."""
+    ctx = admission_context
+    root_work_id = _item(ctx, "stopped root", _GENEROUS_ITEM)
+    task_work_id = _item(ctx, "stopped task", _GENEROUS_ITEM)
+    job_id = _admitting_job(ctx, work_id=task_work_id)
+    receipt_id = f"stopped:receipt:{uuid4()}"
+
+    _engage_stop(ctx)
+
+    before_counts = _admission_counts(ctx)
+
+    # Calling admit on a stopped workspace is refused
+    with pytest.raises(ModelProxyBudgetError) as exc:
+        _admit(ctx, _prepared("1"), work_id=task_work_id, job_id=job_id, worker_id="worker-1", fence=1)
+    assert exc.value.code == "agent_stop_engaged"
+    assert _admission_counts(ctx) == before_counts
+
+    # The lock-only helper runs and acquires all locks without authorizing spend
+    kwargs = ctx.service.config.connection_kwargs("postgres")
+    holder = psycopg.connect(**kwargs, autocommit=False, row_factory=dict_row)
+    probe = psycopg.connect(**kwargs, autocommit=True)
+    try:
+        cur = holder.cursor()
+        lock_captured_identity(
+            cur,
+            workspace_id=ctx.workspace_id,
+            receipt_id=receipt_id,
+            project_id=ctx.project_id,
+            root_work_id=root_work_id,
+            work_id=task_work_id,
+            job_id=job_id,
+            projects=ctx.projects,
+        )
+        # No spend or usage ledgers were authorized or written
+        assert _admission_counts(ctx) == before_counts
+
+        # Probe that locks are held even after stop
+        probe.execute("SET lock_timeout = '150ms'")
+        key = f"omp_work.item_budget:{ctx.workspace_id}:{root_work_id}"
+        with pytest.raises(psycopg.errors.LockNotAvailable):
+            probe.execute("SELECT pg_advisory_lock(hashtextextended(%s, 0))", (key,))
+    finally:
+        holder.close()
+        probe.close()
