@@ -59,6 +59,7 @@ class Lesson(StrictModel):
     steps: tuple[str, ...] = Field(min_length=1)
     preconditions: tuple[Precondition, ...] = ()
     claims: tuple[Claim, ...] = ()
+    research_campaign_ids: tuple[StringId, ...] = ()
 
 
 UnitState = Literal["queued", "running", "succeeded", "no_lesson", "failed"]
