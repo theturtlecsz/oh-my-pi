@@ -1631,6 +1631,174 @@ def test_stale_owner_cleanup_cannot_release_another_gate(admission_context):
     assert _admission_counts(ctx) == charged
 
 
+@pytest.mark.parametrize("fault", ["rollback-before-commit", "commit-then-raise"])
+def test_replay_commit_exception_retains_owner_until_identical_admit(
+    admission_context, monkeypatch, fault
+):
+    """A replay read-exit fault keeps one reachable owner and blocks another send.
+
+    Another budget instance resolves that owner only for the same intent, after
+    the durable receipt is read and cleaned up. Changed intent and repeated
+    reconciliation failures leave the owner, gate, and ledgers in place.
+    """
+    ctx = admission_context
+    unrelated = _item(ctx, "unrelated during replay retain")
+    holder_work = _item(ctx, "holder after replay resolution")
+    third_work = _item(ctx, "third after replay holder")
+    request_id = "replay-commit-retain"
+    prepared = _prepared("1")
+    payload = dict(actual_usd="1", input_tokens=1)
+    sends: list[str] = []
+    with _admit(ctx, prepared, request_id=request_id) as admission:
+        if not admission.settled:
+            sends.append("upstream")
+        first = admission.settle(**payload)
+    charged = _admission_counts(ctx)
+    assert charged == (1, 1, 1, 2) and sends == ["upstream"]
+
+    original = ctx.budget._jobs.transaction
+    enabled = {"on": True}
+    connections: list[object] = []
+
+    @contextmanager
+    def failing_exit(workspace_id, actor_id):
+        with original(workspace_id, actor_id) as cur:
+            connections.append(cur.connection)
+            yield cur
+            if enabled["on"] and fault == "rollback-before-commit":
+                raise RuntimeError(fault)
+        if enabled["on"] and fault == "commit-then-raise":
+            raise RuntimeError(fault)
+
+    def admit_other(body: Prepared, budget: ModelProxyBudget | None = None):
+        return (budget or ModelProxyBudget(ctx.service.config)).admit(
+            ctx.workspace_id, ctx.actor_id, ctx.project_id, None, ctx.work_id,
+            None, None, None, request_id, None, body,
+        )
+
+    waiter = holder = None
+    threads: list[threading.Thread] = []
+    resolved: list[object] = []
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(ctx.budget._jobs, "transaction", failing_exit)
+            with pytest.raises(RuntimeError, match=fault):
+                _admit(ctx, prepared, request_id=request_id)
+            assert all(conn.closed for conn in connections)
+            waiter, waiting, finished, waiter_outcomes = _start_gate_waiter(
+                ctx, unrelated, "during-replay-retain"
+            )
+            threads.append(waiter)
+            assert waiting.wait(2)
+            assert not finished.wait(0.2), "replay commit exception released the gate"
+
+            other = ModelProxyBudget(ctx.service.config)
+            for _ in range(2):
+                with pytest.raises(RuntimeError, match=fault):
+                    admit_other(prepared, other)
+                assert not finished.wait(0.2), "failed reconciliation released the gate"
+                assert _admission_counts(ctx) == charged
+            assert all(conn.closed for conn in connections)
+            assert sends == ["upstream"]
+
+            with pytest.raises(ModelProxyBudgetError) as conflict:
+                admit_other(replace(prepared, body=b'{"different":true}'), other)
+            assert conflict.value.code == "idempotency_conflict"
+            assert not finished.wait(0.2), "changed intent replaced the retained owner"
+            assert _admission_counts(ctx) == charged
+
+            enabled["on"] = False
+            errors: list[BaseException] = []
+            ready = threading.Barrier(3)
+
+            def resolve() -> None:
+                found = None
+                try:
+                    ready.wait(5)
+                    found = admit_other(prepared, ModelProxyBudget(ctx.service.config))
+                    if not found.settled:
+                        sends.append("upstream")
+                    resolved.append(found)
+                except BaseException as exc:
+                    errors.append(exc)
+                finally:
+                    if found is not None and not found.closed:
+                        found.abort()
+
+            resolvers = [threading.Thread(target=resolve) for _ in range(3)]
+            threads.extend(resolvers)
+            for thread in resolvers:
+                thread.start()
+            for thread in resolvers:
+                thread.join(timeout=7)
+            assert errors == [] and all(not thread.is_alive() for thread in resolvers)
+            assert len(resolved) == 3
+            assert all(found.settled and found.closed for found in resolved)
+            assert all(found.settle(**payload) == first for found in resolved)
+            assert sends == ["upstream"] and _admission_counts(ctx) == charged
+            assert finished.wait(5), waiter_outcomes
+            waiter.join(timeout=7)
+            assert not waiter.is_alive() and waiter_outcomes == ["admitted"]
+
+        holder = ModelProxyBudget(ctx.service.config).admit(
+            ctx.workspace_id, ctx.actor_id, None, None, holder_work,
+            None, None, None, "holder-after-replay", None, prepared,
+        )
+        third, third_waiting, third_finished, third_outcomes = _start_gate_waiter(
+            ctx, third_work, "third-after-replay"
+        )
+        threads.append(third)
+        same_done = threading.Event()
+        same_out: list[object] = []
+
+        def same_again() -> None:
+            found = None
+            try:
+                found = admit_other(prepared)
+                if not found.settled:
+                    sends.append("upstream")
+                same_out.append(found)
+            except BaseException as exc:
+                same_out.append(exc)
+            finally:
+                if found is not None and not found.closed:
+                    found.abort()
+                same_done.set()
+
+        same_thread = threading.Thread(target=same_again)
+        threads.append(same_thread)
+        same_thread.start()
+        assert third_waiting.wait(2), third_outcomes
+        for found in resolved:
+            found.abort()
+            assert found.__exit__(None, None, None) is False
+            assert found.settle(**payload) == first
+        assert not third_finished.wait(0.2), "repeated resolution released the later gate"
+        assert _admission_counts(ctx) == charged and sends == ["upstream"]
+    finally:
+        enabled["on"] = False
+        if holder is not None and not holder.closed:
+            holder.abort()
+        try:
+            cleaned = admit_other(prepared)
+            if not cleaned.settled:
+                cleaned.abort()
+        except Exception:
+            pass
+        for thread in threads:
+            thread.join(timeout=7)
+    assert holder is not None
+    assert holder.closed and not holder.settled
+    assert third_finished.wait(5), third_outcomes
+    assert same_done.wait(5)
+    assert not third.is_alive() and not same_thread.is_alive()
+    assert third_outcomes == ["admitted"]
+    assert same_out and all(getattr(item, "settled", False) for item in same_out)
+    assert sends == ["upstream"] and _admission_counts(ctx) == charged
+    for thread in threads:
+        assert not thread.is_alive()
+
+
 def test_unmeasurable_failure_commits_bound_receipt_once(admission_context):
     """Unmeasurable receipt replay preserves separate input/output bounds once."""
     ctx = admission_context

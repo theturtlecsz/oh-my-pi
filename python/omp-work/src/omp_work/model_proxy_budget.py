@@ -21,7 +21,12 @@ A consumed exit stack is not a live transaction. Cross-process exclusion is the
 database lock itself. Completed receipts are checked before authorization so
 retries can replay after cancellation or stop without another upstream call.
 Failed settlements retain their owner until private reconciliation verifies or
-commits the captured accounting in a fresh transaction.
+commits the captured accounting in a fresh transaction. A receipt replay whose
+read-transaction commit fails before ``admit`` returns keeps that closed,
+unresolved owner in process-wide state. A later identical admit resolves it
+before acquiring another gate, and only after a durable matching receipt is
+read and cleaned up. Changed intent conflicts and leaves the retained owner in
+place.
 """
 
 from __future__ import annotations
@@ -66,6 +71,9 @@ class _ProcessGate:
     lock = threading.Lock()
     transition = threading.Lock()
     owner: object | None = None
+    # Call identity -> replay admission whose commit failed before admit returned.
+    retained_replay: dict[str, ModelCallAdmission] = {}
+    retained_mu = threading.Lock()
 
 
 def _acquire_process_gate(token: object) -> None:
@@ -243,7 +251,11 @@ class ModelProxyBudget:
 
         A matching completed receipt returns ``settled=True``; callers skip the
         upstream send and can verify/replay its settlement. Changed intent is
-        an idempotency conflict, even after stop or cancellation.
+        an idempotency conflict, even after stop or cancellation. If committing
+        that read fails, the closed unresolved owner stays reachable for every
+        instance. An identical later admit resolves it before taking a new gate
+        and returns settled only after the durable receipt matches and cleanup
+        finishes. Changed intent does not replace that owner.
 
         The bound is ``prepared.max_usd`` and ``prepared.max_tokens``. Admission
         locks the project row, the mission row, then the mission and project
@@ -312,7 +324,13 @@ class ModelProxyBudget:
         # Capture complete intent without request headers or credentials.
         receipt_request = {"workspace_id": str(workspace_uuid), "fingerprint": fingerprint}
 
+        # Resolve a retained replay owner before taking the gate it still holds.
+        retained_owner = _lookup_replay_owner(identity)
+        if retained_owner is not None:
+            return retained_owner._resolve_retained_replay(receipt_request)
+
         owner = _LifecycleOwner.acquire()
+        retained = False
         try:
             cur = owner.stack.enter_context(
                 self._jobs.transaction(workspace_uuid, actor_uuid)
@@ -344,14 +362,21 @@ class ModelProxyBudget:
                     prepared=prepared, decision=None, _identity=identity,
                     _receipt_request=canonical_json(receipt_request),
                 )
-                # Commit the read transaction, then release this owner once.
+                # Commit the read, then publish settled and release this owner once.
+                # A commit exception happens before return: keep the owner reachable
+                # and do not free the gate for another send.
                 admission._state.closed = True
-                if not owner.complete():
-                    raise ModelProxyBudgetError(
-                        "already_settled", "admission is already settled or closed"
-                    )
+                try:
+                    if not owner.claim() or not owner.consume():
+                        raise ModelProxyBudgetError(
+                            "already_settled", "admission is already settled or closed"
+                        )
+                except BaseException:
+                    retained = _keep_replay_owner(identity, admission, receipt)
+                    raise
                 admission._state.receipt = receipt
                 admission._state.settled = True
+                owner.release()
                 return admission
 
             # Refuse before budget locks. A waiter blocked later is checked
@@ -443,7 +468,10 @@ class ModelProxyBudget:
                 _receipt_request=canonical_json(receipt_request),
             )
         except BaseException as error:
-            owner.complete(error)
+            # Retained replay owners stay until a later identical admit resolves
+            # them. Every other failure still cleans up and releases this token.
+            if not retained:
+                owner.complete(error)
             raise
 
 
@@ -647,11 +675,67 @@ class ModelCallAdmission:
                 raise
             return self._finish_settlement(receipt)
 
+    def _resolve_retained_replay(self, receipt_request: dict[str, object]) -> ModelCallAdmission:
+        """Resolve this replay owner. The caller must not have acquired the gate.
+
+        Identical intent re-reads the durable receipt and returns this admission
+        only after that transaction commits and cleans up. Changed intent
+        conflicts. Concurrent callers share this admission's transition lock, so
+        a later one observes the settled owner and does not release a newer gate.
+        """
+        with self._state.transition:
+            if canonical_json(receipt_request) != self._receipt_request:
+                raise ModelProxyBudgetError("idempotency_conflict", "model call intent changed")
+            if self.settled:
+                return self
+            if not self.closed or self._state.unresolved is None:
+                raise ModelProxyBudgetError("already_settled", "no unresolved settlement")
+            receipt = self._read_durable_replay()
+            self._finish_settlement(receipt)
+            return self
+
+    def _read_durable_replay(self) -> dict[str, object]:
+        """Read the committed receipt. Do not authorize or write a new charge."""
+        stack = _OneShotExitStack()
+        try:
+            cur = stack.enter_context(
+                self.budget._jobs.transaction(self.workspace_id, self.actor_id)
+            )
+
+            def no_effect() -> dict[str, object]:
+                raise AssertionError("existing receipt disappeared under operation lock")
+
+            try:
+                receipt = self.budget._jobs.run_operation(
+                    cur,
+                    f"model_call:receipt:{self._identity}",
+                    self.workspace_id,
+                    "model_call_receipt",
+                    json.loads(self._receipt_request),
+                    no_effect,
+                ).result
+            except JobError as refused:
+                raise ModelProxyBudgetError(refused.code) from refused
+            fingerprint = json.loads(self._receipt_request)["fingerprint"]
+            if (
+                receipt.get("root_work_id") != str(self.root_work_id)
+                or receipt.get("fingerprint") != fingerprint
+                or not isinstance(receipt.get("settlement"), dict)
+            ):
+                raise ModelProxyBudgetError("idempotency_conflict", "settlement receipt changed")
+            stack.close()
+            return receipt
+        except BaseException as error:
+            if not stack.consumed:
+                stack.__exit__(type(error), error, error.__traceback__)
+            raise
+
     def _finish_settlement(self, receipt: dict[str, object]) -> dict[str, object]:
         # Called only after the writing/verifying transaction and cleanup finish.
         self._state.receipt = receipt
         self._state.settled = True
         self._state.unresolved = None
+        _drop_replay_owner(self._identity, self)
         self._owner.release()
         return {**receipt["result"], "actual_usd": Decimal(receipt["settlement"]["actual_usd"])}
 
@@ -763,6 +847,42 @@ class ModelCallAdmission:
             return self._owner.consume(error)
         finally:
             self._owner.release()
+
+
+def _lookup_replay_owner(identity: str) -> ModelCallAdmission | None:
+    with _ProcessGate.retained_mu:
+        found = _ProcessGate.retained_replay.get(identity)
+    return found
+
+
+def _keep_replay_owner(
+    identity: str, admission: ModelCallAdmission, receipt: dict[str, object]
+) -> bool:
+    """Retain a replay owner that failed before admit returned.
+
+    A different owner that still holds the gate is not replaced. The admission
+    stays closed and unresolved so another instance cannot send it again.
+    """
+    settlement = receipt.get("settlement")
+    payload = canonical_json(settlement) if isinstance(settlement, dict) else "{}"
+    admission._state.closed = True
+    admission._state.unresolved = _Settlement(payload, None)
+    with _ProcessGate.retained_mu:
+        current = _ProcessGate.retained_replay.get(identity)
+        if (
+            current is not None
+            and current is not admission
+            and _ProcessGate.owner is current._owner.token
+        ):
+            return False
+        _ProcessGate.retained_replay[identity] = admission
+        return True
+
+
+def _drop_replay_owner(identity: str, admission: ModelCallAdmission) -> None:
+    with _ProcessGate.retained_mu:
+        if _ProcessGate.retained_replay.get(identity) is admission:
+            del _ProcessGate.retained_replay[identity]
 
 
 class _LockHelper(ProjectStoreMixin):
