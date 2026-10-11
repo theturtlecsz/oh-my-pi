@@ -11,8 +11,8 @@ Contract defended:
 - Basename aliases belong only to unique eligible producer files; outputs require exact tokens.
 - Exclusions (Do not touch sections in inline/bold/heading/list formats, plus Assumptions and
   Deferred) are parsed out, so a path named only under an exclusion cannot justify an edge.
-- Owner slice edges, implementer-after-owner edges and the final changelog
-  edge are preserved; union-merged inventory never justifies ordering.
+- Owner dependents, issue-linked owner approvals, consumed owner results and final changelog
+  aggregation are preserved; union-merged inventory never justifies ordering.
 - `check-plan` and both plan-promotion paths (`plan_promotion=auto` and the manual `promote`
   command) apply the same gate, so a disjoint order-only chain is refused as invalid.
 
@@ -677,20 +677,21 @@ def test_owner_and_changelog_cases_pass(staged_flood, tmp_path):
     mod, _, _ = staged_flood
 
     pdir_owner_after = tmp_path / "plan_owner_after"
-    write_slice(pdir_owner_after, "ITEM-s01", deps=[], files=["src/a.ts"],
-                body="Implement ITEM-s01.\nDone when: test_ITEM_s01.py passes.\nDo not touch: none")
-    write_slice(pdir_owner_after, "ITEM-s02", deps=["ITEM-s01"], files=[], owner=True,
+    write_slice(pdir_owner_after, "OMP-584-s01", deps=[], files=["src/a.ts"],
+                body="Implement OMP-584-s01.\nDone when: test_ITEM_s01.py passes.\nDo not touch: none")
+    write_slice(pdir_owner_after, "OMP-584-s02", deps=["OMP-584-s01"], files=[], owner=True,
                 owner_cmd="omp-work approve --issue OMP-584",
                 body="Owner runs: omp-work approve --issue OMP-584\nEvidence: ok\nDone when: passes.")
-    violations, slices = mod.validate_slices("ITEM", pdir_owner_after)
+    violations, slices = mod.validate_slices("OMP-584", pdir_owner_after)
     assert slices[1]["owner_cmd"] == "omp-work approve --issue OMP-584"
     assert violations == [], f"Owner slice depending on implementer slice must pass: {violations}"
 
     pdir_owner_before = tmp_path / "plan_owner_before"
     write_slice(pdir_owner_before, "ITEM-s01", deps=[], files=[], owner=True,
-                body="Owner runs: approve\nEvidence: ok\nDone when: passes.")
+                outputs=["artifacts/result.json"],
+                body="Owner runs: check\nEvidence: artifacts/result.json\nDone when: passes.")
     write_slice(pdir_owner_before, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"],
-                body="Implement ITEM-s02 after owner step.\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
+                body="Consume artifacts/result.json.\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
     violations, _ = mod.validate_slices("ITEM", pdir_owner_before)
     assert violations == [], f"Implementer slice depending on owner slice must pass: {violations}"
 
@@ -1019,3 +1020,116 @@ def test_dependency_context_evidence_lists_preserve_exact_paths_and_tokens(stage
     }
     assert context["work_text"].endswith("## Work\nconsume peer-token")
     assert "blocked-token" in context["excluded_tokens"]
+
+
+@pytest.mark.parametrize("source,work,producer_exclusion,consumer_exclusion,passes", [
+    ("evidence", "Consume artifacts/result.json.", "none", "none", True),
+    ("outputs", "Consume artifacts/result.json.", "none", "none", True),
+    ("missing", "Consume artifacts/result.json.", "none", "none", False),
+    ("evidence", "Implement independent widget.", "none", "none", False),
+    ("evidence", "Consume artifacts/unrelated.json.", "none", "none", False),
+    ("outputs", "Consume result.json.", "none", "none", False),
+    ("evidence", "Do not consume artifacts/result.json.", "none", "none", False),
+    ("outputs", "We may consume artifacts/result.json later.", "none", "none", False),
+    ("evidence", "Consume artifacts/result.json for reference.", "none", "none", False),
+    ("outputs", "Consuming artifacts/result.json is not required.", "none", "none", False),
+    ("evidence", "Read artifacts/unrelated.json; artifacts/result.json stays unchanged.",
+     "none", "none", False),
+    ("evidence", "Consume artifacts/result.json.", "artifacts/result.json", "none", False),
+    ("outputs", "Consume artifacts/result.json.", "artifacts/result.json", "none", False),
+    ("evidence", "Consume artifacts/result.json.", "none", "artifacts/result.json", False),
+    ("outputs", "Consume artifacts/result.json.", "none", "artifacts/result.json", False),
+    ("evidence", "Do not consume artifacts/result.json. Consume artifacts/result.json.",
+     "none", "none", True),
+])
+def test_owner_result_edges_require_affirmative_unexcluded_result(
+        staged_flood, tmp_path, source, work, producer_exclusion, consumer_exclusion, passes):
+    """Owner ordering needs named consumption; exclusions override even declared metadata outputs."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path)
+    evidence = "artifacts/result.json" if source == "evidence" else "check complete"
+    write_slice(pdir, "ITEM-s01", owner=True, files=["artifacts/result.json"],
+                outputs=["artifacts/result.json"] if source == "outputs" else [],
+                body=f"Owner runs: check\nEvidence: {evidence}\nDone when: passes.\n"
+                     f"Do not touch: {producer_exclusion}")
+    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/consumer.ts"],
+                body=f"{work}\nDone when: test_consumer.py passes.\n"
+                     f"Do not touch: {consumer_exclusion}")
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    if passes:
+        assert violations == []
+    else:
+        assert len(violations) == 1
+        assert "ITEM-s02: depends_on ITEM-s01" in violations[0]
+        assert "owner result evidence" in violations[0]
+
+
+def test_unrelated_owner_result_cannot_justify_another_owner_edge(staged_flood, tmp_path):
+    """Consuming one owner's result cannot justify a second, unrelated owner dependency."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path)
+    for sid, result in [("ITEM-s01", "artifacts/first.json"), ("ITEM-s02", "artifacts/second.json")]:
+        write_slice(pdir, sid, owner=True, outputs=[result])
+    write_slice(pdir, "ITEM-s03", deps=["ITEM-s01", "ITEM-s02"], files=["src/consumer.ts"],
+                body="Consume artifacts/first.json.\nDone when: test_consumer.py passes.\nDo not touch: none")
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    assert len(violations) == 1
+    assert "ITEM-s03: depends_on ITEM-s02" in violations[0]
+    assert "evidence" in violations[0]
+
+
+@pytest.mark.parametrize("owner,command,metadata,passes", [
+    (True, "omp-work approve --issue OMP-584", True, True),
+    (True, "omp-work approve --issue OMP-584", False, True),
+    (True, "\n- `omp-work approve --issue OMP-584`", False, True),
+    (True, "omp-work approve --issue OMP-999", True, False),
+    (True, "approve", True, False),
+    (True, "Do not run omp-work approve --issue OMP-584", False, False),
+    (False, "omp-work approve --issue OMP-584", True, False),
+    (True, "omp-work approve --issue OMP-584 --dry-run", True, False),
+])
+def test_approval_edges_require_owner_command_for_linked_issue(
+        staged_flood, tmp_path, owner, command, metadata, passes):
+    """Real synthetic owner approvals permit edges; approval filenames and unrelated commands do not."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path, "OMP-584")
+    write_slice(pdir, "OMP-584-s01", owner=owner, files=["artifacts/approval.json"],
+                owner_cmd=command if metadata else None,
+                body=f"Owner runs: {command if not metadata else 'check'}\nEvidence: check complete\n"
+                     "Done when: test_approval.py passes.\nDo not touch: none")
+    write_slice(pdir, "OMP-584-s02", deps=["OMP-584-s01"], files=["src/approval-widget.ts"])
+    violations, _ = mod.validate_slices("OMP-584", pdir)
+    if passes:
+        assert violations == []
+    else:
+        assert len(violations) == 1
+        assert "OMP-584-s02: depends_on OMP-584-s01" in violations[0]
+
+
+@pytest.mark.parametrize("final", [True, False])
+def test_changelog_aggregation_requires_all_other_slices(staged_flood, tmp_path, final):
+    """Changelog exemption applies only to aggregation after every other slice."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path)
+    write_slice(pdir, "ITEM-s01", files=["src/a.ts"])
+    write_slice(pdir, "ITEM-s02", owner=True)
+    write_slice(pdir, "ITEM-s03", deps=["ITEM-s01", "ITEM-s02"] if final else ["ITEM-s01"],
+                files=["CHANGELOG.md"])
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    if final:
+        assert violations == []
+    else:
+        assert any("touches the changelog but is not the last slice" in v for v in violations)
+        assert any("ITEM-s03: depends_on ITEM-s01 orders the slice only" in v for v in violations)
+
+
+
+def test_owner_approval_links_nested_slices_to_root_issue(staged_flood, tmp_path):
+    """Nested slice IDs still use the root issue's approval command, as Flood does."""
+    mod, _, _ = staged_flood
+    pdir = _plan_tree(tmp_path, "OMP-584-s01")
+    write_slice(pdir, "OMP-584-s01-s01", owner=True,
+                owner_cmd="omp-work approve --issue OMP-584")
+    write_slice(pdir, "OMP-584-s01-s02", deps=["OMP-584-s01-s01"], files=["src/widget.ts"])
+    violations, _ = mod.validate_slices("OMP-584-s01", pdir)
+    assert violations == []
