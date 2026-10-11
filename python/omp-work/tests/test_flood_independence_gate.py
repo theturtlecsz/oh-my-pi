@@ -27,6 +27,7 @@ Staging contract:
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -53,34 +54,45 @@ def _support_files(src_dir: Path) -> list[str]:
     return sorted(f.name for f in src_dir.iterdir() if f.is_file() and f.suffix == ".py" and f.name != "flood.py")
 
 
-def _resolve_stage(tmp_root: Path) -> tuple[Path, list[Path]]:
-    """Produce an executable flood.py copy plus the paths that must stay byte-identical.
+def _snapshot(path: Path) -> tuple[str, int]:
+    return hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_mtime_ns
 
-    Returns (flood.py path, untouched originals). Raises unittest-style SkipTest via pytest.skip
+
+def _resolve_stage(tmp_root: Path) -> tuple[Path, dict[Path, tuple[str, int]]]:
+    """Produce an executable flood.py copy plus pre-use hashes and mtimes of every original.
+
+    Returns (flood.py path, original snapshots). Raises unittest-style SkipTest via pytest.skip
     when there is nothing to execute.
     """
     selected = os.environ.get("OMP584_FLOOD_SOURCE")
+    raw_patch = None
     if selected:
         src_dir = Path(selected).resolve()
         src_flood = src_dir / "flood.py"
         # An explicit selection that is not usable is a configuration error, not "nothing to test":
         # fail visibly so the operator sees the bad path instead of a green skip.
         assert src_flood.is_file(), f"OMP584_FLOOD_SOURCE={src_dir} holds no flood.py"
-        dest = tmp_root / "flood.py"
-        shutil.copy2(src_flood, dest)
-        for name in _support_files(src_dir):
-            shutil.copy2(src_dir / name, tmp_root / name)
-        return dest, [src_flood]
+    else:
+        src_dir = STAGE_DIR
+        src_flood = src_dir / "flood.py"
+        if not src_flood.is_file():
+            pytest.skip(
+                "no staged flood.py to test: set OMP584_FLOOD_SOURCE to an already-patched directory, "
+                f"or stage raw {STAGE_DIR}/flood.py with {PATCH.name}"
+            )
+        raw_patch = (STAGE_DIR / PATCH.name) if (STAGE_DIR / PATCH.name).is_file() else PATCH
+        assert raw_patch.is_file(), f"raw staged flood.py requires {raw_patch}"
 
-    raw_flood = STAGE_DIR / "flood.py"
-    raw_patch = (STAGE_DIR / PATCH.name) if (STAGE_DIR / PATCH.name).is_file() else PATCH
-    if raw_flood.is_file() and raw_patch.is_file():
-        dest = tmp_root / "flood.py"
-        shutil.copy2(raw_flood, dest)
-        for name in _support_files(STAGE_DIR):
-            shutil.copy2(STAGE_DIR / name, tmp_root / name)
+    sources = [src_flood, *(src_dir / name for name in _support_files(src_dir))]
+    if raw_patch is not None:
+        sources.append(raw_patch)
+    originals = {source: _snapshot(source) for source in sources}
+    for source in sources:
+        shutil.copy2(source, tmp_root / source.name)
+    dest = tmp_root / "flood.py"
+    if raw_patch is not None:
         res = subprocess.run(
-            ["patch", "-p1", "--forward", "-i", str(raw_patch)],
+            ["patch", "-p1", "--forward", "-i", str(tmp_root / raw_patch.name)],
             cwd=tmp_root,
             capture_output=True,
             text=True,
@@ -90,12 +102,7 @@ def _resolve_stage(tmp_root: Path) -> tuple[Path, list[Path]]:
                 "staged omp584-dependencies.patch did not apply to the staged flood.py "
                 f"(exit {res.returncode}):\nstdout: {res.stdout}\nstderr: {res.stderr}"
             )
-        return dest, [raw_flood, raw_patch]
-
-    pytest.skip(
-        "no staged flood.py to test: set OMP584_FLOOD_SOURCE to an already-patched directory, "
-        f"or stage raw {STAGE_DIR}/flood.py with {PATCH.name}"
-    )
+    return dest, originals
 
 
 def _load(path: Path):
@@ -111,7 +118,12 @@ def staged_flood(tmp_path_factory: pytest.TempPathFactory):
     """An executable patched flood.py in temp, with the originals it was copied from."""
     stage = tmp_path_factory.mktemp("flood_exec")
     flood_py, originals = _resolve_stage(stage)
-    return _load(flood_py), stage, originals
+    try:
+        mod = _load(flood_py)
+        assert {path: _snapshot(path) for path in originals} == originals
+        yield mod, stage, originals
+    finally:
+        assert {path: _snapshot(path) for path in originals} == originals
 
 
 def _make_repo(tmp_path: Path) -> Path:
@@ -736,7 +748,7 @@ def test_malformed_selected_source_fails_visibly_and_stays_unmodified(tmp_path, 
     with pytest.raises(SyntaxError):
         _load(dest)
     assert (selected / "flood.py").read_text() == broken
-    assert originals == [selected / "flood.py"]
+    assert originals == {selected / "flood.py": _snapshot(selected / "flood.py")}
 
 
 @pytest.mark.parametrize("existing_bytecode", [False, True])
@@ -758,6 +770,7 @@ def test_selected_candidate_executes_in_temp_without_touching_original(tmp_path,
             b"pre-existing bytecode"
         )
     before = {p.relative_to(selected): p.read_bytes() for p in selected.rglob("*") if p.is_file()}
+    snapshots = {selected / name: _snapshot(selected / name) for name in ("flood.py", "helper.py")}
     monkeypatch.setenv("OMP584_FLOOD_SOURCE", str(selected))
 
     def reject_patch(*args, **kwargs):
@@ -766,13 +779,48 @@ def test_selected_candidate_executes_in_temp_without_touching_original(tmp_path,
     monkeypatch.setattr(subprocess, "run", reject_patch)
     stage = tmp_path / "exec"
     stage.mkdir()
-    dest, _ = _resolve_stage(stage)
+    dest, originals = _resolve_stage(stage)
     mod = _load(dest)
 
     assert Path(mod.__file__).resolve().parent == stage
+    assert originals == snapshots
+    assert (stage / "helper.py").read_bytes() == before[Path("helper.py")]
     assert (stage / "executed.txt").read_text() == "VALUE = 41\n"
     after = {p.relative_to(selected): p.read_bytes() for p in selected.rglob("*") if p.is_file()}
     assert after == before, "selected source or its bytecode changed during staging/execution"
+    assert {path: _snapshot(path) for path in originals} == originals
+
+
+def test_raw_stage_preserves_source_support_and_patch_hashes(tmp_path, monkeypatch):
+    """Loading the patched gate leaves all raw inputs byte-identical, with unchanged mtimes."""
+    if (STAGE_DIR / "flood.py").is_file():
+        monkeypatch.delenv("OMP584_FLOOD_SOURCE", raising=False)
+        src_dir = STAGE_DIR
+        raw_patch = STAGE_DIR / PATCH.name if (STAGE_DIR / PATCH.name).is_file() else PATCH
+        sources = [src_dir / "flood.py", *(src_dir / name for name in _support_files(src_dir)), raw_patch]
+    elif selected := os.environ.get("OMP584_FLOOD_SOURCE"):
+        src_dir = Path(selected).resolve()
+        sources = [src_dir / "flood.py", *(src_dir / name for name in _support_files(src_dir))]
+    else:
+        pytest.skip("no raw stage or OMP584_FLOOD_SOURCE supplies flood.py")
+
+    before = {path: (path.read_bytes(), _snapshot(path)) for path in sources}
+    stage = tmp_path / "exec"
+    stage.mkdir()
+    dest, originals = _resolve_stage(stage)
+    mod = _load(dest)
+    pdir = tmp_path / "plan"
+    write_slice(pdir, "ITEM-s01", files=["src/a.ts"])
+    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"])
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    assert any("ITEM-s02: depends_on ITEM-s01 orders the slice only" in v for v in violations)
+
+    assert originals == {path: snapshot for path, (_, snapshot) in before.items()}
+    assert {path: (path.read_bytes(), _snapshot(path)) for path in sources} == before
+    for name in _support_files(src_dir):
+        assert (stage / name).read_bytes() == before[src_dir / name][0]
+    for pattern in ("__pycache__", "*.rej", "*.orig"):
+        assert not list(src_dir.rglob(pattern)), f"staging left {pattern} in source directory"
 
 
 def test_check_plan_cli_uses_the_gate_and_manual_promote_blocks_invalid(staged_flood, tmp_path):
