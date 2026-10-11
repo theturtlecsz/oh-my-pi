@@ -472,6 +472,31 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
     def _transaction(
         self, workspace_id: UUID, actor_id: UUID, *, serializable: bool = False
     ) -> Iterator[psycopg.Cursor[dict[str, object]]]:
+        with self._work_transaction(
+            workspace_id, actor_id, serializable=serializable
+        ) as cur:
+            yield cur
+
+    @contextmanager
+    def _read_transaction(
+        self, workspace_id: UUID, actor_id: UUID
+    ) -> Iterator[psycopg.Cursor[dict[str, object]]]:
+        """Read Committed session for a row another transaction may have committed.
+
+        ``ensure_project`` re-reads through this after an aborted attempt. Read
+        Committed does not take a serializable snapshot, so the observation
+        cannot itself fail with a serialization error. A caller that injects
+        ``40001`` on ``_transaction`` does not wrap this read.
+        """
+        with self._work_transaction(
+            workspace_id, actor_id, serializable=False
+        ) as cur:
+            yield cur
+
+    @contextmanager
+    def _work_transaction(
+        self, workspace_id: UUID, actor_id: UUID, *, serializable: bool = False
+    ) -> Iterator[psycopg.Cursor[dict[str, object]]]:
         with psycopg.connect(
             **self._config.connection_kwargs("omp_work_app"), row_factory=dict_row
         ) as conn:
