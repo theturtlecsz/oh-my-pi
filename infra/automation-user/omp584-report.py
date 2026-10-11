@@ -145,13 +145,40 @@ def report(flood_dir: Path, rollout_path: Path) -> tuple[dict, int]:
                     raise ValueError("malformed plan-start: requires timestamp at and string code_sha256")
                 if not included(start):
                     continue
-                result["plans"].append({"id": task_id, "attempt": success["attempt"],
-                    "code_sha256": start["code_sha256"], "slices": None, "roots": None,
-                    "implementer_slices": None, "implementer_roots": None})
+                plan = {"id": task_id, "attempt": success["attempt"],
+                    "code_sha256": start["code_sha256"], "slices": len(slices), "roots": None,
+                    "implementer_slices": None, "implementer_roots": None}
+                result["plans"].append(plan)
+                if not all(isinstance(s, str) and s.strip() for s in slices) or len(set(slices)) != len(slices):
+                    raise ValueError("malformed slices: ids must be nonblank and unique")
+                if flood is None:
+                    continue
+                roots = implementer_slices = implementer_roots = 0
+                for slice_id in slices:
+                    path = flood_dir / "tasks" / f"{slice_id}.md"
+                    try:
+                        text = path.read_text(encoding="utf-8")
+                    except FileNotFoundError:
+                        raise ValueError(f"missing slice file: {slice_id}") from None
+                    meta, _ = flood.parse_front_matter(text)
+                    root = meta.get("depends_on") == [] and any(
+                        line.strip() == "depends_on: []" for line in text.splitlines()
+                    )
+                    owner = flood.is_owner(meta)
+                    roots += root
+                    implementer_slices += not owner
+                    implementer_roots += root and not owner
+                plan.update(roots=roots, implementer_slices=implementer_slices,
+                            implementer_roots=implementer_roots)
             except Exception as exc:
                 errors.append(f"{task_id}: {exc}")
     result["plans"].sort(key=lambda plan: plan["id"])
     result["plan_count"] = len(result["plans"])
+    result["independent_plan_count"] = sum(
+        plan["roots"] is not None and plan["roots"] >= 2 for plan in result["plans"]
+    )
+    if result["plan_count"] >= 10:
+        result["verdicts"]["plans"] = "met" if result["independent_plan_count"] * 2 > result["plan_count"] else "unmet"
     result["start_count"] = len(result["starts"])
     if result["starts"]:
         result["median"] = statistics.median(e["running_implementers"] for e in result["starts"])

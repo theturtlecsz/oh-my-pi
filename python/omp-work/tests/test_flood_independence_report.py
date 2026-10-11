@@ -1,4 +1,4 @@
-"""OMP-584 report classifies isolated history and defers slice evidence."""
+"""OMP-584 report classifies isolated history and canonical slice evidence."""
 
 from __future__ import annotations
 
@@ -58,7 +58,7 @@ class Evidence:
 
     def plan(self, name, roots=2, at=AFTER, sha=SHA):
         path = self.directory / "tasks" / f"{name}.md"
-        path.write_text("---\ndepends_on: []\ndepends_on: []\n---\nTask body\n")
+        path.write_text("---\ndepends_on: []\n---\nTask body\n")
         slices = [self.slice(f"{name}-s{i}", "[]" if i < roots else "[upstream]") for i in range(3)]
         self.tasks[name] = dict(slices=slices, history=[
             dict(phase="plan-start", attempt=1, at=at, code_sha256=sha),
@@ -125,35 +125,40 @@ def test_missing_functions_or_import_error_fail(evidence, source):
 
 
 @pytest.mark.parametrize("function", ["parse_front_matter", "is_owner"])
-def test_slice_calls_are_deferred_without_losing_classified_counts(evidence, function):
+def test_slice_call_failures_keep_classified_counts(evidence, function):
     (evidence.directory / "flood.py").write_text(STUB + f"\ndef {function}(value): raise RuntimeError('call broke')\n")
     evidence.plan("plan")
     evidence.starts(running=4)
     code, report = evidence.run()
-    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    assert code == 2 and report["status"] == "failure" and "call broke" in report["error"]
     assert report["plan_count"] == 1 and report["start_count"] == 10
     assert report["verdicts"] == {"plans": "pending", "starts": "met"}
 
 
-def test_qualifiers_sorted_once_with_independence_pending(evidence):
+def test_qualifiers_sorted_once_with_canonical_independence(evidence):
     for i in reversed(range(10)):
         evidence.plan(f"p{i}")
     evidence.starts(running=4)
     code, report = evidence.run()
     assert code == 2 and report["status"] == "pending" and report["error"] is None
     assert report["plans"] == [dict(id=f"p{i}", attempt=1, code_sha256=SHA,
-        slices=None, roots=None, implementer_slices=None, implementer_roots=None) for i in range(10)]
-    assert report["plan_count"] == 10 and report["independent_plan_count"] == 0
-    assert report["verdicts"] == {"plans": "pending", "starts": "met"}
+        slices=3, roots=2, implementer_slices=3, implementer_roots=2) for i in range(10)]
+    assert report["plan_count"] == 10 and report["independent_plan_count"] == 10
+    assert report["verdicts"] == {"plans": "met", "starts": "met"}
 
 
 @pytest.mark.parametrize("parked", [".failed", ".dropped"])
-def test_slice_files_are_deferred_even_when_only_parked_twin_exists(evidence, parked):
+def test_missing_canonical_slice_fails_even_when_parked_twin_exists(evidence, parked):
+    evidence.plan("qualifier")
     task = evidence.plan("p")
-    task["slices"] = [evidence.slice("parked", parked=parked)]
+    slice_id = task["slices"][0]
+    path = evidence.directory / "tasks" / f"{slice_id}.md"
+    path.rename(path.with_name(path.name + parked))
     code, report = evidence.run()
-    assert code == 2 and report["status"] == "pending" and report["error"] is None
-    assert report["plan_count"] == 1
+    assert code == 2 and report["status"] == "failure"
+    assert "missing" in report["error"] and slice_id in report["error"]
+    assert report["plan_count"] == 2 and report["independent_plan_count"] == 1
+    assert report["verdicts"]["plans"] != "met"
 
 
 def test_excluded_plans_are_not_read_and_review_time_is_not_cutoff(evidence):
@@ -247,14 +252,14 @@ def test_malformed_implement_start_fails_without_losing_other_counts(evidence, c
     assert code == 2 and report["status"] == "failure" and report["start_count"] == 10
 
 
-def test_short_start_side_and_plan_independence_stay_pending(evidence):
+def test_short_start_side_stays_pending_with_independent_plans(evidence):
     for i in range(10):
         evidence.plan(f"p{i}")
     evidence.starts(count=9, running=4)
     evidence.tasks["never_planned"] = dict(slices=["absent"], history=[])
     code, report = evidence.run()
     assert code == 2 and report["status"] == "pending" and report["error"] is None
-    assert report["verdicts"] == {"plans": "pending", "starts": "pending"}
+    assert report["verdicts"] == {"plans": "met", "starts": "pending"}
     assert report["plan_count"] == 10 and report["start_count"] == 9
 
 
@@ -352,3 +357,61 @@ def test_missing_history_and_non_promoted_tasks_are_excluded(evidence):
     code, report = evidence.run()
     assert code == 2 and report["status"] == "pending" and report["error"] is None
     assert report["plan_count"] == 0
+
+
+@pytest.mark.parametrize("depends", [None, ""])
+def test_missing_or_blank_dependencies_are_not_roots(evidence, depends):
+    for i in range(10):
+        task = evidence.plan(f"p{i}")
+        task["slices"] = [evidence.slice(f"p{i}-s{j}", depends=depends) for j in range(2)]
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    assert report["independent_plan_count"] == 0 and report["verdicts"]["plans"] == "unmet"
+    assert all(plan["roots"] == plan["implementer_roots"] == 0 for plan in report["plans"])
+
+
+@pytest.mark.parametrize("owners,counts", [
+    (["true", "false", "false"], (2, 2, 1)),
+    (["true", "true", "false"], (2, 1, 0)),
+])
+def test_owner_roots_count_toward_independence_only(evidence, owners, counts):
+    task = evidence.plan("p")
+    task["slices"] = [evidence.slice(f"p-s{i}", depends="[]" if i < 2 else "[upstream]", owner=owner)
+                      for i, owner in enumerate(owners)]
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    plan = report["plans"][0]
+    assert plan["slices"] == 3
+    assert (plan["roots"], plan["implementer_slices"], plan["implementer_roots"]) == counts
+    assert report["independent_plan_count"] == 1
+
+
+@pytest.mark.parametrize("count,independent,verdict", [(9, 9, "pending"), (10, 5, "unmet"), (10, 6, "met")])
+def test_plan_verdict_requires_ten_plans_and_strict_majority(evidence, count, independent, verdict):
+    for i in range(count):
+        evidence.plan(f"p{i}", roots=2 if i < independent else 1)
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    assert report["plan_count"] == count and report["independent_plan_count"] == independent
+    assert report["verdicts"] == {"plans": verdict, "starts": "pending"}
+
+
+@pytest.mark.parametrize("slices", [["same", "same"], [""], ["  "], [None]])
+def test_malformed_slice_ids_fail_without_losing_other_qualifiers(evidence, slices):
+    evidence.plan("qualifier")
+    evidence.plan("bad")["slices"] = slices
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "failure"
+    assert "malformed" in report["error"] and "bad" in report["error"]
+    assert report["plan_count"] == 2 and report["independent_plan_count"] == 1
+    assert next(plan for plan in report["plans"] if plan["id"] == "bad")["slices"] == len(slices)
+
+
+def test_canonical_files_ignore_parked_twins(evidence):
+    evidence.plan("p")
+    for slice_id in evidence.tasks["p"]["slices"]:
+        (evidence.directory / "tasks" / f"{slice_id}.md.failed").write_text("not front matter")
+        (evidence.directory / "tasks" / f"{slice_id}.md.dropped").write_text("not front matter")
+    code, report = evidence.run()
+    assert code == 2 and report["error"] is None
+    assert report["plans"][0]["roots"] == 2 and report["independent_plan_count"] == 1
