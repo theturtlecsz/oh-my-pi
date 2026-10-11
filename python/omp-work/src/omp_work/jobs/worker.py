@@ -200,11 +200,14 @@ class JobWorker:
                 return next(iter(self.handlers.values()))
         raise RuntimeError(f"No handler found for job {job.get('job_id')} with kind {job.get('kind')}")
 
-    def tick(self) -> str | None:
+    def tick(self, job_id: str | None = None) -> str | None:
         """Run one worker cycle: reconcile, claim, execute with renewal, settle, and drain outbox.
 
         ``observe`` runs when the job has ``lease_expired`` or ``lease_resumed``.
         ``Frozen`` from the handler leaves the job leased and unsettled.
+        Optional ``job_id`` is passed to ``claim_job``. Renewal, the handler,
+        and settlement then run for that claimed job on this same path.
+        Omitting it keeps the unfiltered claim.
         """
         reconcile_jobs(
             self.store,
@@ -219,6 +222,7 @@ class JobWorker:
             actor_id=self.actor_id,
             worker_id=self.worker_id,
             resource_limits=self.current_resource_limits,
+            job_id=job_id,
         )
         job = claimed.get("job")
         if job is None:
