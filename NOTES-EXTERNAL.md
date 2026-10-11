@@ -719,8 +719,9 @@ recognized:
 
 - `OMP584_FLOOD_SOURCE=<dir>` names a directory holding an already-patched
   `flood.py`. The directory is copied into temp and executed unpatched; the
-  selected source is never patched, imported in place, or given a
-  `__pycache__`.
+  selected source is never patched or imported in place; existing bytecode
+  stays unchanged and no original bytecode is generated. Staging tests inject
+  temporary sources, so they run even when no external source is available.
 - Otherwise the explicitly staged raw directory
   `infra/automation-user/omp584-flood-stage/` is used: a raw `flood.py` plus
   the eventual `infra/automation-user/omp584-dependencies.patch` are copied into
@@ -745,8 +746,8 @@ acceptance; the acceptance evidence must come from real plans after activation.
 ## Unchanged external test conflict: `tests/test_planner.py`
 
 The live external suite `/home/ompbot/flood/tests/test_planner.py` currently
-encodes plans the new gate rejects. Its `test_gate_accepts_a_valid_set_and
-_rejects_each_violation` builds `ITEM-s01` with no dependency and `ITEM-s02`
+encodes plans the new gate rejects. Its
+`test_gate_accepts_a_valid_set_and_rejects_each_violation` builds `ITEM-s01` with no dependency and `ITEM-s02`
 with `depends_on: [ITEM-s01]` whose work text neither shares a non-union file
 nor consumes a named producer path — exactly the disjoint order-only chain the
 gate now refuses. The same holds for the `plan_item`-based promotion tests:
