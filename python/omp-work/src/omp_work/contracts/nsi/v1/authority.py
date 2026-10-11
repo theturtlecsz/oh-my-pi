@@ -55,21 +55,20 @@ def _json_wire(value: object) -> bool:
     return False
 
 
+def _accepts_model(model: type[models.NSIModel], value: dict) -> bool:
+    """Validate plain data against one concrete model and its wire schema."""
+    try:
+        if model.schema_name is not None:
+            validate_instance(model.schema_name, value)
+        model.model_validate(value)
+    except (ValidationError, ValueError):
+        return False
+    return True
+
+
 def _accepts_record(value: dict) -> bool:
     """True when one exported model accepts the wire dict without coercion."""
-    for model in _RECORD_MODELS:
-        schema_name = model.schema_name
-        if schema_name is not None:
-            try:
-                validate_instance(schema_name, value)
-            except ValueError:
-                continue
-        try:
-            model.model_validate(value)
-        except (ValidationError, ValueError):
-            continue
-        return True
-    return False
+    return any(_accepts_model(model, value) for model in _RECORD_MODELS)
 
 
 def _admit_wire(content: object) -> None:
@@ -120,6 +119,10 @@ def _project_model(model: models.NSIModel) -> dict[str, object]:
         if _unset_default(model, key, value):
             continue
         projected[key] = _project_stored(value)
+    # Preserve the concrete type's contract before aggregate wire admission
+    # can interpret these fields as a different exported record or union arm.
+    if not _json_wire(projected) or not _accepts_model(type(model), projected):
+        _refuse_content()
     return projected
 
 
@@ -149,9 +152,9 @@ def refuse_markdown_canonical_state(content: T, *, context: object = None) -> T:
     the two. An empty list is an empty record collection.
 
     A model is admitted only when its stored fields project to plain data that
-    passes the strict wire models and schemas. Undeclared ``__dict__`` fields,
-    private stores, and Pydantic extras are refused. Raw Markdown, prose, bytes,
-    JSON text, non-JSON values, unknown wrappers, and prose inside a record
+    passes its concrete strict model and wire schema recursively. Undeclared
+    ``__dict__`` fields, private stores, and Pydantic extras are refused. Raw
+    Markdown, prose, bytes, JSON text, non-JSON values, unknown wrappers, and prose inside a record
     collection are refused, including when nested inside an otherwise valid
     record. Declared text and value fields stay data.
     """

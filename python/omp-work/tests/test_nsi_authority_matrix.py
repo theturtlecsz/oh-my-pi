@@ -658,3 +658,59 @@ def test_subclass_of_an_exported_record_is_refused():
         _admit(alias)
     assert alias.id == CLAIM["id"]
     assert type(alias) is ClaimAlias
+
+
+@pytest.mark.parametrize(
+    "model_type,wire,wire_model_type",
+    [
+        (models.OwnerRef, {"id": "model-1", "kind": "model"}, models.ActorRef),
+        (models.RatificationReceipt, BINDING, models.Binding),
+        (models.TypedIntegerValue, {"type": "string", "value": MARKDOWN}, models.TypedStringValue),
+    ],
+)
+@pytest.mark.parametrize("location", ["root", "mixed_list"])
+def test_malformed_concrete_models_cannot_pass_as_other_records(model_type, wire, wire_model_type, location):
+    # These bytes are valid for a different record, but not for the stored class.
+    _unchanged(wire)
+    _unchanged(wire_model_type.model_validate(wire))
+    bad = model_type.model_construct(**deepcopy(wire))
+    if location == "root":
+        content = bad
+    else:
+        content = [CLAIM, bad]
+    original = deepcopy(content)
+    with pytest.raises(AuthorityRefusal):
+        _admit(content)
+    assert content == original
+    assert bad.__dict__ == wire
+    if location == "mixed_list":
+        assert content[1] is bad
+
+
+@pytest.mark.parametrize(
+    "parent_type,wire,field,bad_type,bad_wire",
+    [
+        (models.EvidenceArtifact, ARTIFACT, "actor", models.OwnerRef, {"id": "model-1", "kind": "model"}),
+        (models.IntakeClaim, CLAIM, "value", models.TypedIntegerValue, {"type": "string", "value": MARKDOWN}),
+    ],
+)
+@pytest.mark.parametrize("location", ["wire_parent", "typed_parent", "mixed_list"])
+def test_parent_cannot_reinterpret_malformed_nested_model(parent_type, wire, field, bad_type, bad_wire, location):
+    _unchanged({**wire, field: bad_wire})
+    bad = bad_type.model_construct(**bad_wire)
+    if location == "typed_parent":
+        parent = parent_type.model_validate(wire).model_copy(update={field: bad})
+    else:
+        parent = {**wire, field: bad}
+    content = [GAP, parent] if location == "mixed_list" else parent
+    original = deepcopy(content)
+    with pytest.raises(AuthorityRefusal):
+        _admit(content)
+    assert content == original
+    if location == "typed_parent":
+        assert getattr(parent, field) is bad
+    else:
+        assert parent[field] is bad
+    if location == "mixed_list":
+        assert content[1] is parent
+    assert bad.__dict__ == bad_wire
