@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { WORK_CONTRACT_SHA256, WorkClient } from "../src/index";
+import { WORK_CONTRACT_SHA256, WORK_REQUEST_ATTEMPTS, WorkClient, WorkError } from "../src/index";
 import type {
 	IntakeCommand,
 	IntakeCommandResult,
@@ -310,3 +310,157 @@ test("missionIntake still POSTs request_id and payload to the client route", asy
 	expect(requests[0].url).toBe(`http://127.0.0.1:54322/v1/workspaces/${WS_ID}/client/mission-intake`);
 	expect(JSON.parse(String(requests[0].init.body))).toEqual({ request_id: OP_ID, payload: { goal: "x" } });
 });
+
+// Lost-outcome reconciliation. Digests come from Python (the service's own
+// command_sha256 and sha256(result)), never from the TS hashing under test.
+const digestScript = `
+import json, sys
+from omp_work.v1 import models
+from omp_work.v1.canonical import command_sha256, sha256
+
+task = json.load(sys.stdin)
+json.dump(
+    {
+        "request": command_sha256(models.CommandEnvelope.model_validate(task["envelope"])),
+        "result": sha256(task["result"]),
+    },
+    sys.stdout,
+)
+`;
+
+async function pythonDigests(envelope: unknown, result: unknown): Promise<{ request: string; result: string }> {
+	const child = Bun.spawn(["uv", "run", "--project", pythonProject, "python", "-c", digestScript], {
+		stdin: new Blob([JSON.stringify({ envelope, result })]),
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const stdout = await new Response(child.stdout).text();
+	const stderr = await new Response(child.stderr).text();
+	if ((await child.exited) !== 0) throw new Error(stderr);
+	return JSON.parse(stdout);
+}
+
+type LostOptions = {
+	postStatus?: number;
+	getStatus?: number;
+	mutate?: (row: Record<string, unknown>, receipt: Record<string, unknown>) => void;
+};
+
+function lostClient(options: LostOptions = {}) {
+	const posts: { operation_id: string; request_id: string }[] = [];
+	let firstBody: { operation_id: string; request_id: string; command: { type: string } } | null = null;
+	let gets = 0;
+	const entry = fixture.commands.record_intake_decision;
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		WS_ID,
+		() => "token",
+		async (input, init) => {
+			if (init?.method === "POST") {
+				const body = JSON.parse(String(init.body)) as NonNullable<typeof firstBody>;
+				firstBody ??= body;
+				posts.push(body);
+				if (options.postStatus)
+					return Response.json(
+						{ error: { code: "invalid_request", diagnostics: [] } },
+						{ status: options.postStatus },
+					);
+				throw new TypeError("socket closed");
+			}
+			gets++;
+			expect(String(input)).toBe(`http://127.0.0.1:54322/v1/operations/${OP_ID}`);
+			if (options.getStatus)
+				return Response.json(
+					{ error: { code: "invalid_request", diagnostics: [] } },
+					{ status: options.getStatus },
+				);
+			const saved = firstBody as NonNullable<typeof firstBody>;
+			const digests = await pythonDigests(saved, entry.result);
+			const receipt: Record<string, unknown> = {
+				operation_id: OP_ID,
+				request_id: saved.request_id,
+				state: "applied",
+				request_sha256: digests.request,
+				result_sha256: digests.result,
+				diagnostics: [],
+			};
+			const row: Record<string, unknown> = {
+				receipt,
+				command_type: "record_intake_decision",
+				request_id: saved.request_id,
+				correlation_id: "c",
+				result: entry.result,
+			};
+			options.mutate?.(row, receipt);
+			return Response.json(row);
+		},
+	);
+	return { client, posts, gets: () => gets, entry };
+}
+
+const flipHex = (hex: unknown): string => `${String(hex).startsWith("0") ? "1" : "0"}${String(hex).slice(1)}`;
+
+test("a lost write reconciles from the stored operation after bounded POSTs and one GET", async () => {
+	const { client, posts, gets, entry } = lostClient({
+		mutate: (_row, receipt) => {
+			delete receipt.diagnostics;
+		},
+	});
+	const payload = entry.envelope.command.payload as unknown as RecordIntakeDecisionPayload;
+	const response = await client.recordIntakeDecision(OP_ID, payload);
+	expect(response.result).toEqual(entry.result as never);
+	expect(response.receipt.diagnostics).toEqual([]);
+	expect((response.result as unknown as { type: string }).type).toBe("record_intake_decision");
+	expect(posts).toHaveLength(WORK_REQUEST_ATTEMPTS);
+	expect(new Set(posts.map(post => post.operation_id))).toEqual(new Set([OP_ID]));
+	expect(gets()).toBe(1);
+	expect(payload.instruction.provenance.received_at).toBe("2026-10-11T00:00:00+00:00");
+}, 30_000);
+
+const REJECTED: [string, NonNullable<LostOptions["mutate"]>][] = [
+	[
+		"request_sha256 differs by one hex",
+		(_row, receipt) => void (receipt.request_sha256 = flipHex(receipt.request_sha256)),
+	],
+	[
+		"result_sha256 differs by one hex",
+		(_row, receipt) => void (receipt.result_sha256 = flipHex(receipt.result_sha256)),
+	],
+	["command_type is wrong", row => void (row.command_type = "assess_intake")],
+	["result is null", row => void (row.result = null)],
+];
+for (const [name, mutate] of REJECTED) {
+	test(`a lost write is unavailable when ${name}`, async () => {
+		const { client, gets, entry } = lostClient({ mutate });
+		const payload = entry.envelope.command.payload as unknown as RecordIntakeDecisionPayload;
+		const error = await client.recordIntakeDecision(OP_ID, payload).catch((e: unknown) => e);
+		expect(error).toBeInstanceOf(WorkError);
+		expect((error as WorkError).code).toBe("unavailable");
+		expect(gets()).toBe(1);
+	}, 30_000);
+}
+
+test("a lost write maps a GET invalid_request to unavailable", async () => {
+	const { client, entry } = lostClient({ getStatus: 400 });
+	const payload = entry.envelope.command.payload as unknown as RecordIntakeDecisionPayload;
+	const error = await client.recordIntakeDecision(OP_ID, payload).catch((e: unknown) => e);
+	expect((error as WorkError).code).toBe("unavailable");
+}, 30_000);
+
+test("a POST 400 is rethrown without reading the operation", async () => {
+	const { client, posts, gets, entry } = lostClient({ postStatus: 400 });
+	const payload = entry.envelope.command.payload as unknown as RecordIntakeDecisionPayload;
+	const error = await client.recordIntakeDecision(OP_ID, payload).catch((e: unknown) => e);
+	expect((error as WorkError).code).toBe("invalid_request");
+	expect(posts).toHaveLength(1);
+	expect(gets()).toBe(0);
+});
+
+test("a second call keeps the operation id and mints a new request_id", async () => {
+	const { client, posts, entry } = lostClient({ getStatus: 400 });
+	const payload = entry.envelope.command.payload as unknown as RecordIntakeDecisionPayload;
+	await client.recordIntakeDecision(OP_ID, payload).catch(() => undefined);
+	await client.recordIntakeDecision(OP_ID, payload).catch(() => undefined);
+	expect(new Set(posts.map(post => post.operation_id))).toEqual(new Set([OP_ID]));
+	expect(posts[WORK_REQUEST_ATTEMPTS].request_id).not.toBe(posts[0].request_id);
+}, 30_000);

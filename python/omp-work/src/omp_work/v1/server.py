@@ -14,6 +14,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from omp_work import contract_sha256, event_push
+from omp_work.jobs.lease import current_authority
+from omp_work.jobs.store import NativeJobStore
 from omp_work.operations.config import OperationsConfig
 from omp_work.operations.database import collect_health, migration_set_sha256
 from omp_work.operations.fingerprints import (
@@ -48,7 +50,104 @@ def _capability_expired(value: object, now: datetime) -> bool:
     return expires <= now
 
 
-def _principal(request: Request, capabilities_dir: Path) -> Principal:
+def _is_bound_task_capability(data: dict[str, object]) -> bool:
+    return any(k in data for k in ("job_id", "worker_id", "fence", "lease"))
+
+
+def _authenticate_bound_task_capability(
+    data: dict[str, object],
+    now: datetime,
+    job_store: NativeJobStore | None,
+) -> Principal | None:
+    if "lease" in data:
+        return None
+    job_id = data.get("job_id")
+    worker_id = data.get("worker_id")
+    fence = data.get("fence")
+
+    if (
+        not isinstance(job_id, str)
+        or not job_id
+        or not isinstance(worker_id, str)
+        or not worker_id
+        or isinstance(fence, bool)
+        or not isinstance(fence, int)
+        or fence < 0
+    ):
+        return None
+
+    if data.get("actor_kind") != "task-agent":
+        return None
+
+    scopes = data.get("scopes")
+    if not isinstance(scopes, (list, tuple, set, frozenset)):
+        return None
+    if not all(isinstance(scope, str) for scope in scopes):
+        return None
+    if frozenset(scopes) != frozenset({"work.candidate.read"}):
+        return None
+
+    workspaces = data.get("workspaces")
+    if not isinstance(workspaces, (list, tuple)) or len(workspaces) != 1:
+        return None
+    try:
+        workspace_id = UUID(str(workspaces[0]))
+    except (ValueError, TypeError):
+        return None
+
+    raw_candidates = data.get("candidate_ids")
+    if not isinstance(raw_candidates, (list, tuple)) or len(raw_candidates) == 0:
+        return None
+    try:
+        candidate_ids = frozenset(UUID(str(val)) for val in raw_candidates)
+    except (ValueError, TypeError):
+        return None
+    if not candidate_ids:
+        return None
+
+    raw_expires = data.get("expires_at")
+    if not isinstance(raw_expires, str) or not raw_expires:
+        return None
+    if _capability_expired(raw_expires, now):
+        return None
+
+    try:
+        actor_id = UUID(str(data["actor_id"]))
+    except (KeyError, ValueError, TypeError):
+        return None
+
+    if job_store is None:
+        return None
+
+    try:
+        authority = current_authority(
+            job_store,
+            workspace_id=workspace_id,
+            job_id=job_id,
+            worker_id=worker_id,
+            fence=fence,
+        )
+    except Exception:
+        return None
+
+    if not authority.is_live:
+        return None
+
+    return Principal(
+        actor_id=actor_id,
+        actor_kind="task-agent",
+        workspaces=frozenset({workspace_id}),
+        scopes=frozenset({"work.candidate.read"}),
+        candidate_ids=candidate_ids,
+    )
+
+
+def _principal(
+    request: Request,
+    capabilities_dir: Path,
+    *,
+    job_store: NativeJobStore | None = None,
+) -> Principal:
     authorization = request.headers.get("authorization", "")
     if not authorization.startswith("Bearer "):
         raise HTTPException(401, "unauthenticated")
@@ -61,7 +160,16 @@ def _principal(request: Request, capabilities_dir: Path) -> Principal:
             if stat.S_IMODE(path.stat().st_mode) != 0o600:
                 continue
             data = json.loads(path.read_text())
-            if hmac.compare_digest(str(data["token"]), token):
+            raw_token = data.get("token")
+            if raw_token is not None and hmac.compare_digest(str(raw_token), token):
+                if _is_bound_task_capability(data):
+                    bound_principal = _authenticate_bound_task_capability(
+                        data, now, job_store
+                    )
+                    if bound_principal is None:
+                        continue
+                    return bound_principal
+
                 # Past expires_at is unknown (401). No expires_at behaves as before.
                 if _capability_expired(data.get("expires_at"), now):
                     continue
@@ -116,7 +224,11 @@ def _require_contract(request: Request, service_digest: str) -> None:
 
 
 def create_app(
-    config: OperationsConfig, *, capabilities_dir: Path, store: WorkStore | None = None
+    config: OperationsConfig,
+    *,
+    capabilities_dir: Path,
+    store: WorkStore | None = None,
+    job_store: NativeJobStore | None = None,
 ) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -153,6 +265,15 @@ def create_app(
     # OMP-143: the digest this service process loaded — compared against every
     # authenticated request's X-OMP-Contract-SHA256 before any other work.
     service_digest = contract_sha256()
+    resolved_job_store = job_store
+    if resolved_job_store is None:
+        try:
+            resolved_job_store = NativeJobStore(config)
+        except Exception:
+            resolved_job_store = None
+
+    def _authenticate(req: Request) -> Principal:
+        return _principal(req, capabilities_dir, job_store=resolved_job_store)
 
     @app.get("/v1/health/live")
     def live() -> dict[str, object]:
@@ -186,7 +307,7 @@ def create_app(
     ) -> JSONResponse:
         try:
             _require_contract(request, service_digest)
-            principal = _principal(request, capabilities_dir)
+            principal = _authenticate(request)
             return JSONResponse(
                 jsonable_encoder(service.read(principal, workspace_id, kind, value))
             )
@@ -292,7 +413,7 @@ def create_app(
     def stop(request: Request, workspace_id: UUID) -> JSONResponse:
         try:
             _require_contract(request, service_digest)
-            principal = _principal(request, capabilities_dir)
+            principal = _authenticate(request)
             return JSONResponse(
                 jsonable_encoder(service.stop_status(principal, workspace_id))
             )
@@ -318,7 +439,7 @@ def create_app(
     ) -> JSONResponse:
         try:
             _require_contract(request, service_digest)
-            principal = _principal(request, capabilities_dir)
+            principal = _authenticate(request)
             if revision is not None and revision < 1:
                 raise WorkError("invalid_request", status=400)
             return JSONResponse(
@@ -350,7 +471,7 @@ def create_app(
     ) -> JSONResponse:
         try:
             _require_contract(request, service_digest)
-            principal = _principal(request, capabilities_dir)
+            principal = _authenticate(request)
             if (after_created_at is None) != (after_decision_id is None):
                 raise WorkError(
                     "invalid_request",
@@ -399,7 +520,7 @@ def create_app(
     ) -> JSONResponse:
         try:
             _require_contract(request, service_digest)
-            principal = _principal(request, capabilities_dir)
+            principal = _authenticate(request)
             return JSONResponse(
                 jsonable_encoder(
                     service.activity(
@@ -429,7 +550,7 @@ def create_app(
     ) -> JSONResponse:
         try:
             _require_contract(request, service_digest)
-            principal = _principal(request, capabilities_dir)
+            principal = _authenticate(request)
             return JSONResponse(
                 jsonable_encoder(
                     service.events(
@@ -460,7 +581,7 @@ def create_app(
     ) -> JSONResponse:
         try:
             _require_contract(request, service_digest)
-            principal = _principal(request, capabilities_dir)
+            principal = _authenticate(request)
             return JSONResponse(
                 jsonable_encoder(
                     service.mission_events(
@@ -493,7 +614,7 @@ def create_app(
     ) -> JSONResponse:
         try:
             _require_contract(request, service_digest)
-            principal = _principal(request, capabilities_dir)
+            principal = _authenticate(request)
             return JSONResponse(
                 jsonable_encoder(
                     service.event_subscriptions(
@@ -532,7 +653,7 @@ def create_app(
     ) -> JSONResponse:
         try:
             _require_contract(request, service_digest)
-            principal = _principal(request, capabilities_dir)
+            principal = _authenticate(request)
             return JSONResponse(
                 jsonable_encoder(
                     service.revision(principal, x_omp_workspace_id, key, selector)
@@ -559,7 +680,7 @@ def create_app(
     ) -> JSONResponse:
         try:
             _require_contract(request, service_digest)
-            principal = _principal(request, capabilities_dir)
+            principal = _authenticate(request)
             return JSONResponse(
                 jsonable_encoder(
                     service.receipt(principal, x_omp_workspace_id, receipt_id)
@@ -588,7 +709,7 @@ def create_app(
     ) -> JSONResponse:
         try:
             _require_contract(request, service_digest)
-            principal = _principal(request, capabilities_dir)
+            principal = _authenticate(request)
             if (after_created_at is None) != (after_work_id is None):
                 raise WorkError(
                     "invalid_request",
@@ -625,7 +746,7 @@ def create_app(
     # OMP-416: the seven client GETs, after the work reads. Same handshake.
     def _client_authenticate(request: Request) -> Principal:
         _require_contract(request, service_digest)
-        return _principal(request, capabilities_dir)
+        return _authenticate(request)
 
     register_client_reads(app, service, authenticate=_client_authenticate)
     register_client_mutations(app, service, authenticate=_client_authenticate)
@@ -640,7 +761,7 @@ def create_app(
             # stale host never reaches discriminator validation.
             _require_contract(request, service_digest)
             envelope = CommandEnvelope.model_validate(await request.json())
-            principal = _principal(request, capabilities_dir)
+            principal = _authenticate(request)
             if code_fingerprint() + migration_set_sha256() != source_snapshot:
                 is_service_refresh = (
                     isinstance(envelope.command, SetExecutionStateCommand)

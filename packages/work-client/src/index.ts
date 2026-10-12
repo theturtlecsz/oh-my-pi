@@ -6,6 +6,7 @@
 import * as crypto from "node:crypto";
 import * as os from "node:os";
 import { WORK_CONTRACT_SHA256 } from "./contract";
+import { intakeCommandSha256, intakeResultSha256 } from "./intake-records-hash";
 import type {
 	AdmitResearchCampaignPayload,
 	AdmitResearchCampaignResult,
@@ -1449,15 +1450,47 @@ export class WorkClient {
 		operationId: UUID,
 		command: IntakeCommand,
 	): Promise<{ receipt: OperationReceipt; result: Result }> {
-		const response = await this.execute({
+		const envelope: CommandEnvelope = {
 			api_version: "work.omp.dev/v1",
 			workspace_id: this.workspaceId,
 			operation_id: operationId,
 			request_id: crypto.randomUUID(),
 			correlation_id: crypto.randomUUID(),
 			command,
-		});
-		return { receipt: response.receipt, result: response.result as Result };
+		};
+		try {
+			const response = await this.execute(envelope);
+			const result = response.result as { type?: unknown } | null;
+			if (result !== null && result?.type === command.type) {
+				return { receipt: response.receipt, result: result as Result };
+			}
+		} catch (error) {
+			if (!(error instanceof WorkError) || error.code !== "unavailable") throw error;
+		}
+		// Outcome unknown: reconcile once from the stored operation. Never re-POST.
+		let row: StoredOperation;
+		try {
+			row = await this.operation(operationId);
+		} catch (error) {
+			if (error instanceof WorkError && error.code === "invalid_request") {
+				throw new WorkError("unavailable", error.status, error.diagnostics, error.requestId);
+			}
+			throw error;
+		}
+		const stored = row.result as { type?: unknown } | null;
+		if (
+			row.command_type !== command.type ||
+			stored === null ||
+			stored?.type !== command.type ||
+			row.receipt.request_sha256 !== intakeCommandSha256(envelope) ||
+			row.receipt.result_sha256 !== intakeResultSha256(stored)
+		) {
+			throw new WorkError("unavailable", 0, ["stored operation does not match the intake command"]);
+		}
+		return {
+			receipt: { ...row.receipt, diagnostics: row.receipt.diagnostics ?? [] },
+			result: stored as Result,
+		};
 	}
 
 	startIntake(

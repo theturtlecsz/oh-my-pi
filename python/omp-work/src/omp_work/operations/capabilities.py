@@ -86,11 +86,48 @@ def write_capability(
     scopes: tuple[str, ...],
     candidate_ids: tuple[UUID, ...] | None = None,
     expires_at: datetime | None = None,
+    job_id: str | None = None,
+    worker_id: str | None = None,
+    fence: int | None = None,
 ) -> Path:
     if "work.candidate.read" in scopes and not candidate_ids:
         raise ValueError(
             "candidate read capabilities require a non-empty candidate_ids allowlist"
         )
+    has_binding = (
+        job_id is not None
+        or worker_id is not None
+        or fence is not None
+    )
+    if has_binding:
+        if (
+            not isinstance(job_id, str)
+            or not job_id
+            or not isinstance(worker_id, str)
+            or not worker_id
+            or isinstance(fence, bool)
+            or not isinstance(fence, int)
+            or fence < 0
+        ):
+            raise ValueError(
+                "bound task capability requires complete lease identity: non-empty "
+                "job_id, non-empty worker_id, and non-negative integer fence"
+            )
+        if actor_kind != "task-agent":
+            raise ValueError("bound task capability requires actor_kind 'task-agent'")
+        if tuple(sorted(scopes)) != ("work.candidate.read",):
+            raise ValueError(
+                "bound task capability requires only 'work.candidate.read' scope"
+            )
+        if len(workspaces) != 1:
+            raise ValueError("bound task capability requires exactly one workspace")
+        if not candidate_ids or len(candidate_ids) == 0:
+            raise ValueError(
+                "bound task capability requires non-empty candidate allowlist"
+            )
+        if expires_at is None:
+            raise ValueError("bound task capability requires finite expires_at")
+
     data: dict[str, object] = {
         "token": secrets.token_urlsafe(32),
         "actor_id": str(actor_id),
@@ -104,6 +141,10 @@ def write_capability(
         if expires_at.tzinfo is None:
             raise ValueError("expires_at must be timezone-aware")
         data["expires_at"] = expires_at.astimezone(UTC).isoformat()
+    if has_binding:
+        data["job_id"] = str(job_id)
+        data["worker_id"] = str(worker_id)
+        data["fence"] = int(fence)
     path = capabilities_dir(config) / f"{name}.json"
     _write_secret(path, json.dumps(data, indent=2, sort_keys=True))
     return path
@@ -166,13 +207,21 @@ def provision_task_capability(
     candidate_ids: tuple[UUID, ...],
     expires_at: datetime,
     name: str,
+    job_id: str | None = None,
+    worker_id: str | None = None,
+    fence: int | None = None,
 ) -> Path:
     """Mint a candidate reader whose lease ends at ``expires_at``.
 
     The capability is the candidate-reader principal (actor_kind
     ``task-agent``, scope ``work.candidate.read``, one workspace, and the
-    candidate allowlist) with ``expires_at`` stored in the same JSON. A
-    capability written without ``expires_at`` is unchanged.
+    candidate allowlist) with ``expires_at`` stored in the same JSON.
+
+    When ``job_id``, ``worker_id``, and ``fence`` are supplied, the capability
+    is bound to that native research job's lease authority; ``expires_at`` is
+    then the hard task deadline rather than the initial lease deadline.
+    Partial or malformed binding refuses; legacy fixed-expiry mode without
+    lease binding remains supported.
     """
     return write_capability(
         config,
@@ -183,6 +232,9 @@ def provision_task_capability(
         scopes=("work.candidate.read",),
         candidate_ids=candidate_ids,
         expires_at=expires_at,
+        job_id=job_id,
+        worker_id=worker_id,
+        fence=fence,
     )
 
 

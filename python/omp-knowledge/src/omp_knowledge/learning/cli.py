@@ -527,8 +527,9 @@ def main(
                                         break
                             if not passed:
                                 reason = "no matching accepted active lesson"
-            except (WorkError, ValueError, KeyError, OSError, RuntimeError):
+            except (WorkError, ValueError, KeyError, OSError, RuntimeError) as exc:
                 passed = False
+                reason = f"{type(exc).__name__}: {exc}"
 
             if passed:
                 from .promotion import record_journey_pass
