@@ -581,7 +581,7 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
             "register_intake_evidence",
             "record_intake_claim",
             "record_intake_decision", "supersede_intake_claim",
-            "record_intake_issue", "link_intake_criterion",
+            "record_intake_issue", "link_intake_criterion", "assess_intake",
             "create_work_batch",
             "publish_bounded_intake",
             "answer_intake_decision",
@@ -838,7 +838,7 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
                 elif command.type in {
                     "start_intake", "register_intake_evidence", "record_intake_claim",
                     "record_intake_decision", "supersede_intake_claim",
-                    "record_intake_issue", "link_intake_criterion",
+                    "record_intake_issue", "link_intake_criterion", "assess_intake",
                 }:
                     with cur.connection.cursor(row_factory=tuple_row) as intake_cur:
                         result, event = execute_intake(
@@ -931,7 +931,7 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
         if envelope.command.type in {
             "start_intake", "register_intake_evidence", "record_intake_claim",
             "record_intake_decision", "supersede_intake_claim",
-            "record_intake_issue", "link_intake_criterion",
+            "record_intake_issue", "link_intake_criterion", "assess_intake",
         } and not isinstance(mission_id, UUID):
             cur.execute(
                 "SELECT mission_id FROM omp_work.intake_heads WHERE workspace_id=%s AND run_id=%s",

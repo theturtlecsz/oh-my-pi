@@ -12,6 +12,7 @@ import argparse
 import importlib
 import json
 import os
+import re
 import subprocess  # nosec B404 - pytest argv is a list; the executable is this interpreter
 import sys
 import time
@@ -144,6 +145,7 @@ class OrchestratorConfig:
     required_checks: tuple[str, ...] = ()
     operations: tuple[str, ...] = ()
     ops: OperationsConfig = field(default_factory=OperationsConfig.defaults)
+    model_proxy_url: str | None = None
 
     @staticmethod
     def path(ops: OperationsConfig | None = None) -> Path:
@@ -276,6 +278,26 @@ def load_config(path: Path | None = None, ops: OperationsConfig | None = None) -
             raise OrchestratorError("invalid_request")
         return tuple(raw)
 
+    def _model_proxy_url() -> str | None:
+        raw = data.get("model_proxy_url")
+        if raw is None or raw == "":
+            return None
+        if not isinstance(raw, str):
+            raise OrchestratorError("invalid_request")
+        match = re.fullmatch(r"http://(127\.0\.0\.1|\[::1\]|localhost):([0-9]+)", raw)
+        if match is None:
+            raise OrchestratorError("invalid_request")
+        host, port = match.groups()
+        try:
+            valid_port = 1 <= int(port) <= 65535
+        except ValueError:
+            raise OrchestratorError("invalid_request") from None
+        if not valid_port:
+            raise OrchestratorError("invalid_request")
+        if host == "localhost":
+            host = "127.0.0.1"
+        return f"http://{host}:{port}"
+
     return OrchestratorConfig(
         workspace_id=UUID(str(data["workspace_id"])),
         automation_capability_path=_path("automation_capability_path"),
@@ -304,6 +326,7 @@ def load_config(path: Path | None = None, ops: OperationsConfig | None = None) -
         required_checks=_required_checks(),
         operations=tuple(str(item) for item in operations),
         ops=base,
+        model_proxy_url=_model_proxy_url(),
     )
 
 

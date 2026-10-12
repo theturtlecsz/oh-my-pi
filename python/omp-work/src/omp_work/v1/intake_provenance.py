@@ -1,11 +1,17 @@
 """Analyze bounded provenance without substituting generated contract records."""
 from __future__ import annotations
 
-from typing import NamedTuple, NoReturn
+import inspect
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import NamedTuple, NoReturn, Sequence
+from uuid import UUID
+from urllib.parse import urljoin
 
 from psycopg import Cursor
 
-from ..contracts.nsi.v1 import models as nsi
+from ..contracts.nsi.v1 import authority, compat, models as nsi, validate
 from ..contracts.nsi.v1.compat import (
     NsiBoundedEvaluation,
     bounded_to_nsi,
@@ -14,10 +20,14 @@ from ..contracts.nsi.v1.compat import (
     nsi_to_bounded,
 )
 from ..contracts.nsi.v1.models import AcceptanceCriterion, IntakeContract, RequirementClause
-from ..intake_repository import DecisionRecord, IntakeRevisionBody
-from .api_models import IntakeDecisionRecord, IntakeIssueRecord
-from .intake_decisions import _latest_findings, unresolved_findings
+from ..intake_repository import (
+    DecisionRecord, IntakeRepositoryError, IntakeRevisionBody, append_assessment, lock_revision, read_revision,
+)
+from . import api_models, intake_decisions, intake_provenance_closure, models, semantics
+from .api_models import AssessIntakeResult, IntakeAssessmentView, IntakeDecisionRecord, IntakeIssueRecord
+from .intake_decisions import _latest_findings, open_issues, unresolved_findings
 from .intake_provenance_closure import ProvenanceClosure, resolve_provenance_closure
+from .models import AssessIntakeCommand, BoundedIntakeDraft, CommandEnvelope
 from .store_shared import WorkStoreError
 
 
@@ -49,6 +59,80 @@ class ProvenanceEvaluation(NamedTuple):
     findings: NsiBoundedEvaluation
     contract: IntakeContract
     settlement: ProvenanceSettlement | None = None
+    binding: nsi.Binding | None = None
+    closure: ProvenanceClosure | None = None
+    assessment: nsi.IntakeReadinessAssessment | None = None
+    receipts: tuple[nsi.DerivationReceipt, ...] = ()
+    unresolved: tuple[nsi.Gap | nsi.Conflict | nsi.ClarificationQuestion, ...] = ()
+
+    @property
+    def projection(self) -> BoundedIntakeDraft | None:
+        return None if self.closure is None else self.closure.projection
+
+
+def helper_sources() -> dict[str, str]:
+    """Read complete loaded helper modules, including private rules and readiness.
+
+    Module names identify the bundle; locations and mtimes are not hash inputs.
+    Read bytes on every call so a prior evaluation cannot cache stale content.
+    """
+    modules = (
+        compat, validate, authority, nsi, semantics, models, api_models,
+        sys.modules[__name__], intake_provenance_closure, intake_decisions,
+    )
+    return {module.__name__: Path(inspect.getfile(module)).read_bytes().hex() for module in modules}
+
+
+def referenced_schemas() -> dict[str, dict[str, object]]:
+    """Load the contract/status schema closure through the offline bundled loader."""
+    documents: dict[str, dict[str, object]] = {}
+    base = "https://omp.dev/contracts/nsi/v1/"
+
+    def load(name: str) -> None:
+        if name in documents:
+            return
+        document = validate.load_schema(name)
+        documents[name] = document
+        walk(document, str(document["$id"]))
+
+    def walk(node: object, location: str) -> None:
+        if isinstance(node, dict):
+            if "$id" in node:
+                location = urljoin(location, str(node["$id"]))
+            ref = node.get("$ref")
+            if isinstance(ref, str):
+                target = urljoin(location, ref).partition("#")[0]
+                if not target.startswith(base):
+                    raise ValueError(f"Unknown NSI schema reference: {ref}")
+                load(target.removeprefix(base).removesuffix(".schema.json"))
+            for value in node.values():
+                walk(value, location)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value, location)
+
+    load("contract")
+    load("status")
+    return documents
+
+
+def build_provenance_binding(
+    body: IntakeRevisionBody,
+    resolved: ProvenanceClosure,
+    contract: IntakeContract,
+    settlement: ProvenanceSettlement,
+) -> nsi.Binding:
+    """Bind snapshot identity, complete proof, implementation, and schema content."""
+    proof_hash = validate.closure_hash(closure_document(body, resolved, contract, settlement))
+    return nsi.Binding(
+        run_id=body.snapshot.run_id,
+        revision=body.snapshot.revision,
+        contract_hash=validate.contract_hash(contract),
+        claim_set_hash=proof_hash,
+        source_hash=proof_hash,
+        rule_bundle_hash=validate.content_hash(helper_sources()),
+        schema_hash=validate.content_hash(referenced_schemas()),
+    )
 
 
 def closure_document(
@@ -116,11 +200,19 @@ def settle_provenance(
     else:
         derived = evaluation
 
+    return settle_provenance_records(body, derived.gaps, derived.conflicts, derived.questions)
+
+
+def settle_provenance_records(
+    body: IntakeRevisionBody, gaps: Sequence[nsi.Gap], conflicts: Sequence[nsi.Conflict],
+    questions: Sequence[nsi.ClarificationQuestion],
+) -> ProvenanceSettlement:
+    """Settle concrete computed or stored records through the same membership rules."""
     persisted_findings, persisted_gap_links = _latest_findings(body)
 
-    derived_gaps = {g.id: g for g in derived.gaps}
-    derived_conflicts = {c.id: c for c in derived.conflicts}
-    derived_questions = {q.id: q for q in derived.questions}
+    derived_gaps = {g.id: g for g in gaps}
+    derived_conflicts = {c.id: c for c in conflicts}
+    derived_questions = {q.id: q for q in questions}
 
     # 1. Gaps: refresh derived, remove obsolete bounded-derived, keep unrelated persisted.
     merged_gaps: dict[str, nsi.Gap] = {}
@@ -348,6 +440,113 @@ def evaluate_intake_provenance(cur: Cursor, body: IntakeRevisionBody) -> Provena
     return evaluate_provenance_projection(body, resolve_provenance_closure(cur, body))
 
 
+def evaluate_provenance(cur: Cursor, body: IntakeRevisionBody) -> ProvenanceEvaluation:
+    """Issue pinned analysis receipts without writing or advancing the revision.
+
+    Projection is diagnostic only. Original admitted truths and complete consumed
+    ancestry govern certification, even when owner settlement clears every issue.
+    Receipt IDs bind the proof and exact derivation links, excluding issue time.
+    """
+    resolved = resolve_provenance_closure(cur, body)
+    evaluation = evaluate_provenance_projection(body, resolved, settle=False)
+    settlement = settle_provenance(body, resolved, evaluation)
+    binding = build_provenance_binding(body, resolved, evaluation.contract, settlement)
+    claims = {item.claim.id: item for item in resolved.closure.claims}
+    truths = dict(resolved.truths)
+    consumed = set(claims)
+    consumed.update(truths)
+    consumed.update(ancestor for item in claims.values() for ancestor in item.ancestry_ids)
+    consumed.update(claim_id for trace in resolved.closure.traces for claim_id in trace.claim_ids)
+    complete = resolved.ready and bool(consumed) and all(
+        claim_id in claims and truths.get(claim_id) == "true" for claim_id in consumed
+    )
+    conflicts = [item for item in settlement.unresolved if isinstance(item, nsi.Conflict)]
+    gaps = [item for item in settlement.unresolved if isinstance(item, nsi.Gap)]
+    if conflicts:
+        status = "CONFLICTED"
+    elif settlement.unresolved or not complete:
+        status = "NEEDS_SPEC"
+    else:
+        status = "READY_FOR_RATIFICATION"
+
+    engine = nsi.RuleEngineRef(id="omp-work:nsi2-provenance", kind="rule_engine")
+    created_at = datetime.now(timezone.utc).isoformat()
+    bound = binding.model_dump()
+    receipts: list[nsi.DerivationReceipt] = []
+
+    def receipt(rule_id: str, premise_ids: list[str], conclusion_ids: list[str]) -> None:
+        identity = validate.content_hash({
+            "binding": bound, "rule_id": rule_id, "premise_ids": premise_ids,
+            "conclusion_ids": conclusion_ids, "derived_by": engine.model_dump(),
+        })
+        receipts.append(nsi.DerivationReceipt(
+            id=f"derivation:{identity}", **bound, rule_id=rule_id,
+            premise_ids=premise_ids, conclusion_ids=conclusion_ids,
+            derived_by=engine, created_at=created_at,
+        ))
+
+    for item in resolved.closure.claims:
+        receipt("nsi2.provenance.claim", list(item.claim.premise_ids), [item.claim.id])
+    for requirement in evaluation.contract.requirements:
+        receipt("nsi2.provenance.requirement", list(requirement.claim_ids), [requirement.id])
+    for trace in resolved.closure.traces:
+        receipt("nsi2.provenance.criterion", list(trace.requirement_ids), [trace.criterion_id])
+    assessment = nsi.IntakeReadinessAssessment(
+        **bound, status=status, gaps=gaps, conflicts=conflicts,
+        derivation_receipt_ids=[item.id for item in receipts],
+        assessed_by=engine, created_at=created_at,
+    )
+    return evaluation._replace(
+        settlement=settlement, binding=binding, closure=resolved,
+        assessment=assessment, receipts=tuple(receipts), unresolved=settlement.unresolved,
+    )
+
+
 def settle_intake_provenance(cur: Cursor, body: IntakeRevisionBody) -> ProvenanceSettlement:
     """Resolve persisted proof and settle findings on a deep evaluation copy."""
     return settle_provenance(body, resolve_provenance_closure(cur, body))
+
+
+def assess_intake(
+    cur: Cursor, envelope: CommandEnvelope, actor_id: UUID, actor_kind: str,
+) -> dict[str, object]:
+    """Compute proof under the semantic head lock in the caller transaction."""
+    if actor_kind not in ("owner", "rule_engine"):
+        raise WorkStoreError("forbidden")
+    if not isinstance(envelope.command, AssessIntakeCommand):
+        raise WorkStoreError("invalid_request")
+    payload = envelope.command.payload
+    cur.execute(
+        "SELECT mission_id FROM omp_work.intake_heads WHERE workspace_id=%s AND run_id=%s",
+        (envelope.workspace_id, payload.run_id),
+    )
+    head = cur.fetchone()
+    if head is None:
+        raise WorkStoreError("stale_intake")
+    try:
+        locked = lock_revision(
+            cur, workspace_id=envelope.workspace_id, run_id=payload.run_id,
+            expected_revision=payload.expected_revision - 1, mission_id=head[0],
+            operation_id=envelope.operation_id,
+        )
+        stored = read_revision(
+            cur, workspace_id=envelope.workspace_id, run_id=payload.run_id,
+            revision=locked.current_revision,
+        )
+        evaluation = evaluate_provenance(cur, stored.body)
+        assert evaluation.assessment is not None and evaluation.binding is not None
+        assert evaluation.closure is not None and evaluation.settlement is not None
+        append_assessment(cur, locked, IntakeAssessmentView(
+            id=f"assessment:{envelope.operation_id}", assessment=evaluation.assessment,
+            binding=evaluation.binding, receipts=evaluation.receipts,
+            unresolved_issues=open_issues(evaluation.settlement.body),
+            provenance=evaluation.closure.closure,
+        ), envelope.operation_id)
+    except IntakeRepositoryError as exc:
+        raise WorkStoreError(
+            "stale_intake" if str(exc) == "stale_revision" else "invalid_request",
+        ) from exc
+    return AssessIntakeResult(
+        type="assess_intake", run_id=payload.run_id, revision=payload.expected_revision,
+        assessed_revision=payload.expected_revision,
+    ).model_dump(mode="json")

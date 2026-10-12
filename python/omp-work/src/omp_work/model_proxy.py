@@ -260,8 +260,19 @@ def create_app(config: ProxyConfig, *, transport: Transport | None = None) -> Fa
         with grant.lock:
             active(grant)
             route = grant.route
-            expected = f"v1beta/models/{route.model}:streamGenerateContent" if route.api == GEMINI else "api/chat"
-            if path != expected or query not in (("", "alt=sse") if route.api == GEMINI else ("",)):
+            if route.api == GEMINI:
+                # The worker posts to `{baseUrl}/models/{id}:streamGenerateContent`
+                # with no version, `google.ts` uses `v1beta/models/...`; both
+                # spellings of the same generate-content route are accepted.
+                allowed = frozenset((
+                    f"models/{route.model}:streamGenerateContent",
+                    f"v1beta/models/{route.model}:streamGenerateContent",
+                ))
+                expected_query = ("", "alt=sse")
+            else:
+                allowed = frozenset(("api/chat",))
+                expected_query = ("",)
+            if path not in allowed or query not in expected_query:
                 refuse(grant, "route_mismatch")
             with registry_lock:
                 if counts.get(grant.provider, 0) >= policy.concurrency.providers[grant.provider] or sum(counts.values()) >= policy.concurrency.in_flight_max:
@@ -298,10 +309,12 @@ def create_app(config: ProxyConfig, *, transport: Transport | None = None) -> Fa
                     # call's durable charge, never infer success from output.
                     with jobs.transaction(task.workspace_id, actor) as cur:
                         cur.execute("SELECT COALESCE(sum((result->'settlement'->>'actual_usd')::numeric),0) AS usd FROM omp_jobs.operations WHERE workspace_id=%s AND kind='model_call_receipt' AND result->'fingerprint'->>'request_id'=%s", (task.workspace_id, request_id))
-                        grant.spent += cur.fetchone()["usd"]
+                        # COALESCE yields a numeric when charged and an int 0 otherwise.
+                        grant.spent += Decimal(str(cur.fetchone()["usd"]))
                     raise
                 result = guarded.result
-                assert result is not None
+                if result is None:
+                    raise AssertionError
                 with jobs.transaction(task.workspace_id, actor) as cur:
                     authority(task, cur)
                 active(grant)
@@ -323,10 +336,13 @@ def create_app(config: ProxyConfig, *, transport: Transport | None = None) -> Fa
 
     @app.post("/{path:path}")
     async def native(path: str, request: Request):
-        token = request.headers.get("authorization", "").removeprefix("Bearer ")
+        # A Bearer authorization is the credential; the Gemini worker instead
+        # sends its token in x-goog-api-key. Anything else is unauthenticated.
+        authorization = request.headers.get("authorization", "")
+        credential = authorization.removeprefix("Bearer ") if authorization.startswith("Bearer ") else request.headers.get("x-goog-api-key")
         with registry_lock:
-            grant = next((g for g in grants.values() if hmac.compare_digest(g.token, token)), None)
-        if grant is None or not request.headers.get("authorization", "").startswith("Bearer "):
+            grant = next((g for g in grants.values() if credential is not None and hmac.compare_digest(g.token, credential)), None)
+        if grant is None:
             raise HTTPException(401, "unauthenticated")
         active(grant)
         return await run_in_threadpool(invoke, grant, await body(request, grant), path, request.url.query)

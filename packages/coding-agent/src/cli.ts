@@ -14,6 +14,9 @@ try {
  * CLI entry point — registers all commands explicitly and delegates to the
  * lightweight CLI runner from pi-utils.
  */
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import type * as WorkerThreads from "node:worker_threads";
 import type { MessagePort } from "node:worker_threads";
 import type { Process, ProcessStatus } from "@oh-my-pi/pi-natives";
@@ -24,12 +27,14 @@ import {
 	getActiveProfile,
 	MIN_BUN_VERSION,
 	resolveProfileEnv,
+	setAgentDir,
 	setProfile,
+	setProjectDir,
 	VERSION,
 } from "@oh-my-pi/pi-utils/dirs";
 
 import { declareWorkerHostEntry, installWorkerInbox, isWorkerHostSelector } from "@oh-my-pi/pi-utils/worker-host";
-import { extractProfileFlags } from "./cli/profile-bootstrap";
+import type * as ProfileBootstrap from "./cli/profile-bootstrap";
 import {
 	BLOB_BROKER_WORKER_ARG,
 	COMPUTER_WORKER_ARG,
@@ -42,6 +47,7 @@ import {
 } from "./cli/worker-selectors";
 import type * as JsProcessEntry from "./eval/js/process-entry";
 import type { WorkerInbound as JsWorkerInbound, WorkerOutbound as JsWorkerOutbound } from "./eval/js/worker-protocol";
+import type * as OrchestratorWorker from "./orchestrator-worker";
 
 if (Bun.semver.order(Bun.version, MIN_BUN_VERSION) < 0) {
 	process.stderr.write(
@@ -484,6 +490,9 @@ let runningCommand: string | undefined;
 export async function runCli(argv: string[]): Promise<void> {
 	let resolvedArgv = argv;
 	try {
+		// Required here, not at module scope: profile-bootstrap imports the command
+		// registry, and the orchestrator-worker path must not load that graph.
+		const { extractProfileFlags }: typeof ProfileBootstrap = require("./cli/profile-bootstrap");
 		const extracted = extractProfileFlags(resolvedArgv);
 		resolvedArgv = extracted.argv;
 		if (extracted.profile !== undefined) {
@@ -610,6 +619,50 @@ export async function runCli(argv: string[]): Promise<void> {
 	}
 }
 
+const ORCHESTRATOR_WORKER_ARG = "orchestrator-worker";
+
+/**
+ * Exact `orchestrator-worker` argv, and nothing else. Compiled and source
+ * entries both keep the script path at `argv[1]`, so the token is `argv[2]`.
+ */
+function isOrchestratorWorkerProcess(): boolean {
+	return (
+		isProcessEntry && Bun.isMainThread && process.argv.length === 3 && process.argv[2] === ORCHESTRATOR_WORKER_ARG
+	);
+}
+
+/**
+ * Point cwd, HOME, and the agent dir at an empty temp tree before the worker
+ * runtime is loaded. `env.ts` reads those locations at import time, so a
+ * candidate `.env` in the worktree must not be on any of them.
+ */
+function prepareOrchestratorWorkerJail(): void {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "omp-worker-"));
+	const cwd = path.join(root, "cwd");
+	const home = path.join(root, "home");
+	const agent = path.join(root, "agent");
+	fs.mkdirSync(cwd);
+	fs.mkdirSync(home);
+	fs.mkdirSync(agent);
+	process.env.HOME = home;
+	process.env.USERPROFILE = home;
+	for (const key of [
+		"OMP_PROFILE",
+		"PI_PROFILE",
+		"PI_CODING_AGENT_DIR",
+		"PI_CONFIG_DIR",
+		"PI_CONFIG_FILES",
+		"XDG_CONFIG_HOME",
+		"XDG_DATA_HOME",
+		"XDG_STATE_HOME",
+		"XDG_CACHE_HOME",
+	]) {
+		delete process.env[key];
+	}
+	setProjectDir(cwd);
+	setAgentDir(agent);
+}
+
 // Floating call instead of top-level await: TLA forces `--bytecode` (CJS
 // lowering) builds to fail, and the entrypoint needs nothing after this.
 // The catch mirrors what an unhandled TLA rejection produced: error dump to
@@ -621,7 +674,30 @@ export async function runCli(argv: string[]): Promise<void> {
 // launch the agent as a side effect. Worker threads re-enter this module as
 // their entry with `import.meta.main === false`, so the worker-host dispatch
 // is admitted via `!Bun.isMainThread`.
-if (isProcessEntry || !Bun.isMainThread) {
+if (isOrchestratorWorkerProcess()) {
+	// Jail first, then require. A static import would load env.ts against the
+	// candidate worktree before these directories exist.
+	let entry: Promise<number>;
+	try {
+		prepareOrchestratorWorkerJail();
+		const worker: typeof OrchestratorWorker = require("./orchestrator-worker");
+		entry = worker.runOrchestratorWorker();
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		process.stderr.write(`orchestrator-worker: ${message}\n`);
+		entry = Promise.resolve(1);
+	}
+	entry.then(
+		code => {
+			process.exitCode = code;
+		},
+		error => {
+			const message = error instanceof Error ? error.message : String(error);
+			process.stderr.write(`orchestrator-worker: ${message}\n`);
+			process.exitCode = 1;
+		},
+	);
+} else if (isProcessEntry || !Bun.isMainThread) {
 	const postmortem: typeof Postmortem | undefined = isProcessEntry
 		? require("@oh-my-pi/pi-utils/postmortem.js")
 		: undefined;

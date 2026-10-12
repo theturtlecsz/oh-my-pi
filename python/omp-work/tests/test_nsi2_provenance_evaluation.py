@@ -4,21 +4,29 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 from dataclasses import replace
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
 from omp_work.contracts.nsi.v1 import models as nsi
+from omp_work.contracts.nsi.v1 import validate
 from omp_work.contracts.nsi.v1.compat import bounded_to_nsi, nsi_to_bounded
 from omp_work.contracts.nsi.v1.models import TypedBooleanValue, TypedIntegerValue
 from omp_work.contracts.nsi.v1.validate import closure_hash, content_hash, contract_hash
-from omp_work.intake_repository import AssessmentRecord, DecisionRecord, read_revision
+from omp_work.intake_repository import AssessmentRecord, DecisionRecord, append_revision, read_revision
 from omp_work.v1.api_models import IntakeDecisionRecord, IntakeIssueRecord
+from omp_work.v1 import intake_provenance
 from omp_work.v1.intake_provenance import (
+    build_provenance_binding,
     closure_document,
     evaluate_intake_provenance,
+    evaluate_provenance,
     evaluate_provenance_projection,
+    helper_sources,
+    referenced_schemas,
     settle_intake_provenance,
     settle_provenance,
 )
@@ -31,9 +39,9 @@ from omp_work.v1.models import (
 )
 from omp_work.v1.store_shared import WorkStoreError
 from test_nsi2_provenance_closure import (
-    RUN, _criterion, _draft, _entities, _retarget, advance, append_body, insert_relay, make_body, relay_json,
+    RUN, _criterion, _draft, _entities, _retarget, advance, append_body, insert_relay, make_body, relay_json, seal, sync_links,
 )
-from test_nsi2_repository import connection, write_repository  # noqa: F401
+from test_nsi2_repository import connection, locked, write_repository  # noqa: F401
 from test_workflow_service import service  # noqa: F401
 
 pytestmark = pytest.mark.skipif(
@@ -83,6 +91,141 @@ def test_actual_contract_ids_text_and_typed_results_survive(service, write_repos
     altered.requirements[0].text = "Different words"
     assert content_hash(altered) != content_hash(result.contract)
     assert result.findings.issue_count == 0
+
+
+def test_complete_proof_issues_linked_pinned_receipts_without_writes(proof):
+    cur, body, resolved = proof
+    before = body.model_dump(mode="python")
+    result = evaluate_provenance(cur, body)
+    assert result.assessment.status == "READY_FOR_RATIFICATION"
+    assert result.unresolved == ()
+    assert result.closure == resolved
+    assert result.projection == resolved.projection
+    assert result.assessment.derivation_receipt_ids == [item.id for item in result.receipts]
+    assert len(set(result.assessment.derivation_receipt_ids)) == len(result.receipts)
+    bound = result.binding.model_dump()
+    assert {key: result.assessment.model_dump()[key] for key in bound} == bound
+    validate.validate_instance("contract#/$defs/IntakeReadinessAssessment", result.assessment)
+    for receipt in result.receipts:
+        assert {key: receipt.model_dump()[key] for key in bound} == bound
+        assert receipt.derived_by == result.assessment.assessed_by
+        validate.validate_instance("status#/$defs/DerivationReceipt", receipt)
+    claim_receipts = {item.conclusion_ids[0]: item for item in result.receipts if item.rule_id == "nsi2.provenance.claim"}
+    assert set(claim_receipts) == {item.claim.id for item in resolved.closure.claims}
+    for item in resolved.closure.claims:
+        assert claim_receipts[item.claim.id].premise_ids == item.claim.premise_ids
+        assert set(item.ancestry_ids) <= set(claim_receipts)
+    assert claim_receipts["leaf"].premise_ids == ["mid"]
+    assert claim_receipts["mid"].premise_ids == ["ancestor"]
+    assert claim_receipts["ancestor"].premise_ids == ["span-export"]
+    requirement_receipts = {item.conclusion_ids[0]: item for item in result.receipts if item.rule_id == "nsi2.provenance.requirement"}
+    for requirement in result.contract.requirements:
+        assert requirement_receipts[requirement.id].premise_ids == requirement.claim_ids
+    criterion_receipts = {item.conclusion_ids[0]: item for item in result.receipts if item.rule_id == "nsi2.provenance.criterion"}
+    for criterion in result.contract.acceptance_criteria:
+        assert criterion_receipts[criterion.id].premise_ids == criterion.requirement_ids
+    repeated = evaluate_provenance(cur, body)
+    assert repeated.binding == result.binding
+    assert [item.id for item in repeated.receipts] == result.assessment.derivation_receipt_ids
+    assert body.model_dump(mode="python") == before
+    assert read_revision(cur, workspace_id=body.workspace_id, run_id=RUN, revision=0).body.model_dump(mode="python") == before
+    cur.execute("SELECT current_revision FROM omp_work.intake_heads WHERE workspace_id=%s AND run_id=%s", (body.workspace_id, RUN))
+    assert cur.fetchone() == (0,)
+    cur.execute("SELECT count(*) FROM omp_work.intake_assessments WHERE workspace_id=%s AND run_id=%s", (body.workspace_id, RUN))
+    assert cur.fetchone() == (0,)
+    cur.execute("SELECT count(*) FROM omp_work.intake_derivations WHERE workspace_id=%s AND run_id=%s", (body.workspace_id, RUN))
+    assert cur.fetchone() == (0,)
+
+
+@pytest.mark.parametrize("missing", ["root", "ancestor_truth"])
+def test_incomplete_consumed_proof_never_certifies_ready(proof, monkeypatch, missing):
+    cur, body, resolved = proof
+    # Exercise incomplete resolver output after resolving real PostgreSQL proof.
+    if missing == "root":
+        incomplete = replace(resolved, closure=resolved.closure.model_copy(update={
+            "claims": tuple(item for item in resolved.closure.claims if item.claim.id != "leaf"),
+        }))
+    else:
+        incomplete = replace(resolved, truths=tuple(item for item in resolved.truths if item[0] != "ancestor"))
+    monkeypatch.setattr(intake_provenance, "resolve_provenance_closure", lambda _cur, _body: incomplete)
+    result = evaluate_provenance(cur, body)
+    assert result.unresolved == ()
+    assert result.assessment.status == "NEEDS_SPEC"
+
+
+@pytest.mark.parametrize("blocker,status", [("conflict", "CONFLICTED"), ("gap", "NEEDS_SPEC"), ("question", "NEEDS_SPEC")])
+def test_open_findings_never_certify_ready(service, write_repository, blocker, status):
+    workspace_id = write_repository[0]
+    body = make_body(workspace_id, relay=False)
+    if blocker == "conflict":
+        body.conflicts = [nsi.Conflict(id="open", claim_ids=["ancestor", "leaf"], predicate_id="bounded.annotation", reason="Unsettled")]
+    elif blocker == "gap":
+        body.gaps.append(body.gaps[0].model_copy(update={"id": "open"}))
+    else:
+        body.questions.append(body.questions[0].model_copy(update={"id": "open", "gap_ids": []}))
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        append_body(cur, write_repository, body, uuid4(), -1)
+        stored = read_revision(cur, workspace_id=workspace_id, run_id=RUN, revision=0).body
+        result = evaluate_provenance(cur, stored)
+        assert result.closure.ready is True
+        assert result.assessment.status == status
+        assert "open" in {item.id for item in result.unresolved}
+
+
+def test_absent_method_refused_by_pinned_evaluator(service, write_repository):
+    workspace_id = write_repository[0]
+    body = make_body(workspace_id, relay=False)
+    body.criteria[0].verification_method = "absent"
+    body.history.criteria[0].criterion.verification_method = "absent"
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        append_body(cur, write_repository, body, uuid4(), -1)
+        stored = read_revision(cur, workspace_id=workspace_id, run_id=RUN, revision=0).body
+        with pytest.raises(WorkStoreError) as caught:
+            evaluate_provenance(cur, stored)
+        assert caught.value.diagnostics == ("incompatible verification method",)
+
+
+@pytest.mark.parametrize("edit", ["actor", "source_revision", "relation", "binary", "requirement", "finding", "link"])
+def test_same_revision_content_edits_change_pinned_binding(service, write_repository, edit):
+    workspace_id = write_repository[0]
+    body = make_body(workspace_id, relay=False)
+    payload = b"\x00\xff"
+    body.snapshot.artifacts.append(nsi.EvidenceArtifact(
+        id="binary", uri="intake:binary", revision="binary-1", actor=nsi.ActorRef(id="owner", kind="owner"),
+        media_type="application/octet-stream", content_hash=hashlib.sha256(payload).hexdigest(),
+    ))
+    body.artifact_bytes["binary"] = payload
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        operation_id = uuid4()
+        cur.execute("SAVEPOINT seed")
+        append_revision(cur, locked(cur, write_repository, expected=-1, operation_id=operation_id),
+                        seal(sync_links(body)), operation_id=operation_id)
+        stored = read_revision(cur, workspace_id=workspace_id, run_id=RUN, revision=0).body
+        original = evaluate_provenance(cur, stored)
+        cur.execute("ROLLBACK TO SAVEPOINT seed")
+        # Re-seed same revision and operation, changing exactly one content input.
+        if edit == "actor":
+            next(claim for claim in stored.snapshot.claims if claim.id == "ancestor").asserted_by.id = "other-owner"
+        elif edit == "source_revision":
+            next(artifact for artifact in stored.snapshot.artifacts if artifact.id == "bounded-source").revision = "edited"
+        elif edit == "relation":
+            next(link for link in stored.evidence_links if link.claim_id == "ancestor").relation = "contradicts"
+        elif edit == "binary":
+            next(artifact for artifact in stored.snapshot.artifacts if artifact.id == "binary").media_type = "application/x-binary"
+        elif edit == "requirement":
+            stored.history.criteria[0].requirements[0].text = "Edited owner requirement"
+        elif edit == "finding":
+            stored.gaps.append(stored.gaps[0].model_copy(update={"id": "new-gap"}))
+        else:
+            stored.questions[0].gap_ids = []
+        append_revision(cur, locked(cur, write_repository, expected=-1, operation_id=operation_id),
+                        seal(stored), operation_id=operation_id)
+        stored = read_revision(cur, workspace_id=workspace_id, run_id=RUN, revision=0).body
+        changed = evaluate_provenance(cur, stored)
+        assert changed.binding.revision == original.binding.revision == 0
+        assert changed.binding != original.binding
+        assert changed.assessment.derivation_receipt_ids != original.assessment.derivation_receipt_ids
+        assert changed.assessment.status == ("NEEDS_SPEC" if edit in {"finding", "link"} else "READY_FOR_RATIFICATION")
 
 
 @pytest.mark.parametrize("method", ["absent", "manual_inspection"])
@@ -150,12 +293,14 @@ def test_shared_requirements_deduplicate_or_refuse(service, write_repository, in
             assert all(item.requirement_ids == [shared.id] for item in result.contract.acceptance_criteria)
 
 
-def test_clean_analysis_does_not_certify_original_false_premise(service, write_repository):
+@pytest.mark.parametrize("truth", ["false", "unknown"])
+@pytest.mark.parametrize("claim_id", ["goal-ready", "ancestor"])
+def test_clean_analysis_does_not_certify_original_false_premise(service, write_repository, truth, claim_id):
     workspace_id = write_repository[0]
     body = make_body(workspace_id, relay=False)
     body.snapshot.state = "needs_spec"
     body.snapshot.claims = [
-        claim.model_copy(update={"truth": "false"}) if claim.id == "goal-ready" else claim
+        claim.model_copy(update={"truth": truth}) if claim.id == claim_id else claim
         for claim in body.snapshot.claims
     ]
     with connection(service, workspace_id) as conn, conn.cursor() as cur:
@@ -164,9 +309,12 @@ def test_clean_analysis_does_not_certify_original_false_premise(service, write_r
         resolved = resolve_provenance_closure(cur, stored)
         result = evaluate_provenance_projection(stored, resolved)
         assert result.findings.issue_count == 0
-        assert dict(resolved.truths)["goal-ready"] == "false"
+        assert dict(resolved.truths)[claim_id] == truth
         assert resolved.ready is False
-        assert next(claim.truth for claim in stored.snapshot.claims if claim.id == "goal-ready") == "false"
+        assert next(claim.truth for claim in stored.snapshot.claims if claim.id == claim_id) == truth
+        pinned = evaluate_provenance(cur, stored)
+        assert pinned.unresolved == ()  # Owner settlement cannot promote original truth.
+        assert pinned.assessment.status == "NEEDS_SPEC"
 
 
 def test_analysis_preserves_typed_conflict_and_unknown_truth(service, write_repository):
@@ -204,6 +352,9 @@ def test_analysis_preserves_typed_conflict_and_unknown_truth(service, write_repo
         assert dict(resolved.truths)["typed-unknown"] == "unknown"
         assert resolved.ready is False
         assert resolved.projection.model_dump(mode="json") == before
+        pinned = evaluate_provenance(cur, stored)
+        assert pinned.assessment.status == "CONFLICTED"
+        assert set(pinned.assessment.conflicts[0].claim_ids) == {"typed-bool", "typed-int"}
 
 
 def test_same_id_conflict_membership_growth_defeats_old_coverage(service, write_repository):
@@ -527,6 +678,9 @@ def test_uncapped_gaps_preserved_beyond_ui_cap(service, write_repository):
         assert len(oracle_gaps) == 3
         unresolved_oracle_gaps = [item for item in result.unresolved if item.id.startswith("gap:oracle:")]
         assert len(unresolved_oracle_gaps) == 3
+        pinned = evaluate_provenance(cur, stored)
+        assert pinned.assessment.status == "NEEDS_SPEC"
+        assert {item.id for item in pinned.assessment.gaps} >= {item.id for item in unresolved_oracle_gaps}
 
 
 @pytest.fixture
@@ -707,3 +861,112 @@ def test_closure_binds_history_even_when_settlement_filters_stale_decisions(proo
     changed = evaluate_provenance_projection(body, resolved)
     assert changed.settlement.body.history.decisions == []
     assert closure_hash(closure_document(body, resolved, changed.contract, changed.settlement)) != closure_hash(original)
+
+
+def _binding(body, resolved):
+    evaluation = evaluate_provenance_projection(body, resolved)
+    return build_provenance_binding(body, resolved, evaluation.contract, evaluation.settlement)
+
+
+def test_binding_has_seven_snapshot_and_content_fields_without_feedback(proof):
+    _cur, body, resolved = proof
+    evaluation = evaluate_provenance_projection(body, resolved)
+    digest = closure_hash(closure_document(body, resolved, evaluation.contract, evaluation.settlement))
+    binding = _binding(body, resolved)
+    assert binding.model_dump() == {
+        "run_id": body.snapshot.run_id,
+        "revision": body.snapshot.revision,
+        "contract_hash": contract_hash(evaluation.contract),
+        "claim_set_hash": digest,
+        "source_hash": digest,
+        "rule_bundle_hash": content_hash(helper_sources()),
+        "schema_hash": content_hash(referenced_schemas()),
+    }
+    assert _binding(body, resolved) == binding
+    altered = body.model_copy(deep=True)
+    altered.binding = nsi.Binding(
+        run_id="prior-run", revision=99,
+        **{field: "ab" * 32 for field in (
+            "contract_hash", "claim_set_hash", "source_hash", "rule_bundle_hash", "schema_hash",
+        )},
+    )
+    assert _binding(altered, resolved) == binding
+
+
+@pytest.mark.parametrize("module_name,edit", [
+    ("omp_work.contracts.nsi.v1.compat", "module"),
+    ("omp_work.contracts.nsi.v1.validate", "module"),
+    ("omp_work.contracts.nsi.v1.authority", "module"),
+    ("omp_work.contracts.nsi.v1.models", "module"),
+    ("omp_work.v1.semantics", "module"),
+    ("omp_work.v1.models", "module"),
+    ("omp_work.v1.api_models", "module"),
+    ("omp_work.v1.intake_provenance", "module"),
+    ("omp_work.v1.intake_provenance_closure", "module"),
+    ("omp_work.v1.intake_decisions", "module"),
+    ("omp_work.contracts.nsi.v1.compat", "records"),
+    ("omp_work.v1.intake_decisions", "readiness"),
+    ("omp_work.v1.intake_provenance", "settlement"),
+])
+def test_binding_tracks_complete_loaded_helpers_without_paths_or_stale_cache(
+    proof, tmp_path, monkeypatch, module_name, edit,
+):
+    _cur, body, resolved = proof
+    module = sys.modules[module_name]
+    original_content = Path(module.__file__).read_bytes()
+    baseline = _binding(body, resolved)
+    copy = tmp_path / "loaded.py"
+    copy.write_bytes(original_content)
+    monkeypatch.setattr(module, "__file__", str(copy))
+    assert _binding(body, resolved) == baseline
+
+    if edit == "records":
+        changed_content = original_content.replace(b"def _records(", b"def _records_changed(")
+    elif edit == "readiness":
+        changed_content = original_content.replace(b'status = "CONFLICTED"', b'status = "NEEDS_SPEC"')
+    elif edit == "settlement":
+        changed_content = original_content.replace(b"links[cid] = ()", b'links[cid] = ("new-gap",)')
+    else:
+        changed_content = original_content + b"\n_PRIVATE_RULE_REVISION = 2\n"
+    copy.write_bytes(changed_content)
+    changed = _binding(body, resolved)
+    assert changed.rule_bundle_hash != baseline.rule_bundle_hash
+    assert changed == baseline.model_copy(update={"rule_bundle_hash": changed.rule_bundle_hash})
+    assert _binding(body, resolved) == changed
+
+    relocated = tmp_path / "relocated.py"
+    relocated.write_bytes(changed_content)
+    monkeypatch.setattr(module, "__file__", str(relocated))
+    assert _binding(body, resolved) == changed
+    relocated.write_bytes(original_content)
+    assert _binding(body, resolved) == baseline
+
+
+@pytest.mark.parametrize("schema_name", ["authority", "taxonomy", "claim", "status", "contract"])
+def test_binding_tracks_bundled_and_transitively_referenced_schema_payloads(
+    proof, monkeypatch, schema_name,
+):
+    _cur, body, resolved = proof
+    baseline = _binding(body, resolved)
+    loader = validate.load_schema
+    loaded = []
+    altered = False
+
+    def load(name):
+        loaded.append(name)
+        document = loader(name)
+        if altered and name == schema_name:
+            document["$defs"]["FutureInternalValue"] = {"type": "null"}
+        return document
+
+    monkeypatch.setattr(validate, "load_schema", load)
+    assert _binding(body, resolved) == baseline
+    assert set(loaded) == {"authority", "taxonomy", "claim", "status", "contract"}
+    assert len(loaded) == 5  # Local references and cycles load each document once.
+    altered = True
+    changed = _binding(body, resolved)
+    assert changed.schema_hash != baseline.schema_hash
+    assert changed == baseline.model_copy(update={"schema_hash": changed.schema_hash})
+    assert _binding(body, resolved) == changed
+    altered = False
+    assert _binding(body, resolved) == baseline

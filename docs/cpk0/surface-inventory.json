@@ -5418,6 +5418,7 @@
     "packages/coding-agent/src/prompts/memories/stage_one_input.md",
     "packages/coding-agent/src/prompts/memories/stage_one_system.md",
     "packages/coding-agent/src/prompts/orchestrator-tools.md",
+    "packages/coding-agent/src/prompts/orchestrator-worker.md",
     "packages/coding-agent/src/prompts/ratchet-kickoff.md",
     "packages/coding-agent/src/prompts/review-custom-request.md",
     "packages/coding-agent/src/prompts/review-headless-request.md",
