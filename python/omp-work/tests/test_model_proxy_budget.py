@@ -34,7 +34,14 @@ from omp_work.model_proxy_budget import (
     ModelProxyBudgetError,
     lock_captured_identity,
 )
-from omp_work.model_proxy_upstream import GEMINI, ModelRoute, Prepared
+from omp_work.model_proxy_upstream import (
+    GEMINI,
+    OLLAMA,
+    ModelProxyUpstream,
+    ModelRoute,
+    Prepared,
+    prepare,
+)
 from omp_work.operations.jobs_migrate import apply_jobs_migrations
 from omp_work.project_store import ProjectAuthorityRefused
 from omp_work.spend_budget import SpendBudget
@@ -48,6 +55,13 @@ from psycopg.types.json import Jsonb
 from test_agent_stop_store import _envelope
 from test_item_budget_alerts import _seed_budget
 from test_model_proxy_transactions import _transport
+from test_model_proxy_upstream import (
+    FakeTransport,
+    body as gemini_body,
+    gemini_route,
+    ollama_body,
+    ollama_route,
+)
 from test_workflow_service import OWNER, _create, _grant
 
 pytest_plugins = ("test_workflow_service",)
@@ -4717,3 +4731,178 @@ def test_persistent_accounting_failure_closes_process_before_waking_callers(
                 budget_module._ProcessGate.unconfirmed = None
                 if budget_module._ProcessGate.owner is admission._owner.token:
                     admission._owner.release()
+
+
+def _proxy_call(ctx, prepared, upstream, **kw):
+    return ctx.budget.call(
+        ctx.workspace_id, ctx.actor_id, ctx.project_id, None, ctx.work_id,
+        kw.pop("job_id", None), kw.pop("worker_id", None), kw.pop("fence", None),
+        kw.pop("request_id", "orchestrated"), None, prepared, upstream, **kw,
+    )
+
+
+def _proxy_upstream(ctx, monkeypatch, api=GEMINI, *, response=None, error=None):
+    # Synthetic key only; use real preparation and invocation, no external I/O.
+    monkeypatch.setattr(type(ctx.service.config), "read_secret", lambda self, name: "synthetic-key")
+    if api == GEMINI:
+        prepared = prepare(gemini_route(context_tokens=1000, max_output_tokens=100, thinking_tokens=0), gemini_body())
+        response = response if response is not None else b'data: {"candidates":[{"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":5,"cachedContentTokenCount":2}}\n'
+    else:
+        prepared = prepare(ollama_route(context_tokens=1000, max_output_tokens=100), ollama_body())
+        response = response if response is not None else b'{"done":true,"prompt_eval_count":12,"eval_count":5,"prompt_eval_cached_count":2}\n'
+    transport = FakeTransport(body=response, error=error)
+    return prepared, ModelProxyUpstream(ctx.service.config, transport), transport
+
+
+@pytest.mark.parametrize("state,code", [("stop", "agent_stop_engaged"), ("dead", "job_fence_stale")])
+def test_call_refused_admission_never_posts(admission_context, monkeypatch, state, code):
+    """Stopped workspace or dead lease prevents even a real invoke's POST."""
+    ctx = admission_context
+    prepared, upstream, transport = _proxy_upstream(ctx, monkeypatch)
+    job = _admitting_job(ctx, expired=state == "dead")
+    if state == "stop":
+        _engage_stop(ctx)
+    before = _accounting_snapshot(ctx)
+    with pytest.raises(ModelProxyBudgetError) as exc:
+        _proxy_call(ctx, prepared, upstream, job_id=job, worker_id="worker-1", fence=1)
+    assert exc.value.code == code
+    assert transport.calls == []
+    assert _accounting_snapshot(ctx) == before
+
+
+@pytest.mark.parametrize("api", [GEMINI, OLLAMA])
+def test_call_measured_receipt_replays_without_send(admission_context, monkeypatch, api):
+    """Complete measured usage settles under locks; stopped replay sends nothing."""
+    ctx = admission_context
+    prepared, upstream, transport = _proxy_upstream(ctx, monkeypatch, api)
+    post = transport.post
+
+    def locked_post(*args, **kwargs):
+        assert budget_module._ProcessGate.owner is not None
+        with psycopg.connect(**ctx.service.config.connection_kwargs("postgres")) as conn:
+            with pytest.raises(LockNotAvailable):
+                conn.execute(
+                    "SELECT 1 FROM omp_work.projects WHERE project_id=%s FOR UPDATE NOWAIT",
+                    (ctx.project_id,),
+                )
+        return post(*args, **kwargs)
+
+    monkeypatch.setattr(transport, "post", locked_post)
+    receipt = _proxy_call(ctx, prepared, upstream)
+    expected_usd = (prepared.route.input_usd * 10 + prepared.route.output_usd * 5 + prepared.route.cache_usd * 2) / Decimal(1_000_000)
+    assert receipt["status"] == "settled" and receipt["actual_usd"] == expected_usd
+    snapshot = _accounting_snapshot(ctx)
+    usage = snapshot[1][0]
+    assert (usage["input_tokens"], usage["output_tokens"], usage["cache_tokens"], usage["measurement"], usage["price_version"]) == (10, 5, 2, "measured", prepared.route.price_version)
+    assert snapshot[0][0]["amount_usd"] == expected_usd
+    with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
+        assert item_spend(cur, ctx.workspace_id, ctx.work_id).tokens == 15
+    _engage_stop(ctx)
+    assert _proxy_call(ctx, prepared, upstream) == receipt
+    assert len(transport.calls) == 1
+    assert _accounting_snapshot(ctx) == snapshot
+
+
+@pytest.mark.parametrize("changed", [
+    {"input_tokens": 0, "output_tokens": None, "cache_tokens": None},
+    {"input_tokens": None}, {"cache_tokens": None},
+    {"input_tokens": True}, {"output_tokens": -1}, {"cache_tokens": 1.5},
+    {"usd": Decimal("NaN")}, {"usd": Decimal("Infinity")},
+    {"usd": Decimal("-1")}, {"usd": "0"},
+    {"price_version": "foreign"}, {"usd": Decimal("0")},
+    {"input_tokens": 999, "cache_tokens": 2}, {"output_tokens": 101},
+])
+def test_call_invalid_result_charges_estimate(admission_context, monkeypatch, changed):
+    """Partial, malformed, mispriced or over-bound accounting cannot free capacity."""
+    ctx = admission_context
+    prepared, upstream, transport = _proxy_upstream(ctx, monkeypatch)
+    invoke = upstream.invoke
+
+    def invalid_result(bounds):
+        result = replace(invoke(bounds), **changed)
+        if "usd" not in changed and all(type(n) is int and n >= 0 for n in (result.input_tokens, result.output_tokens, result.cache_tokens)):
+            result = replace(result, usd=(
+                bounds.route.input_usd * result.input_tokens
+                + bounds.route.output_usd * result.output_tokens
+                + bounds.route.cache_usd * result.cache_tokens
+            ) / Decimal(1_000_000))
+        return result
+
+    monkeypatch.setattr(upstream, "invoke", invalid_result)
+    with pytest.raises(ModelProxyBudgetError) as exc:
+        _proxy_call(ctx, prepared, upstream)
+    assert exc.value.code == "unmeasurable_failure"
+    _assert_proxy_bound(ctx, prepared)
+    snapshot = _accounting_snapshot(ctx)
+    replay = _proxy_call(ctx, prepared, upstream)
+    assert replay["actual_usd"] == prepared.max_usd
+    assert len(transport.calls) == 1
+    assert _accounting_snapshot(ctx) == snapshot
+
+
+def _assert_proxy_bound(ctx, prepared):
+    snapshot = _accounting_snapshot(ctx)
+    usage = snapshot[1][0]
+    assert (usage["input_tokens"], usage["output_tokens"], usage["cache_tokens"], usage["measurement"]) == (prepared.max_input_tokens, prepared.max_output_tokens, 0, "estimated")
+    assert usage["price_usd"] == snapshot[0][0]["amount_usd"] == prepared.max_usd
+    assert _admission_counts(ctx) == (1, 1, 1, 2)
+
+
+@pytest.mark.parametrize("failure", ["transport", "missing_usage", "unexpected", "exit", "missing_settlement"])
+def test_call_possible_send_failure_charges_estimate(admission_context, monkeypatch, failure):
+    """Transport failure, unmeasured response or interrupted settlement charges once."""
+    ctx = admission_context
+    prepared, upstream, transport = _proxy_upstream(
+        ctx, monkeypatch,
+        response=b'data: {"candidates":[{"finishReason":"STOP"}]}\n' if failure == "missing_usage" else None,
+        error=OSError("connection lost") if failure == "transport" else None,
+    )
+    invoke = upstream.invoke
+
+    def interrupted(bounds):
+        invoke(bounds)
+        raise SystemExit() if failure == "exit" else RuntimeError("unexpected")
+
+    if failure in ("unexpected", "exit"):
+        monkeypatch.setattr(upstream, "invoke", interrupted)
+    if failure == "missing_settlement":
+        settle = budget_module.ModelCallAdmission.settle
+
+        def omit_measured(self, **kw):
+            if kw.get("measurement", "measured") == "measured":
+                return None
+            return settle(self, **kw)
+
+        monkeypatch.setattr(budget_module.ModelCallAdmission, "settle", omit_measured)
+    with pytest.raises(ModelProxyBudgetError) as exc:
+        _proxy_call(ctx, prepared, upstream)
+    assert exc.value.code == "unmeasurable_failure"
+    assert len(transport.calls) == 1
+    _assert_proxy_bound(ctx, prepared)
+
+
+def test_call_presend_refusal_charges_nothing(admission_context, monkeypatch):
+    """Missing synthetic key proves no send; admission aborts without accounting."""
+    ctx = admission_context
+    prepared, upstream, transport = _proxy_upstream(ctx, monkeypatch)
+    monkeypatch.setattr(type(ctx.service.config), "read_secret", lambda self, name: None)
+    with pytest.raises(ModelProxyBudgetError) as exc:
+        _proxy_call(ctx, prepared, upstream)
+    assert exc.value.code == "upstream_refused"
+    assert transport.calls == []
+    assert _admission_counts(ctx) == (0, 0, 0, 0)
+    monkeypatch.setattr(type(ctx.service.config), "read_secret", lambda self, name: "synthetic-key")
+    assert _proxy_call(ctx, prepared, upstream)["status"] == "settled"
+    assert len(transport.calls) == 1
+
+
+def test_call_server_priced_usage_above_usd_bound_charges_estimate(admission_context, monkeypatch):
+    """Correct server price still cannot exceed admitted USD capacity."""
+    ctx = admission_context
+    prepared, upstream, transport = _proxy_upstream(ctx, monkeypatch)
+    prepared = replace(prepared, max_usd=Decimal("0.000001"))
+    with pytest.raises(ModelProxyBudgetError) as exc:
+        _proxy_call(ctx, prepared, upstream)
+    assert exc.value.code == "unmeasurable_failure"
+    assert len(transport.calls) == 1
+    _assert_proxy_bound(ctx, prepared)
