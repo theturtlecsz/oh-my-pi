@@ -5,7 +5,8 @@ import inspect
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import NamedTuple, NoReturn
+from typing import NamedTuple, NoReturn, Sequence
+from uuid import UUID
 from urllib.parse import urljoin
 
 from psycopg import Cursor
@@ -19,12 +20,14 @@ from ..contracts.nsi.v1.compat import (
     nsi_to_bounded,
 )
 from ..contracts.nsi.v1.models import AcceptanceCriterion, IntakeContract, RequirementClause
-from ..intake_repository import DecisionRecord, IntakeRevisionBody
+from ..intake_repository import (
+    DecisionRecord, IntakeRepositoryError, IntakeRevisionBody, append_assessment, lock_revision, read_revision,
+)
 from . import api_models, intake_decisions, intake_provenance_closure, models, semantics
-from .api_models import IntakeDecisionRecord, IntakeIssueRecord
-from .intake_decisions import _latest_findings, unresolved_findings
+from .api_models import AssessIntakeResult, IntakeAssessmentView, IntakeDecisionRecord, IntakeIssueRecord
+from .intake_decisions import _latest_findings, open_issues, unresolved_findings
 from .intake_provenance_closure import ProvenanceClosure, resolve_provenance_closure
-from .models import BoundedIntakeDraft
+from .models import AssessIntakeCommand, BoundedIntakeDraft, CommandEnvelope
 from .store_shared import WorkStoreError
 
 
@@ -197,11 +200,19 @@ def settle_provenance(
     else:
         derived = evaluation
 
+    return settle_provenance_records(body, derived.gaps, derived.conflicts, derived.questions)
+
+
+def settle_provenance_records(
+    body: IntakeRevisionBody, gaps: Sequence[nsi.Gap], conflicts: Sequence[nsi.Conflict],
+    questions: Sequence[nsi.ClarificationQuestion],
+) -> ProvenanceSettlement:
+    """Settle concrete computed or stored records through the same membership rules."""
     persisted_findings, persisted_gap_links = _latest_findings(body)
 
-    derived_gaps = {g.id: g for g in derived.gaps}
-    derived_conflicts = {c.id: c for c in derived.conflicts}
-    derived_questions = {q.id: q for q in derived.questions}
+    derived_gaps = {g.id: g for g in gaps}
+    derived_conflicts = {c.id: c for c in conflicts}
+    derived_questions = {q.id: q for q in questions}
 
     # 1. Gaps: refresh derived, remove obsolete bounded-derived, keep unrelated persisted.
     merged_gaps: dict[str, nsi.Gap] = {}
@@ -494,3 +505,48 @@ def evaluate_provenance(cur: Cursor, body: IntakeRevisionBody) -> ProvenanceEval
 def settle_intake_provenance(cur: Cursor, body: IntakeRevisionBody) -> ProvenanceSettlement:
     """Resolve persisted proof and settle findings on a deep evaluation copy."""
     return settle_provenance(body, resolve_provenance_closure(cur, body))
+
+
+def assess_intake(
+    cur: Cursor, envelope: CommandEnvelope, actor_id: UUID, actor_kind: str,
+) -> dict[str, object]:
+    """Compute proof under the semantic head lock in the caller transaction."""
+    if actor_kind not in ("owner", "rule_engine"):
+        raise WorkStoreError("forbidden")
+    if not isinstance(envelope.command, AssessIntakeCommand):
+        raise WorkStoreError("invalid_request")
+    payload = envelope.command.payload
+    cur.execute(
+        "SELECT mission_id FROM omp_work.intake_heads WHERE workspace_id=%s AND run_id=%s",
+        (envelope.workspace_id, payload.run_id),
+    )
+    head = cur.fetchone()
+    if head is None:
+        raise WorkStoreError("stale_intake")
+    try:
+        locked = lock_revision(
+            cur, workspace_id=envelope.workspace_id, run_id=payload.run_id,
+            expected_revision=payload.expected_revision - 1, mission_id=head[0],
+            operation_id=envelope.operation_id,
+        )
+        stored = read_revision(
+            cur, workspace_id=envelope.workspace_id, run_id=payload.run_id,
+            revision=locked.current_revision,
+        )
+        evaluation = evaluate_provenance(cur, stored.body)
+        assert evaluation.assessment is not None and evaluation.binding is not None
+        assert evaluation.closure is not None and evaluation.settlement is not None
+        append_assessment(cur, locked, IntakeAssessmentView(
+            id=f"assessment:{envelope.operation_id}", assessment=evaluation.assessment,
+            binding=evaluation.binding, receipts=evaluation.receipts,
+            unresolved_issues=open_issues(evaluation.settlement.body),
+            provenance=evaluation.closure.closure,
+        ), envelope.operation_id)
+    except IntakeRepositoryError as exc:
+        raise WorkStoreError(
+            "stale_intake" if str(exc) == "stale_revision" else "invalid_request",
+        ) from exc
+    return AssessIntakeResult(
+        type="assess_intake", run_id=payload.run_id, revision=payload.expected_revision,
+        assessed_revision=payload.expected_revision,
+    ).model_dump(mode="json")

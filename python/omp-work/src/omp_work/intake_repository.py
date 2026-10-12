@@ -171,6 +171,14 @@ def append_assessment(
         created_at=assessment.created_at,
         full_record=Jsonb(view.model_dump(mode="json", exclude_unset=True)),
     ))
+    # Full receipts also name requirements and criteria. This relation indexes
+    # only snapshot claims; the complete typed references remain in full_record.
+    cur.execute(
+        "SELECT claim_id FROM omp_work.intake_claims "
+        "WHERE workspace_id=%s AND run_id=%s AND revision=%s",
+        (locked.workspace_id, locked.run_id, locked.current_revision),
+    )
+    claim_ids = {row[0] for row in cur.fetchall()}
     for receipt in view.receipts:
         _insert(cur, "intake_derivations", common | dict(
             derivation_id=receipt.id, rule_id=receipt.rule_id,
@@ -179,6 +187,8 @@ def append_assessment(
         ))
         for role, ids in (("premise", receipt.premise_ids), ("conclusion", receipt.conclusion_ids)):
             for claim_id in ids:
+                if claim_id not in claim_ids:
+                    continue
                 _insert(cur, "intake_derivation_claims", common | dict(
                     derivation_id=receipt.id, claim_id=claim_id, role=role,
                 ))
