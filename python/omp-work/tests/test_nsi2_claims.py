@@ -603,7 +603,7 @@ def claim_payload(
     asserted_by=None,
     value=None,
 ):
-    span = {"artifact_id": artifact_id, "start_byte": 0, "end_byte": 3, "quote": "aé🙂"}
+    span = {"artifact_id": artifact_id, "start_byte": 0, "end_byte": 7, "quote": "aé🙂"}
     if evidence is None:
         evidence = [span]
     if evidence_links is None:
@@ -644,6 +644,157 @@ def claim_envelope(workspace_id, actor_id, actor_kind, **kwargs):
         operation_id=uuid4(), request_id=uuid4(), correlation_id=uuid4(),
         command=claim_command(actor_id, actor_kind, **kwargs),
     ))
+
+
+def assert_claim_refused_without_write(service, workspace_id, command, *, revision, token="owner-token"):
+    with connection(service, workspace_id) as conn:
+        events = conn.execute(
+            "SELECT * FROM omp_audit.domain_events WHERE workspace_id=%s ORDER BY sequence",
+            (workspace_id,),
+        ).fetchall()
+    status, body = _command(service, workspace_id, command, token=token)
+    assert status == 403
+    assert body["error"]["code"] == "forbidden"
+    with connection(service, workspace_id) as conn:
+        assert conn.execute(
+            "SELECT current_revision FROM omp_work.intake_heads WHERE workspace_id=%s",
+            (workspace_id,),
+        ).fetchone() == (revision,)
+        assert conn.execute(
+            "SELECT revision FROM omp_work.intake_revisions WHERE workspace_id=%s ORDER BY revision",
+            (workspace_id,),
+        ).fetchall() == [(r,) for r in range(revision + 1)]
+        assert conn.execute(
+            "SELECT * FROM omp_audit.domain_events WHERE workspace_id=%s ORDER BY sequence",
+            (workspace_id,),
+        ).fetchall() == events
+
+
+def get_claim_snapshot(service, workspace_id):
+    response = service.client.get(
+        f"/v1/workspaces/{workspace_id}/intake/run-1", headers=_owner_headers(workspace_id),
+    )
+    assert response.status_code == 200
+    return response.json()["snapshot"]
+
+
+@pytest.mark.parametrize("failure", ["forged_asserted_by", "bad_quote", "split_utf8", "out_of_bounds"])
+def test_claim_authority_refusals_leave_revision_and_events_unchanged(service, http_intake, failure):
+    workspace_id, mission_id = http_intake
+    assert _command(service, workspace_id,
+                    envelope(workspace_id, mission_id).command.model_dump(mode="json"))[0] == 200
+    assert _command(service, workspace_id, evidence_command(OWNER, "owner"))[0] == 200
+    span = dict(artifact_id="artifact-added", start_byte=0, end_byte=7, quote="aé🙂")
+    if failure == "bad_quote":
+        span["quote"] = "forged"
+    elif failure == "split_utf8":
+        span.update(start_byte=2, end_byte=4)
+        span.pop("quote")
+    elif failure == "out_of_bounds":
+        span["end_byte"] = 8
+        span.pop("quote")
+    command = claim_command(OWNER, "owner", evidence=[span], evidence_links=[dict(span=span, relation="supports")])
+    if failure == "forged_asserted_by":
+        command["payload"]["claim"]["asserted_by"] = dict(id=str(OWNER), kind="model")
+        command["payload"]["claim"]["origin"] = "model_proposal"
+    assert_claim_refused_without_write(service, workspace_id, command, revision=1)
+    assert get_claim_snapshot(service, workspace_id)["claims"] == []
+
+
+@pytest.mark.parametrize("admitter_kind,transition", [("owner", False), ("owner", True), ("rule_engine", True)])
+def test_owner_statement_admission_get_preserves_admitter_kind(service, http_intake, admitter_kind, transition):
+    workspace_id, mission_id = http_intake
+    assert _command(service, workspace_id,
+                    envelope(workspace_id, mission_id).command.model_dump(mode="json"))[0] == 200
+    assert _command(service, workspace_id, evidence_command(OWNER, "owner"))[0] == 200
+    command = claim_command(OWNER, "owner")
+    if transition:
+        assert _command(service, workspace_id, command)[0] == 200
+        command["payload"]["expected_revision"] = 3
+    admitter_id, token = (OWNER, "owner-token") if admitter_kind == "owner" else intake_capability(
+        service, workspace_id, kind="rule_engine", scopes=("work.mutate", "work.approve"),
+    )
+    claim = command["payload"]["claim"]
+    claim.update(state="admitted", truth="true", admitted_by=dict(id=str(admitter_id), kind=admitter_kind))
+    assert _command(service, workspace_id, command, token=token)[0] == 200
+    stored_claim = get_claim_snapshot(service, workspace_id)["claims"][0]
+    assert stored_claim["state"] == "admitted"
+    assert stored_claim["truth"] == "true"
+    assert stored_claim["admitted_by"] == dict(id=str(admitter_id), kind=admitter_kind)
+    assert stored_claim["asserted_by"] == claim["asserted_by"]
+
+
+@pytest.mark.parametrize("kind", ["model", "agent", "task-agent", "tool"])
+def test_approve_scope_cannot_admit_model_or_tool_claims(service, http_intake, kind):
+    workspace_id, mission_id = http_intake
+    start = envelope(workspace_id, mission_id).command.model_dump(mode="json")
+    start["payload"]["ontology"]["predicates"][0]["authority"] = ["owner", "rule_engine", "model", "tool"]
+    assert _command(service, workspace_id, start)[0] == 200
+    tool_id, tool_token = intake_capability(service, workspace_id, kind="tool")
+    assert _command(service, workspace_id, evidence_command(tool_id, "tool"), token=tool_token)[0] == 200
+    actor_id, token = intake_capability(
+        service, workspace_id, kind=kind, scopes=("work.mutate", "work.approve", "work.read"),
+    )
+    mapped_kind = "tool" if kind == "tool" else "model"
+    command = claim_command(actor_id, mapped_kind)
+    if kind == "tool":
+        command["payload"]["claim"]["origin"] = "repository_observation"
+    proposed = deepcopy(command["payload"]["claim"])
+    assert _command(service, workspace_id, command, token=token)[0] == 200
+    command["payload"]["expected_revision"] = 3
+    command["payload"]["claim"].update(
+        state="admitted", truth="true", admitted_by=dict(id=str(OWNER), kind="owner"),
+    )
+    assert_claim_refused_without_write(service, workspace_id, command, revision=2, token=token)
+    command["payload"]["claim"]["id"] = "new-admission"
+    assert_claim_refused_without_write(service, workspace_id, command, revision=2, token=token)
+    stored = get_claim_snapshot(service, workspace_id)["claims"][0]
+    assert stored["truth"] == "unknown"
+    assert stored["state"] == "proposed"
+    assert stored["asserted_by"] == dict(id=str(actor_id), kind=mapped_kind)
+    assert stored["evidence"] == proposed["evidence"]
+    assert "admitted_by" not in stored
+
+
+def test_owner_evidence_grounds_statements_and_proposals_but_not_observations(service, http_intake):
+    workspace_id, mission_id = http_intake
+    assert _command(service, workspace_id,
+                    envelope(workspace_id, mission_id).command.model_dump(mode="json"))[0] == 200
+    assert _command(service, workspace_id, evidence_command(OWNER, "owner"))[0] == 200
+    assert _command(service, workspace_id, claim_command(OWNER, "owner"))[0] == 200
+    model_id, model_token = intake_capability(service, workspace_id, kind="model")
+    proposal = claim_command(
+        model_id, "model", claim_id="model-claim", expected_revision=3, value={"type": "null", "value": None},
+    )
+    assert _command(service, workspace_id, proposal, token=model_token)[0] == 200
+    # The caller is an owner, but the predicate excludes the model that asserted this claim.
+    admission = deepcopy(proposal)
+    admission["payload"]["expected_revision"] = 4
+    admission["payload"]["claim"].update(
+        state="admitted", truth="true", admitted_by=dict(id=str(OWNER), kind="owner"),
+    )
+    assert_claim_refused_without_write(service, workspace_id, admission, revision=3)
+    tool_id, tool_token = intake_capability(service, workspace_id, kind="tool")
+    observation = claim_command(tool_id, "tool", claim_id="observation", expected_revision=4)
+    observation["payload"]["claim"]["origin"] = "repository_observation"
+    assert_claim_refused_without_write(service, workspace_id, observation, revision=3, token=tool_token)
+    assert _command(service, workspace_id, evidence_command(
+        tool_id, "tool", expected_revision=4, artifact_id="tool-artifact", uri="https://example.test/tool",
+    ), token=tool_token)[0] == 200
+    observation["payload"]["expected_revision"] = 5
+    observation["payload"]["claim"]["evidence"][0]["artifact_id"] = "tool-artifact"
+    assert _command(service, workspace_id, observation, token=tool_token)[0] == 200
+    snapshot = get_claim_snapshot(service, workspace_id)
+    assert {(c["origin"], c["evidence"][0]["artifact_id"]) for c in snapshot["claims"]} == {
+        ("owner_statement", "artifact-added"), ("model_proposal", "artifact-added"),
+        ("repository_observation", "tool-artifact"),
+    }
+    assert {a["id"]: a["actor"]["kind"] for a in snapshot["artifacts"]} == {
+        "artifact-added": "owner", "tool-artifact": "tool",
+    }
+    assert next(c for c in snapshot["claims"] if c["id"] == "model-claim")["value"] == {
+        "type": "null", "value": None,
+    }
 
 
 def test_record_intake_claim_stale_invalid_forbidden_and_event(service, http_intake):
@@ -966,6 +1117,8 @@ def test_claim_storage_copy_preserves_records_quotes_and_clears_derived(service,
     with connection(service, workspace_id) as conn, conn.cursor() as cur:
         seeded = revision_body(workspace_id, revision=0)
         seeded["snapshot"]["state"] = "reasoning"
+        for artifact in seeded["snapshot"]["artifacts"]:
+            artifact["content_hash"] = hashlib.sha256(seeded["artifact_bytes"][artifact["id"]]).hexdigest()
         seeded["binding"]["rule_bundle_hash"] = "1" * 64
         seeded["binding"]["schema_hash"] = "2" * 64
         seeded["binding"]["contract_hash"] = "3" * 64
@@ -1077,7 +1230,6 @@ def test_http_claim_relations_read_replay_and_collision(service, http_intake, re
     command = claim_command(
         OWNER, "owner", evidence=[span], evidence_links=[dict(span=span, relation=relation)],
     )
-    command["payload"]["claim"]["admitted_by"] = {"id": str(OWNER), "kind": "owner"}
     operation_id = uuid4()
     status, body = _command(service, workspace_id, command, operation_id=operation_id)
     assert status == 200
@@ -1165,7 +1317,10 @@ def test_claim_admission_preserves_storage_copies_and_rejects_mutations(service,
     with connection(service, workspace_id) as conn, conn.cursor() as cur:
         seeded = revision_body(workspace_id, revision=0)
         seeded["snapshot"]["state"] = "reasoning"
+        for artifact in seeded["snapshot"]["artifacts"]:
+            artifact["content_hash"] = hashlib.sha256(seeded["artifact_bytes"][artifact["id"]]).hexdigest()
         seeded["supersessions"] = {}
+        seeded["snapshot"]["ontology"]["predicates"][0]["authority"].append("model")
         proposed_claim = seeded["snapshot"]["claims"][0]
         span = proposed_claim["evidence"][0]
         other_claim = seeded["snapshot"]["claims"][1]

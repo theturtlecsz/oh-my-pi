@@ -5,7 +5,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import AwareDatetime, Field, field_validator, model_serializer, model_validator
+from pydantic import AwareDatetime, Field, field_serializer, field_validator, model_serializer, model_validator
 
 from ..contracts.nsi.v1.models import (
     AcceptanceCriterion as NSIAcceptanceCriterion,
@@ -870,6 +870,11 @@ class IntakeRecordView(StrictModel):
     traces: tuple[IntakeTrace, ...]
     assessments: tuple[AssessIntakeResult, ...]
     provenance: IntakeProvenance
+
+    @field_serializer("snapshot")
+    def serialize_snapshot(self, snapshot: NSIIntakeSnapshot) -> dict[str, object]:
+        # NSI optional fields must stay absent; explicit null typed values remain intact.
+        return snapshot.model_dump(mode="json", exclude_unset=True)
 
 
 CommandResult = Annotated[

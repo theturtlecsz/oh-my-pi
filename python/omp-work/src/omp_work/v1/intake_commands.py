@@ -8,6 +8,7 @@ from uuid import UUID
 from psycopg import Cursor
 
 from ..contracts.nsi.v1 import models as nsi
+from ..contracts.nsi.v1.authority import AuthorityRefusal, check_claim_authority
 from ..contracts.nsi.v1.validate import content_hash
 from ..intake_repository import (
     EvidenceLinkRecord, IntakeRepositoryError, IntakeRevisionBody, append_revision,
@@ -246,6 +247,19 @@ def record_intake_claim(
             known_artifact_ids = {a.id for a in previous.artifacts}
             if any(s.artifact_id not in known_artifact_ids for s in claim.evidence):
                 raise WorkStoreError("invalid_request")
+
+        try:
+            check_claim_authority(
+                claim, actor,
+                predicates={p.id: p for p in previous.ontology.predicates},
+                artifacts={a.id: a for a in previous.artifacts},
+                repository_sources={
+                    (a.uri, a.revision): bytes(stored.artifact_bytes[a.id])
+                    for a in previous.artifacts
+                },
+            )
+        except AuthorityRefusal as exc:
+            raise WorkStoreError("forbidden") from exc
 
         added_links = [
             EvidenceLinkRecord(
