@@ -9,8 +9,12 @@ project spend budget. It writes ``orchestrator.json`` and a mission request and
 returns a :class:`E2EWorld` of those handles. It also gives the world one push
 receiver: a ``push-signing.key`` under the service config dir, one
 automation-principal subscription for ``mission.progressed`` at
-:data:`PUSH_URL`, and a recording ``event_push.push_send`` seam (with a
-sitecustomize twin for child worker processes) feeding ``world.sent_pushes``.
+:data:`PUSH_URL`, and ``event_push.push_send`` patched to the recording
+receiver ``e2e_push_record.record_push``. That receiver appends
+``(url, token, idempotency_key, body, headers)`` to a JSONL file
+``world.sent_pushes`` reads. A child worker imports the world's sitecustomize,
+which installs that same receiver only while ``push_send`` is still the
+production sender.
 
 The world also carries the route and verdict evidence the slices assert on: the
 mission draft the route reasons over, the mandate and ceiling ``mission_scope``
@@ -23,6 +27,7 @@ drafts and the confirm stage waits for the owner.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import shutil
@@ -115,26 +120,139 @@ SIMULATED_CRASH = "simulated-crash"
 PUSH_URL = "https://checkpoints.example.test/omp/checkpoint"
 _PUSH_MASTER_KEY = bytes(range(32))
 
-# Child workers of the rollout tests run in their own process, where the parent
-# monkeypatch of event_push.push_send cannot reach. Imported as sitecustomize
-# from the world's push-stub directory, this installs the same seam there: the
-# send is confirmed without a network. Children that cannot import omp_work
-# skip the patch.
-_PUSH_STUB = '''"""Test seam: confirm event pushes in child worker processes."""
+# One recording receiver, shared by the parent monkeypatch and by child worker
+# processes. It appends the push_send arguments to the JSONL file named by
+# OMP_E2E_SENT_PUSHES and returns. It does not open a socket. world.sent_pushes
+# reads that file, so a confirmed child send stays observable.
+_PUSH_RECORD = r'''"""Recording receiver installed as event_push.push_send."""
 
 from __future__ import annotations
 
-try:
-    import omp_work.event_push as _event_push
-except Exception:
-    _event_push = None
+import base64
+import fcntl
+import json
+import os
+from pathlib import Path
+from typing import Any
 
-if _event_push is not None:
 
-    def _send(url, token, idempotency_key, body, *, timeout=10, headers=None):
-        return None
+def _body_bytes(body: Any) -> bytes:
+    if isinstance(body, (bytes, bytearray)):
+        return bytes(body)
+    if isinstance(body, str):
+        return body.encode("utf-8")
+    return json.dumps(
+        body, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
 
-    _event_push.push_send = _send
+
+def append_push(path, url, token, idempotency_key, body, headers) -> None:
+    """Append one push_send call to ``path``."""
+    record = {
+        "body_b64": base64.b64encode(_body_bytes(body)).decode("ascii"),
+        "headers": {
+            str(key): str(value) for key, value in dict(headers or {}).items()
+        },
+        "idempotency_key": str(idempotency_key),
+        "token": None if token is None else str(token),
+        "url": str(url),
+    }
+    line = (
+        json.dumps(record, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        + b"\n"
+    )
+    fd = os.open(str(path), os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            view = line
+            while view:
+                wrote = os.write(fd, view)
+                if wrote <= 0:
+                    raise OSError("short write on push record")
+                view = view[wrote:]
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def read_pushes(path) -> list[tuple]:
+    """The pushes appended to ``path``, in write order."""
+    file = Path(path)
+    if not file.is_file():
+        return []
+    with file.open("rb") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
+        try:
+            raw = handle.read()
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    rows = []
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        payload = json.loads(line)
+        token = payload["token"]
+        rows.append(
+            (
+                str(payload["url"]),
+                None if token is None else str(token),
+                str(payload["idempotency_key"]),
+                base64.b64decode(payload["body_b64"]),
+                {
+                    str(key): str(value)
+                    for key, value in dict(payload["headers"]).items()
+                },
+            )
+        )
+    return rows
+
+
+def record_push(url, token, idempotency_key, body, *, timeout=10, headers=None):
+    """The local receiver ``send_signed`` calls. Record, do not send."""
+    del timeout
+    spool = os.environ.get("OMP_E2E_SENT_PUSHES")
+    if not spool:
+        raise RuntimeError("OMP_E2E_SENT_PUSHES is not set")
+    append_push(spool, url, token, idempotency_key, body, headers)
+'''
+
+# Child workers run in their own interpreter, so the parent's monkeypatch of
+# event_push.push_send is not there. Imported as sitecustomize from the world's
+# push-stub directory, this installs e2e_push_record.record_push — the same
+# receiver — and only when push_send is still the production sender. An already
+# patched receiver is left alone. A child that cannot import omp_work, or that
+# has no spool path, does not replace push_send.
+_PUSH_STUB = r'''"""Install the shared recording push receiver in a child interpreter."""
+
+import importlib.util
+import os
+from pathlib import Path
+
+
+def _install() -> None:
+    try:
+        import omp_work.event_push as event_push
+        from omp_work.push_http import send as http_send
+    except Exception:
+        return
+    # The suite's receiver is already installed. Replacing it would confirm
+    # the send and drop the payload.
+    if event_push.push_send is not http_send:
+        return
+    if not os.environ.get("OMP_E2E_SENT_PUSHES"):
+        return
+    recorder_path = Path(__file__).resolve().parent / "e2e_push_record.py"
+    spec = importlib.util.spec_from_file_location("e2e_push_record", recorder_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load push recorder {recorder_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    event_push.push_send = module.record_push
+
+
+_install()
 '''
 
 # The verifier script reads .omp/verify-task.json and writes the signed verdict
@@ -669,6 +787,68 @@ def kill_first_run(monkeypatch, identity: str) -> dict[str, bool]:
     return holder
 
 
+class _SentPushes(list):
+    """Pushes recorded by this process and by child workers, in write order.
+
+    Both writers append to one JSONL file. Reads reload that file, so a child
+    worker's confirmed send shows up on the parent world.
+    """
+
+    def __init__(self, spool: Path, read_pushes: Any, append_push: Any) -> None:
+        super().__init__()
+        self._spool = spool
+        self._read_pushes = read_pushes
+        self._append_push = append_push
+
+    def _reload(self) -> None:
+        rows = self._read_pushes(self._spool)
+        list.clear(self)
+        list.extend(self, rows)
+
+    def append(self, item: tuple) -> None:
+        url, token, idempotency_key, body, headers = item
+        self._append_push(self._spool, url, token, idempotency_key, body, headers)
+        self._reload()
+
+    def __len__(self) -> int:
+        self._reload()
+        return list.__len__(self)
+
+    def __getitem__(self, index: Any) -> Any:
+        self._reload()
+        return list.__getitem__(self, index)
+
+    def __iter__(self):
+        self._reload()
+        return list.__iter__(self)
+
+    def __eq__(self, other: object) -> bool:
+        self._reload()
+        return list.__eq__(self, other)
+
+    def __ne__(self, other: object) -> bool:
+        self._reload()
+        return list.__ne__(self, other)
+
+    def __repr__(self) -> str:
+        self._reload()
+        return list.__repr__(self)
+
+    def __bool__(self) -> bool:
+        self._reload()
+        return list.__len__(self) > 0
+
+
+def _load_push_record(path: Path) -> Any:
+    """Load the world's recording receiver without importing sitecustomize."""
+    spec = importlib.util.spec_from_file_location(f"e2e_push_record_{uuid4().hex}", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load push recorder {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _open_push_receiver(
     service: Any, workspace_id: UUID, root: Path, monkeypatch: Any
 ) -> tuple[UUID, list[tuple[str, str | None, str, Any, dict[str, str]]]]:
@@ -678,35 +858,29 @@ def _open_push_receiver(
     registers one automation-principal subscription for ``mission.progressed``
     at :data:`PUSH_URL` (the destination check is stubbed: the HTTP checker
     blocks loopback, and no socket is opened), and patches
-    ``event_push.push_send`` to record ``(url, token, idempotency_key, body,
-    headers)`` — the local receiver ``send_signed`` already calls. A
-    sitecustomize stub on PYTHONPATH installs the same confirming seam in
-    child worker processes, which the in-process patch cannot reach.
+    ``event_push.push_send`` to ``e2e_push_record.record_push``. That is the
+    local receiver ``send_signed`` already calls: it appends
+    ``(url, token, idempotency_key, body, headers)`` to the world's JSONL,
+    which ``world.sent_pushes`` reads. A sitecustomize on PYTHONPATH installs
+    that same receiver in child worker processes, and does not replace a
+    ``push_send`` the suite has already patched.
     """
     key_path = service.config.config_dir / "push-signing.key"
     if not key_path.is_file():
         key_path.write_bytes(_PUSH_MASTER_KEY)
         key_path.chmod(0o600)
 
-    sent_pushes: list[tuple[str, str | None, str, Any, dict[str, str]]] = []
-
-    def record_push(
-        url: str,
-        token: str | None,
-        idempotency_key: str,
-        body: Any,
-        *,
-        timeout: float = 10,
-        headers: dict[str, str] | None = None,
-    ) -> None:
-        del timeout
-        sent_pushes.append((str(url), token, str(idempotency_key), body, dict(headers or {})))
-
-    monkeypatch.setattr(event_push, "push_send", record_push)
-
     stub_dir = root / "push-stub"
     stub_dir.mkdir()
+    spool = root / "sent-pushes.jsonl"
+    (stub_dir / "e2e_push_record.py").write_text(_PUSH_RECORD, encoding="utf-8")
     (stub_dir / "sitecustomize.py").write_text(_PUSH_STUB, encoding="utf-8")
+    recorder = _load_push_record(stub_dir / "e2e_push_record.py")
+    sent_pushes = _SentPushes(spool, recorder.read_pushes, recorder.append_push)
+    # The child inherits this path and records into the same file.
+    monkeypatch.setenv("OMP_E2E_SENT_PUSHES", str(spool))
+    monkeypatch.setattr(event_push, "push_send", recorder.record_push)
+
     # Keep the child's import path as rich as the parent's: children that spawn
     # with a copied environment (the rollout workers, the patched verifier
     # sandbox) resolve omp_work from the same entries, plus the stub first.

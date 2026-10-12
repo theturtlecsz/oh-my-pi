@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -477,3 +479,75 @@ def test_changed_subscription_does_not_retarget_open_intent(
     assert first_body == second_body
     assert third_url == _CHANGED_URL
     assert third_key != first_key
+
+
+def test_sitecustomize_keeps_the_installed_receiver(
+    service: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Executing the child seam does not replace a push_send the suite installed."""
+    world = _open(service, tmp_path / "keep-receiver", monkeypatch)
+    recorded: list[tuple] = []
+
+    def receiver(
+        url: str,
+        token: str | None,
+        idempotency_key: str,
+        body: Any,
+        *,
+        timeout: float = 10,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        del timeout
+        recorded.append((url, token, idempotency_key, body, dict(headers or {})))
+
+    monkeypatch.setattr(event_push, "push_send", receiver)
+    stub = (world.config_path.parent / "push-stub" / "sitecustomize.py").read_text(
+        encoding="utf-8"
+    )
+    # The child seam, run here after this test installed its own receiver.
+    exec(stub, {})  # nosec B102 - loads the world's sitecustomize, no user input
+    event_push.send_signed(
+        PUSH_URL, "checkpoint:probe", {"rendered_text": "probe"}, key=b"x" * 32
+    )
+    assert len(recorded) == 1
+    url, token, idempotency_key, body, headers = recorded[0]
+    assert url == PUSH_URL
+    assert token is None
+    assert idempotency_key == "checkpoint:probe"
+    assert json.loads(body) == {"rendered_text": "probe"}
+    assert str(headers.get("X-OMP-Signature", "")).startswith("v1=")
+    assert world.sent_pushes == []
+
+
+def test_child_process_records_the_confirmed_push(
+    service: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A child interpreter's send_signed is visible on world.sent_pushes."""
+    world = _open(service, tmp_path / "child-record", monkeypatch)
+    probe = (
+        "import os\n"
+        "from omp_work import event_push\n"
+        "event_push.send_signed(\n"
+        "    os.environ['PUSH_URL'],\n"
+        "    'checkpoint:probe',\n"
+        "    {'rendered_text': 'probe'},\n"
+        "    key=b'x' * 32,\n"
+        ")\n"
+    )
+    env = os.environ.copy()
+    env["PUSH_URL"] = PUSH_URL
+    completed = subprocess.run(
+        [sys.executable, "-c", probe],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr + completed.stdout
+    assert len(world.sent_pushes) == 1
+    url, token, idempotency_key, body, headers = world.sent_pushes[0]
+    assert url == PUSH_URL
+    assert token is None
+    assert idempotency_key == "checkpoint:probe"
+    assert json.loads(body) == {"rendered_text": "probe"}
+    assert str(headers.get("X-OMP-Signature", "")).startswith("v1=")
