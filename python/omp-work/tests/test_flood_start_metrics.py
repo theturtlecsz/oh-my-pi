@@ -1,7 +1,7 @@
 """omp584-start-metrics.patch: Flood.spawn records plan-start / implement-start history events.
 
-The tests stage flood.py in pytest's temp dir, apply the patch there and execute that copy. Set
-OMP584_FLOOD_SOURCE to a directory holding an already-patched flood.py to run against it unpatched.
+The tests copy already-patched flood.py into pytest's temp dir and execute that copy.
+OMP584_FLOOD_SOURCE selects a directory; otherwise use the deployed ~/flood copy.
 """
 
 from __future__ import annotations
@@ -18,8 +18,6 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[3]
-PATCH = ROOT / "infra" / "automation-user" / "omp584-start-metrics.patch"
 LIVE_FLOOD = Path.home() / "flood" / "flood.py"
 SLEEP = [sys.executable, "-c", "import time; time.sleep(2)"]
 
@@ -28,13 +26,10 @@ def stage(tmp_path: Path) -> Path:
     dest = tmp_path / "stage"
     dest.mkdir()
     source = os.environ.get("OMP584_FLOOD_SOURCE")
-    if source:
-        shutil.copy(Path(source) / "flood.py", dest / "flood.py")
-        return dest / "flood.py"
-    if not LIVE_FLOOD.is_file():
-        pytest.skip("no flood.py to patch (set OMP584_FLOOD_SOURCE)")
-    shutil.copy(LIVE_FLOOD, dest / "flood.py")
-    subprocess.run(["patch", "-p1", "--forward", "-d", str(dest), "-i", str(PATCH)], check=True, capture_output=True)
+    candidate = Path(source) / "flood.py" if source else LIVE_FLOOD
+    if not source and not candidate.is_file():
+        pytest.skip("no deployed flood.py to test (set OMP584_FLOOD_SOURCE)")
+    shutil.copy(candidate, dest / "flood.py")
     return dest / "flood.py"
 
 
@@ -43,6 +38,32 @@ def load(path: Path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.mark.parametrize("selected", [False, True])
+def test_deployed_source_executes_only_in_temp_without_repatching(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selected: bool,
+) -> None:
+    source = tmp_path / "deployed"
+    source.mkdir()
+    candidate = source / "flood.py"
+    candidate.write_text(
+        "from pathlib import Path\n"
+        "Path(__file__).with_suffix('.loaded').write_text('loaded')\n"
+    )
+    before = candidate.read_bytes()
+    if selected:
+        monkeypatch.setenv("OMP584_FLOOD_SOURCE", str(source))
+    else:
+        monkeypatch.delenv("OMP584_FLOOD_SOURCE", raising=False)
+        monkeypatch.setattr(sys.modules[__name__], "LIVE_FLOOD", candidate)
+
+    copied = stage(tmp_path)
+    load(copied)
+
+    assert copied.with_suffix(".loaded").read_text() == "loaded"
+    assert candidate.read_bytes() == before
+    assert list(source.iterdir()) == [candidate]
 
 
 class Harness:
