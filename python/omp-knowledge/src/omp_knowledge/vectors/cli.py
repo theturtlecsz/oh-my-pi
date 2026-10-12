@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Callable
 from typing import Any, TextIO
 from uuid import UUID
 
@@ -16,7 +17,13 @@ from omp_work.knowledge_namespace import validate_snapshot_id
 from omp_work.knowledge_publication import StructuralPublicationStore
 
 from omp_knowledge.inference.embedding import Embedder, HttpEmbedder
-from omp_knowledge.inference.routes import load_routes, resolve
+from omp_knowledge.inference.routes import (
+    RouteHealth,
+    RouteProfile,
+    load_routes,
+    probe,
+    resolve,
+)
 from omp_knowledge.vectors.store import VectorProjectionStore
 
 EXIT_OK = 0
@@ -63,6 +70,7 @@ def main(
     argv: list[str] | None = None,
     *,
     embedder: Embedder | Any | None = None,
+    prober: Callable[[RouteProfile], RouteHealth] = probe,
     stdout: TextIO | None = None,
     stderr: TextIO | None = None,
 ) -> int:
@@ -101,7 +109,7 @@ def main(
         return EXIT_ERROR
 
     try:
-        resolved = resolve(route_set, "embedding")
+        resolved = resolve(route_set, "embedding", prober)
     except Exception as exc:
         _stderr(f"failed to resolve embedding route: {exc}", stderr)
         return EXIT_ERROR

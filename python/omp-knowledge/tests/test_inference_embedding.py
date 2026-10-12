@@ -99,7 +99,7 @@ class MockEmbeddingHandler(http.server.BaseHTTPRequestHandler):
 
 
 @pytest.fixture
-def embedding_server():
+def embedding_server(live_loopback: None):
     server = http.server.HTTPServer(("127.0.0.1", 0), MockEmbeddingHandler)
     port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)

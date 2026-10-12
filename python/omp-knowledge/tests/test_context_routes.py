@@ -135,7 +135,7 @@ def _make_stub_server(
 
 
 @pytest.fixture
-def stub_pool() -> Generator[list[HTTPServer], None, None]:
+def stub_pool(live_loopback: None) -> Generator[list[HTTPServer], None, None]:
     servers: list[HTTPServer] = []
     try:
         yield servers

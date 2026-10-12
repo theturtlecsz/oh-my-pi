@@ -107,7 +107,7 @@ class MockRerankHandler(http.server.BaseHTTPRequestHandler):
 
 
 @pytest.fixture
-def rerank_server():
+def rerank_server(live_loopback: None):
     server = http.server.HTTPServer(("127.0.0.1", 0), MockRerankHandler)
     port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)

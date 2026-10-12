@@ -231,7 +231,7 @@ class HealthHandler(BaseHTTPRequestHandler):
 
 
 @pytest.fixture
-def health_server() -> Any:
+def health_server(live_loopback: None) -> Any:
     server = HTTPServer(("127.0.0.1", 0), HealthHandler)
     port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -427,7 +427,7 @@ def test_health_cli_refuses_an_invalid_file(tmp_path: Path, capsys: Any) -> None
     assert "route_config_invalid" in captured.err
 
 
-def test_readme_block_loads_and_resolves_against_stubs(tmp_path: Path) -> None:
+def test_readme_block_loads_and_resolves_against_stubs(tmp_path: Path, live_loopback: None) -> None:
     """The README's ```json fk-routes``` block is a real, loadable route file."""
     readme = Path(__file__).resolve().parents[1] / "README.md"
     text = readme.read_text(encoding="utf-8")
