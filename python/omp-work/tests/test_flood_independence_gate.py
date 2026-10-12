@@ -192,71 +192,81 @@ def write_slice(pdir: Path, sid: str, deps: list[str] = (), files: list[str] | N
     return pdir / f"{sid}.md"
 
 
+# Each row contains a label-only line and the prefix for the affirmative clause below it.
+# Removing only that label line must turn the rejected dependency into a valid one.
 EXCLUSION_FORMATS = [
-    ("inline", "Do not touch: src/a.ts"),
-    ("inline_backticks", "Do not touch: `src/a.ts`"),
-    ("bold_colon_inside", "**Do not touch:** src/a.ts"),
-    ("bold_colon_outside", "**Do not touch**: src/a.ts"),
-    ("italic_colon", "*Do not touch*: src/a.ts"),
-    ("underline_colon", "__Do not touch__: src/a.ts"),
-    ("heading_h1", "# Do not touch\nsrc/a.ts"),
-    ("heading_h2", "## Do not touch\n`src/a.ts`"),
-    ("heading_h3", "### Do not touch\nsrc/a.ts"),
-    ("heading_h4", "#### Do not touch\nsrc/a.ts"),
-    ("heading_with_label", "## Do not touch: unrelated files\nsrc/a.ts"),
-    ("unordered_dash", "Do not touch:\n- src/a.ts\n- other.ts"),
-    ("unordered_star", "Do not touch:\n* src/a.ts\n* other.ts"),
-    ("unordered_plus", "Do not touch:\n+ src/a.ts"),
-    ("numbered_dot", "Do not touch:\n1. src/a.ts\n2. other.ts"),
-    ("numbered_paren", "Do not touch:\n1) `src/a.ts`\n2) other.ts"),
-    ("bold_numbered", "**Do not touch**:\n1. src/a.ts"),
-    ("bold_unordered", "**Do not touch:**\n- src/a.ts"),
-    ("inline_done_when", "Done when: test_ITEM_s02.py passes. Do not touch: src/a.ts"),
-    ("assumptions_heading", "# Assumptions\nassume narrow reading src/a.ts\n# Work\nImplement ITEM-s02.\nDone when: test_ITEM_s02.py passes.\nDo not touch: unrelated.ts"),
-    ("deferred_heading", "# Deferred\ndefer src/a.ts\n# Work\nImplement ITEM-s02.\nDone when: test_ITEM_s02.py passes.\nDo not touch: unrelated.ts"),
+    (f"{name}_{position}", f"{prefix}{label}", "")
+    for name, label in [
+        ("plain_colon", "{label}:"),
+        ("bold_colon_inside", "**{label}:**"),
+        ("bold_colon_outside", "**{label}**:"),
+        ("italic_colon_inside", "*{label}:*"),
+        ("italic_colon_outside", "*{label}*:"),
+        ("underline_colon_inside", "__{label}:__"),
+        ("underline_colon_outside", "__{label}__:"),
+    ]
+    for position, prefix in [("own_line", ""), ("after_prose", "Implementation notes. ")]
+] + [
+    ("plain_standalone", "{label}", ""),
+    ("bold_standalone", "**{label}**", ""),
+    ("italic_standalone", "*{label}*", ""),
+    ("underline_standalone", "__{label}__", ""),
+] + [
+    (f"{name}_{form}", f"{marker} {{label}}{suffix}", f"  {marker} ")
+    for name, marker in [("unordered_dash", "-"), ("unordered_star", "*"),
+                         ("unordered_plus", "+"), ("numbered_dot", "1."),
+                         ("numbered_paren", "1)")]
+    for form, suffix in [("colon_label", ":"), ("standalone_label", "")]
+] + [
+    (f"{name}_items", "{label}:", f"{marker} ")
+    for name, marker in [("unordered_dash", "-"), ("unordered_star", "*"),
+                         ("unordered_plus", "+"), ("numbered_dot", "1."),
+                         ("numbered_paren", "1)")]
+] + [
+    ("bold_numbered", "**{label}**:", "1. "),
+    ("bold_unordered", "**{label}:**", "- "),
+    *[(f"heading_h{level}", f"{'#' * level} {{label}}", "") for level in range(1, 7)],
 ]
 
 
-@pytest.mark.parametrize("fmt_name,exclusion_snippet", EXCLUSION_FORMATS)
-def test_two_slice_exclusion_only_chains_fail_all_formats(staged_flood, tmp_path, fmt_name, exclusion_snippet):
+@pytest.mark.parametrize("fmt_name,label_template,item_prefix", EXCLUSION_FORMATS,
+                         ids=[row[0] for row in EXCLUSION_FORMATS])
+@pytest.mark.parametrize("label", ["Do not touch", "Assumptions", "Deferred"])
+@pytest.mark.parametrize("chain_length", [2, 3])
+@pytest.mark.parametrize("verb,path_template", [("Import", "{path}"), ("Consume", "`{path}`")])
+def test_exclusion_only_chains_require_affirmative_work_outside_label(
+        staged_flood, tmp_path, fmt_name, label_template, item_prefix, label,
+        chain_length, verb, path_template):
+    """Every edge rejects excluded affirmative use, but qualifies when only its label is removed."""
     mod, _, _ = staged_flood
     pdir = tmp_path / f"plan_{fmt_name}"
-    write_slice(pdir, "ITEM-s01", deps=[], files=["src/a.ts"],
-                body="Implement ITEM-s01.\nDone when: test_ITEM_s01.py passes.\nDo not touch: none")
-
-    body_s02 = f"Implement ITEM-s02.\nDone when: test_ITEM_s02.py passes.\n{exclusion_snippet}"
-    if fmt_name in ("inline_done_when", "assumptions_heading", "deferred_heading"):
-        body_s02 = exclusion_snippet
-    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"], body=body_s02)
-
-    violations, _ = mod.validate_slices("ITEM", pdir)
-    expected = "ITEM-s02: depends_on ITEM-s01 orders the slice only; leave depends_on empty, edit a file ITEM-s01 also edits, or name a file or output of ITEM-s01 that this slice reads, imports, consumes or extends"
-    assert any(expected in v for v in violations), (
-        f"Format {fmt_name} failed to reject order-only chain. Violations: {violations}"
-    )
-
-
-@pytest.mark.parametrize("fmt_name,exclusion_snippet", EXCLUSION_FORMATS[:6])
-def test_three_slice_exclusion_only_chains_fail_all_formats(staged_flood, tmp_path, fmt_name, exclusion_snippet):
-    mod, _, _ = staged_flood
-    pdir = tmp_path / f"plan_3_{fmt_name}"
-    write_slice(pdir, "ITEM-s01", deps=[], files=["src/a.ts"],
-                body="Implement ITEM-s01.\nDone when: test_ITEM_s01.py passes.\nDo not touch: none")
-
-    body_s02 = f"Implement ITEM-s02.\nDone when: test_ITEM_s02.py passes.\n{exclusion_snippet}"
-    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"], body=body_s02)
-
-    excl_s03 = exclusion_snippet.replace("src/a.ts", "src/b.ts")
-    body_s03 = f"Implement ITEM-s03.\nDone when: test_ITEM_s03.py passes.\n{excl_s03}"
-    write_slice(pdir, "ITEM-s03", deps=["ITEM-s02"], files=["src/c.ts"], body=body_s03)
+    files = ["src/producer.ts", "src/intermediate.ts", "src/consumer.ts"]
+    write_slice(pdir, "ITEM-s01", files=[files[0]])
+    label_line = label_template.format(label=label)
+    consumers = []
+    for index in range(1, chain_length):
+        consumer, producer = f"ITEM-s{index + 1:02}", f"ITEM-s{index:02}"
+        path = path_template.format(path=files[index - 1])
+        body = (f"Do not touch: none\nWork: implement {consumer}.\n"
+                f"Done when: test_{consumer.replace('-', '_')}.py passes.\n"
+                f"{label_line}\n{item_prefix}{verb} {path}.")
+        write_slice(pdir, consumer, deps=[producer], files=[files[index]], body=body)
+        consumers.append((consumer, producer, files[index], body))
 
     violations, _ = mod.validate_slices("ITEM", pdir)
-    assert any("ITEM-s02: depends_on ITEM-s01 orders the slice only" in v for v in violations), (
-        f"Violations missing s02 -> s01 failure: {violations}"
-    )
-    assert any("ITEM-s03: depends_on ITEM-s02 orders the slice only" in v for v in violations), (
-        f"Violations missing s03 -> s02 failure: {violations}"
-    )
+    assert len(violations) == chain_length - 1, violations
+    for consumer, producer, _, _ in consumers:
+        expected = (f"{consumer}: depends_on {producer} orders the slice only; "
+                    f"leave depends_on empty, edit a file {producer} also edits, or name a file "
+                    f"or output of {producer} that this slice reads, imports, consumes or extends")
+        assert expected in violations, violations
+
+    # Keep clauses, files, deps and all other body lines identical: only tested label disappears.
+    for consumer, producer, consumer_file, body in consumers:
+        control = body.replace(f"{label_line}\n", "", 1)
+        write_slice(pdir, consumer, deps=[producer], files=[consumer_file], body=control)
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    assert violations == [], f"Label-removal control must qualify: {violations}"
 
 
 def test_independent_roots_pass(staged_flood, tmp_path):
