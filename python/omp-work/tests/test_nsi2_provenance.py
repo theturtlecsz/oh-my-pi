@@ -1,19 +1,33 @@
 """Assessment commands persist pinned proof without semantic writes or replay effects."""
 from __future__ import annotations
 
+import json
 import os
+from contextlib import contextmanager
+from copy import deepcopy
+from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from fastapi.testclient import TestClient
 
-from omp_work.intake_repository import AssessmentRecord, append_assessment, read_revision
+from omp_work import contract_sha256, validate_bundle
+from omp_work.contracts.nsi.v1.compat import bounded_to_nsi, nsi_bounded_evaluation
+from omp_work.contracts.nsi.v1.models import TypedBooleanValue
+from omp_work.intake_repository import AssessmentRecord, DecisionRecord, append_assessment, read_revision, revision_hashes
 from omp_work.v1 import intake_provenance
-from omp_work.v1.api_models import IntakeAssessmentView
-from omp_work.v1.models import CommandEnvelope
+from omp_work.v1.api_models import IntakeAssessmentView, IntakeDecisionRecord
+from omp_work.v1.models import CommandEnvelope, RecordIntakeDecisionCommand
+from omp_work.v1.server import create_app
 from omp_work.v1.store import PostgresWorkStore
 from omp_work.v1.store_shared import WorkStoreError
-from test_nsi2_claims import intake_capability
-from test_nsi2_provenance_closure import RUN, advance, append_body, make_body
+from test_nsi2_claims import evidence_command, intake_capability
+from test_nsi2_provenance_closure import (
+    RUN, TEXT, SOURCE_URI, SOURCE_ACTOR, _draft, _entities, _retarget, _replace, advance, append_body, make_body,
+    insert_relay, relay_json, mutate_cycle, mutate_superseded, mutate_missing_trace,
+)
+from test_nsi2_decisions import decision
 from test_nsi2_repository import connection, locked, write_repository  # noqa: F401
 from test_nsi_schemas import ASSESSMENT
 from test_workflow_service import OWNER, _command, _grant, _owner_headers, service  # noqa: F401
@@ -274,3 +288,367 @@ def test_current_read_keeps_carried_legacy_proof_but_not_prior_concrete_assessme
     assert legacy["provenance"]["revision"] == 1
     assert get(service, workspace_id, "@1") == historical
     assert PostgresWorkStore(service.config).read(workspace_id, OWNER, "intake", RUN) == current
+
+
+@contextmanager
+def restarted(service):
+    """Fresh store and WorkService, retaining only DB and capability files."""
+    root = Path(__file__).parents[1] / "src/omp_work/contracts/v1"
+    approved = json.loads((root / "approval.json").read_text())["contract_sha256"]
+    assert contract_sha256() == approved
+    validate_bundle()  # Approved generated schema must close over the new wire fields.
+    store = PostgresWorkStore(service.config)
+    with TestClient(create_app(service.config, capabilities_dir=service.capabilities, store=store)) as client:
+        # Use the approved digest on the actual HTTP boundary, not a generated replacement.
+        client.headers["X-OMP-Contract-SHA256"] = approved
+        yield SimpleNamespace(client=client, config=service.config, capabilities=service.capabilities)
+
+
+def apply(service, workspace_id, request, **kwargs):
+    status, result = _command(service, workspace_id, request, **kwargs)
+    assert status == 200, result
+    return result
+
+
+def record_claim(claim, revision, *, relation="supports"):
+    return dict(type="record_intake_claim", payload=dict(
+        run_id=RUN, expected_revision=revision, claim=claim,
+        evidence_links=[dict(span=span, relation=relation) for span in claim["evidence"]],
+    ))
+
+
+@pytest.fixture
+def relayed_proof(service, write_repository):
+    workspace_id, mission_id = write_repository
+    _grant(service, workspace_id)
+    body = make_body(workspace_id)
+    _replace(body, "leaf", premise_ids=["late"])
+    # Proposed assertion has evidence; admission must preserve it and the full ancestry.
+    ancestor = next(c for c in body.snapshot.claims if c.id == "ancestor")
+    _replace(body, "late", evidence=ancestor.evidence)
+    operation_id = uuid4()
+    relay_id = body.history.decisions[0].verified_relay_operation_id
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        relay_event = insert_relay(cur, workspace_id, mission_id, relay_id,
+                                   relay_json(body.history.decisions[0].instruction))
+        body, source_event = append_body(cur, write_repository, body, operation_id, -1)
+    claim = next(c for c in body.snapshot.claims if c.id == "late").model_dump(mode="json")
+    claim.update(state="admitted", truth="true", admitted_by=dict(id=str(OWNER), kind="owner"))
+    admission_id = uuid4()
+    apply(service, workspace_id, record_claim(claim, 1), operation_id=admission_id)
+    with connection(service, workspace_id) as conn:
+        admission_event = conn.execute(
+            "SELECT event_id FROM omp_audit.domain_events WHERE workspace_id=%s AND operation_id=%s",
+            (workspace_id, admission_id),
+        ).fetchone()[0]
+    return workspace_id, body, dict(
+        source=dict(operation_id=str(operation_id), event_id=str(source_event)),
+        relay=dict(operation_id=str(relay_id), event_id=str(relay_event)),
+        admission=dict(operation_id=str(admission_id), event_id=str(admission_event)),
+    )
+
+
+def test_restart_http_retains_exact_multihop_proof_and_audit_refs(service, relayed_proof, monkeypatch):
+    workspace_id, body, refs = relayed_proof
+    operation_id = uuid4()
+    applied = apply(service, workspace_id, command(2), operation_id=operation_id)
+    pinned = get(service, workspace_id, "@2")
+    proof = pinned["assessments"][0]
+    closure = proof["provenance"]
+    assert proof["assessment"]["status"] == "READY_FOR_RATIFICATION"
+    claims = {item["claim"]["id"]: item for item in closure["claims"]}
+    assert set(claims["leaf"]["ancestry_ids"]) == {"late", "mid", "ancestor", "span-export"}
+    assert len(claims["leaf"]["ancestry_ids"]) == 4
+    assert set(claims["sibling"]["ancestry_ids"]) == {"mid", "ancestor", "span-export"}
+    for claim_id in ("leaf", "sibling"):
+        link = claims[claim_id]["evidence_links"]["ancestor"][0]
+        assert link == dict(relation="supports", span=dict(
+            artifact_id="instruction:decision-1", start_byte=0, end_byte=len(TEXT.encode()), quote=TEXT,
+        ))
+    span = claims["span-export"]["evidence_links"]["span-export"][0]["span"]
+    assert span["quote"] == body.artifact_bytes["bounded-source"][span["start_byte"]:span["end_byte"]].decode()
+    sources = {source["artifact"]["id"]: source for source in closure["sources"]}
+    for artifact in body.snapshot.artifacts:
+        source = sources[artifact.id]
+        assert source["artifact"] == artifact.model_dump(mode="json")
+        assert source["source"]["text"] == body.artifact_bytes[artifact.id].decode()
+        assert source["source"]["sha256"] == artifact.content_hash
+        if artifact.id == "bounded-source":
+            assert source["source"]["spans"] == [span.model_dump(mode="json") for span in _draft(drop_unknowns=True).source.spans]
+        assert source["operation"] == refs["source"]
+    assert sources["bounded-source"]["artifact"]["uri"] == SOURCE_URI
+    assert sources["bounded-source"]["artifact"]["actor"] == SOURCE_ACTOR.model_dump()
+    admissions = {item["claim_id"]: item for item in closure["admissions"]}
+    assert admissions["late"]["admitted_by"] == dict(id=str(OWNER), kind="owner")
+    assert admissions["late"]["operation"] == refs["admission"]
+    owner = closure["decisions"][0]
+    assert owner["record"]["instruction"] == body.history.decisions[0].instruction.model_dump(mode="json")
+    assert owner["record"]["decision"] == body.history.decisions[0].decision.model_dump(mode="json")
+    assert owner["operation"] == refs["source"]
+    assert closure["relays"][0]["relay"] == relay_json(body.history.decisions[0].instruction)
+    assert closure["relays"][0]["operation"] == refs["relay"]
+    assert closure["supersessions"][0] == dict(
+        old_claim_id="retired", replacement_claim_id="ancestor", decision_id="decision-1", operation=refs["source"],
+    )
+    assert pinned["criterion_links"] == [link.model_dump(mode="json") for link in body.history.criteria]
+    assert {t["criterion_id"]: t for t in closure["traces"]} == {t["criterion_id"]: t for t in pinned["traces"]}
+    assert {t["criterion_id"]: set(t["requirement_ids"]) for t in closure["traces"]} == {
+        "ac-export": {"req-ac-export"}, "ac-table": {"req-ac-table"},
+    }
+    assert {r["id"] for r in proof["receipts"]} == set(proof["assessment"]["derivation_receipt_ids"])
+    for receipt in proof["receipts"]:
+        assert {key: receipt[key] for key in proof["binding"]} == proof["binding"]
+    claim_receipts = {tuple(r["conclusion_ids"]): r["premise_ids"] for r in proof["receipts"]
+                      if r["rule_id"] == "nsi2.provenance.claim"}
+    assert claim_receipts[("leaf",)] == ["late"]
+    assert claim_receipts[("late",)] == ["mid"]
+    assert claim_receipts[("mid",)] == ["ancestor"]
+    assert claim_receipts[("ancestor",)] == ["span-export"]
+    before = counts(service, workspace_id)
+
+    def unexpected(*args):
+        pytest.fail("restart GET, replay and stale refusal must not recompute pinned proof")
+
+    monkeypatch.setattr(intake_provenance, "evaluate_provenance", unexpected)
+    with restarted(service) as fresh:
+        assert get(fresh, workspace_id) == get(fresh, workspace_id, "@2") == pinned
+        replay = apply(fresh, workspace_id, command(2), operation_id=operation_id)
+        assert replay["receipt"]["state"] == "replayed"
+        assert replay["result"] == applied["result"]
+        status, refused = _command(fresh, workspace_id, command(1))
+        assert status == 409 and refused["error"]["code"] == "stale_intake"
+        assert counts(fresh, workspace_id) == before
+        assert get(fresh, workspace_id) == pinned
+
+
+def test_real_source_and_semantic_writes_invalidate_current_ready_but_pin_history(service, intake):
+    workspace_id, _ = intake
+    apply(service, workspace_id, command())
+    ready = get(service, workspace_id, "@1")
+    apply(service, workspace_id, evidence_command(OWNER, "owner", expected_revision=1))
+    with restarted(service) as fresh:
+        current = get(fresh, workspace_id)
+        assert current["revision"] == 2 and current["assessments"] == []
+        assert get(fresh, workspace_id, "@1") == ready
+        apply(fresh, workspace_id, command(2))
+        source_proof = get(fresh, workspace_id, "@2")
+        assert source_proof["assessments"][0]["binding"]["source_hash"] != ready["assessments"][0]["binding"]["source_hash"]
+        claim = next(c for c in current["snapshot"]["claims"] if c["id"] == "ancestor")
+        claim = deepcopy(claim)
+        claim.update(id="semantic-added", asserted_by=dict(id=str(OWNER), kind="owner"),
+                     admitted_by=dict(id=str(OWNER), kind="owner"),
+                     value=dict(type="string", value="owner changed semantic content"))
+        apply(fresh, workspace_id, record_claim(claim, 2))
+    with restarted(service) as fresh:
+        assert get(fresh, workspace_id)["assessments"] == []
+        assert get(fresh, workspace_id, "@1") == ready
+        assert get(fresh, workspace_id, "@2") == source_proof
+        apply(fresh, workspace_id, command(3))
+        assert get(fresh, workspace_id)["assessments"][0]["binding"]["claim_set_hash"] != source_proof["assessments"][0]["binding"]["claim_set_hash"]
+
+
+@pytest.mark.parametrize("blocker", ["source-span-unknown", "material-unknown", "open-issue"])
+def test_restart_http_unknown_premises_and_open_material_findings_block_ready(service, write_repository, blocker):
+    workspace_id, _ = write_repository
+    _grant(service, workspace_id)
+    body = make_body(workspace_id, relay=False, drop_unknowns=blocker != "material-unknown")
+    body.snapshot.state = "needs_spec"
+    if blocker == "source-span-unknown":
+        _replace(body, "span-export", truth="unknown")
+    elif blocker == "material-unknown":
+        draft = _draft(drop_unknowns=False)
+        draft = draft.model_copy(update={"unknowns": (
+            draft.unknowns[0].model_copy(update={"material": True, "kind": "authority_or_dependency"}),
+            *draft.unknowns[1:],
+        )})
+        projected = bounded_to_nsi(draft)
+        extras = [c for c in body.snapshot.claims if c.id in {"ancestor", "mid", "sibling", "leaf", "late", "retired"}]
+        body.snapshot.claims = _retarget(list(projected.claims)) + extras
+        body.snapshot.entities = _entities(body.snapshot.claims)
+    elif blocker == "open-issue":
+        body.questions.append(body.questions[0].model_copy(update={"id": "still-open", "gap_ids": []}))
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        append_body(cur, write_repository, body, uuid4(), -1)
+    apply(service, workspace_id, command())
+    wire = get(service, workspace_id)
+    proof = wire["assessments"][0]
+    assert proof["assessment"]["status"] == "NEEDS_SPEC"
+    if blocker == "source-span-unknown":
+        claim = next(c["claim"] for c in proof["provenance"]["claims"] if c["claim"]["id"] == "span-export")
+        assert claim["truth"] == "unknown"
+    elif blocker == "material-unknown":
+        assert proof["assessment"]["gaps"]
+        assert proof["unresolved_issues"] == wire["issues"]
+    else:
+        assert any(i["issue"]["id"] == "still-open" for i in proof["unresolved_issues"])
+    with restarted(service) as fresh:
+        assert get(fresh, workspace_id) == get(fresh, workspace_id, "@1") == wire
+
+
+@pytest.mark.parametrize("defect,diagnostic", [
+    ("dangling", "dangling reference"), ("cycle", "cycle"),
+    ("superseded", "superseded reference"), ("trace", "missing criterion trace"),
+])
+def test_http_legacy_invalid_ancestry_refuses_without_persisting_ready(service, write_repository, defect, diagnostic):
+    workspace_id, _ = write_repository
+    _grant(service, workspace_id)
+    body = make_body(workspace_id, relay=False)
+    if defect == "cycle":
+        mutate_cycle(body)
+    elif defect == "superseded":
+        mutate_superseded(body)
+    elif defect == "trace":
+        mutate_missing_trace(body)
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        append_body(cur, write_repository, body, uuid4(), -1)
+    if defect == "dangling":
+        # Impossible legacy FK violation: bypass only inside this workspace-scoped transaction.
+        with connection(service, workspace_id, "postgres") as conn:
+            conn.execute("SET LOCAL session_replication_role = replica")
+            conn.execute(
+                "UPDATE omp_work.intake_claim_premises SET premise_id='missing-premise' "
+                "WHERE workspace_id=%s AND run_id=%s AND revision=0 AND claim_id='leaf'",
+                (workspace_id, RUN),
+            )
+            corrupted = read_revision(conn.cursor(), workspace_id=workspace_id, run_id=RUN, revision=0)
+            claim_hash, source_hash = revision_hashes(corrupted.snapshot, corrupted.artifact_bytes)
+            conn.execute(
+                "UPDATE omp_work.intake_revisions SET claim_set_hash=%s,source_hash=%s "
+                "WHERE workspace_id=%s AND run_id=%s AND revision=0",
+                (claim_hash, source_hash, workspace_id, RUN),
+            )
+    before = counts(service, workspace_id)
+    with restarted(service) as fresh:
+        status, refused = _command(fresh, workspace_id, command())
+        assert status == 400 and refused["error"]["code"] == "invalid_request"
+        assert diagnostic in refused["error"]["diagnostics"]
+        assert counts(fresh, workspace_id) == before
+        response = fresh.client.get(f"/v1/workspaces/{workspace_id}/intake/{RUN}", headers=_owner_headers(workspace_id))
+        assert response.status_code == 200
+        assert response.json()["assessments"] == []
+
+
+def test_third_conflicting_claim_reopens_two_claim_settlement_after_restart(service, write_repository):
+    workspace_id, _ = write_repository
+    _grant(service, workspace_id)
+    body = make_body(workspace_id, relay=False)
+    draft = _draft(drop_unknowns=True)
+    second = draft.constraints[0].model_copy(update={
+        "id": "c-yaml", "statement": "The export encoding is YAML",
+        "value": draft.constraints[0].value.model_copy(update={"value": "yaml"}),
+    })
+    draft = draft.model_copy(update={"constraints": (*draft.constraints, second)})
+    projected = bounded_to_nsi(draft)
+    extras = [c for c in body.snapshot.claims if c.id in {"ancestor", "mid", "sibling", "leaf", "late"}]
+    body.snapshot.claims = _retarget(list(projected.claims)) + extras
+    body.snapshot.entities = _entities(body.snapshot.claims)
+    findings = nsi_bounded_evaluation(projected)
+    body.gaps, body.conflicts, body.questions = list(findings.gaps), list(findings.conflicts), list(findings.questions)
+    body.decisions = []
+    body.instructions = []
+    body.supersessions = {}
+    body.history.decisions = []
+    body.history.claim_supersession_decisions = {}
+    body.history.instruction_hashes = {}
+    body.history.relays = {}
+    third = second.model_copy(update={"id": "c-xml", "value": second.value.model_copy(update={"value": "xml"})})
+    third_snapshot = bounded_to_nsi(draft.model_copy(update={"constraints": (*draft.constraints, third)}))
+    new_claims = [c for c in third_snapshot.claims if c.id in {"c-xml", "bounded.annotation.c-xml"}]
+    body.snapshot.entities.extend(_entities(new_claims))
+    question_id = body.questions[0].id
+    request = decision(1, claim_ids=["c-json", "c-yaml"])
+    request["payload"]["decision"].update(id="decision-1", question_id=question_id)
+    owner = RecordIntakeDecisionCommand.model_validate(request).payload
+    stored_decision = owner.decision.model_copy(update={"revision": 0})
+    body.decisions = [DecisionRecord(decision=stored_decision, settled_claim_ids=list(owner.claim_ids))]
+    body.history.decisions = [IntakeDecisionRecord(
+        decision=stored_decision, claim_ids=owner.claim_ids, instruction=owner.instruction,
+    )]
+    # Initial owner settlement is fixture state, just like the bounded proof and criteria.
+    # Successor below uses the real decision command after observing the renewed conflict.
+    original = make_body(workspace_id, relay=False)
+    body.instructions = original.instructions
+    body.history.instruction_hashes = original.history.instruction_hashes
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        append_body(cur, write_repository, body, uuid4(), -1)
+    apply(service, workspace_id, command())
+    settled = get(service, workspace_id, "@1")
+    assert settled["assessments"][0]["assessment"]["status"] == "READY_FOR_RATIFICATION"
+    revision = 1
+    for claim in new_claims:
+        raw = claim.model_dump(mode="json")
+        raw.update(asserted_by=dict(id=str(OWNER), kind="owner"), admitted_by=dict(id=str(OWNER), kind="owner"))
+        # Annotation commands require their own evidence, anchored to the same source span.
+        if not raw["evidence"]:
+            raw["evidence"] = new_claims[0].model_dump(mode="json")["evidence"]
+        apply(service, workspace_id, record_claim(raw, revision))
+        revision += 1
+    assert get(service, workspace_id)["assessments"] == []
+    apply(service, workspace_id, command(revision))
+    reopened = get(service, workspace_id)
+    proof = reopened["assessments"][0]
+    assert proof["assessment"]["status"] == "CONFLICTED"
+    conflict = proof["assessment"]["conflicts"][0]
+    assert set(conflict["claim_ids"]) == {"c-json", "c-yaml", "c-xml"}
+    assert conflict["id"] == body.conflicts[0].id
+    assert conflict["reason"] == body.conflicts[0].reason
+    assert proof["assessment"]["gaps"] == [gap.model_dump(mode="json") for gap in body.gaps]
+    question = next(i for i in proof["unresolved_issues"] if i["issue"]["id"] == question_id)
+    assert question["issue"] == body.questions[0].model_dump(mode="json")
+    assert question["gaps"] == [gap.id for gap in body.gaps]
+    assert reopened["decisions"][0]["claim_ids"] == ["c-json", "c-yaml"]
+    assert reopened["decisions"][0]["instruction"] == request["payload"]["instruction"]
+    with restarted(service) as fresh:
+        assert get(fresh, workspace_id) == get(fresh, workspace_id, f"@{revision}") == reopened
+        assert get(fresh, workspace_id, "@1") == settled
+        successor = decision(revision, claim_ids=["c-json", "c-yaml", "c-xml"],
+                             superseded_decision_id="decision-1")
+        successor["payload"]["decision"].update(id="settle-all", question_id=question_id)
+        apply(fresh, workspace_id, successor)
+    with restarted(service) as fresh:
+        completed = get(fresh, workspace_id)
+        assert completed["issues"] == []
+        assert completed["assessments"] == []
+        assert completed["decisions"][-1]["claim_ids"] == ["c-json", "c-yaml", "c-xml"]
+        assert completed["decisions"][-1]["instruction"] == successor["payload"]["instruction"]
+        assert get(fresh, workspace_id, f"@{revision}") == reopened
+        assert get(fresh, workspace_id, "@1") == settled
+
+
+@pytest.mark.parametrize("collision", ["source-actor", "source-revision", "relation", "typed-value"])
+def test_http_collisions_cannot_reuse_pinned_binding_or_receipts(service, write_repository, collision):
+    workspace_id, _ = write_repository
+    _grant(service, workspace_id)
+    body = make_body(workspace_id, relay=False)
+    # Proposed annotation is outside consumed proof until owner admission.
+    if collision == "source-revision":
+        body.snapshot.artifacts[0].actor = body.snapshot.artifacts[0].actor.model_copy(update={"id": str(OWNER)})
+    span = next(c for c in body.snapshot.claims if c.id == "ancestor").evidence
+    _replace(body, "late", evidence=span, value=TypedBooleanValue(type="boolean", value=True))
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        append_body(cur, write_repository, body, uuid4(), -1)
+    apply(service, workspace_id, command())
+    pinned = get(service, workspace_id, "@1")
+    before = counts(service, workspace_id)
+    if collision.startswith("source"):
+        artifact = body.snapshot.artifacts[0]
+        request = evidence_command(OWNER, "owner", artifact_id=artifact.id,
+                                   uri=artifact.uri, text=body.artifact_bytes[artifact.id].decode(),
+                                   revision=artifact.revision)
+        if collision == "source-revision":
+            request["payload"]["artifact"]["revision"] = "source-rev-8"
+        else:
+            # Authenticating as OWNER cannot borrow another source author's identity.
+            request["payload"]["artifact"]["actor"] = artifact.actor.model_dump(mode="json")
+    else:
+        raw = next(c for c in body.snapshot.claims if c.id == "late").model_dump(mode="json")
+        raw.update(state="admitted", truth="true", admitted_by=dict(id=str(OWNER), kind="owner"))
+        if collision == "typed-value":
+            raw["value"] = dict(type="integer", value=1)
+        request = record_claim(raw, 1, relation="contradicts" if collision == "relation" else "supports")
+    with restarted(service) as fresh:
+        status, refused = _command(fresh, workspace_id, request)
+        expected_status, expected_code = (403, "forbidden") if collision == "source-actor" else (400, "invalid_request")
+        assert (status, refused["error"]["code"]) == (expected_status, expected_code)
+        assert counts(fresh, workspace_id) == before
+        assert get(fresh, workspace_id) == get(fresh, workspace_id, "@1") == pinned
