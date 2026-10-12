@@ -289,7 +289,7 @@ def test_failing_test_command_settles_no_pass(
     service: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     test_command = (
-        str(Path(sys.executable).resolve()),
+        "/usr/bin/python3",
         "-c",
         "import os, sys; sys.exit(0 if os.path.exists('.git') else 1)",
     )
@@ -496,7 +496,7 @@ def test_malicious_command_cannot_forge_a_pass(
         "    pass\n"
         "sys.exit(42)\n"
     )
-    test_command = (str(Path(sys.executable).resolve()), "-c", malicious_script)
+    test_command = ("/usr/bin/python3", "-c", malicious_script)
     world, work_id = _open_world(service, root, monkeypatch, test_command=test_command)
     _patch_sandbox(monkeypatch)
     worker = open_worker(world)
