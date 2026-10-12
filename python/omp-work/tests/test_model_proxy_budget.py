@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -46,6 +47,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from test_agent_stop_store import _envelope
 from test_item_budget_alerts import _seed_budget
+from test_model_proxy_transactions import _transport
 from test_workflow_service import OWNER, _create, _grant
 
 pytest_plugins = ("test_workflow_service",)
@@ -4223,3 +4225,277 @@ def test_receipt_replay_commit_is_bounded_and_owner_reachable(admission_context,
         if waiter is not None:
             waiter.join(timeout=5)
             assert not waiter.is_alive()
+
+
+@pytest.mark.parametrize("outer, lookup, fresh", [
+    ("commit", "normal", "normal"),
+    ("rollback", "normal", "normal"),
+    ("commit", "lock", "normal"),
+    ("rollback", "lock", "normal"),
+    ("commit", "transport", "normal"),
+    ("rollback", "transport", "normal"),
+    ("rollback", "transport", "exhaust"),
+    ("rollback", "lock", "fail-commit"),
+])
+def test_outer_transport_deadlines_keep_gate_through_resolution(
+    admission_context, monkeypatch, outer, lookup, fresh,
+):
+    """Lost outer ACKs cannot free capacity, drop deadlines, retry, or double charge.
+
+    Total allowance is 5s from settle, including original disposal, receipt
+    lookup, at most one fresh fallback and its cleanup. Allow 300ms scheduling
+    tolerance on this shared host; phase barriers consume only 20ms each.
+    """
+    ctx = admission_context
+    unrelated = _item(ctx, "transport successor")
+    transaction = ctx.budget._jobs.transaction
+    command = psycopg.Connection._exec_command
+    execute = psycopg.Cursor.execute
+    close = psycopg.Connection.close
+    phases = queue.Queue()
+    stop_barriers = threading.Event()
+    successor_waiting = threading.Event()
+    successor_entered, release_successor = threading.Event(), threading.Event()
+    finished = threading.Event()
+    connections, controls, deadlines, disposed, errors, sends = [], [], [], [], [], []
+    threads = []
+    admission = None
+    start = None
+    injected = RuntimeError("fresh commit refused")
+    receipt_lock = None
+    snapshot_at_commit = []
+    original_command_seen = threading.Event()
+
+    def barrier(phase):
+        resume = threading.Event()
+        phases.put((phase, resume))
+        # Bounded even if main assertion fails; finally releases all barriers.
+        end = time.monotonic() + 0.15
+        while not stop_barriers.is_set() and not resume.wait(0.005):
+            assert time.monotonic() < end, f"unreleased {phase} barrier"
+
+    def observed_close(conn):
+        if conn in connections:
+            index = connections.index(conn)
+            barrier(f"cleanup-{index}")
+            result = close(conn)
+            disposed.append((index, time.monotonic()))
+            return result
+        return close(conn)
+
+    with ExitStack() as resources:
+        original_config, original_blocked, original_commit = resources.enter_context(
+            _transport(ctx.service.config)
+        )
+        holder = resources.enter_context(psycopg.connect(
+            **ctx.service.config.connection_kwargs("postgres"), autocommit=True,
+        ))
+        lookup_blocked = None
+
+        @contextmanager
+        def observed_transaction(workspace_id, actor_id, **kwargs):
+            nonlocal lookup_blocked, receipt_lock
+            index = len(connections)
+            if index == 0:
+                controls.append(kwargs["deadline_control"])
+                store = NativeJobStore(original_config)
+            else:
+                assert all(conn.closed for conn in connections), "resolution before disposal"
+                deadlines.append(kwargs["deadline"])
+                assert kwargs["deadline"] <= start + 5.01, "total deadline reset"
+                store = NativeJobStore(ctx.service.config)
+                if index == 1 and lookup == "lock":
+                    receipt_lock = f"model_call:receipt:{admission._identity}"
+                    holder.execute(
+                        "SELECT pg_advisory_lock(hashtextextended('omp_jobs.operation:' || %s, 0))",
+                        (receipt_lock,),
+                    )
+                if index == 1 and lookup == "transport":
+                    config, lookup_blocked, _ = resources.enter_context(_transport(ctx.service.config))
+                    store = NativeJobStore(config)
+                if index == 2 and receipt_lock is not None:
+                    holder.execute(
+                        "SELECT pg_advisory_unlock(hashtextextended('omp_jobs.operation:' || %s, 0))",
+                        (receipt_lock,),
+                    )
+                    receipt_lock = None
+            with store.transaction(workspace_id, actor_id, **kwargs) as cur:
+                connections.append(cur.connection)
+                if index == 0:
+                    assert cur.connection.deadline_control is controls[0]
+                else:
+                    assert cur.connection.deadline_control.deadline == kwargs["deadline"]
+                if index:
+                    barrier(f"transaction-{index}")
+                    if index == 2 and fresh == "exhaust":
+                        cur.execute("SELECT pg_sleep(6)")
+                yield cur
+                if index == 0 and outer == "rollback":
+                    raise RuntimeError("pre-commit failure after measured write")
+
+        def suppress_outer_reply(conn, sql_command, *args, **kwargs):
+            if (
+                fresh == "fail-commit" and len(connections) == 3
+                and conn is connections[2] and sql_command == b"COMMIT"
+            ):
+                assert conn.deadline_control.deadline == deadlines[1]
+                raise injected
+            if connections and conn is connections[0] and sql_command in (b"COMMIT", b"ROLLBACK"):
+                assert controls[0].deadline is not None, "outer cleanup lost deadline"
+                original_command_seen.set()
+                original_blocked.set()
+                # Tunnel forwards COMMIT: receipt/actual usage may be durable
+                # even though client cannot receive acknowledgement.
+                barrier("outer-command")
+            return (yield from command(conn, sql_command, *args, **kwargs))
+
+        def stall_lookup(cur, query, *args, **kwargs):
+            if (
+                lookup_blocked is not None and len(connections) > 1
+                and cur.connection is connections[1]
+                and query == "SELECT 1 FROM omp_jobs.operations WHERE operation_id=%s"
+            ):
+                lookup_blocked.set()
+            return execute(cur, query, *args, **kwargs)
+
+        def settle():
+            try:
+                admission.settle(actual_usd="1", input_tokens=10, output_tokens=5, cache_tokens=0)
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                finished.set()
+
+        def successor():
+            try:
+                successor_waiting.set()
+                with ModelProxyBudget(ctx.service.config).admit(
+                    ctx.workspace_id, ctx.actor_id, None, None, unrelated,
+                    None, None, None, "transport-successor", None, _prepared("1"),
+                ):
+                    sends.append("successor")
+                    successor_entered.set()
+                    assert release_successor.wait(8), "successor not released"
+            except BaseException as error:
+                errors.append(error)
+
+        monkeypatch.setattr(ctx.budget._jobs, "transaction", observed_transaction)
+        monkeypatch.setattr(psycopg.Connection, "_exec_command", suppress_outer_reply)
+        monkeypatch.setattr(psycopg.Cursor, "execute", stall_lookup)
+        monkeypatch.setattr(psycopg.Connection, "close", observed_close)
+        observed_phases = []
+        try:
+            admission = _admit(ctx, _prepared("2"), request_id="transport-original")
+            sends.append("upstream")
+            waiter = threading.Thread(target=successor)
+            threads.append(waiter)
+            waiter.start()
+            assert successor_waiting.wait(1)
+            assert not successor_entered.wait(0.02)
+            start = time.monotonic()
+            worker = threading.Thread(target=settle)
+            threads.append(worker)
+            worker.start()
+            end = start + 5.3
+            while not finished.is_set() or not phases.empty():
+                assert time.monotonic() < end, "settle exceeded 5s total plus 300ms tolerance"
+                try:
+                    phase, resume = phases.get(timeout=0.02)
+                except queue.Empty:
+                    continue
+                try:
+                    observed_phases.append(phase)
+                    assert not successor_entered.wait(0.02), f"waiter sent during {phase}"
+                    if phase == "transaction-1" and outer == "commit":
+                        snapshot_at_commit.append(_accounting_snapshot(ctx))
+                finally:
+                    resume.set()
+            worker.join(timeout=0.3)
+            assert not worker.is_alive()
+            assert time.monotonic() - start < 5.3
+            assert original_command_seen.is_set()
+            assert original_commit.is_set() is (outer == "commit")
+            assert admission.closed and all(conn.closed for conn in connections)
+            assert 0 < controls[0].deadline - start <= 1.05
+            assert disposed[0][1] <= controls[0].deadline + 0.3
+            assert deadlines[0] <= start + 2.05
+            assert disposed[1][1] <= deadlines[0] + 0.3
+            fallback = outer == "rollback" or lookup != "normal"
+            assert len(connections) == (3 if fallback else 2), "hidden fresh retry"
+            if fallback:
+                assert deadlines[1] - deadlines[0] >= 2.9, "lookup consumed fallback reserve"
+                assert "transaction-2" in observed_phases and "cleanup-2" in observed_phases
+            assert {"outer-command", "cleanup-0", "transaction-1", "cleanup-1"} <= set(observed_phases)
+            with pytest.raises((TransactionDeadlineExceeded, psycopg.OperationalError, psycopg.InterfaceError)):
+                admission.cursor.execute(
+                    "INSERT INTO omp_jobs.operations(operation_id, workspace_id, kind, request_sha256, result) "
+                    "VALUES (%s, %s, 'late-write', %s, '{}'::jsonb)",
+                    ("transport-late-write", ctx.workspace_id, "0" * 64),
+                )
+            assert len(errors) == 1
+            assert isinstance(errors[0], RuntimeError if fresh == "fail-commit" else TransactionDeadlineExceeded)
+            if fresh == "normal":
+                assert errors[0].outcome_uncertain is (outer == "commit")
+            if fresh != "normal":
+                assert not admission.settled
+                assert not successor_entered.wait(0.05), "unresolved owner freed gate"
+                assert _admission_counts(ctx) == (0, 0, 0, 0)
+            # Restore all faults before explicit reconciliation; no implicit retry.
+            monkeypatch.setattr(ctx.budget._jobs, "transaction", transaction)
+            monkeypatch.setattr(psycopg.Connection, "_exec_command", command)
+            monkeypatch.setattr(psycopg.Cursor, "execute", execute)
+            monkeypatch.setattr(psycopg.Connection, "close", close)
+            if not admission.settled:
+                admission._resolve()
+            assert successor_entered.wait(2)
+            durable = _accounting_snapshot(ctx)
+            assert _admission_counts(ctx) == (1, 1, 1, 2)
+            spend, usage, _, operations = durable
+            assert spend[0]["amount_usd"] == usage[0]["price_usd"] == Decimal(1 if outer == "commit" else 2)
+            assert usage[0]["tokens"] == (15 if outer == "commit" else 150)
+            receipt = next(row["result"] for row in operations if row["kind"] == "model_call_receipt")
+            assert receipt["settlement"]["measurement"] == ("measured" if outer == "commit" else "estimated")
+            if snapshot_at_commit:
+                assert snapshot_at_commit == [durable], "lost ACK replaced durable actual accounting"
+            # Stale abort and context exit must not release successor's gate.
+            admission.abort()
+            admission.__exit__(None, None, None)
+            probe, waiting, probe_finished, outcomes = _start_gate_waiter(ctx, unrelated, "transport-stale-probe")
+            threads.append(probe)
+            assert waiting.wait(1)
+            assert not probe_finished.wait(0.05), "stale cleanup released successor gate"
+            release_successor.set()
+            assert probe_finished.wait(2)
+            assert outcomes == ["admitted"]
+            with _admit(ctx, _prepared("2"), request_id="transport-original") as replay:
+                assert replay.settled
+                expected = dict(actual_usd="1", input_tokens=10, output_tokens=5, cache_tokens=0) if outer == "commit" else admission._admitted_bound_payload()
+                replay.settle(**expected)
+            for thread in threads:
+                thread.join(timeout=2)
+            assert all(not thread.is_alive() for thread in threads)
+            assert len(errors) == 1, "waiter failed after resolution"
+            assert sends == ["upstream", "successor"]
+            assert _accounting_snapshot(ctx) == durable
+        finally:
+            stop_barriers.set()
+            release_successor.set()
+            monkeypatch.setattr(ctx.budget._jobs, "transaction", transaction)
+            monkeypatch.setattr(psycopg.Connection, "_exec_command", command)
+            monkeypatch.setattr(psycopg.Cursor, "execute", execute)
+            monkeypatch.setattr(psycopg.Connection, "close", close)
+            if receipt_lock is not None:
+                holder.execute(
+                    "SELECT pg_advisory_unlock(hashtextextended('omp_jobs.operation:' || %s, 0))",
+                    (receipt_lock,),
+                )
+            try:
+                if admission is not None:
+                    if not admission.closed:
+                        admission.abort()
+                    elif not admission.settled:
+                        admission._resolve()
+            finally:
+                for thread in threads:
+                    thread.join(timeout=6)
+                assert all(not thread.is_alive() for thread in threads), "budget test thread survived cleanup"
