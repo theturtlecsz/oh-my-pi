@@ -24,8 +24,10 @@ import pytest
 from fastapi import HTTPException
 from fastapi.exception_handlers import http_exception_handler
 from omp_work import egress_sandbox
+from omp_work.jobs.store import NativeJobStore
 from omp_work.model_proxy import ProxyConfig, create_app
 from omp_work.model_proxy_upstream import TransportResponse
+from omp_work.orchestrator import model_proxy_client
 from omp_work.orchestrator import service as orchestrator
 from omp_work.orchestrator import worker_sandbox
 from omp_work.orchestrator.service import OrchestratorHandler, submit
@@ -165,7 +167,7 @@ def binary():
 
 
 @contextmanager
-def upstream(forbidden):
+def upstream(forbidden=False, *, status_code=200, block_all=False):
     calls = []
     entered = threading.Condition()
     release = threading.Event()
@@ -179,10 +181,19 @@ def upstream(forbidden):
             held = "hold-capacity" in json.dumps(body)
             gemini = self.path.startswith("/v1beta/")
             with entered:
-                calls.append((self.path, body, dict(self.headers), held))
+                calls.append((self.path, body, dict(self.headers), held or block_all))
                 entered.notify_all()
             if held:
                 assert release.wait(90)
+            elif block_all:
+                release.wait(2.0)
+            if status_code != 200:
+                self.send_response(status_code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"{}")
+                return
             args = {
                 "path": "forbidden.txt" if forbidden else "feature.txt",
                 "content": CONTENT,
@@ -525,3 +536,209 @@ def test_production_worker(service, tmp_path, monkeypatch, binary, capfd, mode):
                 ).fetchall()
             assert len(rows) == len(calls)
             assert all(row[0] > 0 for row in rows)
+
+
+@pytest.mark.parametrize("scenario", ["success", "provider_500", "timeout"])
+def test_revocation_after_success_failure_timeout(
+    service, tmp_path, monkeypatch, binary, capfd, scenario
+):
+    binary, shim, native = binary
+    monkeypatch.setattr(orchestrator, "_REGISTRY", dict(orchestrator._REGISTRY))
+    monkeypatch.setenv("GEMINI_API_KEY", PROVIDER_KEY)
+    monkeypatch.setenv("OMP_CONTROL_TOKEN", CONTROL_TOKEN)
+    world = open_e2e_world(
+        service,
+        tmp_path / scenario,
+        monkeypatch,
+        verifier_mode="pass",
+        worker_mode="ok",
+        extra_capability=None,
+        operations=("omp_work.orchestrator.operations:register",),
+    )
+    world.request = replace(
+        world.request,
+        worker_argv=(str(binary), "orchestrator-worker"),
+        scope=world.request.scope.model_copy(
+            update={
+                "budget_policy": world.request.scope.budget_policy.model_copy(
+                    update={"tokens": 200_000}
+                )
+            }
+        ),
+    )
+    capability = world.config.automation_capability_path
+    data = json.loads(capability.read_text())
+    data["token"] = CONTROL_TOKEN
+    holder = _budget_ctx(service) if scenario == "success" else None
+    if holder is not None:
+        data["workspaces"] += [str(holder.workspace_id)]
+    capability.write_text(json.dumps(data))
+    capability.chmod(0o600)
+    for name in ("gemini-key", "ollama-key"):
+        key = service.config.credentials_dir / name
+        key.write_text(PROVIDER_KEY)
+        key.chmod(0o600)
+
+    real_sandbox = worker_sandbox.run_sandboxed
+
+    def observe_sandbox(argv, identity, recorder, workdir, env, timeout, **kwargs):
+        kwargs["ro_binds"] = (*kwargs.get("ro_binds", ()), str(shim), str(native))
+        return real_sandbox(argv, identity, recorder, workdir, env, timeout, **kwargs)
+
+    monkeypatch.setattr(worker_sandbox, "run_sandboxed", observe_sandbox)
+
+    registered_grants: list[dict[str, str]] = []
+    real_register = model_proxy_client.register
+
+    def spy_register(capability_path, base_url, payload, **kwargs):
+        result = real_register(capability_path, base_url, payload, **kwargs)
+        registered_grants.append(
+            {"id": result["id"], "model_token": result["model_token"]}
+        )
+        return result
+
+    revoked_tasks: list[tuple[str, str]] = []
+    real_revoke_task = model_proxy_client.revoke_task
+
+    def spy_revoke_task(capability_path, base_url, task_id, **kwargs):
+        revoked_tasks.append((base_url, task_id))
+        return real_revoke_task(capability_path, base_url, task_id, **kwargs)
+
+    monkeypatch.setattr(
+        "omp_work.orchestrator.model_proxy_client.register", spy_register
+    )
+    monkeypatch.setattr(
+        "omp_work.orchestrator.model_proxy_client.revoke_task", spy_revoke_task
+    )
+
+    lease_seconds = 1 if scenario == "timeout" else 180
+    status_code = 500 if scenario == "provider_500" else 200
+    block_all = scenario == "timeout"
+
+    with upstream(False, status_code=status_code, block_all=block_all) as (
+        transport,
+        calls,
+        entered,
+        release,
+    ):
+        config = ProxyConfig(
+            service.config,
+            capability,
+            {
+                "gemini_flash": gemini_route(model="gemini-3.8-flash-high"),
+                "ollama_cloud": ollama_route(model="deepseek-v4.1-flash:cloud"),
+            },
+        )
+        app = create_app(config, transport=transport)
+        with (
+            serving(app) as proxy_url,
+            serving(
+                work_app(service.config, capabilities_dir=service.capabilities)
+            ) as work_url,
+        ):
+            world.config = replace(
+                world.config,
+                model_proxy_url=proxy_url,
+                workservice_url=work_url,
+                lease_seconds=lease_seconds,
+            )
+            submitted = submit(world.config, world.request)
+            work_id = UUID(submitted["work_id"])
+            tree = world.store.read(world.workspace_id, OWNER, "tree", "")
+            item = next(
+                row for row in tree["items"] if str(row.get("work_id")) == str(work_id)
+            )
+            _seed_budget(
+                SimpleNamespace(
+                    service=service, workspace_id=world.workspace_id, actor_id=OWNER
+                ),
+                work_id=work_id,
+                revision_id=UUID(str(item["revision"]["revision_id"])),
+                budget={
+                    "usd": "2.00",
+                    "tokens": 200_000,
+                    "wall_clock_seconds": 180,
+                    "max_subagents": 0,
+                },
+            )
+            worker = open_worker(world)
+
+            def implemented(view):
+                return any(
+                    step.get("stage") == "implement"
+                    and step.get("kind") == "outcome"
+                    for step in view["steps"]
+                )
+
+            try:
+                tick_until(worker, world, implemented, limit=30)
+            finally:
+                release.set()
+
+            handler = OrchestratorHandler(world.config)
+            handler.mission_id = world.mission_id
+            outcome = next(
+                step
+                for step in handler.steps()
+                if step.get("stage") == "implement"
+                and step.get("kind") == "outcome"
+            )
+
+            assert len(registered_grants) == 1
+            grant_id = registered_grants[0]["id"]
+            model_token = registered_grants[0]["model_token"]
+
+            assert len(revoked_tasks) == 1
+            assert revoked_tasks[0] == (proxy_url.rstrip("/"), grant_id)
+
+            headers = {"Authorization": f"Bearer {CONTROL_TOKEN}"}
+            with httpx.Client(base_url=proxy_url, timeout=30) as client:
+                if scenario == "success":
+                    assert outcome["outcome"] == "succeeded"
+                    assert outcome["data"]["exit_code"] == 0
+
+                    revoked_resp = client.post(
+                        "/v1beta/models/gemini-3.8-flash-high:streamGenerateContent?alt=sse",
+                        json={"contents": [{"parts": [{"text": "probe"}]}]},
+                        headers={"Authorization": f"Bearer {model_token}"},
+                    )
+                    assert revoked_resp.status_code == 403
+                    assert revoked_resp.json()["detail"] == "grant_refused"
+
+                    assert holder is not None
+                    live_job_id = _admitting_job(holder, lease_seconds=180)
+                    live_task = dict(
+                        workspace_id=str(holder.workspace_id),
+                        project_id=str(holder.project_id),
+                        work_id=str(holder.work_id),
+                        job_id=live_job_id,
+                        worker_id="worker-1",
+                        fence=1,
+                        stage="implement",
+                        expires_at=(
+                            datetime.now(UTC) + timedelta(seconds=120)
+                        ).isoformat(),
+                        ceiling_usd="10",
+                    )
+                    reg_resp = client.post("/tasks", json=live_task, headers=headers)
+                    assert reg_resp.status_code == 200, reg_resp.text
+                    live_grant = reg_resp.json()
+                    try:
+                        live_resp = client.post(
+                            "/v1beta/models/gemini-3.8-flash-high:streamGenerateContent?alt=sse",
+                            json={"contents": [{"parts": [{"text": "probe"}]}]},
+                            headers={"Authorization": f"Bearer {live_grant['model_token']}"},
+                        )
+                        assert live_resp.status_code == 200, live_resp.text
+                    finally:
+                        client.delete(
+                            f"/tasks/{live_grant['id']}", headers=headers
+                        )
+
+                elif scenario == "provider_500":
+                    assert outcome["outcome"] == "crashed"
+
+                elif scenario == "timeout":
+                    assert outcome["outcome"] == "crashed"
+                    assert outcome["data"].get("code") == "lease_dead"
+
