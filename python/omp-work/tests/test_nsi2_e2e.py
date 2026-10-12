@@ -400,6 +400,21 @@ def test_ac1_nsi2_lifecycle_provenance_and_persistence(service, mission):
     assert status == 200, res
     assert res["result"]["revision"] == 5
 
+    # The issue API links existing findings; seed claim-linked gaps at SQL
+    # revision 4 (view @5) before recording the question through HTTP.
+    gap_ids = ["gap-old", "gap-ac-2"]
+    with psycopg.connect(**service.config.connection_kwargs("postgres")) as conn:
+        for gap_id, claim_id in zip(gap_ids, ["claim-old", "ac-2"], strict=True):
+            conn.execute(
+                "INSERT INTO omp_work.intake_issues "
+                "(workspace_id,run_id,revision,issue_id,kind,reason,dimension_id,"
+                "premise_id,materiality,waiver_policy,operation_id,nsi_version) "
+                "SELECT workspace_id,run_id,revision,%s,'gap','Owner must settle claim',"
+                "'missing_verification_oracle',%s,'material','owner_with_reason',operation_id,'nsi/v1' "
+                "FROM omp_work.intake_revisions WHERE workspace_id=%s AND run_id='run-1' AND revision=4",
+                (gap_id, claim_id, workspace_id),
+            )
+
     # Command 6: issue
     status, res = _command(service, workspace_id, {
         "type": "record_intake_issue",
@@ -409,15 +424,20 @@ def test_ac1_nsi2_lifecycle_provenance_and_persistence(service, mission):
             "issue": {
                 "id": "question-1",
                 "question": "Which claim should be used?",
-                "gap_ids": [],
+                "gap_ids": gap_ids,
                 "conflict_ids": [],
                 "category": "constraints_and_tradeoffs",
             },
-            "gaps": [],
+            "gaps": gap_ids,
         },
     })
     assert status == 200, res
     assert res["result"]["revision"] == 6
+    r6 = service.client.get(f"/v1/workspaces/{workspace_id}/intake/run-1?revision=6", headers=headers)
+    assert r6.status_code == 200, r6.json()
+    assert len(r6.json()["issues"]) == 1
+    assert r6.json()["issues"][0]["issue"]["id"] == "question-1"
+    assert set(r6.json()["issues"][0]["issue"]["gap_ids"]) == set(gap_ids)
 
     # Command 7: first decision (@7, exactly one decision)
     status, res = _command(service, workspace_id, {
@@ -458,6 +478,8 @@ def test_ac1_nsi2_lifecycle_provenance_and_persistence(service, mission):
     assert get_7_initial["decisions"][0]["decision"]["id"] == "decision-1"
     # Assumption: decision.revision equals that command's expected_revision
     assert get_7_initial["decisions"][0]["decision"]["revision"] == 6
+    assert set(get_7_initial["decisions"][0]["claim_ids"]) == {"claim-old", "ac-2"}
+    assert get_7_initial["issues"] == []
 
     # Command 8: supersede_intake_claim
     status, res = _command(service, workspace_id, {
@@ -860,9 +882,15 @@ def test_ac1_nsi2_lifecycle_provenance_and_persistence(service, mission):
     assert trace_ac1["requirement_ids"] == ["req-ac-1"]
     assert trace_ac1["claim_ids"] == ["ac-1"]
 
-    evidence_spans = [s["span"] for s in latest_view["evidence_links"] if s["span"]["artifact_id"] == "bounded-source"]
-    assert any(s["start_byte"] == start1 and s["end_byte"] == end1 and s["quote"] == quote1 for s in evidence_spans)
-    assert any(s["start_byte"] == start2 and s["end_byte"] == end2 and s["quote"] == quote2 for s in evidence_spans)
+    claim_provenance = {item["claim"]["id"]: item for item in prov["claims"]}
+    for trace, expected_span in (
+        (trace_ac2, claim_admitted_span),
+        (trace_ac1, {"artifact_id": "bounded-source", "start_byte": start2, "end_byte": end2, "quote": quote2}),
+    ):
+        for claim_id in trace["claim_ids"]:
+            proof = claim_provenance[claim_id]
+            assert proof["claim"]["evidence"] == [expected_span]
+            assert proof["evidence_links"][claim_id] == [{"span": expected_span, "relation": "supports"}]
 
     # 9. Each bounded.acceptance_criterion id present at assess time has a history link with that same id
     history_criterion_ids = [l["criterion"]["id"] for l in latest_view["criterion_links"]]
@@ -889,4 +917,3 @@ def test_ac1_nsi2_lifecycle_provenance_and_persistence(service, mission):
     assert new_client.get(f"/v1/workspaces/{workspace_id}/intake/run-1?revision=1", headers=headers).json() == get_1_initial
     assert new_client.get(f"/v1/workspaces/{workspace_id}/intake/run-1?revision=4", headers=headers).json() == get_4_initial
     assert new_client.get(f"/v1/workspaces/{workspace_id}/intake/run-1?revision=7", headers=headers).json() == get_7_initial
-

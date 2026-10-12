@@ -148,13 +148,6 @@ def _slice_text(data: bytes, start: object, end: object) -> str:
         _refuse("unknown span")
 
 
-def _history_core(history: DecisionHistory) -> dict[str, object]:
-    return history.model_dump(
-        mode="json",
-        include={"decisions", "criteria", "instruction_hashes", "claim_supersession_decisions"},
-    )
-
-
 def _walk(children: dict[str, list[str]]) -> None:
     visiting: set[str] = set()
     visited: set[str] = set()
