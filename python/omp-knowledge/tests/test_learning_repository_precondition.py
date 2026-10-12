@@ -1,19 +1,155 @@
 from __future__ import annotations
 
 import json
+import subprocess
+from collections.abc import Iterator, Mapping
+from datetime import datetime
+from pathlib import Path
+from types import MappingProxyType
 from typing import Any
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
+from omp_work.v1.api_models import WorkItemsPage, WorkItemSummary
+from omp_work.v1.models import EvidenceReceipt
+from support.stub_events import FakeEvents, make_event
+from support.stub_generator import StubGenerator
 
+from omp_knowledge.learning.capture import drain
+from omp_knowledge.learning.cli import EXIT_OK, main as cli_main
 from omp_knowledge.learning.generation import (
+    GenerationResult,
     LocalChatGenerator,
     ensure_repository_precondition,
     extract_trace_repository,
 )
-from omp_knowledge.learning.models import Lesson, Precondition
+from omp_knowledge.learning.models import Claim, Lesson, Precondition
+from omp_knowledge.learning.store import LearningStore
+from omp_knowledge.learning.uses import supply
 
 LOOPBACK_BASE_URL = "http://127.0.0.1:18080"
+REPOSITORY = "ssh://git@github.com/org/repo"
+
+
+class RepositoryRecords:
+    """Mapping-backed workflow and reader-known supporting receipt."""
+
+    def __init__(self) -> None:
+        fixture = Path(__file__).parent / "fixtures" / "workflows" / "OMP-175.json"
+        payload = json.loads(fixture.read_text())
+        self.key = payload["key"]
+        view = payload["workflow"]
+        for attempt in view["close_attempts"]:
+            attempt["repository"] = REPOSITORY
+        self.view = MappingProxyType(view)
+        self.evidence = EvidenceReceipt.model_validate(next(
+            receipt for receipt in view["receipts"]
+            if receipt["kind"] == "audit" and receipt["verdict"] == "PASS"
+        ))
+
+    def work_items(
+        self,
+        *,
+        after: tuple[datetime, UUID] | None = None,
+        limit: int | None = None,
+    ) -> WorkItemsPage:
+        item = self.view["item"]
+        return WorkItemsPage(items=(WorkItemSummary(
+            work_id=item["work_id"],
+            key=self.key,
+            state=item["state"],
+            created_at=item["revision"]["created_at"],
+        ),))
+
+    def workflow(self, key: str) -> Mapping[str, Any]:
+        assert key == self.key
+        return self.view
+
+    def receipt(self, receipt_id: UUID | str) -> EvidenceReceipt:
+        if str(receipt_id) != str(self.evidence.receipt_id):
+            raise KeyError(receipt_id)
+        return self.evidence
+
+
+@pytest.fixture
+def drained_store() -> Iterator[LearningStore]:
+    records = RepositoryRecords()
+    event = make_event(
+        sequence=1,
+        aggregate_id=UUID(records.view["item"]["work_id"]),
+        payload={"work_id": records.view["item"]["work_id"]},
+    )
+    lesson = Lesson(
+        title="Check candidate drift before closeout",
+        steps=("compare candidate commit against HEAD",),
+        claims=(Claim(
+            text="candidate drift check passed",
+            receipt_ids=(records.evidence.receipt_id,),
+        ),),
+    )
+    generator = StubGenerator([GenerationResult(
+        model="stub-model",
+        profile="stub-profile",
+        request_sha256="0" * 64,
+        response_sha256="0" * 64,
+        lessons=(lesson,),
+    )])
+    with LearningStore(":memory:") as store:
+        run = drain(
+            store, FakeEvents([event]), records, generator,
+            workspace_id=event.workspace_id, records=records,
+        )
+        assert run.proposals_accepted == 1
+        yield store
+
+
+def test_drain_scopes_unscoped_generator_lesson_before_storage_and_supply(
+    drained_store: LearningStore,
+) -> None:
+    """Drained lessons persist repository eq and supply only to that repository."""
+    proposal = drained_store.execute("SELECT lesson_json FROM proposals").fetchone()
+    version = drained_store.execute(
+        "SELECT preconditions_json FROM procedure_versions"
+    ).fetchone()
+    expected = [{"key": "repository", "op": "eq", "value": REPOSITORY}]
+    assert json.loads(proposal["lesson_json"])["preconditions"] == expected
+    assert json.loads(version["preconditions_json"]) == expected
+
+    for context, count in (
+        ({"repository": REPOSITORY}, 1),
+        ({"repository": "ssh://git@github.com/other/repo"}, 0),
+        ({}, 0),
+    ):
+        result = supply(
+            drained_store, workspace_id=uuid4(), work_key="next-work",
+            context=context,
+        )
+        assert len(result.lines) == count
+
+
+def test_cli_supply_cwd_excludes_drained_lesson_from_another_repository(
+    drained_store: LearningStore,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """CLI remote-derived context cannot supply a different repository's lesson."""
+    git_dir = tmp_path / "repo"
+    git_dir.mkdir()
+    subprocess.run(["git", "init"], cwd=git_dir, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "remote", "add", "origin", "git@github.com:other/repo.git"],
+        cwd=git_dir,
+        check=True,
+        capture_output=True,
+    )
+    rc = cli_main([
+        "supply", "--state-dir", ":memory:", "--workspace", str(uuid4()),
+        "--work-key", "next-work", "--cwd", str(git_dir), "--json",
+    ], store=drained_store)
+
+    assert rc == EXIT_OK
+    assert json.loads(capsys.readouterr().out) == []
 
 
 def _receipt(repository: str, *, truncated: bool = False, raw: str | None = None) -> dict[str, Any]:

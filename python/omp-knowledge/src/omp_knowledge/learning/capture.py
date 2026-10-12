@@ -9,7 +9,12 @@ from uuid import UUID, uuid4
 from omp_work.v1.api_models import DomainEventsPage
 from omp_work.v1.canonical import canonical_json
 
-from .generation import GeneratorError, LessonGenerator
+from .generation import (
+    GeneratorError,
+    LessonGenerator,
+    ensure_repository_precondition,
+    extract_trace_repository,
+)
 from .models import Attribution, RunStatus, SourceIdentity, StrictModel, UnitState
 from .policy import NativeReceipts
 from .proposals import create_proposal
@@ -425,11 +430,14 @@ def _process_units(
             )
             continue
 
+        repo = extract_trace_repository(trace)
         attribution = Attribution(
             model=result.model, profile=result.profile, source=source
         )
         proposal_ids: list[str] = []
         for lesson in result.lessons:
+            if repo is not None:
+                lesson = ensure_repository_precondition(lesson, repo)
             proposal = create_proposal(
                 store,
                 unit_id=unit_id,
