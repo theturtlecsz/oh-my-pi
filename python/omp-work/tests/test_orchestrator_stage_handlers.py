@@ -6,10 +6,12 @@ import os
 from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from omp_work.orchestrator.service import OrchestratorHandler, _REGISTRY, submit
+from orchestrator_test_ops import run_stage
 from test_orchestrator_service import _until, _worker, open_world
 
 pytestmark = pytest.mark.skipif(
@@ -73,3 +75,52 @@ def test_missing_audit_handler_fails_closed(service, tmp_path: Path) -> None:
     world["config"] = replace(world["config"], operations=())
     _REGISTRY.pop("audit")
     _assert_missing_handler_pauses(service, world, "audit")
+
+
+def test_plain_audit_empty_existing_key_is_0600(tmp_path: Path) -> None:
+    key = tmp_path / "verifier.key"
+    key.write_text("")
+    key.chmod(0o644)
+    assert key.stat().st_size == 0
+    ctx = SimpleNamespace(
+        stage="audit", request={}, prior={},
+        config=SimpleNamespace(verifier_key_path=key),
+        intents=SimpleNamespace(record_intent=lambda *args, **kwargs: None),
+    )
+
+    run_stage(ctx)
+
+    assert key.stat().st_mode & 0o777 == 0o600
+    assert len(key.read_bytes()) == 32
+
+
+def test_plain_audit_creates_missing_key_as_0600(tmp_path: Path) -> None:
+    key = tmp_path / "verifier.key"
+    assert not key.exists()
+    ctx = SimpleNamespace(
+        stage="audit", request={}, prior={},
+        config=SimpleNamespace(verifier_key_path=key),
+        intents=SimpleNamespace(record_intent=lambda *args, **kwargs: None),
+    )
+
+    run_stage(ctx)
+
+    assert len(key.read_bytes()) == 32
+    assert key.stat().st_mode & 0o777 == 0o600
+
+
+def test_plain_audit_keeps_existing_key_bytes_and_mode(tmp_path: Path) -> None:
+    key = tmp_path / "verifier.key"
+    original = b"fedcba9876543210fedcba9876543210"
+    key.write_bytes(original)
+    key.chmod(0o644)
+    ctx = SimpleNamespace(
+        stage="audit", request={}, prior={},
+        config=SimpleNamespace(verifier_key_path=key),
+        intents=SimpleNamespace(record_intent=lambda *args, **kwargs: None),
+    )
+
+    run_stage(ctx)
+
+    assert key.read_bytes() == original
+    assert key.stat().st_mode & 0o777 == 0o644
