@@ -1103,8 +1103,12 @@ class OrchestratorHandler:
             raise AssertionError("stage context is unbound")
         run = _REGISTRY.get(stage)
         if run is None:
-            verdict = "pass" if stage == "audit" else "none"
-            return Outcome(outcome="succeeded", data={"stage": stage}, verdict=verdict)
+            return Outcome(
+                outcome="failed",
+                data={"stage": stage, "code": "missing_stage_handler"},
+                blocker="missing_stage_handler",
+                verdict="none",
+            )
         work_id = UUID(str(job["work_id"]))
         ctx = StageContext(
             self,
