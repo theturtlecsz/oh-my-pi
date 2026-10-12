@@ -51,6 +51,42 @@ class ProvenanceEvaluation(NamedTuple):
     settlement: ProvenanceSettlement | None = None
 
 
+def closure_document(
+    body: IntakeRevisionBody,
+    resolved: ProvenanceClosure,
+    contract: IntakeContract,
+    settlement: ProvenanceSettlement,
+) -> dict[str, object]:
+    """Bind the complete proof and original history, independent of prior assessments.
+
+    ``closure_hash(document)`` supplies both claim-set and source binding slots;
+    ``contract_hash(contract)`` supplies the contract slot. Revision hashes and
+    placeholder bindings are deliberately not inputs to either digest.
+    """
+    excluded = {"binding", "artifact_bytes", "assessments", "derivations"}
+    return {
+        "body": body.model_dump(mode="json", exclude=excluded),
+        # Sources contain only decodable text. Bind all bytes independently,
+        # including unreferenced binary artifacts, without a lossy text decode.
+        "artifact_bytes_hex": {
+            artifact_id: payload.hex() for artifact_id, payload in body.artifact_bytes.items()
+        },
+        "provenance": resolved.closure.model_dump(mode="json"),
+        "assertions": [
+            {"claim_id": assertion.claim_id, "operation": assertion.operation.model_dump(mode="json")}
+            for assertion in resolved.assertions
+        ],
+        "truths": [list(item) for item in resolved.truths],
+        "ready": resolved.ready,
+        "contract": contract.model_dump(mode="json"),
+        "settlement": {
+            "body": settlement.body.model_dump(mode="json", exclude=excluded),
+            "conflict_gap_links": {key: list(value) for key, value in settlement.links.items()},
+            "unresolved": [item.model_dump(mode="json") for item in settlement.unresolved],
+        },
+    }
+
+
 def _refuse(diagnostic: str) -> NoReturn:
     raise WorkStoreError("invalid_request", (diagnostic,))
 
@@ -315,4 +351,3 @@ def evaluate_intake_provenance(cur: Cursor, body: IntakeRevisionBody) -> Provena
 def settle_intake_provenance(cur: Cursor, body: IntakeRevisionBody) -> ProvenanceSettlement:
     """Resolve persisted proof and settle findings on a deep evaluation copy."""
     return settle_provenance(body, resolve_provenance_closure(cur, body))
-

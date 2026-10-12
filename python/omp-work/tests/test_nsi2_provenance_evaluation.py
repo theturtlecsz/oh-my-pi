@@ -1,6 +1,8 @@
 """Bounded analysis retains the persisted contract and refuses inconsistent proof."""
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from dataclasses import replace
 from uuid import uuid4
@@ -10,10 +12,11 @@ import pytest
 from omp_work.contracts.nsi.v1 import models as nsi
 from omp_work.contracts.nsi.v1.compat import bounded_to_nsi, nsi_to_bounded
 from omp_work.contracts.nsi.v1.models import TypedBooleanValue, TypedIntegerValue
-from omp_work.contracts.nsi.v1.validate import content_hash
-from omp_work.intake_repository import DecisionRecord, read_revision
+from omp_work.contracts.nsi.v1.validate import closure_hash, content_hash, contract_hash
+from omp_work.intake_repository import AssessmentRecord, DecisionRecord, read_revision
 from omp_work.v1.api_models import IntakeDecisionRecord, IntakeIssueRecord
 from omp_work.v1.intake_provenance import (
+    closure_document,
     evaluate_intake_provenance,
     evaluate_provenance_projection,
     settle_intake_provenance,
@@ -27,7 +30,9 @@ from omp_work.v1.models import (
     UnknownIntakeValue,
 )
 from omp_work.v1.store_shared import WorkStoreError
-from test_nsi2_provenance_closure import RUN, _criterion, _draft, _entities, _retarget, advance, append_body, make_body
+from test_nsi2_provenance_closure import (
+    RUN, _criterion, _draft, _entities, _retarget, advance, append_body, insert_relay, make_body, relay_json,
+)
 from test_nsi2_repository import connection, write_repository  # noqa: F401
 from test_workflow_service import service  # noqa: F401
 
@@ -523,3 +528,182 @@ def test_uncapped_gaps_preserved_beyond_ui_cap(service, write_repository):
         unresolved_oracle_gaps = [item for item in result.unresolved if item.id.startswith("gap:oracle:")]
         assert len(unresolved_oracle_gaps) == 3
 
+
+@pytest.fixture
+def complete_proof(service, write_repository):
+    workspace_id = write_repository[0]
+    body = make_body(workspace_id)
+    payload = b"\x00\xff\xfe\x80"
+    body.snapshot.artifacts.append(nsi.EvidenceArtifact(
+        id="binary", uri="intake:binary", revision="binary-rev-1",
+        actor=nsi.ActorRef(id="binary-owner", kind="owner"),
+        media_type="application/octet-stream", content_hash=hashlib.sha256(payload).hexdigest(),
+    ))
+    body.artifact_bytes["binary"] = payload
+    body.conflicts = [nsi.Conflict(
+        id="open-conflict", claim_ids=["ancestor", "leaf"],
+        predicate_id="bounded.constraint", reason="Unsettled conflict",
+    )]
+    body.history.issues = [IntakeIssueRecord(issue=body.conflicts[0], gaps=("gap-1",))]
+    body.questions[0].conflict_ids = ["open-conflict"]
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        record = body.history.decisions[0]
+        insert_relay(cur, workspace_id, write_repository[1], record.verified_relay_operation_id, relay_json(record.instruction))
+        append_body(cur, write_repository, body, uuid4(), -1)
+        stored = read_revision(cur, workspace_id=workspace_id, run_id=RUN, revision=0).body
+        yield stored, resolve_provenance_closure(cur, stored)
+
+
+def _document(body, resolved):
+    evaluation = evaluate_provenance_projection(body, resolved)
+    return closure_document(body, resolved, evaluation.contract, evaluation.settlement)
+
+
+def _edited(current, path, value):
+    """Copy nested proof records, including frozen instruction/operation models."""
+    if not path:
+        return value
+    key, *rest = path
+    child = current[key] if isinstance(current, (dict, list, tuple)) else getattr(current, key)
+    changed = _edited(child, rest, value)
+    if isinstance(current, dict):
+        return {**current, key: changed}
+    if isinstance(current, (list, tuple)):
+        items = list(current)
+        items[key] = changed
+        return tuple(items) if isinstance(current, tuple) else items
+    return current.model_copy(update={key: changed})
+
+
+def test_closure_is_lossless_repeatable_and_excludes_feedback(complete_proof):
+    body, resolved = complete_proof
+    before = body.model_dump(mode="python")
+    document = _document(body, resolved)
+    wire = json.loads(json.dumps(document))
+    assert bytes.fromhex(wire["artifact_bytes_hex"]["binary"]) == body.artifact_bytes["binary"]
+    assert all(source.artifact.id != "binary" for source in resolved.closure.sources)
+    assert closure_hash(wire) == closure_hash(_document(body, resolved))
+    assert body.model_dump(mode="python") == before
+    altered = body.model_copy(deep=True)
+    altered.binding = altered.binding.model_copy(update={"source_hash": "ab" * 32, "claim_set_hash": "cd" * 32})
+    # Assessment/derivation payloads must never feed the next assessment digest.
+    hashes = {key: "ef" * 32 for key in (
+        "contract_hash", "claim_set_hash", "rule_bundle_hash", "schema_hash", "source_hash",
+    )}
+    engine = nsi.RuleEngineRef(id="previous-engine", kind="rule_engine")
+    altered.assessments = [AssessmentRecord(id="previous-assessment", assessment=nsi.IntakeReadinessAssessment(
+        run_id=RUN, revision=0, **hashes, status="CONFLICTED", gaps=[], conflicts=body.conflicts,
+        derivation_receipt_ids=["previous-receipt"], assessed_by=engine, created_at="2026-10-10T00:00:00Z",
+    ))]
+    altered.derivations = [nsi.DerivationReceipt(
+        id="previous-receipt", run_id=RUN, revision=0, **hashes, rule_id="previous-rule",
+        premise_ids=["ancestor"], conclusion_ids=["leaf"], derived_by=engine, created_at="2026-10-10T00:00:00Z",
+    )]
+    assert closure_hash(_document(altered, resolved)) == closure_hash(document)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("uri", "intake:binary-other"),
+    ("revision", "binary-rev-2"),
+    ("actor", nsi.ActorRef(id="other-owner", kind="owner")),
+    ("media_type", "application/x-binary"),
+    ("content_hash", "ab" * 32),
+    ("bytes", b"\x00\xff\xfe\x81"),
+])
+def test_unreferenced_binary_artifact_changes_closure_digest(complete_proof, field, value):
+    body, resolved = complete_proof
+    original = closure_hash(_document(body, resolved))
+    altered = body.model_copy(deep=True)
+    if field == "bytes":
+        altered.artifact_bytes["binary"] = value
+        altered.snapshot.artifacts[-1].content_hash = hashlib.sha256(value).hexdigest()
+    else:
+        setattr(altered.snapshot.artifacts[-1], field, value)
+    assert closure_hash(_document(altered, resolved)) != original
+
+
+@pytest.mark.parametrize("target,path,value", [
+    ("body", ("snapshot", "claims", 0, "asserted_by", "id"), "other-assertor"),
+    ("body", ("snapshot", "claims", 0, "admitted_by", "id"), "other-admitter"),
+    ("closure", ("admissions", 0, "admitted_by", "id"), "other-admitter"),
+    ("closure", ("admissions", 0, "operation", "operation_id"), uuid4()),
+    ("assertion", ("operation", "event_id"), uuid4()),
+    ("assertion", ("operation", "operation_id"), uuid4()),
+    ("body", ("evidence_links", 0, "relation"), "contradicts"),
+    ("body", ("evidence_links", 0, "start_byte"), 1),
+    ("body", ("evidence_links", 0, "quote"), "Other exact words"),
+    ("body", ("history", "decisions", 0, "instruction", "text"), "Other owner words"),
+    ("body", ("history", "instruction_hashes", "decision-1"), "ab" * 32),
+    ("body", ("history", "decisions", 0, "claim_ids"), ("ancestor",)),
+    ("body", ("history", "decisions", 0, "superseded_decision_id"), "older-decision"),
+    ("body", ("history", "decisions", 0, "verified_relay_operation_id"), uuid4()),
+    ("closure", ("decisions", 0, "operation", "event_id"), uuid4()),
+    ("closure", ("relays", 0, "operation", "event_id"), uuid4()),
+    ("closure", ("relays", 0, "relay", "instruction", "source_message_ref"), "msg:other"),
+    ("closure", ("supersessions", 0, "operation", "event_id"), uuid4()),
+    ("closure", ("supersessions", 0, "decision_id"), "other-decision"),
+    ("body", ("gaps", 0, "reason"), "Other open gap"),
+    ("body", ("conflicts", 0, "reason"), "Other open conflict"),
+    ("body", ("questions", 0, "question"), "Other question?"),
+    ("body", ("questions", 0, "conflict_ids"), []),
+    ("body", ("history", "issues", 0, "gaps"), ()),
+    ("closure", ("claims", 0, "ancestry_ids"), ("ancestor",)),
+    ("closure", ("traces", 0, "claim_ids"), ("ac-export",)),
+])
+def test_proof_and_finding_edits_change_closure_digest(complete_proof, target, path, value):
+    body, resolved = complete_proof
+    original = closure_hash(_document(body, resolved))
+    body = body.model_copy(deep=True)
+    resolved = replace(
+        resolved, closure=resolved.closure.model_copy(deep=True),
+        assertions=tuple(replace(item, operation=item.operation.model_copy(deep=True)) for item in resolved.assertions),
+    )
+    if target == "body":
+        body = _edited(body, path, value)
+    elif target == "closure":
+        resolved = replace(resolved, closure=_edited(resolved.closure, path, value))
+        if path == ("traces", 0, "claim_ids"):
+            criterion_id = resolved.closure.traces[0].criterion_id
+            index = next(index for index, link in enumerate(body.history.criteria) if link.criterion.id == criterion_id)
+            body = _edited(body, ("history", "criteria", index, "requirements", 0, "claim_ids"), list(value))
+    else:
+        assertion = replace(resolved.assertions[0], operation=_edited(resolved.assertions[0].operation, path[1:], value))
+        resolved = replace(resolved, assertions=(assertion, *resolved.assertions[1:]))
+    assert closure_hash(_document(body, resolved)) != original
+
+
+def test_effective_settlement_links_and_unresolved_membership_are_bound(complete_proof):
+    body, resolved = complete_proof
+    evaluation = evaluate_provenance_projection(body, resolved)
+    settlement = evaluation.settlement
+    assert settlement.links["open-conflict"] == ("gap-1",)
+    assert {item.id for item in settlement.unresolved} >= {"open-conflict", "question-1"}
+    original = closure_hash(closure_document(body, resolved, evaluation.contract, settlement))
+    unlinked = settlement._replace(links={"open-conflict": ()})
+    assert closure_hash(closure_document(body, resolved, evaluation.contract, unlinked)) != original
+    covered = settlement._replace(unresolved=())
+    assert closure_hash(closure_document(body, resolved, evaluation.contract, covered)) != original
+
+
+def test_stored_requirement_words_change_contract_and_closure_hashes(proof):
+    _cur, body, resolved = proof
+    evaluation = evaluate_provenance_projection(body, resolved)
+    original = closure_document(body, resolved, evaluation.contract, evaluation.settlement)
+    altered = body.model_copy(deep=True)
+    altered.history.criteria[0].requirements[0].text = "Owner changed required export behavior."
+    changed = evaluate_provenance_projection(altered, resolved)
+    assert contract_hash(changed.contract) != contract_hash(evaluation.contract)
+    assert closure_hash(closure_document(altered, resolved, changed.contract, changed.settlement)) != closure_hash(original)
+
+
+def test_closure_binds_history_even_when_settlement_filters_stale_decisions(proof):
+    _cur, body, resolved = proof
+    body = body.model_copy(deep=True)
+    body.questions = []
+    evaluation = evaluate_provenance_projection(body, resolved)
+    assert evaluation.settlement.body.history.decisions == []
+    original = closure_document(body, resolved, evaluation.contract, evaluation.settlement)
+    body = _edited(body, ("history", "decisions", 0, "instruction", "text"), "Changed stale owner instruction")
+    changed = evaluate_provenance_projection(body, resolved)
+    assert changed.settlement.body.history.decisions == []
+    assert closure_hash(closure_document(body, resolved, changed.contract, changed.settlement)) != closure_hash(original)
