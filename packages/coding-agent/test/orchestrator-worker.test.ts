@@ -209,8 +209,12 @@ function getBinaryInterpreter(binaryPath: string): string | null {
  * so the dynamic linker loader path exists; the resolved Bun binary and
  * checkout are bound under `/run` regardless of their host paths.
  */
-function pivotScript(root: string, layout: HostSystemLayout = resolveHostSystemLayout()): string {
-	const realDirBinds = layout.realDirs.map(name => `mount --bind /${name} ${root}/${name}\n`).join("");
+function pivotScript(
+	root: string,
+	layout: HostSystemLayout = resolveHostSystemLayout(),
+	command = "exec /run/bun --no-env-file /run/checkout/packages/coding-agent/src/cli.ts orchestrator-worker",
+): string {
+	const realDirBinds = layout.realDirs.map(name => `mount --bind /${name} ${root}/${name}`).join("\n");
 	return `
 set -euo pipefail
 mount --make-rprivate /
@@ -218,7 +222,7 @@ mount --bind /usr ${root}/usr
 mount --rbind /proc ${root}/proc
 mount --rbind /dev ${root}/dev
 mount --rbind /sys ${root}/sys
-${realDirBinds}touch ${root}/run/bun
+${realDirBinds ? `${realDirBinds}\n` : ""}touch ${root}/run/bun
 mount --bind ${fs.realpathSync(process.execPath)} ${root}/run/bun
 mkdir ${root}/run/checkout
 mount --bind ${repoRoot} ${root}/run/checkout
@@ -226,7 +230,7 @@ mount --rbind ${root} ${root}
 cd ${root}
 pivot_root . old
 cd /work
-exec /run/bun --no-env-file /run/checkout/packages/coding-agent/src/cli.ts orchestrator-worker
+${command}
 `;
 }
 
@@ -363,10 +367,13 @@ describe.serial("orchestrator-worker", () => {
 		}
 	}, 150_000);
 
-	it("mirrors the host /lib64 layout so the dynamic loader is present in the pivoted root", () => {
+	it("mirrors the host /lib64 layout so the dynamic loader is present in the pivoted root", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "omp-layout-test-"));
 		try {
 			const layout = resolveHostSystemLayout();
+			for (const dir of ["old", "work", "tmp", "proc", "dev", "sys", "usr", "run"]) {
+				fs.mkdirSync(path.join(root, dir));
+			}
 			populateHostSystemLayout(root, layout);
 
 			const hostLib64 = "/lib64";
@@ -384,27 +391,66 @@ describe.serial("orchestrator-worker", () => {
 				}
 			}
 
+			expect(pivotScript("/test-root", { symlinks: [], realDirs: ["lib64"] })).toContain(
+				"mount --bind /lib64 /test-root/lib64",
+			);
+
 			const interp = getBinaryInterpreter(fs.realpathSync(process.execPath));
 			expect(interp).not.toBeNull();
 			if (interp) {
-				// Inside the pivoted root host /usr is mounted at /usr and real directories are bound.
-				// For this layout resolution check, symlink /usr to host /usr and point any realDirs to host.
-				fs.symlinkSync("/usr", path.join(root, "usr"));
-				for (const dir of layout.realDirs) {
-					const target = path.join(root, dir);
-					if (fs.existsSync(target) && fs.lstatSync(target).isDirectory()) {
-						fs.rmdirSync(target);
-						fs.symlinkSync(`/${dir}`, target);
-					}
+				const verifyScript = pivotScript(
+					root,
+					layout,
+					`exec /run/bun -e '
+const fs = require("node:fs");
+const interp = process.argv[1];
+if (!fs.existsSync(interp)) {
+	process.stderr.write("missing interpreter: " + interp + "\\n");
+	process.exit(1);
+}
+const stat = fs.statSync(interp);
+if (!stat.isFile()) {
+	process.stderr.write("interpreter not a file: " + interp + "\\n");
+	process.exit(2);
+}
+process.stdout.write(JSON.stringify({
+	interp,
+	exists: true,
+	resolved: fs.realpathSync(interp),
+}));
+' "${interp}"`,
+				);
+
+				const proc = Bun.spawn(["unshare", "--user", "--map-root-user", "--mount", "bash", "-c", verifyScript], {
+					cwd: root,
+					stdin: "ignore",
+					stdout: "pipe",
+					stderr: "pipe",
+				});
+				const timer = setTimeout(() => proc.kill(), 30_000);
+				let exitCode: number;
+				let stdout: string;
+				let stderr: string;
+				try {
+					[exitCode, stdout, stderr] = await Promise.all([
+						proc.exited,
+						new Response(proc.stdout).text(),
+						new Response(proc.stderr).text(),
+					]);
+				} finally {
+					clearTimeout(timer);
+					if (proc.exitCode === null) proc.kill();
 				}
-				const loaderInRoot = path.join(root, interp);
-				expect(fs.existsSync(loaderInRoot)).toBe(true);
-				expect(fs.realpathSync(loaderInRoot)).toBe(fs.realpathSync(interp));
+				expect(exitCode, `${stderr}\n${stdout}`).toBe(0);
+				const result = JSON.parse(stdout) as { interp: string; exists: boolean; resolved: string };
+				expect(result.exists).toBe(true);
+				expect(result.interp).toBe(interp);
+				expect(result.resolved.length).toBeGreaterThan(0);
 			}
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
-	});
+	}, 60_000);
 
 	it("applies a fake Gemini write inside the allowed fixture", async () => {
 		const result = await runWorker("google-generative-ai", index => {
