@@ -1327,7 +1327,7 @@ def test_settlement_failure_rolls_back_usage_receipt_and_cancellation(admission_
 
 
 def test_usage_after_spend_fault_proves_atomic_bound_replacement(admission_context, monkeypatch):
-    """SQL failure replaces spend with bound under continuous DB and process-gate locks."""
+    """SQL failure replaces spend with one bound under held locks; replay adds no effects."""
     ctx = admission_context
     mission = _mission(ctx, "1000")
     root = _item(ctx, "SQL fault root", {**_GENEROUS_ITEM, "usd": "1"})
@@ -1356,6 +1356,7 @@ def test_usage_after_spend_fault_proves_atomic_bound_replacement(admission_conte
     settlement_thread = waiter_thread = None
     probe = monitor = waiter = None
     settlement_errors, waiter_errors, waiter_rows = [], [], []
+    sends: list[str] = []
     execute = psycopg.Cursor.execute
     persist = budget_module.ModelCallAdmission._persist
     row_probes = (
@@ -1416,6 +1417,9 @@ def test_usage_after_spend_fault_proves_atomic_bound_replacement(admission_conte
 
     def settle():
         try:
+            # The upstream send is the caller's, before settlement observes the SQL error.
+            if not admission.settled:
+                sends.append("upstream")
             admission.settle(
                 actual_usd="0.25", input_tokens=7, output_tokens=3,
                 cache_tokens=2, measurement="measured", price_version="p1",
@@ -1546,36 +1550,140 @@ def test_usage_after_spend_fault_proves_atomic_bound_replacement(admission_conte
         assert Decimal(detail["amount_usd"]) == Decimal("0.25")
         assert fault_name in error.diag.context
         assert admission.closed and admission.settled
+        assert sends == ["upstream"]
 
-        # Independent connection sees the committed bound, never the partial .25 write.
-        spend, usage, _, operations = _accounting_snapshot(ctx)
-        assert len(spend) == len(usage) == 1
-        assert spend[0]["record_id"] == record_id
-        assert spend[0]["amount_usd"] == Decimal(1)
-        assert spend[0]["mission_id"] == mission
-        assert usage[0]["request_id"] == usage_request
-        assert usage[0]["work_id"] == task and usage[0]["job_id_derived"] == child
-        assert usage[0]["price_usd"] == Decimal(1)
-        assert usage[0]["measurement"] == "estimated"
-        assert (usage[0]["input_tokens"], usage[0]["output_tokens"],
-                usage[0]["cache_tokens"]) == (100, 50, 0)
-        receipts = [row["result"] for row in operations if row["kind"] == "model_call_receipt"]
-        assert len(receipts) == 1
-        assert receipts[0]["settlement"] == {
+        # Counts cannot tell a wrong bound from the admitted one, or a second effect
+        # hiding beside a matching row. Compare the captured payload and identity.
+        bound = {
             "actual_usd": "1", "input_tokens": 100, "output_tokens": 50,
             "cache_tokens": 0, "measurement": "estimated", "model": "test-model",
             "price_version": "p1",
         }
+        durable = _accounting_snapshot(ctx)
+        spend, usage, outbox, operations = durable
+        assert len(spend) == len(usage) == 1
+        assert spend[0]["record_id"] == record_id
+        assert spend[0]["amount_usd"] == Decimal(1)
+        assert spend[0]["mission_id"] == mission
+        assert spend[0]["amount_usd"] != Decimal("0.25")
+        assert usage[0]["request_id"] == usage_request
+        assert usage[0]["work_id"] == task and usage[0]["job_id_derived"] == child
+        assert usage[0]["price_usd"] == Decimal(1)
+        assert usage[0]["model"] == "test-model"
+        assert usage[0]["measurement"] == "estimated"
+        assert usage[0]["price_version"] == "p1"
+        assert usage[0]["input_tokens"] == 100
+        assert usage[0]["output_tokens"] == 50
+        assert usage[0]["cache_tokens"] == 0
+        assert usage[0]["tokens"] == 150
+        usage_payload = usage[0]["payload"]
+        assert usage_payload["price_usd"] == "1"
+        assert usage_payload["input_tokens"] == 100
+        assert usage_payload["output_tokens"] == 50
+        assert usage_payload["cache_tokens"] == 0
+        assert usage_payload["measurement"] == "estimated"
+        assert usage_payload["model"] == "test-model"
+        assert usage_payload["price_version"] == "p1"
+        ledgers = [row for row in outbox if row["kind"] == "usage_ledger"]
+        assert len(ledgers) == 1
+        assert ledgers[0]["event_id"] == f"usage:{usage[0]['usage_id']}"
+        ledger_payload = ledgers[0]["payload"]
+        assert ledger_payload["price_usd"] == "1"
+        assert ledger_payload["input_tokens"] == 100
+        assert ledger_payload["output_tokens"] == 50
+        assert ledger_payload["cache_tokens"] == 0
+        assert ledger_payload["measurement"] == "estimated"
+        assert ledger_payload["model"] == "test-model"
+        assert ledger_payload["price_version"] == "p1"
+        receipts = [row for row in operations if row["kind"] == "model_call_receipt"]
+        assert len(receipts) == 1
+        assert admission._identity == identity
+        assert receipts[0]["operation_id"] == f"model_call:receipt:{admission._identity}"
+        receipt = receipts[0]["result"]
+        captured_fingerprint = json.loads(admission._receipt_request)["fingerprint"]
+        assert receipt["root_work_id"] == str(root)
+        assert receipt["fingerprint"] == captured_fingerprint
+        assert receipt["fingerprint"]["work_id"] == str(task)
+        assert receipt["fingerprint"]["job_id"] == child
+        assert receipt["fingerprint"]["worker_id"] == "worker-1"
+        assert receipt["fingerprint"]["fence"] == 1
+        assert receipt["fingerprint"]["request_id"] == request_id
+        assert receipt["fingerprint"]["mission_id"] == str(mission)
+        assert receipt["settlement"] == bound
+        assert receipt["settlement"]["input_tokens"] == 100
+        assert receipt["settlement"]["output_tokens"] == 50
+        assert receipt["settlement"]["cache_tokens"] == 0
+        encoded = json.dumps(durable, default=str)
+        assert "0.25" not in encoded and '"measured"' not in encoded
+        for payload in (usage[0], usage_payload, ledger_payload, receipt["settlement"]):
+            assert payload.get("input_tokens") != 7
+            assert payload.get("output_tokens") != 3
+            assert payload.get("cache_tokens") != 2
+            assert payload.get("measurement") != "measured"
 
+        with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
+            cur.execute(
+                "SELECT job_id, status, cancel_reason FROM omp_jobs.jobs"
+                " WHERE workspace_id=%s AND job_id = ANY(%s) ORDER BY job_id",
+                (ctx.workspace_id, [parent, child]),
+            )
+            job_states = cur.fetchall()
+            cur.execute(
+                "SELECT payload FROM omp_jobs.outbox"
+                " WHERE workspace_id=%s AND kind='budget_alert'"
+                " AND payload->>'event'='budget.exceeded'",
+                (ctx.workspace_id,),
+            )
+            exceeded = cur.fetchall()
+        assert len(job_states) == 2
+        assert {row["job_id"] for row in job_states} == {parent, child}
+        assert all(
+            row["status"] == "cancelled" and row["cancel_reason"] == "budget_exceeded"
+            for row in job_states
+        )
+        assert len(exceeded) == 1
+        assert exceeded[0]["payload"]["dimension"] == "usd"
+        assert exceeded[0]["payload"]["work_id"] == str(root)
+        assert sum(
+            1 for row in outbox
+            if row["kind"] == "budget_alert" and row["payload"]["event"] == "budget.exceeded"
+        ) == 1
+
+        # The measured-usage trigger stays installed across replay and is dropped in finally.
         pauses.enabled["on"] = False
+        assert probe.execute(
+            "SELECT 1 FROM pg_trigger WHERE tgname=%s", (fault_name,),
+        ).fetchone() is not None
         with _admit(
             ctx, _prepared("1", 100, 50), mission_id=mission, work_id=task,
             job_id=child, worker_id="worker-1", fence=1,
             request_id=request_id, task_ceiling_usd=Decimal("1000"),
         ) as replay:
+            if not replay.settled:
+                sends.append("replay")
             assert replay.settled
-            replay.settle(**receipts[0]["settlement"])
+            replayed = replay.settle(**bound)
+        assert replayed["status"] == "settled"
+        assert replayed["actual_usd"] == Decimal(1)
+        assert replayed["usage"]["usage_id"] == usage[0]["usage_id"]
+        assert sends == ["upstream"]
+        assert _accounting_snapshot(ctx) == durable
         assert _admission_counts(ctx) == committed_counts
+        with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
+            cur.execute(
+                "SELECT operation_id, result FROM omp_jobs.operations"
+                " WHERE workspace_id=%s AND operation_id=%s",
+                (ctx.workspace_id, f"model_call:receipt:{admission._identity}"),
+            )
+            stable_receipt = cur.fetchone()
+            cur.execute(
+                "SELECT job_id, status, cancel_reason FROM omp_jobs.jobs"
+                " WHERE workspace_id=%s AND job_id = ANY(%s) ORDER BY job_id",
+                (ctx.workspace_id, [parent, child]),
+            )
+            assert cur.fetchall() == job_states
+        assert stable_receipt["operation_id"] == receipts[0]["operation_id"]
+        assert stable_receipt["result"] == receipt
     finally:
         if pauses is not None:
             pauses.enabled["on"] = False
