@@ -194,7 +194,7 @@ def write_slice(pdir: Path, sid: str, deps: list[str] = (), files: list[str] | N
 
 # Each row contains a label-only line and the prefix for the affirmative clause below it.
 # Removing only that label line must turn the rejected dependency into a valid one.
-EXCLUSION_FORMATS = [
+INLINE_EXCLUSION_FORMATS = [
     (f"{name}_{position}", f"{prefix}{label}", "")
     for name, label in [
         ("plain_colon", "{label}:"),
@@ -225,8 +225,24 @@ EXCLUSION_FORMATS = [
 ] + [
     ("bold_numbered", "**{label}**:", "1. "),
     ("bold_unordered", "**{label}:**", "- "),
-    *[(f"heading_h{level}", f"{'#' * level} {{label}}", "") for level in range(1, 7)],
 ]
+
+HEADING_EXCLUSION_FORMATS = [
+    # Levels 1-6 plain and bold, with and without colons inside or outside the bold (unindented affirmative prose)
+    *[(f"heading_h{level}", f"{'#' * level} {{label}}", "") for level in range(1, 7)],
+    *[(f"heading_h{level}_colon", f"{'#' * level} {{label}}:", "") for level in range(1, 7)],
+    *[(f"heading_h{level}_bold", f"{'#' * level} **{{label}}**", "") for level in range(1, 7)],
+    *[(f"heading_h{level}_bold_colon_inside", f"{'#' * level} **{{label}}:**", "") for level in range(1, 7)],
+    *[(f"heading_h{level}_bold_colon_outside", f"{'#' * level} **{{label}}**:", "") for level in range(1, 7)],
+    # Nested sub-headings (level+1) holding the clause
+    *[(f"nested_heading_h{level}_h{level + 1}", f"{'#' * level} {{label}}", f"{'#' * (level + 1)} Work\n") for level in range(1, 6)],
+    *[(f"nested_bold_heading_h{level}_h{level + 1}", f"{'#' * level} **{{label}}**", f"{'#' * (level + 1)} **Work**\n") for level in range(1, 6)],
+    # - Work: label does not end a heading exclusion
+    *[(f"heading_h{level}_dash_work", f"{'#' * level} {{label}}", "- Work:\n") for level in range(1, 7)],
+    *[(f"heading_h{level}_bold_dash_work", f"{'#' * level} **{{label}}**", "- Work:\n") for level in range(1, 7)],
+]
+
+EXCLUSION_FORMATS = [*INLINE_EXCLUSION_FORMATS, *HEADING_EXCLUSION_FORMATS]
 
 
 @pytest.mark.parametrize("fmt_name,label_template,item_prefix", EXCLUSION_FORMATS,
@@ -267,6 +283,100 @@ def test_exclusion_only_chains_require_affirmative_work_outside_label(
         write_slice(pdir, consumer, deps=[producer], files=[consumer_file], body=control)
     violations, _ = mod.validate_slices("ITEM", pdir)
     assert violations == [], f"Label-removal control must qualify: {violations}"
+
+
+@pytest.mark.parametrize("fmt_name,label_template,item_prefix", INLINE_EXCLUSION_FORMATS,
+                         ids=[row[0] for row in INLINE_EXCLUSION_FORMATS])
+@pytest.mark.parametrize("label", ["Do not touch", "Assumptions", "Deferred"])
+@pytest.mark.parametrize("peer", ["Work:", "- Work:", "**Work**:", "# Work"])
+@pytest.mark.parametrize("chain_length", [2, 3])
+@pytest.mark.parametrize("verb,path_template", [("Import", "{path}"), ("Consume", "`{path}`")])
+def test_inline_exclusions_resume_at_work_boundaries_and_qualify(
+        staged_flood, tmp_path, fmt_name, label_template, item_prefix, label,
+        peer, chain_length, verb, path_template):
+    """Pair each inline exclusion with valid affirmative work after peer work labels and headings."""
+    mod, _, _ = staged_flood
+    pdir = tmp_path / f"resume_{fmt_name}_{peer.replace(' ', '_').replace('*', '').replace(':', '')}_{chain_length}"
+    files = ["src/producer.ts", "src/intermediate.ts", "src/consumer.ts"]
+    write_slice(pdir, "ITEM-s01", files=[files[0]])
+    label_line = label_template.format(label=label)
+    for index in range(1, chain_length):
+        consumer, producer = f"ITEM-s{index + 1:02}", f"ITEM-s{index:02}"
+        path = path_template.format(path=files[index - 1])
+        body = (f"Do not touch: none\n"
+                f"{label_line}\n{item_prefix}src/blocked.ts\n"
+                f"{peer}\n{verb} {path}.\n"
+                f"Done when: test_{consumer.replace('-', '_')}.py passes.")
+        write_slice(pdir, consumer, deps=[producer], files=[files[index]], body=body)
+
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    assert violations == [], f"Resumed work must qualify: {violations}"
+
+
+MIDLINE_EXCLUSION_STYLES = [
+    ("plain_colon", "{label}:"),
+    ("bold_colon_inside", "**{label}:**"),
+    ("bold_colon_outside", "**{label}**:"),
+    ("italic_colon_inside", "*{label}:*"),
+    ("italic_colon_outside", "*{label}*:"),
+    ("underline_colon_inside", "__{label}:__"),
+    ("underline_colon_outside", "__{label}__:"),
+]
+
+
+@pytest.mark.parametrize("style_name,style_template", MIDLINE_EXCLUSION_STYLES,
+                         ids=[row[0] for row in MIDLINE_EXCLUSION_STYLES])
+@pytest.mark.parametrize("label", ["Do not touch", "Assumptions", "Deferred"])
+@pytest.mark.parametrize("chain_length", [2, 3])
+@pytest.mark.parametrize("verb,path_template", [("Import", "{path}"), ("Consume", "`{path}`")])
+@pytest.mark.parametrize("trailing", ["", "\nUnindented note src/tail.ts\n- src/list_blocked.ts"])
+def test_midline_exclusions_preserve_prior_affirmative_work(
+        staged_flood, tmp_path, style_name, style_template, label,
+        chain_length, verb, path_template, trailing):
+    """Work before a midline exclusion qualifies, while only blocked targets are excluded."""
+    mod, _, _ = staged_flood
+    pdir = tmp_path / f"midline_{style_name}_{chain_length}"
+    files = ["src/producer.ts", "src/intermediate.ts", "src/consumer.ts"]
+    write_slice(pdir, "ITEM-s01", files=[files[0]])
+    midline = style_template.format(label=label)
+    for index in range(1, chain_length):
+        consumer, producer = f"ITEM-s{index + 1:02}", f"ITEM-s{index:02}"
+        path = path_template.format(path=files[index - 1])
+        body = (f"Do not touch: none\n"
+                f"Work: implement {consumer}.\n"
+                f"{verb} {path}. {midline} src/blocked.ts{trailing}\n"
+                f"Done when: test_{consumer.replace('-', '_')}.py passes.")
+        write_slice(pdir, consumer, deps=[producer], files=[files[index]], body=body)
+
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    assert violations == [], f"Work before midline exclusion must qualify: {violations}"
+
+
+@pytest.mark.parametrize("level", range(1, 7))
+@pytest.mark.parametrize("label", ["Do not touch", "Assumptions", "Deferred"])
+@pytest.mark.parametrize("heading_rel", ["same", "higher"])
+@pytest.mark.parametrize("chain_length", [2, 3])
+@pytest.mark.parametrize("verb,path_template", [("Import", "{path}"), ("Consume", "`{path}`")])
+def test_heading_exclusions_resume_at_same_or_higher_work_heading(
+        staged_flood, tmp_path, level, label, heading_rel, chain_length, verb, path_template):
+    """A same- or higher-level work heading ends a heading exclusion, resuming affirmative work."""
+    mod, _, _ = staged_flood
+    pdir = tmp_path / f"heading_resume_{level}_{heading_rel}_{chain_length}"
+    files = ["src/producer.ts", "src/intermediate.ts", "src/consumer.ts"]
+    write_slice(pdir, "ITEM-s01", files=[files[0]])
+    h = "#" * level
+    work_h = "# Work" if heading_rel == "higher" else f"{h} Work"
+    for index in range(1, chain_length):
+        consumer, producer = f"ITEM-s{index + 1:02}", f"ITEM-s{index:02}"
+        path = path_template.format(path=files[index - 1])
+        body = (f"Do not touch: none\n"
+                f"{h} {label}\nsrc/blocked.ts\n"
+                f"{work_h}\n{verb} {path}.\n"
+                f"Done when: test_{consumer.replace('-', '_')}.py passes.")
+        write_slice(pdir, consumer, deps=[producer], files=[files[index]], body=body)
+
+    violations, _ = mod.validate_slices("ITEM", pdir)
+    assert violations == [], f"Work after same/higher heading must qualify: {violations}"
 
 
 def test_independent_roots_pass(staged_flood, tmp_path):
