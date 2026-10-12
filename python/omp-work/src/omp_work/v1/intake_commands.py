@@ -353,20 +353,32 @@ def _revision_provenance(run_id: str, revision: int, artifact_bytes: dict[str, b
 
 
 def _assessment_views(
-    run_id: str, stored: IntakeRevisionView,
+    cur: Cursor, workspace_id: UUID, run_id: str, stored: IntakeRevisionView,
 ) -> tuple[IntakeAssessmentView, ...]:
     """Project each stored assessment onto the revision it assessed."""
     views = []
     for record in stored.body.assessments:
+        assessed = stored
+        supplied = record.assessment
         if record.assessment.revision != stored.revision:
-            continue
-        assessment = compute_settlement_assessment(stored.body, record.assessment)
-        receipts = {item.id: item for item in stored.body.derivations}
+            try:
+                assessed = read_revision(
+                    cur, workspace_id=workspace_id, run_id=run_id, revision=record.assessment.revision,
+                )
+            except IntakeRepositoryError as exc:
+                raise WorkStoreError("invalid_request") from exc
+            # Repository reconstruction associates receipts with the containing
+            # revision; carried assessments need their assessed revision instead.
+            supplied = supplied.model_copy(update={
+                "derivation_receipt_ids": [receipt.id for receipt in assessed.body.derivations],
+            })
+        assessment = compute_settlement_assessment(assessed.body, supplied)
+        receipts = {item.id: item for item in assessed.body.derivations}
         views.append(IntakeAssessmentView(
-            id=record.id, assessment=assessment, binding=stored.body.binding,
+            id=record.id, assessment=assessment, binding=assessed.body.binding,
             receipts=tuple(receipts[item] for item in assessment.derivation_receipt_ids if item in receipts),
-            unresolved_issues=open_issues(stored.body),
-            provenance=_revision_provenance(run_id, stored.revision, stored.artifact_bytes),
+            unresolved_issues=open_issues(assessed.body),
+            provenance=_revision_provenance(run_id, assessed.revision, assessed.artifact_bytes),
         ))
     for view in stored.assessments:
         # Stored findings and explicit issue links are the settlement input.
@@ -406,7 +418,7 @@ def read_intake_view(cur: Cursor, workspace_id: UUID, value: str) -> IntakeRecor
         stored = read_revision(cur, workspace_id=workspace_id, run_id=run_id, revision=revision)
     except IntakeRepositoryError as exc:
         raise WorkStoreError("invalid_request") from exc
-    assessments = _assessment_views(run_id, stored)
+    assessments = _assessment_views(cur, workspace_id, run_id, stored)
     proof = stored.assessments[-1].provenance if stored.assessments else None
     return IntakeRecordView(
         workspace_id=workspace_id, mission_id=head[0], run_id=run_id, revision=revision + 1,

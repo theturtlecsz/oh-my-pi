@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 
-from omp_work.intake_repository import append_assessment, read_revision
+from omp_work.intake_repository import AssessmentRecord, append_assessment, read_revision
 from omp_work.v1 import intake_provenance
 from omp_work.v1.api_models import IntakeAssessmentView
 from omp_work.v1.models import CommandEnvelope
@@ -15,6 +15,7 @@ from omp_work.v1.store_shared import WorkStoreError
 from test_nsi2_claims import intake_capability
 from test_nsi2_provenance_closure import RUN, advance, append_body, make_body
 from test_nsi2_repository import connection, locked, write_repository  # noqa: F401
+from test_nsi_schemas import ASSESSMENT
 from test_workflow_service import OWNER, _command, _grant, _owner_headers, service  # noqa: F401
 
 pytestmark = pytest.mark.skipif(
@@ -246,3 +247,30 @@ def test_ready_read_does_not_revive_obsolete_bounded_findings(service, write_rep
     assert result["assessments"][0]["assessment"]["status"] == "READY_FOR_RATIFICATION"
     assert result["assessments"][0]["assessment"]["gaps"] == []
     assert result["issues"] == []
+
+
+def test_current_read_keeps_carried_legacy_proof_but_not_prior_concrete_assessments(service, write_repository):
+    workspace_id, _ = write_repository
+    _grant(service, workspace_id)
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        body = make_body(workspace_id, relay=False)
+        body.assessments = [AssessmentRecord.model_validate(dict(
+            id="legacy-proof", assessment={**ASSESSMENT, "revision": 0},
+        ))]
+        append_body(cur, write_repository, body, uuid4(), -1)
+    assert _command(service, workspace_id, command())[0] == 200
+    historical = get(service, workspace_id, "@1")
+    legacy = next(view for view in historical["assessments"] if view["id"] == "legacy-proof")
+    assert len(historical["assessments"]) == 2
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        prior = read_revision(cur, workspace_id=workspace_id, run_id=RUN, revision=0)
+        later = advance(prior.body, 1)
+        later.assessments[0].id = "carried-proof"
+        append_body(cur, write_repository, later, uuid4(), 0)
+    current = get(service, workspace_id)
+    assert current["revision"] == 2
+    assert current["assessments"] == [{**legacy, "id": "carried-proof"}]
+    assert legacy["assessment"]["revision"] == legacy["binding"]["revision"] == 0
+    assert legacy["provenance"]["revision"] == 1
+    assert get(service, workspace_id, "@1") == historical
+    assert PostgresWorkStore(service.config).read(workspace_id, OWNER, "intake", RUN) == current
