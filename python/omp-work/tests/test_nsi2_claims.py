@@ -773,3 +773,81 @@ def test_execute_intake_record_claim_returns_four_key_dict_subclass(service, wri
         assert RecordIntakeClaimResult.model_validate(result).model_dump(mode="json") == expected_four_keys
         assert sha256(result) == sha256(expected_four_keys)
 
+
+def test_http_record_intake_claim_ontology_and_entity_validation(service, http_intake):
+    workspace_id, mission_id = http_intake
+    start_cmd = envelope(workspace_id, mission_id).command.model_dump(mode="json")
+    entity_subject_mismatch = {"id": "entity-svc", "type": "service"}
+    entity_target_mismatch = {"id": "entity-other", "type": "other"}
+    start_cmd["payload"]["entities"] = [ENTITY, entity_subject_mismatch, entity_target_mismatch]
+    start_cmd["payload"]["ontology"] = dict(predicates=[PREDICATE], dimensions=[])
+
+    assert _command(service, workspace_id, start_cmd)[0] == 200
+    assert _command(service, workspace_id, evidence_command(OWNER, "owner", expected_revision=1))[0] == 200
+
+    with connection(service, workspace_id) as conn:
+        baseline_heads = conn.execute(
+            "SELECT workspace_id, run_id, current_revision, mission_id FROM omp_work.intake_heads WHERE workspace_id=%s",
+            (workspace_id,),
+        ).fetchall()
+        baseline_revisions = conn.execute(
+            "SELECT workspace_id, run_id, revision FROM omp_work.intake_revisions WHERE workspace_id=%s ORDER BY revision",
+            (workspace_id,),
+        ).fetchall()
+
+    cases = [
+        # unknown predicate
+        claim_command(
+            OWNER,
+            "owner",
+            claim_id="claim-unknown-predicate",
+            expected_revision=2,
+            predicate_id="unknown_predicate",
+            subject=ENTITY,
+        ),
+        # stored subject type outside subject_types with ref matching storage
+        claim_command(
+            OWNER,
+            "owner",
+            claim_id="claim-subject-type-outside",
+            expected_revision=2,
+            predicate_id="depends_on",
+            subject=entity_subject_mismatch,
+        ),
+        # entity value missing target ID
+        claim_command(
+            OWNER,
+            "owner",
+            claim_id="claim-target-missing",
+            expected_revision=2,
+            predicate_id="depends_on",
+            subject=ENTITY,
+            value={"type": "entity", "value": {"id": "missing-entity", "type": "service"}},
+        ),
+        # stored target type outside object_types with ref matching storage
+        claim_command(
+            OWNER,
+            "owner",
+            claim_id="claim-target-type-outside",
+            expected_revision=2,
+            predicate_id="depends_on",
+            subject=ENTITY,
+            value={"type": "entity", "value": entity_target_mismatch},
+        ),
+    ]
+
+    for command in cases:
+        status, body = _command(service, workspace_id, command)
+        assert status == 400
+        assert body["error"]["code"] == "invalid_request"
+        with connection(service, workspace_id) as conn:
+            assert conn.execute(
+                "SELECT workspace_id, run_id, current_revision, mission_id FROM omp_work.intake_heads WHERE workspace_id=%s",
+                (workspace_id,),
+            ).fetchall() == baseline_heads
+            assert conn.execute(
+                "SELECT workspace_id, run_id, revision FROM omp_work.intake_revisions WHERE workspace_id=%s ORDER BY revision",
+                (workspace_id,),
+            ).fetchall() == baseline_revisions
+
+
