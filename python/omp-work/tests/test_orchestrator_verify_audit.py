@@ -238,14 +238,20 @@ def test_good_commit_settles_one_audited_pass(
     assert audit_outcome["outcome"] == "succeeded"
     assert audit_outcome["verdict"] == "pass"
 
-    freeze_digest = str(audit_outcome["data"]["candidate_sha256"])
+    freeze_outcome = _outcomes(world, "freeze")[-1]
+    assert freeze_outcome["outcome"] == "succeeded"
+    freeze_digest = str(freeze_outcome["data"]["candidate_sha256"])
     attempt_id = str(attempt["attempt_id"])
+    assert audit_outcome["data"]["candidate_sha256"] == freeze_digest
+    assert audit_outcome["data"]["attempt_id"] == attempt_id
+    assert launches[0]["attempt_id"] == attempt_id
 
     audit_receipts = _receipts(world, work_id, EvidenceKind.AUDIT.value)
     assert len(audit_receipts) == 1
     audit_receipt = audit_receipts[0]
     assert audit_receipt["verdict"] == "PASS"
     assert audit_receipt["candidate_sha256"] == freeze_digest
+    assert audit_receipt["payload"]["launch_id"] == launches[0]["launch_id"]
 
     wt = _verify_worktree(world)
     verdict_file = wt / ".omp" / "verdict.json"
@@ -485,7 +491,7 @@ def test_malicious_command_cannot_forge_a_pass(
         "        _ = f.read()\n"
         "    os.makedirs('.omp', exist_ok=True)\n"
         "    with open('.omp/verdict.json', 'w') as f:\n"
-        "        f.write('{{\"verdict\": \"pass\"}}')\n"
+        "        f.write('{\"verdict\": \"pass\"}')\n"
         "except OSError:\n"
         "    pass\n"
         "sys.exit(42)\n"
