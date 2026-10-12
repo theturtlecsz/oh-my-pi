@@ -5,6 +5,7 @@ from typing import NamedTuple, NoReturn
 
 from psycopg import Cursor
 
+from ..contracts.nsi.v1 import models as nsi
 from ..contracts.nsi.v1.compat import (
     NsiBoundedEvaluation,
     bounded_to_nsi,
@@ -13,22 +14,264 @@ from ..contracts.nsi.v1.compat import (
     nsi_to_bounded,
 )
 from ..contracts.nsi.v1.models import AcceptanceCriterion, IntakeContract, RequirementClause
-from ..intake_repository import IntakeRevisionBody
+from ..intake_repository import DecisionRecord, IntakeRevisionBody
+from .api_models import IntakeDecisionRecord, IntakeIssueRecord
+from .intake_decisions import _latest_findings, unresolved_findings
 from .intake_provenance_closure import ProvenanceClosure, resolve_provenance_closure
 from .store_shared import WorkStoreError
+
+
+class ProvenanceSettlement(NamedTuple):
+    settlement: IntakeRevisionBody
+    links: dict[str, tuple[str, ...]]
+    unresolved: tuple[nsi.Gap | nsi.Conflict | nsi.ClarificationQuestion, ...]
+
+    @property
+    def copy(self) -> IntakeRevisionBody:
+        return self.settlement
+
+    @property
+    def body(self) -> IntakeRevisionBody:
+        return self.settlement
+
+    @property
+    def gap_links(self) -> dict[str, tuple[str, ...]]:
+        return self.links
+
+    @property
+    def unresolved_findings(
+        self,
+    ) -> tuple[nsi.Gap | nsi.Conflict | nsi.ClarificationQuestion, ...]:
+        return self.unresolved
 
 
 class ProvenanceEvaluation(NamedTuple):
     findings: NsiBoundedEvaluation
     contract: IntakeContract
+    settlement: ProvenanceSettlement | None = None
+
+
+def closure_document(
+    body: IntakeRevisionBody,
+    resolved: ProvenanceClosure,
+    contract: IntakeContract,
+    settlement: ProvenanceSettlement,
+) -> dict[str, object]:
+    """Bind the complete proof and original history, independent of prior assessments.
+
+    ``closure_hash(document)`` supplies both claim-set and source binding slots;
+    ``contract_hash(contract)`` supplies the contract slot. Revision hashes and
+    placeholder bindings are deliberately not inputs to either digest.
+    """
+    excluded = {"binding", "artifact_bytes", "assessments", "derivations"}
+    return {
+        "body": body.model_dump(mode="json", exclude=excluded),
+        # Sources contain only decodable text. Bind all bytes independently,
+        # including unreferenced binary artifacts, without a lossy text decode.
+        "artifact_bytes_hex": {
+            artifact_id: payload.hex() for artifact_id, payload in body.artifact_bytes.items()
+        },
+        "provenance": resolved.closure.model_dump(mode="json"),
+        "assertions": [
+            {"claim_id": assertion.claim_id, "operation": assertion.operation.model_dump(mode="json")}
+            for assertion in resolved.assertions
+        ],
+        "truths": [list(item) for item in resolved.truths],
+        "ready": resolved.ready,
+        "contract": contract.model_dump(mode="json"),
+        "settlement": {
+            "body": settlement.body.model_dump(mode="json", exclude=excluded),
+            "conflict_gap_links": {key: list(value) for key, value in settlement.links.items()},
+            "unresolved": [item.model_dump(mode="json") for item in settlement.unresolved],
+        },
+    }
 
 
 def _refuse(diagnostic: str) -> NoReturn:
     raise WorkStoreError("invalid_request", (diagnostic,))
 
 
+def _is_bounded_derived_id(finding_id: str) -> bool:
+    return finding_id.startswith((
+        "gap:constraint:",
+        "gap:oracle:",
+        "gap:authority:",
+        "conflict:constraint:",
+        "question:constraint:",
+        "question:oracle:",
+        "question:authority:",
+    ))
+
+
+def settle_provenance(
+    body: IntakeRevisionBody,
+    resolved: ProvenanceClosure,
+    evaluation: ProvenanceEvaluation | NsiBoundedEvaluation | None = None,
+) -> ProvenanceSettlement:
+    """Merge derived/persisted findings, reconcile decisions, and settle a deep evaluation copy."""
+    if evaluation is None:
+        evaluation = evaluate_provenance_projection(body, resolved, settle=False)
+    if isinstance(evaluation, ProvenanceEvaluation):
+        derived = evaluation.findings
+    else:
+        derived = evaluation
+
+    persisted_findings, persisted_gap_links = _latest_findings(body)
+
+    derived_gaps = {g.id: g for g in derived.gaps}
+    derived_conflicts = {c.id: c for c in derived.conflicts}
+    derived_questions = {q.id: q for q in derived.questions}
+
+    # 1. Gaps: refresh derived, remove obsolete bounded-derived, keep unrelated persisted.
+    merged_gaps: dict[str, nsi.Gap] = {}
+    for gid, gap in derived_gaps.items():
+        merged_gaps[gid] = gap.model_copy(deep=True)
+    for fid, finding in persisted_findings.items():
+        if isinstance(finding, nsi.Gap) and fid not in merged_gaps:
+            if not _is_bounded_derived_id(fid):
+                merged_gaps[fid] = finding.model_copy(deep=True)
+
+    # 2. Conflicts: refresh derived, remove obsolete bounded-derived, keep unrelated persisted.
+    merged_conflicts: dict[str, nsi.Conflict] = {}
+    for cid, conflict in derived_conflicts.items():
+        merged_conflicts[cid] = conflict.model_copy(deep=True)
+    for fid, finding in persisted_findings.items():
+        if isinstance(finding, nsi.Conflict) and fid not in merged_conflicts:
+            if not _is_bounded_derived_id(fid):
+                merged_conflicts[fid] = finding.model_copy(deep=True)
+
+    # 3. Questions:
+    # Preserve surviving question conflict links; regenerated questions cannot erase live conflicts.
+    # Trim only removed targets.
+    merged_questions: dict[str, nsi.ClarificationQuestion] = {}
+    for qid, q in derived_questions.items():
+        persisted_q = persisted_findings.get(qid)
+        persisted_conflicts = (
+            list(persisted_q.conflict_ids)
+            if isinstance(persisted_q, nsi.ClarificationQuestion)
+            else []
+        )
+        combined_conflicts = list(dict.fromkeys([*q.conflict_ids, *persisted_conflicts]))
+        surviving_conflicts = [cid for cid in combined_conflicts if cid in merged_conflicts]
+        surviving_gaps = [gid for gid in q.gap_ids if gid in merged_gaps]
+        merged_questions[qid] = q.model_copy(deep=True, update={
+            "conflict_ids": surviving_conflicts,
+            "gap_ids": surviving_gaps,
+        })
+    for fid, finding in persisted_findings.items():
+        if isinstance(finding, nsi.ClarificationQuestion) and fid not in merged_questions:
+            if not _is_bounded_derived_id(fid):
+                surviving_conflicts = [cid for cid in finding.conflict_ids if cid in merged_conflicts]
+                surviving_gaps = [gid for gid in finding.gap_ids if gid in merged_gaps]
+                merged_questions[fid] = finding.model_copy(deep=True, update={
+                    "conflict_ids": surviving_conflicts,
+                    "gap_ids": surviving_gaps,
+                })
+
+    # 4. Conflict-to-gap links:
+    # Preserve latest persisted conflict-to-gap links, including empty overrides.
+    # Trim only removed targets.
+    links: dict[str, tuple[str, ...]] = {}
+    for cid in merged_conflicts:
+        if cid in persisted_gap_links:
+            links[cid] = tuple(gid for gid in persisted_gap_links[cid] if gid in merged_gaps)
+        else:
+            links[cid] = ()
+
+    # 5. Build deep evaluation copy:
+    settlement_copy = body.model_copy(deep=True)
+    settlement_copy.gaps = list(merged_gaps.values())
+    settlement_copy.conflicts = list(merged_conflicts.values())
+    settlement_copy.questions = list(merged_questions.values())
+
+    settlement_copy.history.issues = [
+        IntakeIssueRecord(issue=conflict.model_copy(deep=True), gaps=links.get(conflict.id, ()))
+        for conflict in settlement_copy.conflicts
+    ] + [
+        IntakeIssueRecord(issue=question.model_copy(deep=True), gaps=tuple(question.gap_ids))
+        for question in settlement_copy.questions
+    ]
+
+    # 6. Reconcile body.decisions AND history.decisions with current question/claim membership:
+    # Exclude obsolete targets from this copy, retain original owner coverage and supersession semantics for survivors.
+    # Never broaden coverage or mutate history.
+    current_question_ids = set(merged_questions.keys())
+    snapshot_claim_ids = {c.id for c in settlement_copy.snapshot.claims}
+
+    # Identify original history decisions and supersessions before filtering
+    original_history_by_id = {d.decision.id: d for d in settlement_copy.history.decisions}
+    original_superseded = {
+        d.superseded_decision_id
+        for d in settlement_copy.history.decisions
+        if d.superseded_decision_id is not None
+    }
+
+    # Step 1: Filter history decisions with current question/claim membership
+    reconciled_history_decisions: list[IntakeDecisionRecord] = []
+    for d in settlement_copy.history.decisions:
+        if d.decision.question_id in current_question_ids and set(d.claim_ids) <= snapshot_claim_ids:
+            reconciled_history_decisions.append(d.model_copy(deep=True))
+
+    # Preserve supersession exclusions from original history:
+    # A decision that was superseded in original history must not reactivate as an active survivor.
+    # It can only remain in history if a surviving decision still supersedes it.
+    while True:
+        surviving_superseded_ids = {
+            d.superseded_decision_id
+            for d in reconciled_history_decisions
+            if d.superseded_decision_id is not None
+        }
+        pruned = [
+            d for d in reconciled_history_decisions
+            if d.decision.id not in original_superseded or d.decision.id in surviving_superseded_ids
+        ]
+        if len(pruned) == len(reconciled_history_decisions):
+            break
+        reconciled_history_decisions = pruned
+
+    settlement_copy.history.decisions = reconciled_history_decisions
+
+    # Step 2: Reconcile body.decisions.
+    # Original history has precedence over body.decisions.
+    # If a decision existed in original history:
+    # - If its original history coverage is obsolete (question or claims removed),
+    #   it is obsolete and must NOT fall back to broader body.decisions coverage.
+    # - If it was superseded in original history, it must NOT be an active decision in body.decisions.
+    # - If it survives, its coverage must match original history (never broadened).
+    # If a decision was NOT in original history (snapshot-only):
+    # - It survives if its question and claims are in current membership.
+    reconciled_body_decisions: list[DecisionRecord] = []
+    for d in settlement_copy.decisions:
+        if d.decision.question_id not in current_question_ids:
+            continue
+        if d.decision.id in original_history_by_id:
+            orig = original_history_by_id[d.decision.id]
+            if orig.decision.id in original_superseded:
+                continue
+            if orig.decision.question_id not in current_question_ids:
+                continue
+            if not (set(orig.claim_ids) <= snapshot_claim_ids):
+                continue
+            reconciled_body_decisions.append(
+                d.model_copy(deep=True, update={"settled_claim_ids": list(orig.claim_ids)})
+            )
+        else:
+            if set(d.settled_claim_ids) <= snapshot_claim_ids:
+                reconciled_body_decisions.append(d.model_copy(deep=True))
+    settlement_copy.decisions = reconciled_body_decisions
+
+    unresolved = unresolved_findings(settlement_copy)
+    return ProvenanceSettlement(settlement=settlement_copy, links=links, unresolved=unresolved)
+
+
+settle_provenance_findings = settle_provenance
+
+
 def evaluate_provenance_projection(
-    body: IntakeRevisionBody, resolved: ProvenanceClosure,
+    body: IntakeRevisionBody,
+    resolved: ProvenanceClosure,
+    *,
+    settle: bool = True,
 ) -> ProvenanceEvaluation:
     """Return findings and the actual traced contract for a locked revision.
 
@@ -96,9 +339,15 @@ def evaluate_provenance_projection(
         "requirements": [item.model_copy(deep=True) for item in requirements.values()],
         "acceptance_criteria": [item.model_copy(deep=True) for item in criteria.values()],
     })
-    return ProvenanceEvaluation(findings=findings, contract=contract)
+    settlement = settle_provenance(body, resolved, findings) if settle else None
+    return ProvenanceEvaluation(findings=findings, contract=contract, settlement=settlement)
 
 
 def evaluate_intake_provenance(cur: Cursor, body: IntakeRevisionBody) -> ProvenanceEvaluation:
     """Resolve persisted proof and analyze the caller's locked body without writes."""
     return evaluate_provenance_projection(body, resolve_provenance_closure(cur, body))
+
+
+def settle_intake_provenance(cur: Cursor, body: IntakeRevisionBody) -> ProvenanceSettlement:
+    """Resolve persisted proof and settle findings on a deep evaluation copy."""
+    return settle_provenance(body, resolve_provenance_closure(cur, body))
