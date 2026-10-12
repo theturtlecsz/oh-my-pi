@@ -33,6 +33,46 @@ def _require(condition: bool) -> None:
         raise WorkStoreError("invalid_request")
 
 
+def _latest_findings(body: IntakeRevisionBody) -> tuple[
+    dict[str, nsi.Gap | nsi.Conflict | nsi.ClarificationQuestion], dict[str, tuple[str, ...]],
+]:
+    """Body findings override history; the last conflict record owns its gap links."""
+    findings: dict[str, nsi.Gap | nsi.Conflict | nsi.ClarificationQuestion] = {}
+    gap_links: dict[str, tuple[str, ...]] = {}
+    for record in body.history.issues:
+        findings[record.issue.id] = record.issue
+        if isinstance(record.issue, nsi.Conflict):
+            gap_links[record.issue.id] = record.gaps
+    for finding in [*body.gaps, *body.conflicts, *body.questions]:
+        findings[finding.id] = finding
+    return findings, gap_links
+
+
+def _settlement_membership(
+    body: IntakeRevisionBody, question: nsi.ClarificationQuestion,
+    findings: dict[str, nsi.Gap | nsi.Conflict | nsi.ClarificationQuestion],
+    gap_links: dict[str, tuple[str, ...]],
+) -> tuple[set[str], set[str]]:
+    """Resolve current settlement targets and validate their snapshot claim references."""
+    current = findings.get(question.id)
+    _require(isinstance(current, nsi.ClarificationQuestion))
+    linked = {current.id, *current.conflict_ids}
+    gap_ids = set(current.gap_ids)
+    required: set[str] = set()
+    for conflict_id in current.conflict_ids:
+        conflict = findings.get(conflict_id)
+        _require(isinstance(conflict, nsi.Conflict))
+        required.update(conflict.claim_ids)
+        gap_ids.update(gap_links.get(conflict_id, ()))
+    for gap_id in gap_ids:
+        gap = findings.get(gap_id)
+        _require(isinstance(gap, nsi.Gap))
+        required.add(gap.premise_id)
+    _require(required <= {claim.id for claim in body.snapshot.claims})
+    linked.update(gap_ids)
+    return linked, required
+
+
 def _relay(cur: Cursor, envelope: CommandEnvelope, mission_id: UUID) -> dict[str, object] | None:
     payload = envelope.command.payload
     ref = payload.verified_relay_operation_id
@@ -77,15 +117,10 @@ def _decision(cur: Cursor, envelope: CommandEnvelope, actor: nsi.ActorRef,
     _require(bool(payload.claim_ids) and len(payload.claim_ids) == len(set(payload.claim_ids)))
     claims = {c.id: c for c in body.snapshot.claims}
     _require(set(payload.claim_ids) <= claims.keys())
-    question = next((q for q in body.questions if q.id == decision.question_id), None)
-    _require(question is not None)
-    conflicts = {c.id: c for c in body.conflicts}
-    gaps = {g.id: g for g in body.gaps}
-    required = {cid for issue_id in question.conflict_ids for cid in conflicts[issue_id].claim_ids}
-    gap_ids = set(question.gap_ids)
-    gap_ids.update(gap_id for record in body.history.issues
-                   if record.issue.id in question.conflict_ids for gap_id in record.gaps)
-    required.update(gaps[issue_id].premise_id for issue_id in gap_ids)
+    findings, gap_links = _latest_findings(body)
+    question = findings.get(decision.question_id)
+    _require(isinstance(question, nsi.ClarificationQuestion))
+    _, required = _settlement_membership(body, question, findings, gap_links)
     _require(required <= set(payload.claim_ids))
     history = body.history
     _require(all(d.decision.id != decision.id for d in history.decisions))
@@ -250,12 +285,15 @@ def open_issues(body: IntakeRevisionBody) -> tuple[IntakeIssueRecord, ...]:
     """Only an owner settlement closes a question and its linked findings."""
     superseded = {d.superseded_decision_id for d in body.history.decisions}
     resolved = {d.decision.question_id for d in body.history.decisions if d.decision.id not in superseded}
-    for question in body.questions:
-        if question.id in resolved:
-            resolved.update(question.gap_ids + question.conflict_ids)
-    records = {i.issue.id: i for i in body.history.issues}
-    for issue in [*body.conflicts, *body.questions]:
-        records.setdefault(issue.id, IntakeIssueRecord(
-            issue=issue, gaps=tuple(issue.gap_ids) if isinstance(issue, nsi.ClarificationQuestion) else (),
-        ))
-    return tuple(i for i in records.values() if i.issue.id not in resolved)
+    findings, gap_links = _latest_findings(body)
+    for question_id in tuple(resolved):
+        question = findings.get(question_id)
+        _require(isinstance(question, nsi.ClarificationQuestion))
+        linked, _ = _settlement_membership(body, question, findings, gap_links)
+        resolved.update(linked)
+    return tuple(IntakeIssueRecord(
+        issue=issue,
+        gaps=tuple(issue.gap_ids) if isinstance(issue, nsi.ClarificationQuestion)
+        else gap_links.get(issue.id, ()),
+    ) for issue in findings.values()
+        if isinstance(issue, (nsi.Conflict, nsi.ClarificationQuestion)) and issue.id not in resolved)
