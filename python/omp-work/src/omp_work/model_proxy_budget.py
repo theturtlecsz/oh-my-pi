@@ -54,7 +54,12 @@ from omp_work.jobs.store import (
     TransactionDeadlineExceeded,
 )
 from omp_work.jobs.usage import record_usage, validate_usage_counts
-from omp_work.model_proxy_upstream import Prepared
+from omp_work.model_proxy_upstream import (
+    ModelProxyUpstream,
+    Prepared,
+    UpstreamRefused,
+    UpstreamResult,
+)
 from omp_work.operations.config import OperationsConfig
 from omp_work.project_store import ProjectAuthorityRefused, ProjectStoreMixin
 from omp_work.spend_budget import SpendDecision
@@ -255,6 +260,57 @@ class ModelProxyBudget:
 
     acquire_captured_locks = lock_captured_identity
     acquire_locks = lock_captured_identity
+
+    def call(
+        self,
+        workspace_id: UUID | str,
+        actor_id: UUID | str,
+        project_id: UUID | str | None,
+        mission_id: UUID | str | None,
+        work_id: UUID | str,
+        job_id: str | None,
+        worker_id: str | None,
+        fence: int | None,
+        request_id: str,
+        task_ceiling_usd: Decimal | str | None,
+        prepared: Prepared,
+        upstream: ModelProxyUpstream,
+        *,
+        role: str = "model_call",
+        operation_id: str | None = None,
+        now: datetime | None = None,
+    ) -> dict[str, object]:
+        """Send once under admission locks, returning durable accounting only."""
+        with self.admit(
+            workspace_id, actor_id, project_id, mission_id, work_id, job_id,
+            worker_id, fence, request_id, task_ceiling_usd, prepared,
+            role=role, operation_id=operation_id, now=now,
+        ) as admission:
+            if admission.settled:
+                return admission._finish_settlement(admission._state.receipt)
+            admission._state.consumed = True
+            try:
+                result = upstream.invoke(prepared)
+            except UpstreamRefused:
+                # This exception alone proves no bytes were sent.
+                admission._state.consumed = False
+                admission.abort()
+                raise ModelProxyBudgetError("upstream_refused") from None
+            except BaseException:
+                admission.settle_unmeasurable_failure()
+            if not _valid_upstream_result(result, prepared):
+                admission.settle_unmeasurable_failure()
+            try:
+                return admission.settle(
+                    actual_usd=result.usd, input_tokens=result.input_tokens,
+                    output_tokens=result.output_tokens, cache_tokens=result.cache_tokens,
+                    price_version=result.price_version,
+                )
+            except BaseException as error:
+                if isinstance(error, ModelProxyBudgetError) and error.code == "accounting_unconfirmed":
+                    raise
+                # Settlement already reconciles failed writes through s04.
+                raise ModelProxyBudgetError("unmeasurable_failure") from None
 
     def admit(
         self,
@@ -514,6 +570,7 @@ class _Settlement:
 @dataclass
 class _AdmissionState:
     settled: bool = False
+    consumed: bool = False
     closed: bool = False
     receipt: dict[str, object] | None = None
     unresolved: _Settlement | None = None
@@ -1066,6 +1123,8 @@ class ModelCallAdmission:
         with self._state.transition:
             if self.closed:
                 return
+            if self._state.consumed:
+                self.settle_unmeasurable_failure()
             self._close(ModelProxyBudgetError("aborted_before_send"))
 
     def __enter__(self) -> Self:
@@ -1419,6 +1478,31 @@ def _refuse_if_stopped(
 ) -> None:
     if read_stop_state(cur, workspace_id)["stopped"]:
         raise ModelProxyBudgetError("agent_stop_engaged", "agent stop is engaged")
+
+
+def _valid_upstream_result(result: object, prepared: Prepared) -> bool:
+    """Validate complete provider accounting once, without usage coercion."""
+    if not isinstance(result, UpstreamResult):
+        return False
+    counts = (result.input_tokens, result.output_tokens, result.cache_tokens)
+    if any(isinstance(n, bool) or not isinstance(n, int) or n < 0 for n in counts):
+        return False
+    if not isinstance(result.usd, Decimal) or not result.usd.is_finite() or result.usd < 0:
+        return False
+    route = prepared.route
+    expected = (
+        route.input_usd * result.input_tokens
+        + route.output_usd * result.output_tokens
+        + route.cache_usd * result.cache_tokens
+    ) / Decimal(1_000_000)
+    return (
+        result.price_version == route.price_version
+        and result.usd == expected
+        and result.input_tokens + result.cache_tokens <= prepared.max_input_tokens
+        and result.output_tokens <= prepared.max_output_tokens
+        and sum(counts) <= prepared.max_tokens
+        and result.usd <= prepared.max_usd
+    )
 
 
 def _require_prepared(prepared: object) -> None:
