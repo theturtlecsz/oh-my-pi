@@ -211,7 +211,7 @@ def create_app(config: ProxyConfig, *, transport: Transport | None = None) -> Fa
                 item_b = item_budget(cur, task.workspace_id, root)
                 item_used = item_spend(cur, task.workspace_id, root).usd
                 if item_b is not None:
-                    remaining = min(remaining, item_b.usd - item_used)
+                    remaining = min(remaining, Decimal(item_b.usd) - item_used)
                 # s01 task ceilings include already recorded work spend.
                 work_used = item_spend(cur, task.workspace_id, task.work_id).usd
                 if task.ceiling_usd <= work_used or task.ceiling_usd - work_used > remaining:

@@ -9,14 +9,19 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
+from decimal import Decimal
 import hashlib
 import json
+import logging
+import os
 from pathlib import Path
 import re
 import shlex
 import subprocess
 import sys
+import tempfile
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import ValidationError
@@ -24,12 +29,15 @@ from pydantic import ValidationError
 import omp_work
 from omp_work import control_actions, event_push
 from omp_work.action_classify import ResolvedTarget, classify, parse_submission
+from omp_work.jobs.budget import item_budget, item_spend, root_work_id
+from omp_work.jobs.store import NativeJobStore
 from omp_work.mission_intake_rules import scope_draft
 from omp_work.operations import database, fingerprints
 from omp_work.operations.capabilities import provision_task_capability
 from omp_work.orchestrator import (
     candidate_git,
     merge_gate,
+    model_proxy_client,
     service,
     verifier,
     verify_candidate,
@@ -707,6 +715,9 @@ def _sandbox(
     *,
     identity: str = "worker",
     ro_binds: Sequence[str | Path] = (),
+    model_proxy: tuple[str, int] | None = None,
+    model_token: str | None = None,
+    manifest_path: Path | None = None,
 ) -> int | None:
     """Run ``argv`` in the worker jail until the stage lease expires.
 
@@ -740,10 +751,115 @@ def _sandbox(
             workservice_socket=ctx.config.workservice_url,
             identity=identity,
             ro_binds=ro_binds,
+            model_proxy=model_proxy,
+            model_token=model_token,
+            manifest_path=manifest_path,
             timeout=remaining,
         )
     except subprocess.TimeoutExpired:
         return None
+
+
+def _worker_ceiling(ctx: StageContext) -> Decimal:
+    """Task ceiling includes work spend plus unused item/project/mission room."""
+    jobs = NativeJobStore(ctx.config.ops)
+    with jobs.transaction(ctx.workspace_id, ctx.principal.actor_id) as cur:
+        project_budget, _ = ctx.projects._load_budget(
+            cur, ctx.workspace_id, ctx.project_id, None
+        )
+        mission_budget, _ = ctx.projects._load_budget(
+            cur, ctx.workspace_id, ctx.project_id, ctx.mission_id
+        )
+        budgets = [b for b in (project_budget, mission_budget) if b is not None]
+        if not budgets:
+            raise WorkError("ceiling_refused")
+        spent = ctx.projects._spent_by_budget(
+            cur, ctx.workspace_id, ctx.project_id, ctx.mission_id,
+            mission_budget, project_budget,
+        )
+        room = min(b.ceiling_usd - spent[b.budget_id] for b in budgets)
+        root = root_work_id(cur, ctx.workspace_id, str(ctx.lease.job_id))
+        budget = item_budget(cur, ctx.workspace_id, root)
+        if budget is not None:
+            room = min(room, Decimal(budget.usd) - item_spend(cur, ctx.workspace_id, root).usd)
+        if room <= 0:
+            raise WorkError("ceiling_refused")
+        return item_spend(cur, ctx.workspace_id, ctx.work_id).usd + room
+
+
+def _worker_approach(ctx: StageContext) -> list[str]:
+    try:
+        view = ctx.service.read(
+            ctx.principal, ctx.workspace_id, "execution",
+            str(service._ids(ctx.mission_id, "grant")),
+        )
+        item = next(
+            (it for it in view["items"] if str(it["work_id"]) == str(ctx.work_id)),
+            view.get("active_item") or {},
+        )
+        return list(item["plan_stamp"]["approach"])
+    except (WorkError, KeyError, TypeError):
+        intake = ctx.request["intake"]
+        return [intake["goal"]["statement"], *(
+            constraint["statement"] for constraint in intake.get("constraints", ())
+        )]
+
+
+def _run_model_worker(ctx: StageContext, argv: Sequence[str], worktree: Path) -> int | None:
+    if not ctx.config.model_proxy_url or not Path(argv[0]).is_absolute():
+        raise WorkError("invalid_request")
+    expires_at = ctx.lease_expires_at()
+    if expires_at is None or expires_at <= datetime.now(UTC):
+        return None
+    ceiling = _worker_ceiling(ctx)
+    base_url = ctx.config.model_proxy_url.rstrip("/")
+    grant = model_proxy_client.register(
+        ctx.config.automation_capability_path, base_url,
+        {
+            "workspace_id": str(ctx.workspace_id), "project_id": str(ctx.project_id),
+            "mission_id": str(ctx.mission_id), "work_id": str(ctx.work_id),
+            "job_id": str(ctx.lease.job_id), "worker_id": ctx.lease.worker_id,
+            "fence": ctx.lease.fence, "stage": "implement",
+            "expires_at": expires_at.isoformat(), "ceiling_usd": str(ceiling),
+        },
+    )
+    manifest_path = None
+    try:
+        descriptor = grant["descriptor"]
+        manifest = {
+            "version": 1, "instruction": ctx.request["instruction"]["text"],
+            "approach": _worker_approach(ctx),
+            "allowed_paths": list(ctx.request.get("allowed_paths") or ()),
+            "candidate_id": str(service._ids(ctx.mission_id, "plan-candidate")),
+            "lease_expires_at": expires_at.isoformat(),
+            "model": {
+                "api": descriptor["api"], "id": descriptor["id"],
+                "limits": {
+                    "context_window": descriptor["limits"]["context_tokens"],
+                    "max_output_tokens": descriptor["limits"]["max_output_tokens"],
+                },
+                "proxy": {"baseUrl": base_url},
+            },
+        }
+        fd, name = tempfile.mkstemp(prefix="omp-worker-", suffix=".json")
+        manifest_path = Path(name)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(manifest, stream)
+        endpoint = urlsplit(base_url)
+        return _sandbox(
+            ctx, argv, worktree, ro_binds=(Path(argv[0]), manifest_path),
+            model_proxy=(endpoint.hostname, endpoint.port or (443 if endpoint.scheme == "https" else 80)),
+            model_token=grant["model_token"], manifest_path=manifest_path,
+        )
+    finally:
+        if manifest_path is not None:
+            manifest_path.unlink(missing_ok=True)
+        try:
+            model_proxy_client.revoke_task(
+                ctx.config.automation_capability_path, base_url, grant["id"]
+            )
+        except Exception:
+            logging.getLogger(__name__).exception("Model task revocation failed")
 
 
 def run_implement(ctx: StageContext) -> Outcome:
@@ -768,7 +884,14 @@ def run_implement(ctx: StageContext) -> Outcome:
         "repair_round": ctx.repair_round,
     }
     try:
-        code = _sandbox(ctx, argv, worktree)
+        code = (
+            _run_model_worker(ctx, argv, worktree)
+            if Path(argv[0]).name == "orchestrator-worker"
+            else _sandbox(ctx, argv, worktree)
+        )
+    except WorkError as err:
+        data["code"] = err.code
+        return Outcome(outcome="failed", data=data)
     except worker_sandbox.WorkerSandboxRefused as err:
         data["code"] = err.code
         return Outcome(outcome="crashed", data=data)
