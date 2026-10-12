@@ -46,7 +46,12 @@ from uuid import UUID
 import psycopg
 
 from omp_work.jobs.budget import item_budget, item_spend, root_work_id
-from omp_work.jobs.store import JobError, NativeJobStore, TransactionDeadlineExceeded
+from omp_work.jobs.store import (
+    JobError,
+    NativeJobStore,
+    TransactionDeadline,
+    TransactionDeadlineExceeded,
+)
 from omp_work.jobs.usage import record_usage, validate_usage_counts
 from omp_work.model_proxy_upstream import Prepared
 from omp_work.operations.config import OperationsConfig
@@ -335,9 +340,12 @@ class ModelProxyBudget:
         if isinstance(owner, ModelCallAdmission):
             return owner._resolve_retained_replay(receipt_request)
         retained = False
+        deadline_control = TransactionDeadline()
         try:
             cur = owner.stack.enter_context(
-                self._jobs.transaction(workspace_uuid, actor_uuid)
+                self._jobs.transaction(
+                    workspace_uuid, actor_uuid, deadline_control=deadline_control
+                )
             )
 
             # Serialize this identity across processes before fresh authorization.
@@ -365,6 +373,7 @@ class ModelProxyBudget:
                     request_id=request_id, operation_id=operation_id, role=role,
                     prepared=prepared, decision=None, _identity=identity,
                     _receipt_request=canonical_json(receipt_request),
+                    _deadline_control=deadline_control,
                 )
                 # Commit the read, then publish settled and release this owner once.
                 # A commit exception happens before return: keep the owner reachable
@@ -470,6 +479,7 @@ class ModelProxyBudget:
                 decision=decision,
                 _identity=identity,
                 _receipt_request=canonical_json(receipt_request),
+                _deadline_control=deadline_control,
             )
         except BaseException as error:
             # Retained replay owners stay until a later identical admit resolves
@@ -520,6 +530,7 @@ class ModelCallAdmission:
     decision: SpendDecision | None
     _identity: str
     _receipt_request: str
+    _deadline_control: TransactionDeadline | None = field(default=None, repr=False)
     _state: _AdmissionState = field(default_factory=_AdmissionState, init=False)
 
     @property
@@ -592,6 +603,8 @@ class ModelCallAdmission:
                 }
                 return usd, counted, canonical_json(payload)
 
+            total_deadline = time.monotonic() + 5.0
+
             # Completed or unresolved accounting may only replay its captured
             # payload. Malformed retries conflict; they never trigger fallback.
             if self._state.receipt is not None or self._state.unresolved is not None:
@@ -607,73 +620,129 @@ class ModelCallAdmission:
                     return {**self._state.receipt["result"], "actual_usd": usd}
                 if self._state.unresolved.payload != payload:
                     raise ModelProxyBudgetError("idempotency_conflict", "settlement payload changed")
-                return self._resolve()
+                return self._resolve(deadline=total_deadline)
 
-            captured: _Settlement | None = None
+            # Capture bound, receipt intent/identity and SpendDecision before writes.
+            bound = self._admitted_bound_payload()
+            bound["actual_usd"] = _decimal_text(self.max_usd)
+            bound_settlement = _Settlement(canonical_json(bound), self.decision)
+            captured = bound_settlement
+
+            # Arm original with <=1s including cleanup, retaining lookup/fallback reserves; never reset total deadline.
+            now = time.monotonic()
+            if self._deadline_control is not None and self._deadline_control.deadline is None:
+                arm_duration = min(1.0, max(0.0, total_deadline - now - 3.0))
+                self._deadline_control.arm(now + arm_duration)
+
             write_error: BaseException | None = None
-            try:
-                bound = self._admitted_bound_payload()
-                bound["actual_usd"] = _decimal_text(self.max_usd)
-                bound_settlement = _Settlement(canonical_json(bound), self.decision)
-                captured = bound_settlement
-                # Admission locks predate this savepoint. Explicit rollback
-                # confirms that only settlement effects were discarded; unlike
-                # transaction context cleanup, rollback errors cannot be ignored.
-                with self._cur.connection.transaction(savepoint_name="model_call_settlement"):
-                    try:
-                        usd, counted, payload = build_payload()
-                        if usd > self.max_usd:
-                            raise ModelProxyBudgetError(
-                                "usage_exceeds_admission",
-                                f"actual USD {usd} exceeds admitted bound {self.max_usd}",
+            original_error: BaseException | None = None
+            receipt: dict[str, object] | None = None
+
+            conn = getattr(self._cur, "connection", None)
+            is_broken = conn is None or getattr(conn, "closed", False)
+
+            if is_broken:
+                original_error = psycopg.OperationalError("connection closed before settlement")
+            else:
+                try:
+                    with self._cur.connection.transaction(savepoint_name="model_call_settlement"):
+                        try:
+                            usd, counted, payload = build_payload()
+                            if usd > self.max_usd:
+                                raise ModelProxyBudgetError(
+                                    "usage_exceeds_admission",
+                                    f"actual USD {usd} exceeds admitted bound {self.max_usd}",
+                                )
+                            if counted > self.max_tokens:
+                                raise ModelProxyBudgetError(
+                                    "usage_exceeds_admission",
+                                    f"actual tokens {counted} exceed admitted bound {self.max_tokens}",
+                                )
+                            captured = _Settlement(payload, self.decision)
+                            receipt = self._persist(self._cur, captured)
+                        except BaseException as error:
+                            write_error = error
+                            conflict = (
+                                isinstance(error, (JobError, ModelProxyBudgetError))
+                                and error.code == "idempotency_conflict"
                             )
-                        if counted > self.max_tokens:
-                            raise ModelProxyBudgetError(
-                                "usage_exceeds_admission",
-                                f"actual tokens {counted} exceed admitted bound {self.max_tokens}",
-                            )
-                        captured = _Settlement(payload, self.decision)
-                        receipt = self._persist(self._cur, captured)
-                    except BaseException as error:
-                        write_error = error
-                        # Choose accounting before rollback: even rollback itself
-                        # can fail. A conflict must never rewrite existing rows.
-                        conflict = (
-                            isinstance(error, (JobError, ModelProxyBudgetError))
-                            and error.code == "idempotency_conflict"
-                        )
-                        if not conflict:
-                            captured = _Settlement(
-                                bound_settlement.payload, self.decision, error,
-                            )
+                            if not conflict:
+                                captured = _Settlement(
+                                    bound_settlement.payload, self.decision, error,
+                                )
+                            self._state.unresolved = captured
+                            self._state.failure = error
+                            if conflict:
+                                raise
+                            self._cur.execute("ROLLBACK TO SAVEPOINT model_call_settlement")
+                except BaseException as error:
+                    conflict = (
+                        isinstance(error, (JobError, ModelProxyBudgetError))
+                        and error.code == "idempotency_conflict"
+                    )
+                    if conflict:
+                        self._state.closed = True
                         self._state.unresolved = captured
-                        self._state.failure = error
-                        self._cur.execute("ROLLBACK TO SAVEPOINT model_call_settlement")
-                        if conflict:
-                            raise
-                if write_error is not None:
-                    self._state.unresolved = captured
-                    with self._cur.connection.transaction():
-                        receipt = self._persist(self._cur, captured)
-                self._state.closed = True
-                if not self._owner.claim() or not self._owner.consume():
-                    raise ModelProxyBudgetError("already_settled", "transaction already consumed")
-            except BaseException as error:
-                # The call was consumed. Roll back/clean up its old transaction but
-                # retain the process gate until accounting is durably reconciled.
-                self._state.closed = True
+                        self._owner.claim()
+                        self._owner.consume(error)
+                        if isinstance(error, JobError):
+                            raise ModelProxyBudgetError(error.code) from error
+                        raise
+                    original_error = error
+
+            # If write_error occurred but savepoint rollback succeeded on intact connection:
+            if write_error is not None and original_error is None:
                 self._state.unresolved = captured
-                self._owner.claim()
-                self._owner.consume(error)
-                if isinstance(error, JobError):
-                    raise ModelProxyBudgetError(error.code) from error
-                raise
-            result = self._finish_settlement(receipt)
-            if write_error is not None:
-                if isinstance(write_error, JobError):
-                    raise ModelProxyBudgetError(write_error.code) from write_error
-                raise write_error
-            return result
+                if getattr(self._cur.connection, "closed", False):
+                    original_error = psycopg.OperationalError("connection closed before bound write")
+                else:
+                    try:
+                        with self._cur.connection.transaction():
+                            receipt = self._persist(self._cur, captured)
+                    except BaseException as error:
+                        original_error = error
+
+            # If write succeeded (measured or bound on original), attempt outer COMMIT
+            if original_error is None:
+                self._state.closed = True
+                if not self._owner.claim():
+                    original_error = ModelProxyBudgetError("already_settled", "transaction already consumed")
+                else:
+                    try:
+                        if not self._owner.consume():
+                            original_error = ModelProxyBudgetError("already_settled", "transaction already consumed")
+                    except BaseException as error:
+                        original_error = error
+
+            # If original transaction succeeded without error:
+            if original_error is None and receipt is not None:
+                result = self._finish_settlement(receipt)
+                if write_error is not None:
+                    if isinstance(write_error, JobError):
+                        raise ModelProxyBudgetError(write_error.code) from write_error
+                    raise write_error
+                return result
+
+            # An error occurred (connection loss, failed savepoint rollback, bound write/commit, outer COMMIT).
+            # Dispose original within phase; cleanup failure cannot bypass fallback.
+            self._state.closed = True
+            self._state.unresolved = captured
+            self._owner.claim()
+            try:
+                self._owner.consume(original_error)
+            except BaseException:
+                pass
+
+            # Shared resolution in same attempt.
+            self._resolve(deadline=total_deadline)
+
+            # Preserve original error mapping after resolution.
+            error_to_raise = write_error if write_error is not None else original_error
+            if error_to_raise is not None:
+                if isinstance(error_to_raise, JobError):
+                    raise ModelProxyBudgetError(error_to_raise.code) from error_to_raise
+                raise error_to_raise
+            return self._finish_settlement(self._state.receipt)
 
     def _persist(
         self, cur: psycopg.Cursor[dict[str, object]], captured: _Settlement,
