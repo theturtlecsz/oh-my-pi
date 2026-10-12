@@ -1129,12 +1129,7 @@ class OrchestratorHandler:
     def _facts(self, steps: list[dict[str, Any]], step_index: int, stage: str, outcome: Outcome | None) -> Facts:
         if self.mission_id is None or self.project_id is None or self._request is None:
             raise AssertionError("stage context is unbound")
-        record, release = qualification_record(self.config.qualification_path)
-        qualified, _missing = qualification.qualified(
-            record,
-            unattended=bool(self._request.get("unattended")),
-            release=release,
-        )
+        qualified = _release_qualified(self.config, unattended=bool(self._request.get("unattended")))
         mission = self._mission()
         produced = outcome or Outcome(outcome="none")
         budget = produced.budget_exhausted or self._budget_hit(UUID(str(self._work_id(steps))))
@@ -1477,8 +1472,13 @@ class OrchestratorHandler:
     def _capacity_free(self) -> bool:
         if self.mission_id is None:
             raise AssertionError("mission_id is None")
-        record, _release = qualification_record(self.config.qualification_path)
-        limit = qualification.max_workers(self.config.max_workers, record)
+        if self._request is None:
+            raise AssertionError("request is None")
+        record, release = qualification_record(self.config.qualification_path)
+        expected = _expected_release(
+            self.config, unattended=bool(self._request.get("unattended")), proof_release=release
+        )
+        limit = qualification.max_workers(self.config.max_workers, record, expected)
         prefix = f"orch:{self.mission_id}:"
         with self.store.transaction(self.config.workspace_id, self.principal.actor_id) as cur:
             cur.execute(

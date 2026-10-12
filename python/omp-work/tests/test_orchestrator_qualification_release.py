@@ -4,14 +4,20 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
+from uuid import UUID, uuid4
 
 import psycopg
 import pytest
 from psycopg import sql
 
-from omp_work.orchestrator.service import dry_run, load_config, submit
+from omp_work.jobs.admission import enqueue_job
+from omp_work.jobs.store import NativeJobStore
+from omp_work.orchestrator.service import OrchestratorHandler, dry_run, load_config, submit
+from omp_work.orchestrator.stages import decide
 from test_orchestrator_service import _checks, _decision_count, _orch_jobs, open_world
+from test_workflow_service import OWNER
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1",
@@ -164,3 +170,82 @@ def test_attended_proof_identity_fallback_and_decoding(
     world = open_world(service, tmp_path, qualification=proof)
     _reload(service, world, "r0" if configured else None)
     _assert_gate(service, world, match=not configured)
+
+
+@pytest.mark.parametrize("case", ["prior-release", "envelope-only", "empty-identity"])
+def test_running_unattended_mission_rechecks_release(service, tmp_path: Path, case: str) -> None:
+    world = open_world(service, tmp_path, unattended=True, qualification=_checks(locks=True))
+    _reload(service, world, "r1")
+    assert submit(world["config"], world["request"])["status"] == "enqueued"
+    handler = OrchestratorHandler(world["config"])
+    handler._bind(world["mission_id"])
+
+    proof = _checks(locks=True)
+    proof["release"] = "" if case == "empty-identity" else "r0"
+    if case != "envelope-only":
+        for entry in proof["results"].values():
+            entry["release"] = proof["release"]
+    if case == "empty-identity":
+        handler.config = replace(handler.config, release="")
+    handler.config.qualification_path.write_text(json.dumps(proof))
+
+    chosen = decide(handler._facts(handler.steps(), 0, "implement", None), handler._bounds("implement"))
+    assert chosen.kind == "pause"
+    assert chosen.rule_id == "release-qualification"
+
+    handler.config = replace(handler.config, release="r1")
+    handler.config.qualification_path.write_text(json.dumps(_checks(locks=True)))
+    chosen = decide(handler._facts(handler.steps(), 0, "implement", None), handler._bounds("implement"))
+    assert chosen.kind == "dispatch"
+    assert chosen.rule_id == "stage-dispatch"
+
+
+@pytest.mark.parametrize("unattended", [True, False])
+def test_capacity_requires_current_release_rollout(service, tmp_path: Path, unattended: bool) -> None:
+    proof = _checks(locks=unattended)
+    proof["results"]["omp16-rollout"] = {"result": "pass", "release": "r0"}
+    world = open_world(service, tmp_path, unattended=unattended, qualification=proof)
+    _reload(service, world, "r1" if unattended else None)
+    world["config"] = replace(world["config"], max_workers=4)
+    submitted = submit(world["config"], world["request"])
+    assert submitted["status"] == "enqueued"
+
+    blocker = f"blocker-{uuid4()}"
+    enqueue_job(
+        NativeJobStore(service.config),
+        operation_id=str(uuid4()),
+        workspace_id=world["workspace_id"],
+        actor_id=OWNER,
+        job_id=blocker,
+        work_id=UUID(submitted["work_id"]),
+        kind="compute",
+        required_capabilities=["omp.orchestrator"],
+        resources={"cpu": 1, "memory_mib": 1, "gpu": 0, "model_calls": 0},
+        lease_seconds=30,
+    )
+    with psycopg.connect(**service.config.connection_kwargs("postgres"), autocommit=True) as conn:
+        conn.execute(
+            "UPDATE omp_jobs.jobs SET status='admitted' WHERE workspace_id=%s AND job_id=%s",
+            (world["workspace_id"], blocker),
+        )
+    handler = OrchestratorHandler(world["config"])
+    handler._bind(world["mission_id"])
+    assert handler._capacity_free() is False
+
+    proof["results"]["omp16-rollout"]["release"] = "r1"
+    handler.config.qualification_path.write_text(json.dumps(proof))
+    assert handler._capacity_free() is True
+    if unattended:
+        handler.config = replace(handler.config, release="")
+        assert handler._capacity_free() is False
+
+
+def test_running_attended_mission_uses_proof_release_without_identity(service, tmp_path: Path) -> None:
+    world = open_world(service, tmp_path, qualification=_checks())
+    _reload(service, world, None)
+    assert submit(world["config"], world["request"])["status"] == "enqueued"
+    handler = OrchestratorHandler(world["config"])
+    handler._bind(world["mission_id"])
+    chosen = decide(handler._facts(handler.steps(), 0, "implement", None), handler._bounds("implement"))
+    assert chosen.kind == "dispatch"
+    assert chosen.rule_id == "stage-dispatch"
