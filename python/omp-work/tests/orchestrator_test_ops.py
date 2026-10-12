@@ -25,6 +25,11 @@ def register() -> None:
 
 def run_stage(ctx: StageContext) -> Outcome:
     """One stub visit of ``ctx.stage``."""
+    import hashlib
+    from uuid import uuid5
+
+    from omp_work.orchestrator.verifier import sign_verdict
+
     controls = _controls(ctx)
     visits = int((ctx.prior.get(ctx.stage) or {}).get("visits") or 0)
     hold = controls.get("hold")
@@ -63,6 +68,19 @@ def run_stage(ctx: StageContext) -> Outcome:
         if not key.exists() or key.stat().st_size == 0:
             key.write_bytes(b"0123456789abcdef0123456789abcdef")
             key.chmod(0o600)
+        if action is None and blocker is None and not (
+            once and (controls.get("new_scope") or controls.get("budget_exhausted"))
+        ):
+            record = sign_verdict(
+                key.read_bytes(),
+                verifier_id="verifier",
+                candidate_sha256=hashlib.sha256(f"stub:{ctx.mission_id}".encode()).hexdigest(),
+                attempt_id=str(uuid5(ctx.mission_id, "stub-audit")),
+                verdict="pass",
+            )
+            ctx.intents.record_intent(
+                f"audit-accept:{ctx.mission_id}:{ctx.step_index}", "sign_verdict", record
+            )
     return Outcome(
         outcome="succeeded",
         data={"stage": ctx.stage, "visits": visits, "operation_id": operation_id},

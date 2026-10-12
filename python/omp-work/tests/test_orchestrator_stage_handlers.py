@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4, uuid5
 
 import pytest
 
 from omp_work.orchestrator.service import OrchestratorHandler, _REGISTRY, submit
+from omp_work.orchestrator.verifier import accept_candidate
 from orchestrator_test_ops import run_stage
 from test_orchestrator_service import _until, _worker, open_world
 
@@ -124,3 +127,94 @@ def test_plain_audit_keeps_existing_key_bytes_and_mode(tmp_path: Path) -> None:
 
     assert key.read_bytes() == original
     assert key.stat().st_mode & 0o777 == 0o644
+
+
+def test_plain_audit_records_signed_intent_before_pass(service, tmp_path: Path) -> None:
+    world = open_world(service, tmp_path)
+    key = world["config"].verifier_key_path
+    original = b"fedcba9876543210fedcba9876543210"
+    key.write_bytes(original)
+    key.chmod(0o644)
+    submit(world["config"], world["request"])
+    worker = _worker(service, world["config"], world["workspace_id"])
+    view = _until(
+        worker, world["config"], world["mission_id"],
+        lambda item: item["status"] in ("paused", "completed"),
+    )
+    assert view["status"] == "completed"
+    handler = OrchestratorHandler(world["config"])
+    handler.mission_id = world["mission_id"]
+    steps = handler.steps()
+    audit = next(step for step in steps if step["kind"] == "outcome" and step["stage"] == "audit")
+    intents = [step for step in steps if step["kind"] == "external_intent"]
+    assert len(intents) == 1
+    intent = intents[0]
+    sha = hashlib.sha256(f"stub:{world['mission_id']}".encode()).hexdigest()
+    attempt = str(uuid5(world["mission_id"], "stub-audit"))
+    assert intent["step_index"] == audit["step_index"]
+    assert intent["idempotency_key"] == f"audit-accept:{world['mission_id']}:{audit['step_index']}"
+    assert intent["action"] == "sign_verdict"
+    record = intent["target"]
+    assert record["candidate_sha256"] == sha
+    assert record["attempt_id"] == attempt
+    assert record["verifier_id"] == "verifier"
+    assert accept_candidate(
+        key.read_bytes(), record,
+        candidate_sha256=sha, attempt_id=attempt, producer_id="worker",
+    )
+    assert steps.index(intent) < steps.index(audit)
+    assert audit["verdict"] == "pass"
+    assert key.read_bytes() == original
+    assert len(key.read_bytes()) == 32
+    assert key.stat().st_mode & 0o777 == 0o644
+
+
+def test_plain_audit_store_error_does_not_return_pass(tmp_path: Path) -> None:
+    key = tmp_path / "verifier.key"
+    key.write_bytes(b"0123456789abcdef0123456789abcdef")
+    error = RuntimeError("intent store unavailable")
+
+    def record_intent(*args) -> None:
+        raise error
+
+    ctx = SimpleNamespace(
+        stage="audit", request={}, prior={}, mission_id=uuid4(), step_index=7,
+        config=SimpleNamespace(verifier_key_path=key),
+        intents=SimpleNamespace(record_intent=record_intent),
+    )
+    returned = None
+    with pytest.raises(RuntimeError) as raised:
+        returned = run_stage(ctx)
+    assert raised.value is error
+    assert returned is None
+
+
+@pytest.mark.parametrize(
+    ("stage", "controls", "prior"),
+    [
+        ("audit", {"fails": 1}, {}),
+        ("audit", {"fails": 1}, {"audit": {"visits": 1}}),
+        ("audit", {"once": True, "blocker": "blocked"}, {}),
+        ("audit", {"once": True, "action": {"tier": 2, "action_class": "write"}}, {}),
+        ("audit", {"once": True, "new_scope": True}, {}),
+        ("audit", {"once": True, "budget_exhausted": True}, {}),
+        ("implement", {}, {}),
+    ],
+)
+def test_non_plain_stage_does_not_sign(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str, controls: dict, prior: dict,
+) -> None:
+    import omp_work.orchestrator.verifier as verifier
+
+    def unexpected_call(*args, **kwargs) -> None:
+        pytest.fail("non-plain stage signed or recorded an audit verdict")
+
+    monkeypatch.setattr(verifier, "sign_verdict", unexpected_call)
+    ctx = SimpleNamespace(
+        stage=stage, request={"controls": {stage: controls}}, prior=prior,
+        mission_id=uuid4(), step_index=7,
+        config=SimpleNamespace(verifier_key_path=tmp_path / "verifier.key"),
+        intents=SimpleNamespace(record_intent=unexpected_call),
+    )
+    result = run_stage(ctx)
+    assert result.outcome == ("failed" if controls.get("fails") and not prior else "succeeded")
