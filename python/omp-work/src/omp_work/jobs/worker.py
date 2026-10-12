@@ -16,9 +16,15 @@ from uuid import UUID, uuid4
 import psycopg
 
 from omp_work.jobs.admission import claim_job
-from omp_work.jobs.lease import reconcile_jobs, renew_lease, settle_job
+from omp_work.jobs.lease import (
+    LeaseAuthority,
+    current_authority,
+    reconcile_jobs,
+    renew_lease,
+    settle_job,
+)
 from omp_work.jobs.outbox import deliver_outbox
-from omp_work.jobs.store import NativeJobStore, register_worker
+from omp_work.jobs.store import JobError, NativeJobStore, register_worker
 from omp_work.jobs.usage import record_usage
 from omp_work.operations.database import _jobs_migration_state, check_migrations
 
@@ -26,6 +32,7 @@ __all__ = [
     "Frozen",
     "Handler",
     "JobWorker",
+    "LeaseAuthority",
     "Settlement",
     "WorkerConfig",
     "load_handler",
@@ -111,6 +118,13 @@ class JobWorker:
         self.config = config
         self._started = False
         self.cancel_requested = threading.Event()
+        self.frozen_requested = threading.Event()
+        self.stop_requested = self.frozen_requested
+        self.cancel_reason: str | None = None
+        self.frozen_reason: str | None = None
+        self.stop_reason: str | None = None
+        self.current_job_id: str | None = None
+        self.current_fence: int | None = None
 
         def _get(key: str, default: Any = None) -> Any:
             if isinstance(config, dict):
@@ -200,6 +214,32 @@ class JobWorker:
                 return next(iter(self.handlers.values()))
         raise RuntimeError(f"No handler found for job {job.get('job_id')} with kind {job.get('kind')}")
 
+    def current_authority(
+        self,
+        job_id: str | None = None,
+        fence: int | None = None,
+        *,
+        deadline: float | None = None,
+        cur: Any | None = None,
+    ) -> LeaseAuthority:
+        """Query current authority for a job under this worker."""
+        jid = job_id or self.current_job_id
+        if jid is None:
+            raise ValueError("No active job_id provided or currently executing")
+        f = fence if fence is not None else self.current_fence
+        if f is None:
+            raise ValueError("No fence provided or currently executing")
+        return current_authority(
+            self.store,
+            workspace_id=self.workspace_id,
+            job_id=jid,
+            worker_id=self.worker_id,
+            fence=f,
+            actor_id=self.actor_id,
+            deadline=deadline,
+            cur=cur,
+        )
+
     def tick(self, job_id: str | None = None) -> str | None:
         """Run one worker cycle: reconcile, claim, execute with renewal, settle, and drain outbox.
 
@@ -209,6 +249,16 @@ class JobWorker:
         and settlement then run for that claimed job on this same path.
         Omitting it keeps the unfiltered claim.
         """
+        # Next tick starts uncancelled. Never reuse prior tick's event.
+        self.cancel_requested = threading.Event()
+        self.frozen_requested = threading.Event()
+        self.stop_requested = self.frozen_requested
+        self.cancel_reason = None
+        self.frozen_reason = None
+        self.stop_reason = None
+        self.current_job_id = None
+        self.current_fence = None
+
         reconcile_jobs(
             self.store,
             operation_id=str(uuid4()),
@@ -245,49 +295,92 @@ class JobWorker:
             )
             resume_from_saved = cur.fetchone() is not None
 
+        # Initialize per-claim authority/cancellation BEFORE observe
+        self.current_job_id = job_id
+        self.current_fence = fence
+        self.cancel_requested = threading.Event()
+        self.frozen_requested = threading.Event()
+        self.stop_requested = self.frozen_requested
+        self.cancel_reason = None
+        self.frozen_reason = None
+        self.stop_reason = None
+
+        stop_renew = threading.Event()
+        renewal_failed = threading.Event()
+        frozen_stopped = threading.Event()
+
+        def _renew_loop() -> None:
+            interval = max(0.01, lease_seconds / 3.0)
+            while not stop_renew.wait(timeout=interval):
+                try:
+                    renew_lease(
+                        self.store,
+                        operation_id=str(uuid4()),
+                        workspace_id=self.workspace_id,
+                        actor_id=self.actor_id,
+                        job_id=job_id,
+                        worker_id=self.worker_id,
+                        fence=fence,
+                    )
+                except JobError as err:
+                    reason = err.code
+                    if err.code == "agent_stop_engaged":
+                        # Renewal refuses stop before checking ownership. A
+                        # cancelled or reassigned job must still signal loss.
+                        try:
+                            authority = self.current_authority(job_id, fence)
+                        except Exception:
+                            reason = "renewal_failed"
+                        else:
+                            if authority.is_live:
+                                # Stop was released before the authority read.
+                                continue
+                            if authority.is_frozen:
+                                self.frozen_reason = "agent_stop_engaged"
+                                self.stop_reason = "agent_stop_engaged"
+                                self.frozen_requested.set()
+                                frozen_stopped.set()
+                                break
+                            reason = authority.reason or "job_fence_stale"
+                    self.cancel_reason = reason
+                    renewal_failed.set()
+                    self.cancel_requested.set()
+                    break
+                except Exception:
+                    self.cancel_reason = "renewal_failed"
+                    renewal_failed.set()
+                    self.cancel_requested.set()
+                    break
+
+        thread = threading.Thread(target=_renew_loop, daemon=True)
+        thread.start()
+
         settlement: Settlement | None = None
+        is_frozen = False
         try:
-            if resume_from_saved:
-                settlement = handler.observe(self, job)
-        except Frozen:
+            try:
+                if resume_from_saved:
+                    settlement = handler.observe(self, job)
+                if (
+                    settlement is None
+                    and not renewal_failed.is_set()
+                    and not frozen_stopped.is_set()
+                    and not self.cancel_requested.is_set()
+                    and not self.frozen_requested.is_set()
+                ):
+                    settlement = handler.run(self, job)
+            except Frozen:
+                is_frozen = True
+                return job_id
+        finally:
+            stop_renew.set()
+            thread.join()
+
+        if is_frozen or frozen_stopped.is_set() or self.frozen_requested.is_set():
             return job_id
 
-        if settlement is None:
-            self.cancel_requested = threading.Event()
-            stop_renew = threading.Event()
-            renewal_failed = threading.Event()
-
-            def _renew_loop() -> None:
-                interval = max(0.01, lease_seconds / 3.0)
-                while not stop_renew.wait(timeout=interval):
-                    try:
-                        renew_lease(
-                            self.store,
-                            operation_id=str(uuid4()),
-                            workspace_id=self.workspace_id,
-                            actor_id=self.actor_id,
-                            job_id=job_id,
-                            worker_id=self.worker_id,
-                            fence=fence,
-                        )
-                    except Exception:  # noqa: BLE001 - renewal failure indicates lost lease or cancelled job
-                        renewal_failed.set()
-                        self.cancel_requested.set()
-                        break
-
-            thread = threading.Thread(target=_renew_loop, daemon=True)
-            thread.start()
-            try:
-                try:
-                    settlement = handler.run(self, job)
-                except Frozen:
-                    return job_id
-            finally:
-                stop_renew.set()
-                thread.join()
-
-            if renewal_failed.is_set():
-                return job_id
+        if renewal_failed.is_set() or self.cancel_requested.is_set():
+            return job_id
 
         if settlement is not None:
             for n, usage_item in enumerate(settlement.usage):

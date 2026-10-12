@@ -4,11 +4,13 @@ import argparse
 import json
 import shutil
 import subprocess  # nosec B404 - invokes git to resolve the workspace remote
+import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 from uuid import UUID
 
 from omp_work.v1.client import WorkClient, WorkError
+from omp_work.v1.models import ResearchCampaignState
 from pydantic import ValidationError
 
 from .capture import NativeEvents, NativeRecords, RunRecord, drain, retry
@@ -23,6 +25,7 @@ from .uses import record_outcome, record_use, supply
 EXIT_OK = 0
 EXIT_RUN_FAILED = 1
 SUCCESS_STATUSES = frozenset({"succeeded", "no_lesson"})
+VALID_CAMPAIGN_STATES = frozenset(get_args(ResearchCampaignState))
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -139,6 +142,7 @@ def _build_parser() -> argparse.ArgumentParser:
     journey_parser.add_argument("--workspace", required=True)
     journey_parser.add_argument("--work-key", required=True)
     journey_parser.add_argument("--json", action="store_true")
+    journey_parser.add_argument("--explain", action="store_true")
 
     return parser
 
@@ -459,45 +463,70 @@ def main(
                 )
 
             passed = False
+            reason: str | None = None
             work_id_str: str | None = None
             try:
                 item = client.work_item(args.work_key)
-                if item.state.upper() == "DONE":
+                if item.state.upper() != "DONE":
+                    reason = f"work item {args.work_key} is not DONE (state: {item.state})"
+                else:
                     work_id_str = str(item.work_id)
                     res_data = client._get(f"/v1/work-items/{args.work_key}/research")
-                    campaigns = res_data.get("campaigns", [])
-                    # Every campaign on this work must be concluded.
-                    if isinstance(campaigns, list) and campaigns and all(
-                        isinstance(campaign, dict)
-                        and campaign.get("state") == "concluded"
-                        and isinstance(campaign.get("campaign_id"), str)
-                        and campaign["campaign_id"].strip()
-                        for campaign in campaigns
-                    ):
-                        concluded_ids = {campaign["campaign_id"] for campaign in campaigns}
-                        with active_store.transaction() as conn:
-                            rows = conn.execute(
-                                """
-                                SELECT pr.lesson_json, pr.source_json
-                                FROM procedures p
-                                JOIN proposals pr ON p.procedure_id = pr.procedure_id
-                                WHERE p.status = 'active' AND pr.status = 'accepted'
-                                """
-                            ).fetchall()
-                            for r in rows:
-                                try:
-                                    src = SourceIdentity.model_validate_json(r["source_json"])
-                                    lesson = Lesson.model_validate_json(r["lesson_json"])
-                                except ValidationError:
-                                    continue
-                                if (
-                                    src.aggregate_id == work_id_str
-                                    and src.workspace_id == args.workspace
-                                    and all(citation.strip() for citation in lesson.research_campaign_ids)
-                                    and concluded_ids.intersection(lesson.research_campaign_ids)
-                                ):
-                                    passed = True
-                                    break
+                    if not isinstance(res_data, dict) or "campaigns" not in res_data:
+                        reason = f"work item {args.work_key} has absent research campaigns"
+                    elif not isinstance(res_data["campaigns"], list):
+                        reason = f"campaigns for work item {args.work_key} is malformed (not a list)"
+                    elif len(res_data["campaigns"]) == 0:
+                        reason = f"work item {args.work_key} has empty research campaigns"
+                    else:
+                        campaigns = res_data["campaigns"]
+                        for idx, campaign in enumerate(campaigns):
+                            if not isinstance(campaign, dict):
+                                reason = f"campaign at index {idx} is malformed (not a dict)"
+                                break
+                            cid = campaign.get("campaign_id")
+                            if cid is None or not isinstance(cid, str) or not cid.strip():
+                                reason = f"campaign at index {idx} has missing or blank campaign_id"
+                                break
+                            state = campaign.get("state")
+                            if not isinstance(state, str) or state not in VALID_CAMPAIGN_STATES:
+                                reason = (
+                                    f"campaign {cid} has missing or invalid state"
+                                    if state is None
+                                    else f"campaign {cid} has invalid state: {state!r}"
+                                )
+                                break
+                            if state != "concluded":
+                                reason = f"campaign {cid} is not concluded (state: {state})"
+                                break
+
+                        if reason is None:
+                            concluded_ids = {campaign["campaign_id"] for campaign in campaigns}
+                            with active_store.transaction() as conn:
+                                rows = conn.execute(
+                                    """
+                                    SELECT pr.lesson_json, pr.source_json
+                                    FROM procedures p
+                                    JOIN proposals pr ON p.procedure_id = pr.procedure_id
+                                    WHERE p.status = 'active' AND pr.status = 'accepted'
+                                    """
+                                ).fetchall()
+                                for r in rows:
+                                    try:
+                                        src = SourceIdentity.model_validate_json(r["source_json"])
+                                        lesson = Lesson.model_validate_json(r["lesson_json"])
+                                    except ValidationError:
+                                        continue
+                                    if (
+                                        src.aggregate_id == work_id_str
+                                        and src.workspace_id == args.workspace
+                                        and all(citation.strip() for citation in lesson.research_campaign_ids)
+                                        and concluded_ids.intersection(lesson.research_campaign_ids)
+                                    ):
+                                        passed = True
+                                        break
+                            if not passed:
+                                reason = "no matching accepted active lesson"
             except (WorkError, ValueError, KeyError, OSError, RuntimeError):
                 passed = False
 
@@ -514,6 +543,8 @@ def main(
                 print(json.dumps({"capability": "research_to_learning", "passed": True}))
                 return EXIT_OK
             else:
+                if not passed and args.explain and reason:
+                    sys.stderr.write(" ".join(reason.splitlines()) + "\n")
                 print(json.dumps({"capability": "research_to_learning", "passed": False}))
                 return EXIT_RUN_FAILED
 

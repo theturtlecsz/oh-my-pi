@@ -261,7 +261,8 @@ def _verify() -> int:
 
     record = _sign(task)
 
-    assert exit_code == 0
+    if exit_code != 0:
+        raise AssertionError
     report = render_audit_result(_pass_result(task, cwd, exit_code))
     try:
         _atomic_write(omp_dir / _REPORT, report.encode("utf-8"))
