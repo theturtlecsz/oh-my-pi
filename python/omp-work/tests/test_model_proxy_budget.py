@@ -1326,8 +1326,8 @@ def test_settlement_failure_rolls_back_usage_receipt_and_cancellation(admission_
             admission._resolve()
 
 
-def test_usage_after_spend_fault_proves_atomic_bound_replacement(admission_context):
-    """A real SQL usage failure discards measured spend before committing the bound."""
+def test_usage_after_spend_fault_proves_atomic_bound_replacement(admission_context, monkeypatch):
+    """SQL failure replaces measured spend while all eight admission locks survive rollback."""
     ctx = admission_context
     mission = _mission(ctx, "1000")
     root = _item(ctx, "SQL fault root", {**_GENEROUS_ITEM, "usd": "1"})
@@ -1347,6 +1347,81 @@ def test_usage_after_spend_fault_proves_atomic_bound_replacement(admission_conte
     function = sql.Identifier("omp_jobs", fault_name)
     kwargs = ctx.service.config.connection_kwargs("postgres")
     admission = None
+    gap, release, bound_entered = (threading.Event() for _ in range(3))
+    settlement_thread = waiter_thread = None
+    probe = monitor = waiter = None
+    settlement_errors, waiter_errors, waiter_rows = [], [], []
+    execute = psycopg.Cursor.execute
+    persist = budget_module.ModelCallAdmission._persist
+    row_probes = (
+        ("SELECT project_id FROM omp_work.projects"
+         " WHERE workspace_id=%s AND project_id=%s", (ctx.workspace_id, ctx.project_id)),
+        ("SELECT mission_id FROM omp_work.project_missions"
+         " WHERE workspace_id=%s AND project_id=%s AND mission_id=%s",
+         (ctx.workspace_id, ctx.project_id, mission)),
+        ("SELECT budget_id FROM omp_work.spend_budgets"
+         " WHERE workspace_id=%s AND project_id=%s AND active AND mission_id=%s",
+         (ctx.workspace_id, ctx.project_id, mission)),
+        ("SELECT budget_id FROM omp_work.spend_budgets"
+         " WHERE workspace_id=%s AND project_id=%s AND active AND mission_id IS NULL",
+         (ctx.workspace_id, ctx.project_id)),
+        ("SELECT job_id FROM omp_jobs.jobs WHERE workspace_id=%s AND job_id=%s",
+         (ctx.workspace_id, child)),
+    )
+
+    def probe_locks(held):
+        for key in (
+            f"omp_jobs.operation:model_call:receipt:{admission._identity}",
+            f"omp_work.item_budget:{ctx.workspace_id}:{root}",
+            f"omp_work.task_budget:{ctx.workspace_id}:{task}",
+        ):
+            with probe.transaction():
+                assert probe.execute(
+                    "SELECT pg_try_advisory_xact_lock(hashtextextended(%s, 0))", (key,),
+                ).fetchone() == (not held,)
+        for query, params in row_probes:
+            if held:
+                # Catch outside transaction: a failed NOWAIT probe must roll back
+                # before the next lock is tested on this independent connection.
+                with pytest.raises(LockNotAvailable):
+                    with probe.transaction():
+                        probe.execute(query + " FOR UPDATE NOWAIT", params)
+            else:
+                with probe.transaction():
+                    rows = probe.execute(query + " FOR UPDATE NOWAIT", params).fetchall()
+                    assert len(rows) == 1
+
+    def pause_after_rollback(cur, query, *args, **kwargs):
+        result = execute(cur, query, *args, **kwargs)
+        if cur is admission._cur and query == "ROLLBACK TO SAVEPOINT model_call_settlement":
+            gap.set()
+            assert release.wait(5), "rollback-gap barrier was not released"
+        return result
+
+    def observe_persist(owner, cur, captured):
+        if owner is admission and json.loads(captured.payload)["measurement"] == "estimated":
+            bound_entered.set()
+            assert release.is_set(), "bound write entered before rollback-gap probes"
+        return persist(owner, cur, captured)
+
+    def settle():
+        try:
+            admission.settle(
+                actual_usd="0.25", input_tokens=7, output_tokens=3,
+                cache_tokens=2, measurement="measured", price_version="p1",
+            )
+        except BaseException as error:
+            settlement_errors.append(error)
+
+    def wait_on_project():
+        try:
+            with waiter.transaction():
+                waiter.execute("SET LOCAL statement_timeout = '20s'")
+                query, params = row_probes[0]
+                waiter_rows.extend(waiter.execute(query + " FOR UPDATE", params).fetchall())
+        except BaseException as error:
+            waiter_errors.append(error)
+
     try:
         with psycopg.connect(**kwargs) as conn:
             conn.execute(sql.SQL("""
@@ -1386,17 +1461,39 @@ def test_usage_after_spend_fault_proves_atomic_bound_replacement(admission_conte
         )
         assert admission.root_work_id == root
         assert admission._spend_record_id() == record_id
-        with pytest.raises(CheckViolation) as raised:
-            admission.settle(
-                actual_usd="0.25", input_tokens=7, output_tokens=3,
-                cache_tokens=2, measurement="measured", price_version="p1",
-            )
-        assert raised.value.sqlstate == "23514"
-        assert raised.value.diag.message_primary == "measured usage rejected after spend"
-        detail = dict(part.split("=", 1) for part in raised.value.diag.message_detail.split())
+        probe = psycopg.connect(**kwargs, autocommit=True)
+        monitor = psycopg.connect(**kwargs, autocommit=True)
+        waiter = psycopg.connect(**kwargs, autocommit=True)
+        holder_pid = admission._cur.connection.info.backend_pid
+        monkeypatch.setattr(psycopg.Cursor, "execute", pause_after_rollback)
+        monkeypatch.setattr(budget_module.ModelCallAdmission, "_persist", observe_persist)
+        settlement_thread = threading.Thread(target=settle)
+        settlement_thread.start()
+        assert gap.wait(5), "settlement never reached rollback gap"
+        assert not bound_entered.is_set()
+        waiter_thread = threading.Thread(target=wait_on_project)
+        waiter_thread.start()
+        _wait_for_blocker(monitor, holder_pid)
+        probe_locks(held=True)
+        assert not bound_entered.is_set()
+        release.set()
+        settlement_thread.join(timeout=7)
+        waiter_thread.join(timeout=22)
+        assert not settlement_thread.is_alive()
+        assert not waiter_thread.is_alive()
+        assert waiter_errors == []
+        assert waiter_rows == [(ctx.project_id,)]
+        assert bound_entered.is_set()
+        probe_locks(held=False)
+        assert len(settlement_errors) == 1
+        error = settlement_errors[0]
+        assert isinstance(error, CheckViolation)
+        assert error.sqlstate == "23514"
+        assert error.diag.message_primary == "measured usage rejected after spend"
+        detail = dict(part.split("=", 1) for part in error.diag.message_detail.split())
         assert UUID(detail["record_id"]) == record_id
         assert Decimal(detail["amount_usd"]) == Decimal("0.25")
-        assert fault_name in raised.value.diag.context
+        assert fault_name in error.diag.context
         assert admission.closed and admission.settled
 
         # Independent connection sees the committed bound, never the partial .25 write.
@@ -1419,8 +1516,19 @@ def test_usage_after_spend_fault_proves_atomic_bound_replacement(admission_conte
             "price_version": "p1",
         }
     finally:
-        if admission is not None and not admission.closed:
-            admission.abort()
+        release.set()
+        try:
+            for thread in (settlement_thread, waiter_thread):
+                if thread is not None:
+                    thread.join(timeout=22)
+        finally:
+            monkeypatch.setattr(psycopg.Cursor, "execute", execute)
+            monkeypatch.setattr(budget_module.ModelCallAdmission, "_persist", persist)
+            for connection in (probe, monitor, waiter):
+                if connection is not None:
+                    connection.close()
+            if admission is not None and not admission.closed:
+                admission.abort()
         try:
             with psycopg.connect(**kwargs) as conn:
                 conn.execute(sql.SQL(
@@ -1440,6 +1548,9 @@ def test_usage_after_spend_fault_proves_atomic_bound_replacement(admission_conte
                 " WHERE n.nspname='omp_jobs' AND p.proname=%s", (fault_name,),
             ).fetchone() is None
 
+        for thread in (settlement_thread, waiter_thread):
+            if thread is not None:
+                assert not thread.is_alive(), "database proof thread did not stop"
 
 @pytest.mark.parametrize("fault", ["rollback-before-commit", "commit-then-raise"])
 def test_failed_settlement_reconciles_durable_accounting(admission_context, monkeypatch, fault):
