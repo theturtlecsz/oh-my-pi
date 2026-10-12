@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .contracts.nsi.v1 import models
 from .contracts.nsi.v1.validate import content_hash
+from .v1.api_models import IntakeCriterionLink, IntakeDecisionRecord, IntakeIssueRecord
 
 
 class IntakeRepositoryError(ValueError):
@@ -61,6 +62,15 @@ class EvidenceLinkRecord(_Record):
     relation: Literal["supports", "contradicts", "neither"]
 
 
+class DecisionHistory(_Record):
+    decisions: list[IntakeDecisionRecord] = Field(default_factory=list)
+    issues: list[IntakeIssueRecord] = Field(default_factory=list)
+    criteria: list[IntakeCriterionLink] = Field(default_factory=list)
+    instruction_hashes: dict[str, str] = Field(default_factory=dict)
+    claim_supersession_decisions: dict[str, str] = Field(default_factory=dict)
+    relays: dict[str, dict[str, object]] = Field(default_factory=dict)
+
+
 class IntakeRevisionBody(_Record):
     """Storage envelope around unchanged NSI/v1 records.
 
@@ -81,6 +91,7 @@ class IntakeRevisionBody(_Record):
     assessments: list[AssessmentRecord] = Field(default_factory=list)
     derivations: list[models.DerivationReceipt] = Field(default_factory=list)
     supersessions: dict[str, list[str]] = Field(default_factory=dict)
+    history: DecisionHistory = Field(default_factory=DecisionHistory)
 
 
 def lock_revision(
@@ -268,6 +279,7 @@ def append_revision(
         for role, ids in (("premise", derivation.premise_ids), ("conclusion", derivation.conclusion_ids)):
             for claim_id in ids:
                 put("derivation_claims", derivation_id=derivation.id, claim_id=claim_id, role=role)
+    put("decision_history", records=Jsonb(body.history.model_dump(mode="json")))
     if locked.current_revision >= 0:
         cur.execute(
             "UPDATE omp_work.intake_heads SET current_revision=%s "
@@ -458,7 +470,9 @@ def read_revision(
     supersessions = {}
     for row in rows("claim_supersessions"):
         supersessions.setdefault(row["claim_id"], []).append(row["superseded_claim_id"])
+    history_rows = rows("decision_history")
     body = IntakeRevisionBody(
+        history=DecisionHistory.model_validate(history_rows[0]["records"]) if history_rows else DecisionHistory(),
         workspace_id=workspace_id, snapshot=snapshot, binding=binding, artifact_bytes=artifact_bytes,
         evidence_links=[EvidenceLinkRecord.model_validate({name: row[name] for name in
                         ("claim_id", "artifact_id", "start_byte", "end_byte", "quote", "relation")})
