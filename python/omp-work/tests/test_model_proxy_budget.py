@@ -10,6 +10,7 @@ abort writes no ledgers and frees the locks.
 
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
@@ -2464,6 +2465,214 @@ def test_resolution_locks_original_identity_after_commit_failure(
             assert not fresh.is_alive()
 
     assert all(conn.closed for conn in connections)
+
+
+@pytest.mark.parametrize("fault_kind", ["rollback-before-commit", "commit-then-raise"])
+def test_bound_uncertainty_retains_failure_and_reconciles_once(
+    admission_context, monkeypatch, fault_kind
+):
+    """A failed actual write cannot replace bound accounting while commit is uncertain."""
+    ctx = admission_context
+    other = _item(ctx, "bound uncertainty waiter")
+    transaction = ctx.budget._jobs.transaction
+    append = ctx.budget._projects.append_spend_cursor
+    original_failure = RuntimeError("actual write failed once")
+    failed = False
+    fault = True
+
+    def fail_actual_once(*args, **kwargs):
+        nonlocal failed
+        result = append(*args, **kwargs)
+        if not failed:
+            failed = True
+            raise original_failure
+        return result
+
+    @contextmanager
+    def uncertain_commit(workspace_id, actor_id):
+        with transaction(workspace_id, actor_id) as cur:
+            yield cur
+            if fault and fault_kind == "rollback-before-commit":
+                raise RuntimeError("bound commit uncertain")
+        if fault:
+            raise RuntimeError("bound commit uncertain")
+
+    monkeypatch.setattr(ctx.budget._jobs, "transaction", uncertain_commit)
+    monkeypatch.setattr(ctx.budget._projects, "append_spend_cursor", fail_actual_once)
+    admission = _admit(ctx, _prepared("2"), request_id="bound-uncertainty")
+    actual = dict(actual_usd="1", input_tokens=10, output_tokens=5, cache_tokens=0,
+                  price_version="p1")
+    bound = admission._admitted_bound_payload()
+    sends = ["upstream"]
+    waiter = resolution = None
+    pauses = None
+    outcomes = []
+
+    def resolve():
+        try:
+            outcomes.append(admission._resolve())
+        except BaseException as error:
+            outcomes.append(error)
+
+    try:
+        with pytest.raises(RuntimeError, match="bound commit uncertain"):
+            admission.settle(**actual)
+        assert admission.closed and not admission.settled
+        captured = admission._state.unresolved
+        assert captured.failure is original_failure
+        assert admission._state.failure is original_failure
+        assert captured.decision == admission.decision
+        assert json.loads(captured.payload) == bound | {"actual_usd": "2"}
+        before = _accounting_snapshot(ctx)
+        assert _admission_counts(ctx) == (
+            (0, 0, 0, 0) if fault_kind == "rollback-before-commit" else (1, 1, 1, 2)
+        )
+        waiter, waiting, finished, waiter_outcomes = _start_gate_waiter(
+            ctx, other, "bound-uncertainty-waiter"
+        )
+        assert waiting.wait(2) and not finished.wait(0.2)
+        with pytest.raises(ModelProxyBudgetError) as conflict:
+            admission.settle(**actual)
+        assert conflict.value.code == "idempotency_conflict"
+        assert admission._state.unresolved is captured
+        assert _accounting_snapshot(ctx) == before
+
+        fault = False
+        monkeypatch.setattr(ctx.budget._jobs, "transaction", transaction)
+        monkeypatch.setattr(ctx.budget._projects, "append_spend_cursor", append)
+
+        def forbidden(*args, **kwargs):
+            pytest.fail("bound reconciliation reauthorized")
+
+        monkeypatch.setattr(ctx.budget._projects, "authorize_spend_cursor", forbidden)
+        pauses = _arm_cleanup_pauses(monkeypatch, ctx.budget._jobs)
+        resolution = threading.Thread(target=resolve)
+        resolution.start()
+        assert pauses.cursor_closing.wait(5), outcomes
+        assert not finished.wait(0.2)
+        pauses.allow_cursor.set()
+        assert pauses.committing.wait(5), outcomes
+        assert not finished.wait(0.2)
+        pauses.allow_commit.set()
+        assert pauses.connection_closing.wait(5), outcomes
+        assert not admission.settled and not finished.wait(0.2)
+        pauses.release()
+        resolution.join(timeout=7)
+        waiter.join(timeout=7)
+        assert not resolution.is_alive() and not waiter.is_alive()
+        assert waiter_outcomes == ["admitted"]
+        assert len(outcomes) == 1 and isinstance(outcomes[0], dict), outcomes
+        assert outcomes[0]["actual_usd"] == Decimal(2)
+        assert admission.settled and admission._state.failure is original_failure
+        pauses.enabled["on"] = False
+        durable = _accounting_snapshot(ctx)
+        assert _admission_counts(ctx) == (1, 1, 1, 2)
+        spend, usage, _, operations = durable
+        assert spend[0]["amount_usd"] == usage[0]["price_usd"] == Decimal(2)
+        assert usage[0]["tokens"] == 150
+        assert usage[0]["model"] == "test-model" and usage[0]["price_version"] == "p1"
+        receipt = next(row["result"] for row in operations if row["kind"] == "model_call_receipt")
+        assert receipt["settlement"] == bound | {"actual_usd": "2"}
+        if fault_kind == "commit-then-raise":
+            assert durable == before
+        with pytest.raises(ModelProxyBudgetError) as conflict:
+            admission.settle(**actual)
+        assert conflict.value.code == "idempotency_conflict"
+        assert admission.settle(**bound) == outcomes[0]
+        with _admit(ctx, _prepared("2"), request_id="bound-uncertainty") as replay:
+            if not replay.settled:
+                sends.append("replay")
+            assert replay.settle(**bound) == outcomes[0]
+        assert sends == ["upstream"] and _accounting_snapshot(ctx) == durable
+    finally:
+        fault = False
+        monkeypatch.setattr(ctx.budget._jobs, "transaction", transaction)
+        monkeypatch.setattr(ctx.budget._projects, "append_spend_cursor", append)
+        if pauses is not None:
+            pauses.release()
+        if resolution is not None:
+            resolution.join(timeout=7)
+            assert not resolution.is_alive()
+        if not admission.closed:
+            admission.abort()
+        elif not admission.settled:
+            admission._resolve()
+        if waiter is not None:
+            waiter.join(timeout=7)
+            assert not waiter.is_alive()
+
+
+def test_orphan_usage_conflict_preserves_accounting_and_reachable_owner(
+    admission_context
+):
+    """Usage lacking a call receipt conflicts unchanged until repaired and reconciled."""
+    ctx = admission_context
+    other = _item(ctx, "orphan waiter")
+    identity = budget_module.sha256({
+        "workspace_id": str(ctx.workspace_id), "work_id": str(ctx.work_id),
+        "job_id": None, "request_id": "orphan-owner",
+    })
+    baseline = _accounting_snapshot(ctx)
+    payload = dict(actual_usd="1", input_tokens=10, output_tokens=5, cache_tokens=0,
+                   model="test-model", measurement="measured", price_version="p1")
+    record_usage(
+        ctx.jobs, operation_id=f"model_call:usage:{identity}",
+        workspace_id=ctx.workspace_id, actor_id=ctx.actor_id, work_id=ctx.work_id,
+        job_id=None, request_id=f"model_call:request:{identity}",
+        role="model_call", model="test-model", measurement="measured",
+        input_tokens=10, output_tokens=5, cache_tokens=0,
+        price_usd=Decimal(1), price_version="p1",
+    )
+    snapshot = _accounting_snapshot(ctx)
+    admission = _admit(ctx, _prepared("2"), request_id="orphan-owner")
+    waiter = None
+    sends = ["upstream"]
+
+    def remove_orphan():
+        with psycopg.connect(**ctx.service.config.connection_kwargs("postgres")) as conn:
+            conn.execute("SET LOCAL lock_timeout = '3s'")
+            for table in reversed(_ADMISSION_TABLES):
+                conn.execute(
+                    f"DELETE FROM {table} WHERE workspace_id=%s",  # nosec B608 - fixed tables
+                    (ctx.workspace_id,),
+                )
+
+    try:
+        with pytest.raises(ModelProxyBudgetError) as conflict:
+            admission.settle(**payload)
+        assert conflict.value.code == "idempotency_conflict"
+        assert admission.closed and not admission.settled
+        assert admission._state.unresolved is not None
+        assert _accounting_snapshot(ctx) == snapshot
+        waiter, waiting, finished, outcomes = _start_gate_waiter(ctx, other, "orphan-waiter")
+        assert waiting.wait(2) and not finished.wait(0.2)
+        with pytest.raises(ModelProxyBudgetError) as conflict:
+            admission._resolve()
+        assert conflict.value.code == "idempotency_conflict"
+        assert not finished.wait(0.2) and _accounting_snapshot(ctx) == snapshot
+        remove_orphan()
+        assert _accounting_snapshot(ctx) == baseline
+        result = admission._resolve()
+        waiter.join(timeout=7)
+        assert not waiter.is_alive() and outcomes == ["admitted"]
+        assert result["actual_usd"] == Decimal(1)
+        assert _admission_counts(ctx) == (1, 1, 1, 2)
+        durable = _accounting_snapshot(ctx)
+        with pytest.raises(ModelProxyBudgetError) as conflict:
+            admission.settle(**(payload | {"actual_usd": "2"}))
+        assert conflict.value.code == "idempotency_conflict"
+        assert admission.settle(**payload) == result
+        assert sends == ["upstream"] and _accounting_snapshot(ctx) == durable
+    finally:
+        if not admission.closed:
+            admission.abort()
+            remove_orphan()
+        elif not admission.settled:
+            remove_orphan()
+            admission._resolve()
+        if waiter is not None:
+            waiter.join(timeout=7)
+            assert not waiter.is_alive()
 
 
 def test_unmeasurable_failure_commits_bound_receipt_once(admission_context):

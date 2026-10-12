@@ -481,6 +481,7 @@ class ModelProxyBudget:
 class _Settlement:
     payload: str
     decision: SpendDecision | None
+    failure: BaseException | None = None
 
 
 @dataclass
@@ -489,6 +490,7 @@ class _AdmissionState:
     closed: bool = False
     receipt: dict[str, object] | None = None
     unresolved: _Settlement | None = None
+    failure: BaseException | None = None
     transition: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
 
@@ -631,10 +633,23 @@ class ModelCallAdmission:
                         captured = _Settlement(payload, self.decision)
                         receipt = self._persist(self._cur, captured)
                     except BaseException as error:
-                        self._cur.execute("ROLLBACK TO SAVEPOINT model_call_settlement")
                         write_error = error
+                        # Choose accounting before rollback: even rollback itself
+                        # can fail. A conflict must never rewrite existing rows.
+                        conflict = (
+                            isinstance(error, (JobError, ModelProxyBudgetError))
+                            and error.code == "idempotency_conflict"
+                        )
+                        if not conflict:
+                            captured = _Settlement(
+                                bound_settlement.payload, self.decision, error,
+                            )
+                        self._state.unresolved = captured
+                        self._state.failure = error
+                        self._cur.execute("ROLLBACK TO SAVEPOINT model_call_settlement")
+                        if conflict:
+                            raise
                 if write_error is not None:
-                    captured = bound_settlement
                     self._state.unresolved = captured
                     with self._cur.connection.transaction():
                         receipt = self._persist(self._cur, captured)
