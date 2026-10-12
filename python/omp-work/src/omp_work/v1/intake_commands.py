@@ -357,6 +357,7 @@ def _assessment_views(
     views = []
     for record in stored.body.assessments:
         assessed = stored
+        supplied = record.assessment
         if record.assessment.revision != stored.revision:
             try:
                 assessed = read_revision(
@@ -364,7 +365,12 @@ def _assessment_views(
                 )
             except IntakeRepositoryError as exc:
                 raise WorkStoreError("invalid_request") from exc
-        assessment = compute_settlement_assessment(assessed.body, record.assessment)
+            # Repository reconstruction associates receipts with the containing
+            # revision; carried assessments need their assessed revision instead.
+            supplied = supplied.model_copy(update={
+                "derivation_receipt_ids": [receipt.id for receipt in assessed.body.derivations],
+            })
+        assessment = compute_settlement_assessment(assessed.body, supplied)
         receipts = {item.id: item for item in assessed.body.derivations}
         views.append(IntakeAssessmentView(
             id=record.id, assessment=assessment, binding=assessed.body.binding,

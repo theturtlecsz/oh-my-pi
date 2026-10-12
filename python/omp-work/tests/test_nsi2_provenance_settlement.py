@@ -341,11 +341,13 @@ def _with_hashes(raw):
 def test_read_view_serializes_assessments_for_their_own_revisions(service, write_repository):
     workspace_id, _ = write_repository
     opening = _with_hashes(revision_body(workspace_id))
+    opening["derivations"][0]["id"] = "receipt-old"
     opening["assessments"] = [dict(
         id="assessment-0",
         assessment={**ASSESSMENT, "revision": 0, "status": "READY_FOR_RATIFICATION", "gaps": [], "conflicts": []},
     )]
     later = _with_hashes(revision_body(workspace_id, 1))
+    later["derivations"][0]["id"] = "receipt-new"
     artifact_id = next(iter(later["artifact_bytes"]))
     later["artifact_bytes"][artifact_id] += b"\x01"
     later["snapshot"]["artifacts"][0]["uri"] += "/1"
@@ -380,7 +382,9 @@ def test_read_view_serializes_assessments_for_their_own_revisions(service, write
     older, current = by_id["carried-forward"], by_id["assessment-1"]
     carried = next(item for item in stored1.body.assessments if item.id == "carried-forward")
     current_record = next(item for item in stored1.body.assessments if item.id == "assessment-1")
-    assert older.assessment == compute_settlement_assessment(stored0.body, carried.assessment)
+    assert older.assessment == compute_settlement_assessment(stored0.body, carried.assessment.model_copy(update={
+        "derivation_receipt_ids": [receipt.id for receipt in stored0.body.derivations],
+    }))
     assert current.assessment == compute_settlement_assessment(stored1.body, current_record.assessment)
     assert older.assessment.status == "CONFLICTED"
     assert {item.id for item in older.assessment.gaps} == {"gap-1"}
@@ -400,6 +404,7 @@ def test_read_view_serializes_assessments_for_their_own_revisions(service, write
     assert older.binding == stored0.body.binding
     assert older.assessment.revision == older.binding.revision == 0
     assert older.receipts == tuple(stored0.body.derivations)
+    assert older.assessment.derivation_receipt_ids == [receipt.id for receipt in older.receipts] == ["receipt-old"]
     assert older.receipts[0].revision == 0
     assert older.provenance.revision == 1
     assert older.provenance.source_sha256 == hashlib.sha256(next(iter(stored0.artifact_bytes.values()))).hexdigest()
@@ -409,6 +414,7 @@ def test_read_view_serializes_assessments_for_their_own_revisions(service, write
     assert current.binding == stored1.body.binding
     assert current.assessment.revision == current.binding.revision == 1
     assert current.receipts == tuple(stored1.body.derivations)
+    assert current.assessment.derivation_receipt_ids == [receipt.id for receipt in current.receipts] == ["receipt-new"]
     assert current.receipts[0].revision == 1
     assert current.receipts != older.receipts
     assert current.provenance.revision == parsed.revision == 2
