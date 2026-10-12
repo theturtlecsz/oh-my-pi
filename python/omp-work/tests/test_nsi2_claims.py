@@ -1056,3 +1056,98 @@ def test_claim_storage_copy_preserves_records_quotes_and_clears_derived(service,
             (workspace_id,),
         ).fetchone() == (1,)
 
+
+@pytest.mark.parametrize("relation,evidence_status", [
+    ("supports", "supported"),
+    ("contradicts", "contested"),
+    ("neither", "unsupported"),
+])
+def test_http_claim_relations_read_replay_and_collision(service, http_intake, relation, evidence_status):
+    workspace_id, mission_id = http_intake
+    assert _command(service, workspace_id,
+                    envelope(workspace_id, mission_id).command.model_dump(mode="json"))[0] == 200
+    text = "aé🙂"
+    assert _command(service, workspace_id,
+                    evidence_command(OWNER, "owner", text=text))[0] == 200
+    span = dict(artifact_id="artifact-added", start_byte=0,
+                end_byte=len(text.encode("utf-8")), quote=text)
+    command = claim_command(
+        OWNER, "owner", evidence=[span], evidence_links=[dict(span=span, relation=relation)],
+    )
+    command["payload"]["claim"]["admitted_by"] = {"id": str(OWNER), "kind": "owner"}
+    operation_id = uuid4()
+    status, body = _command(service, workspace_id, command, operation_id=operation_id)
+    assert status == 200
+    result = {
+        "type": "record_intake_claim", "run_id": "run-1",
+        "expected_revision": 2, "revision": 3,
+    }
+    assert body["result"] == result
+    assert set(body["result"]) == {"type", "run_id", "expected_revision", "revision"}
+    assert "evidence_status" not in body["result"]
+    assert "mission_id" not in body["result"]
+
+    response = service.client.get(
+        f"/v1/workspaces/{workspace_id}/intake/run-1", headers=_owner_headers(workspace_id),
+    )
+    assert response.status_code == 200
+    view = response.json()
+    assert view["revision"] == 3
+    assert len(view["snapshot"]["claims"]) == 1
+    claim = view["snapshot"]["claims"][0]
+    assert claim["id"] == command["payload"]["claim"]["id"]
+    assert claim["truth"] == "unknown"
+    assert claim["state"] == "proposed"
+    assert claim["evidence"] == [span]
+    assert view["evidence_links"] == [{"span": span, "relation": relation}]
+
+    with connection(service, workspace_id) as conn:
+        heads = conn.execute(
+            "SELECT * FROM omp_work.intake_heads WHERE workspace_id=%s", (workspace_id,),
+        ).fetchall()
+        revisions = conn.execute(
+            "SELECT * FROM omp_work.intake_revisions WHERE workspace_id=%s ORDER BY revision", (workspace_id,),
+        ).fetchall()
+        events = conn.execute(
+            "SELECT * FROM omp_audit.domain_events WHERE workspace_id=%s ORDER BY sequence", (workspace_id,),
+        ).fetchall()
+
+    status, replay = _command(service, workspace_id, command, operation_id=operation_id)
+    assert status == 200
+    assert replay["receipt"]["state"] == "replayed"
+    assert replay["result"] == body["result"]
+    with connection(service, workspace_id) as conn:
+        assert conn.execute(
+            "SELECT * FROM omp_work.intake_heads WHERE workspace_id=%s", (workspace_id,),
+        ).fetchall() == heads
+        assert conn.execute(
+            "SELECT * FROM omp_work.intake_revisions WHERE workspace_id=%s ORDER BY revision", (workspace_id,),
+        ).fetchall() == revisions
+        assert conn.execute(
+            "SELECT * FROM omp_audit.domain_events WHERE workspace_id=%s ORDER BY sequence", (workspace_id,),
+        ).fetchall() == events
+
+    changed = {**command, "payload": {
+        **command["payload"], "claim": {
+            **command["payload"]["claim"], "value": {"type": "number", "value": 42.0},
+        },
+    }}
+    status, conflict = _command(service, workspace_id, changed, operation_id=operation_id)
+    assert status == 409
+    assert conflict["error"]["code"] == "idempotency_conflict"
+    with connection(service, workspace_id) as conn:
+        assert conn.execute(
+            "SELECT * FROM omp_work.intake_heads WHERE workspace_id=%s", (workspace_id,),
+        ).fetchall() == heads
+        assert conn.execute(
+            "SELECT * FROM omp_work.intake_revisions WHERE workspace_id=%s ORDER BY revision", (workspace_id,),
+        ).fetchall() == revisions
+        operation_events = conn.execute(
+            "SELECT event_type,aggregate_type,aggregate_id,payload FROM omp_audit.domain_events "
+            "WHERE workspace_id=%s AND operation_id=%s ORDER BY sequence", (workspace_id, operation_id),
+        ).fetchall()
+        assert operation_events == [
+            ("record_intake_claim", "mission", mission_id, {**result, "evidence_status": evidence_status}),
+            ("idempotency_conflict", "mission", mission_id, {"code": "idempotency_conflict"}),
+        ]
+        assert all("mission_id" not in payload for _, _, _, payload in operation_events)
