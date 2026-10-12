@@ -6,7 +6,11 @@ push per ref, a control clone, the worktrees directory named by
 signers, a verifier HMAC key, a merge credential, and a seeded project with a
 repository record, a ``push_branch`` standing policy, a standing mandate, and a
 project spend budget. It writes ``orchestrator.json`` and a mission request and
-returns a :class:`E2EWorld` of those handles.
+returns a :class:`E2EWorld` of those handles. It also gives the world one push
+receiver: a ``push-signing.key`` under the service config dir, one
+automation-principal subscription for ``mission.progressed`` at
+:data:`PUSH_URL`, and a recording ``event_push.push_send`` seam (with a
+sitecustomize twin for child worker processes) feeding ``world.sent_pushes``.
 
 The world also carries the route and verdict evidence the slices assert on: the
 mission draft the route reasons over, the mandate and ceiling ``mission_scope``
@@ -20,8 +24,10 @@ drafts and the confirm stage waits for the owner.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -30,6 +36,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import psycopg
+from omp_work import event_push
 from omp_work.mission_intake_rules import draft_from_intake
 from omp_work.orchestrator import worker_sandbox
 from omp_work.orchestrator.candidate_git import add_worktree
@@ -48,6 +55,7 @@ from omp_work.standing_mandate import StandingMandate
 from omp_work.standing_policy import StandingPolicy
 from omp_work.v1.canonical import text_sha256
 from omp_work.v1.models import CommandEnvelope, MissionDraft
+from omp_work.v1.service import Principal, WorkService
 from omp_work.v1.store import PostgresWorkStore
 from test_research_contract import _register_component
 from test_workflow_service import OWNER, _grant, _seed_project
@@ -57,6 +65,7 @@ __all__ = [
     "FORGED_ATTEMPT",
     "FORGED_CANDIDATE",
     "OTHER_ATTEMPT",
+    "PUSH_URL",
     "SIMULATED_CRASH",
     "E2EWorld",
     "SimulatedCrash",
@@ -99,6 +108,34 @@ FORGED_CANDIDATE = "0" * 64
 FORGED_ATTEMPT = "a-forged"
 OTHER_ATTEMPT = "a-other"
 SIMULATED_CRASH = "simulated-crash"
+
+# The one fixed push destination the world's automation principal subscribes to.
+# A .test name never resolves, so a send that escapes the recording seams fails
+# fast instead of touching a real host.
+PUSH_URL = "https://checkpoints.example.test/omp/checkpoint"
+_PUSH_MASTER_KEY = bytes(range(32))
+
+# Child workers of the rollout tests run in their own process, where the parent
+# monkeypatch of event_push.push_send cannot reach. Imported as sitecustomize
+# from the world's push-stub directory, this installs the same seam there: the
+# send is confirmed without a network. Children that cannot import omp_work
+# skip the patch.
+_PUSH_STUB = '''"""Test seam: confirm event pushes in child worker processes."""
+
+from __future__ import annotations
+
+try:
+    import omp_work.event_push as _event_push
+except Exception:
+    _event_push = None
+
+if _event_push is not None:
+
+    def _send(url, token, idempotency_key, body, *, timeout=10, headers=None):
+        return None
+
+    _event_push.push_send = _send
+'''
 
 # The verifier script reads .omp/verify-task.json and writes the signed verdict
 # and the auditor report the way the audit stage later expects them.
@@ -209,6 +246,9 @@ class E2EWorld:
     request_path: Path
     operations: tuple[str, ...]
     store: PostgresWorkStore
+    push_url: str
+    push_subscription_id: UUID
+    sent_pushes: list[tuple[str, str | None, str, Any, dict[str, str]]]
     intake_decision_id: UUID | None = None
     mission_revision: int = 0
     _count_path: Path = field(default_factory=Path)
@@ -629,6 +669,85 @@ def kill_first_run(monkeypatch, identity: str) -> dict[str, bool]:
     return holder
 
 
+def _open_push_receiver(
+    service: Any, workspace_id: UUID, root: Path, monkeypatch: Any
+) -> tuple[UUID, list[tuple[str, str | None, str, Any, dict[str, str]]]]:
+    """Give the world one push receiver: signing key, subscription, send seam.
+
+    Writes ``push-signing.key`` under the service config dir when missing,
+    registers one automation-principal subscription for ``mission.progressed``
+    at :data:`PUSH_URL` (the destination check is stubbed: the HTTP checker
+    blocks loopback, and no socket is opened), and patches
+    ``event_push.push_send`` to record ``(url, token, idempotency_key, body,
+    headers)`` — the local receiver ``send_signed`` already calls. A
+    sitecustomize stub on PYTHONPATH installs the same confirming seam in
+    child worker processes, which the in-process patch cannot reach.
+    """
+    key_path = service.config.config_dir / "push-signing.key"
+    if not key_path.is_file():
+        key_path.write_bytes(_PUSH_MASTER_KEY)
+        key_path.chmod(0o600)
+
+    sent_pushes: list[tuple[str, str | None, str, Any, dict[str, str]]] = []
+
+    def record_push(
+        url: str,
+        token: str | None,
+        idempotency_key: str,
+        body: Any,
+        *,
+        timeout: float = 10,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        del timeout
+        sent_pushes.append((str(url), token, str(idempotency_key), body, dict(headers or {})))
+
+    monkeypatch.setattr(event_push, "push_send", record_push)
+
+    stub_dir = root / "push-stub"
+    stub_dir.mkdir()
+    (stub_dir / "sitecustomize.py").write_text(_PUSH_STUB, encoding="utf-8")
+    # Keep the child's import path as rich as the parent's: children that spawn
+    # with a copied environment (the rollout workers, the patched verifier
+    # sandbox) resolve omp_work from the same entries, plus the stub first.
+    pythonpath = os.environ.get("PYTHONPATH") or os.pathsep.join(
+        entry for entry in sys.path if entry
+    )
+    monkeypatch.setenv("PYTHONPATH", f"{stub_dir}{os.pathsep}{pythonpath}")
+
+    push_service = WorkService(
+        PostgresWorkStore(service.config), push_destination_check=lambda url: None
+    )
+    automation = Principal(
+        actor_id=OWNER,
+        actor_kind="automation",
+        workspaces=frozenset({workspace_id}),
+        scopes=frozenset(_SCOPES),
+    )
+    subscription_id = uuid4()
+    push_service.execute(
+        automation,
+        CommandEnvelope.model_validate(
+            {
+                "api_version": "work.omp.dev/v1",
+                "workspace_id": str(workspace_id),
+                "operation_id": str(uuid4()),
+                "request_id": str(uuid4()),
+                "correlation_id": str(uuid4()),
+                "command": {
+                    "type": "put_event_subscription",
+                    "payload": {
+                        "subscription_id": str(subscription_id),
+                        "push_url": PUSH_URL,
+                        "event_types": ["mission.progressed"],
+                    },
+                },
+            }
+        ),
+    )
+    return subscription_id, sent_pushes
+
+
 def open_e2e_world(
     service: Any,
     tmp_path: Path,
@@ -741,6 +860,10 @@ def open_e2e_world(
         None,
         SpendBudget(str(project_id), _PROJECT_CEILING, Decimal(40)),
         _owner(uuid4()),
+    )
+
+    push_subscription_id, sent_pushes = _open_push_receiver(
+        service, workspace_id, root, monkeypatch
     )
 
     candidate_ref = f"refs/heads/omp/{mission_id.hex[:12]}"
@@ -902,5 +1025,8 @@ def open_e2e_world(
         request_path=request_path,
         operations=tuple(operations),
         store=store,
+        push_url=PUSH_URL,
+        push_subscription_id=push_subscription_id,
+        sent_pushes=sent_pushes,
         _count_path=remote_repo / "push-count",
     )
