@@ -111,7 +111,7 @@ def register(
         raise TypeError(f"payload must be TaskRequest or Mapping, got {type(payload).__name__}")
 
     body = task.model_dump(mode="json")
-    with httpx.Client(base_url=url, transport=transport, timeout=timeout) as client:
+    with httpx.Client(base_url=url, transport=transport, timeout=timeout, trust_env=False) as client:
         response = client.post(
             "/tasks",
             json=body,
@@ -145,7 +145,7 @@ def revoke_task(
     if not cleaned_id:
         raise ValueError("task_id must be a non-empty string")
 
-    with httpx.Client(base_url=url, transport=transport, timeout=timeout) as client:
+    with httpx.Client(base_url=url, transport=transport, timeout=timeout, trust_env=False) as client:
         response = client.delete(
             f"/tasks/{urllib.parse.quote(cleaned_id, safe='')}",
             headers={"Authorization": f"Bearer {token}"},

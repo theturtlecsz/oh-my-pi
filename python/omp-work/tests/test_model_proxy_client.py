@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+import httpcore
 import httpx
 import pytest
 
@@ -302,6 +303,39 @@ def test_loopback_variants_accepted(tmp_path: Path, loopback_url: str) -> None:
     )
     assert res_rev["refused"] is False
     assert calls == ["POST", "DELETE"]
+
+
+@pytest.mark.parametrize(
+    ("scheme", "proxy_env"),
+    [("http", "HTTP_PROXY"), ("https", "HTTPS_PROXY"), ("http", "ALL_PROXY")],
+)
+def test_control_bearer_never_connects_to_environment_proxy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scheme: str, proxy_env: str
+) -> None:
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+        monkeypatch.delenv(name.lower(), raising=False)
+    monkeypatch.setenv(proxy_env, "http://203.0.113.10:8080")
+
+    destinations: list[tuple[str, int]] = []
+
+    def connect_tcp(
+        self: httpcore.SyncBackend, host: str, port: int, *args: Any, **kwargs: Any
+    ) -> httpcore.NetworkStream:
+        destinations.append((host, port))
+        raise httpcore.ConnectError("socket-free destination probe")
+
+    monkeypatch.setattr(httpcore.SyncBackend, "connect_tcp", connect_tcp)
+    cap_path = _valid_capability(tmp_path)
+    base_url = f"{scheme}://127.0.0.1:8091"
+
+    # Use real HTTPX transport selection; MockTransport disables env proxies.
+    with pytest.raises(httpx.ConnectError):
+        model_proxy_client.register(cap_path, base_url, _valid_payload())
+    with pytest.raises(httpx.ConnectError):
+        model_proxy_client.revoke_task(cap_path, base_url, "task-123")
+
+    assert destinations == [("127.0.0.1", 8091), ("127.0.0.1", 8091)]
 
 
 def test_transport_error_raises_on_register_and_revoke(tmp_path: Path) -> None:
