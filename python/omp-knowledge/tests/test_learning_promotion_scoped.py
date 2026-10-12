@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+import pytest
+
 from omp_knowledge.learning.cli import EXIT_OK, main as cli_main
 from omp_knowledge.learning.promotion import (
     answer_promotion,
@@ -256,6 +258,22 @@ def test_legacy_sourceless_procedure_coverage() -> None:
     assert rec is not None
     assert len(rec["batch"]) == 1
     assert rec["batch"][0]["procedure_id"] == legacy_proc
+
+
+@pytest.mark.parametrize("source_json", ["   ", "{", "null", "[]", '{"unknown": 1}'])
+def test_invalid_source_does_not_receive_legacy_promotion(source_json: str) -> None:
+    store = LearningStore(":memory:")
+    ws = "ws-invalid-source"
+    proc_id = insert_procedure(store)
+    with store.transaction() as conn:
+        conn.execute(
+            "UPDATE procedure_versions SET source_json = ? WHERE procedure_id = ?",
+            (source_json, proc_id),
+        )
+
+    record_journey_pass(store, workspace_id=ws, work_id=None)
+    assert request_promotion(store, workspace_id=ws) is None
+    assert get_promoted_procedures(store, workspace_id=ws) == set()
 
 
 def test_procedure_versions_source_identity_matching() -> None:

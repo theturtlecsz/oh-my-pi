@@ -11,14 +11,11 @@ from .store import LearningStore
 
 def _is_empty_source_json(raw: str | None) -> bool:
     if raw is None:
-        return True
-    s = raw.strip()
-    if not s or s == "{}":
-        return True
+        return False
     try:
-        val = json.loads(s)
+        val = json.loads(raw)
         return isinstance(val, dict) and len(val) == 0
-    except Exception:
+    except json.JSONDecodeError:
         return False
 
 
