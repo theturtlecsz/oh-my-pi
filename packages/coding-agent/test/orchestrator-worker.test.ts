@@ -132,8 +132,8 @@ function assertPinned(requests: CapturedRequest[], api: WorkerApi, proxyUrl: str
 
 /**
  * User and mount namespace whose `/work` is `root/work`. Host `/usr` is bound
- * in so the dynamic linker survives `pivot_root`; `/home` is a symlink back to
- * the old root so this checkout and bun stay visible.
+ * in so the dynamic linker survives `pivot_root`; the resolved Bun binary and
+ * checkout are bound under `/run` regardless of their host paths.
  */
 function pivotScript(root: string): string {
 	return `
@@ -143,11 +143,15 @@ mount --bind /usr ${root}/usr
 mount --rbind /proc ${root}/proc
 mount --rbind /dev ${root}/dev
 mount --rbind /sys ${root}/sys
+touch ${root}/run/bun
+mount --bind ${fs.realpathSync(process.execPath)} ${root}/run/bun
+mkdir ${root}/run/checkout
+mount --bind ${repoRoot} ${root}/run/checkout
 mount --rbind ${root} ${root}
 cd ${root}
 pivot_root . old
 cd /work
-exec ${process.execPath} --no-env-file ${cliEntry} orchestrator-worker
+exec /run/bun --no-env-file /run/checkout/packages/coding-agent/src/cli.ts orchestrator-worker
 `;
 }
 
