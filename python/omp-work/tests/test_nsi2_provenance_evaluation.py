@@ -4,21 +4,27 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 from dataclasses import replace
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
 from omp_work.contracts.nsi.v1 import models as nsi
+from omp_work.contracts.nsi.v1 import validate
 from omp_work.contracts.nsi.v1.compat import bounded_to_nsi, nsi_to_bounded
 from omp_work.contracts.nsi.v1.models import TypedBooleanValue, TypedIntegerValue
 from omp_work.contracts.nsi.v1.validate import closure_hash, content_hash, contract_hash
 from omp_work.intake_repository import AssessmentRecord, DecisionRecord, read_revision
 from omp_work.v1.api_models import IntakeDecisionRecord, IntakeIssueRecord
 from omp_work.v1.intake_provenance import (
+    build_provenance_binding,
     closure_document,
     evaluate_intake_provenance,
     evaluate_provenance_projection,
+    helper_sources,
+    referenced_schemas,
     settle_intake_provenance,
     settle_provenance,
 )
@@ -707,3 +713,112 @@ def test_closure_binds_history_even_when_settlement_filters_stale_decisions(proo
     changed = evaluate_provenance_projection(body, resolved)
     assert changed.settlement.body.history.decisions == []
     assert closure_hash(closure_document(body, resolved, changed.contract, changed.settlement)) != closure_hash(original)
+
+
+def _binding(body, resolved):
+    evaluation = evaluate_provenance_projection(body, resolved)
+    return build_provenance_binding(body, resolved, evaluation.contract, evaluation.settlement)
+
+
+def test_binding_has_seven_snapshot_and_content_fields_without_feedback(proof):
+    _cur, body, resolved = proof
+    evaluation = evaluate_provenance_projection(body, resolved)
+    digest = closure_hash(closure_document(body, resolved, evaluation.contract, evaluation.settlement))
+    binding = _binding(body, resolved)
+    assert binding.model_dump() == {
+        "run_id": body.snapshot.run_id,
+        "revision": body.snapshot.revision,
+        "contract_hash": contract_hash(evaluation.contract),
+        "claim_set_hash": digest,
+        "source_hash": digest,
+        "rule_bundle_hash": content_hash(helper_sources()),
+        "schema_hash": content_hash(referenced_schemas()),
+    }
+    assert _binding(body, resolved) == binding
+    altered = body.model_copy(deep=True)
+    altered.binding = nsi.Binding(
+        run_id="prior-run", revision=99,
+        **{field: "ab" * 32 for field in (
+            "contract_hash", "claim_set_hash", "source_hash", "rule_bundle_hash", "schema_hash",
+        )},
+    )
+    assert _binding(altered, resolved) == binding
+
+
+@pytest.mark.parametrize("module_name,edit", [
+    ("omp_work.contracts.nsi.v1.compat", "module"),
+    ("omp_work.contracts.nsi.v1.validate", "module"),
+    ("omp_work.contracts.nsi.v1.authority", "module"),
+    ("omp_work.contracts.nsi.v1.models", "module"),
+    ("omp_work.v1.semantics", "module"),
+    ("omp_work.v1.models", "module"),
+    ("omp_work.v1.api_models", "module"),
+    ("omp_work.v1.intake_provenance", "module"),
+    ("omp_work.v1.intake_provenance_closure", "module"),
+    ("omp_work.v1.intake_decisions", "module"),
+    ("omp_work.contracts.nsi.v1.compat", "records"),
+    ("omp_work.v1.intake_decisions", "readiness"),
+    ("omp_work.v1.intake_provenance", "settlement"),
+])
+def test_binding_tracks_complete_loaded_helpers_without_paths_or_stale_cache(
+    proof, tmp_path, monkeypatch, module_name, edit,
+):
+    _cur, body, resolved = proof
+    module = sys.modules[module_name]
+    original_content = Path(module.__file__).read_bytes()
+    baseline = _binding(body, resolved)
+    copy = tmp_path / "loaded.py"
+    copy.write_bytes(original_content)
+    monkeypatch.setattr(module, "__file__", str(copy))
+    assert _binding(body, resolved) == baseline
+
+    if edit == "records":
+        changed_content = original_content.replace(b"def _records(", b"def _records_changed(")
+    elif edit == "readiness":
+        changed_content = original_content.replace(b'status = "CONFLICTED"', b'status = "NEEDS_SPEC"')
+    elif edit == "settlement":
+        changed_content = original_content.replace(b"links[cid] = ()", b'links[cid] = ("new-gap",)')
+    else:
+        changed_content = original_content + b"\n_PRIVATE_RULE_REVISION = 2\n"
+    copy.write_bytes(changed_content)
+    changed = _binding(body, resolved)
+    assert changed.rule_bundle_hash != baseline.rule_bundle_hash
+    assert changed == baseline.model_copy(update={"rule_bundle_hash": changed.rule_bundle_hash})
+    assert _binding(body, resolved) == changed
+
+    relocated = tmp_path / "relocated.py"
+    relocated.write_bytes(changed_content)
+    monkeypatch.setattr(module, "__file__", str(relocated))
+    assert _binding(body, resolved) == changed
+    relocated.write_bytes(original_content)
+    assert _binding(body, resolved) == baseline
+
+
+@pytest.mark.parametrize("schema_name", ["authority", "taxonomy", "claim", "status", "contract"])
+def test_binding_tracks_bundled_and_transitively_referenced_schema_payloads(
+    proof, monkeypatch, schema_name,
+):
+    _cur, body, resolved = proof
+    baseline = _binding(body, resolved)
+    loader = validate.load_schema
+    loaded = []
+    altered = False
+
+    def load(name):
+        loaded.append(name)
+        document = loader(name)
+        if altered and name == schema_name:
+            document["$defs"]["FutureInternalValue"] = {"type": "null"}
+        return document
+
+    monkeypatch.setattr(validate, "load_schema", load)
+    assert _binding(body, resolved) == baseline
+    assert set(loaded) == {"authority", "taxonomy", "claim", "status", "contract"}
+    assert len(loaded) == 5  # Local references and cycles load each document once.
+    altered = True
+    changed = _binding(body, resolved)
+    assert changed.schema_hash != baseline.schema_hash
+    assert changed == baseline.model_copy(update={"schema_hash": changed.schema_hash})
+    assert _binding(body, resolved) == changed
+    altered = False
+    assert _binding(body, resolved) == baseline

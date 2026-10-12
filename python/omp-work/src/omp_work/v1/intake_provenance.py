@@ -1,11 +1,15 @@
 """Analyze bounded provenance without substituting generated contract records."""
 from __future__ import annotations
 
+import inspect
+import sys
+from pathlib import Path
 from typing import NamedTuple, NoReturn
+from urllib.parse import urljoin
 
 from psycopg import Cursor
 
-from ..contracts.nsi.v1 import models as nsi
+from ..contracts.nsi.v1 import authority, compat, models as nsi, validate
 from ..contracts.nsi.v1.compat import (
     NsiBoundedEvaluation,
     bounded_to_nsi,
@@ -15,6 +19,7 @@ from ..contracts.nsi.v1.compat import (
 )
 from ..contracts.nsi.v1.models import AcceptanceCriterion, IntakeContract, RequirementClause
 from ..intake_repository import DecisionRecord, IntakeRevisionBody
+from . import api_models, intake_decisions, intake_provenance_closure, models, semantics
 from .api_models import IntakeDecisionRecord, IntakeIssueRecord
 from .intake_decisions import _latest_findings, unresolved_findings
 from .intake_provenance_closure import ProvenanceClosure, resolve_provenance_closure
@@ -49,6 +54,71 @@ class ProvenanceEvaluation(NamedTuple):
     findings: NsiBoundedEvaluation
     contract: IntakeContract
     settlement: ProvenanceSettlement | None = None
+
+
+def helper_sources() -> dict[str, str]:
+    """Read complete loaded helper modules, including private rules and readiness.
+
+    Module names identify the bundle; locations and mtimes are not hash inputs.
+    Read bytes on every call so a prior evaluation cannot cache stale content.
+    """
+    modules = (
+        compat, validate, authority, nsi, semantics, models, api_models,
+        sys.modules[__name__], intake_provenance_closure, intake_decisions,
+    )
+    return {module.__name__: Path(inspect.getfile(module)).read_bytes().hex() for module in modules}
+
+
+def referenced_schemas() -> dict[str, dict[str, object]]:
+    """Load the contract/status schema closure through the offline bundled loader."""
+    documents: dict[str, dict[str, object]] = {}
+    base = "https://omp.dev/contracts/nsi/v1/"
+
+    def load(name: str) -> None:
+        if name in documents:
+            return
+        document = validate.load_schema(name)
+        documents[name] = document
+        walk(document, str(document["$id"]))
+
+    def walk(node: object, location: str) -> None:
+        if isinstance(node, dict):
+            if "$id" in node:
+                location = urljoin(location, str(node["$id"]))
+            ref = node.get("$ref")
+            if isinstance(ref, str):
+                target = urljoin(location, ref).partition("#")[0]
+                if not target.startswith(base):
+                    raise ValueError(f"Unknown NSI schema reference: {ref}")
+                load(target.removeprefix(base).removesuffix(".schema.json"))
+            for value in node.values():
+                walk(value, location)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value, location)
+
+    load("contract")
+    load("status")
+    return documents
+
+
+def build_provenance_binding(
+    body: IntakeRevisionBody,
+    resolved: ProvenanceClosure,
+    contract: IntakeContract,
+    settlement: ProvenanceSettlement,
+) -> nsi.Binding:
+    """Bind snapshot identity, complete proof, implementation, and schema content."""
+    proof_hash = validate.closure_hash(closure_document(body, resolved, contract, settlement))
+    return nsi.Binding(
+        run_id=body.snapshot.run_id,
+        revision=body.snapshot.revision,
+        contract_hash=validate.contract_hash(contract),
+        claim_set_hash=proof_hash,
+        source_hash=proof_hash,
+        rule_bundle_hash=validate.content_hash(helper_sources()),
+        schema_hash=validate.content_hash(referenced_schemas()),
+    )
 
 
 def closure_document(
