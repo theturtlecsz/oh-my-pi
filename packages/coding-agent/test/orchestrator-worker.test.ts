@@ -130,12 +130,87 @@ function assertPinned(requests: CapturedRequest[], api: WorkerApi, proxyUrl: str
 	}
 }
 
+const SYSTEM_ENTRY_NAMES = ["bin", "lib", "lib64", "sbin", "lib32", "libx32"] as const;
+type SystemEntryName = (typeof SYSTEM_ENTRY_NAMES)[number];
+
+interface HostSystemLayout {
+	symlinks: Array<{ name: SystemEntryName; target: string }>;
+	realDirs: SystemEntryName[];
+}
+
+function resolveHostSystemLayout(): HostSystemLayout {
+	const symlinks: Array<{ name: SystemEntryName; target: string }> = [];
+	const realDirs: SystemEntryName[] = [];
+	for (const name of SYSTEM_ENTRY_NAMES) {
+		const hostPath = `/${name}`;
+		try {
+			const stat = fs.lstatSync(hostPath);
+			if (stat.isSymbolicLink()) {
+				symlinks.push({ name, target: fs.readlinkSync(hostPath) });
+			} else if (stat.isDirectory()) {
+				realDirs.push(name);
+			}
+		} catch {
+			// absent on this host
+		}
+	}
+	return { symlinks, realDirs };
+}
+
+function populateHostSystemLayout(root: string, layout: HostSystemLayout = resolveHostSystemLayout()): void {
+	for (const { name, target } of layout.symlinks) {
+		fs.symlinkSync(target, path.join(root, name));
+	}
+	for (const name of layout.realDirs) {
+		fs.mkdirSync(path.join(root, name));
+	}
+}
+
+function getBinaryInterpreter(binaryPath: string): string | null {
+	try {
+		const proc = Bun.spawnSync(["readelf", "-l", binaryPath]);
+		if (proc.exitCode === 0) {
+			const match = proc.stdout.toString().match(/Requesting program interpreter:\s*([^\]]+)\]/);
+			if (match?.[1]) return match[1].trim();
+		}
+	} catch {}
+	try {
+		const fd = fs.openSync(binaryPath, "r");
+		try {
+			const buf = Buffer.alloc(64);
+			fs.readSync(fd, buf, 0, 64, 0);
+			if (buf.subarray(0, 4).toString("latin1") === "\x7fELF" && buf[4] === 2) {
+				const phoff = Number(buf.readBigUInt64LE(32));
+				const phentsize = buf.readUInt16LE(54);
+				const phnum = buf.readUInt16LE(56);
+				const phBuf = Buffer.alloc(phentsize * phnum);
+				fs.readSync(fd, phBuf, 0, phBuf.length, phoff);
+				for (let i = 0; i < phnum; i++) {
+					const entry = phBuf.subarray(i * phentsize, (i + 1) * phentsize);
+					if (entry.readUInt32LE(0) === 3) {
+						const offset = Number(entry.readBigUInt64LE(8));
+						const size = Number(entry.readBigUInt64LE(32));
+						const interpBuf = Buffer.alloc(size);
+						fs.readSync(fd, interpBuf, 0, size, offset);
+						return interpBuf.toString("utf8").replace(/\0+$/, "");
+					}
+				}
+			}
+		} finally {
+			fs.closeSync(fd);
+		}
+	} catch {}
+	return null;
+}
+
 /**
  * User and mount namespace whose `/work` is `root/work`. Host `/usr` is bound
- * in so the dynamic linker survives `pivot_root`; the resolved Bun binary and
+ * in so the dynamic linker survives `pivot_root`; host system layout is mirrored
+ * so the dynamic linker loader path exists; the resolved Bun binary and
  * checkout are bound under `/run` regardless of their host paths.
  */
-function pivotScript(root: string): string {
+function pivotScript(root: string, layout: HostSystemLayout = resolveHostSystemLayout()): string {
+	const realDirBinds = layout.realDirs.map(name => `mount --bind /${name} ${root}/${name}\n`).join("");
 	return `
 set -euo pipefail
 mount --make-rprivate /
@@ -143,7 +218,7 @@ mount --bind /usr ${root}/usr
 mount --rbind /proc ${root}/proc
 mount --rbind /dev ${root}/dev
 mount --rbind /sys ${root}/sys
-touch ${root}/run/bun
+${realDirBinds}touch ${root}/run/bun
 mount --bind ${fs.realpathSync(process.execPath)} ${root}/run/bun
 mkdir ${root}/run/checkout
 mount --bind ${repoRoot} ${root}/run/checkout
@@ -160,6 +235,7 @@ async function runWorker(
 	respond: (index: number, request: CapturedRequest) => Response,
 ): Promise<WorkerRun> {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "omp-worker-test-"));
+	const layout = resolveHostSystemLayout();
 	const requests: CapturedRequest[] = [];
 	const server = Bun.serve({
 		hostname: "127.0.0.1",
@@ -175,9 +251,7 @@ async function runWorker(
 		for (const dir of ["old", "work", "tmp", "proc", "dev", "sys", "usr", "run"]) {
 			fs.mkdirSync(path.join(root, dir));
 		}
-		fs.symlinkSync("usr/bin", path.join(root, "bin"));
-		fs.symlinkSync("usr/lib", path.join(root, "lib"));
-		fs.symlinkSync("usr/lib", path.join(root, "lib64"));
+		populateHostSystemLayout(root, layout);
 		fs.symlinkSync("old/home", path.join(root, "home"));
 		const work = path.join(root, "work");
 		fs.mkdirSync(path.join(work, "src"));
@@ -202,22 +276,25 @@ async function runWorker(
 				},
 			}),
 		);
-		const proc = Bun.spawn(["unshare", "--user", "--map-root-user", "--mount", "bash", "-c", pivotScript(root)], {
-			cwd: root,
-			env: childEnv({
-				HOME: "/work/planted-home",
-				USERPROFILE: "/work/planted-home",
-				TMPDIR: "/tmp",
-				OMP_MODEL_PROXY_URL: proxyUrl,
-				OMP_MODEL_TOKEN: MODEL_TOKEN,
-				OMP_TASK_TOKEN: TASK_TOKEN,
-				OMP_WORKER_MANIFEST: "/work/.omp-worker-manifest.json",
-				PI_NO_THINKING_LOOP_GUARD: "1",
-			}),
-			stdin: "ignore",
-			stdout: "pipe",
-			stderr: "pipe",
-		});
+		const proc = Bun.spawn(
+			["unshare", "--user", "--map-root-user", "--mount", "bash", "-c", pivotScript(root, layout)],
+			{
+				cwd: root,
+				env: childEnv({
+					HOME: "/work/planted-home",
+					USERPROFILE: "/work/planted-home",
+					TMPDIR: "/tmp",
+					OMP_MODEL_PROXY_URL: proxyUrl,
+					OMP_MODEL_TOKEN: MODEL_TOKEN,
+					OMP_TASK_TOKEN: TASK_TOKEN,
+					OMP_WORKER_MANIFEST: "/work/.omp-worker-manifest.json",
+					PI_NO_THINKING_LOOP_GUARD: "1",
+				}),
+				stdin: "ignore",
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
 		const timer = setTimeout(() => proc.kill(), 150_000);
 		let exitCode: number;
 		let stdout: string;
@@ -285,6 +362,49 @@ describe.serial("orchestrator-worker", () => {
 			fs.rmSync(home, { recursive: true, force: true });
 		}
 	}, 150_000);
+
+	it("mirrors the host /lib64 layout so the dynamic loader is present in the pivoted root", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "omp-layout-test-"));
+		try {
+			const layout = resolveHostSystemLayout();
+			populateHostSystemLayout(root, layout);
+
+			const hostLib64 = "/lib64";
+			if (fs.existsSync(hostLib64)) {
+				const hostStat = fs.lstatSync(hostLib64);
+				const rootLib64 = path.join(root, "lib64");
+				const rootStat = fs.lstatSync(rootLib64);
+
+				if (hostStat.isSymbolicLink()) {
+					expect(rootStat.isSymbolicLink()).toBe(true);
+					expect(fs.readlinkSync(rootLib64)).toBe(fs.readlinkSync(hostLib64));
+				} else if (hostStat.isDirectory()) {
+					expect(rootStat.isDirectory()).toBe(true);
+					expect(layout.realDirs).toContain("lib64");
+				}
+			}
+
+			const interp = getBinaryInterpreter(fs.realpathSync(process.execPath));
+			expect(interp).not.toBeNull();
+			if (interp) {
+				// Inside the pivoted root host /usr is mounted at /usr and real directories are bound.
+				// For this layout resolution check, symlink /usr to host /usr and point any realDirs to host.
+				fs.symlinkSync("/usr", path.join(root, "usr"));
+				for (const dir of layout.realDirs) {
+					const target = path.join(root, dir);
+					if (fs.existsSync(target) && fs.lstatSync(target).isDirectory()) {
+						fs.rmdirSync(target);
+						fs.symlinkSync(`/${dir}`, target);
+					}
+				}
+				const loaderInRoot = path.join(root, interp);
+				expect(fs.existsSync(loaderInRoot)).toBe(true);
+				expect(fs.realpathSync(loaderInRoot)).toBe(fs.realpathSync(interp));
+			}
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
 
 	it("applies a fake Gemini write inside the allowed fixture", async () => {
 		const result = await runWorker("google-generative-ai", index => {
