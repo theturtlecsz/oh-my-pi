@@ -479,6 +479,20 @@ def _budget_ctx(service, **budget_kwargs) -> SimpleNamespace:
 
 
 @pytest.fixture
+def staged_accounting(monkeypatch):
+    """Stage private reconciliation tests before terminal lifecycle handling.
+
+    These tests inspect captured authority and owner exclusion across explicit
+    phase boundaries. Persistent failure closure is covered separately through
+    the public settlement path; this seam never changes production behavior.
+    """
+    monkeypatch.setattr(
+        budget_module.ModelCallAdmission, "_resolve",
+        budget_module.ModelCallAdmission._resolve_accounting,
+    )
+
+
+@pytest.fixture
 def admission_context(service):
     return _budget_ctx(service)
 
@@ -1734,7 +1748,7 @@ def test_usage_after_spend_fault_proves_atomic_bound_replacement(admission_conte
             ).fetchone() is None
 
 @pytest.mark.parametrize("fault", ["rollback-before-commit", "commit-then-raise"])
-def test_failed_settlement_reconciles_durable_accounting(admission_context, monkeypatch, fault):
+def test_failed_settlement_reconciles_durable_accounting(admission_context, staged_accounting, monkeypatch, fault):
     """Consumed calls retain ownership across rollback or ambiguous commit, without another send/charge."""
     ctx = admission_context
     policy = StandingPolicy(
@@ -1775,7 +1789,7 @@ def test_failed_settlement_reconciles_durable_accounting(admission_context, monk
     try:
         # Private reconciliation has no authority to close a fresh admission.
         with pytest.raises(ModelProxyBudgetError):
-            admission._resolve()
+            admission._resolve_accounting()
         assert not admission.closed and not admission.settled
         with pytest.raises(RuntimeError, match=fault):
             with admission:
@@ -1821,7 +1835,7 @@ def test_failed_settlement_reconciles_durable_accounting(admission_context, monk
 
         monkeypatch.setattr(ctx.budget._projects, "authorize_spend_cursor", forbidden)
         enabled = False
-        result = admission._resolve()
+        result = admission._resolve_accounting()
         assert finished.wait(5)
         waiter.join(timeout=5)
         assert not waiter.is_alive()
@@ -1844,7 +1858,7 @@ def test_failed_settlement_reconciles_durable_accounting(admission_context, monk
         enabled = False
         monkeypatch.setattr(ctx.budget._jobs, "transaction", original)
         if not admission.settled:
-            admission._resolve()
+            admission._resolve_accounting()
         if waiter is not None:
             waiter.join(timeout=5)
             assert not waiter.is_alive()
@@ -1902,7 +1916,7 @@ def test_resolution_receipt_conflict_retains_consumed_owner(admission_context, f
                 "SELECT * FROM omp_jobs.operations WHERE operation_id=%s", (receipt_id,)
             ).fetchone()
         with pytest.raises(ModelProxyBudgetError) as conflict:
-            admission._resolve()
+            admission._resolve_accounting()
         assert conflict.value.code == "idempotency_conflict"
         assert admission.closed and not admission.settled
         admission.abort()
@@ -1925,14 +1939,14 @@ def test_resolution_receipt_conflict_retains_consumed_owner(admission_context, f
                      Jsonb(stored["result"]), stored["created_at"], receipt_id),
                 )
         if not admission.settled:
-            admission._resolve()
+            admission._resolve_accounting()
         if waiter is not None:
             waiter.join(timeout=5)
             assert not waiter.is_alive() and outcomes == ["admitted"]
     assert _admission_counts(ctx) == (1, 1, 1, 2)
 
 
-def test_resolution_cannot_redirect_captured_root(admission_context, monkeypatch):
+def test_resolution_cannot_redirect_captured_root(admission_context, staged_accounting, monkeypatch):
     """Reparenting a failed consumed job conflicts instead of accounting under new root locks."""
     ctx = admission_context
     other = _item(ctx, "different root")
@@ -2085,7 +2099,7 @@ def _start_gate_waiter(ctx, work_id, request_id):
 
 
 @pytest.mark.parametrize("retry", [False, True])
-def test_process_gate_stays_held_until_settlement_commit(admission_context, monkeypatch, retry):
+def test_process_gate_stays_held_until_settlement_commit(admission_context, staged_accounting, monkeypatch, retry):
     """Settlement keeps the gate through commit and cursor/connection cleanup."""
     ctx = admission_context
     other = _item(ctx, "separate commit waiter")
@@ -2268,9 +2282,24 @@ def test_abort_and_receipt_replay_release_gate_after_cleanup(admission_context, 
     assert _admission_counts(ctx) == charged
 
 
-def test_stale_owner_cleanup_cannot_release_another_gate(admission_context):
+def test_stale_owner_cleanup_cannot_release_another_gate(admission_context, monkeypatch):
     """Repeated cleanup of a finished owner cannot admit a third while a second holds the gate."""
     ctx = admission_context
+    queued = threading.Event()
+    wait = budget_module._ProcessGate.transition.wait
+    release = budget_module._release_process_gate
+    releases = []
+
+    def observed_wait(timeout=None):
+        queued.set()
+        return wait(timeout)
+
+    def observed_release(token):
+        releases.append(token)
+        release(token)
+
+    monkeypatch.setattr(budget_module._ProcessGate.transition, "wait", observed_wait)
+    monkeypatch.setattr(budget_module, "_release_process_gate", observed_release)
     second_work = _item(ctx, "second gate owner")
     third_work = _item(ctx, "third gate owner")
     payload = dict(actual_usd="1", input_tokens=1)
@@ -2281,6 +2310,8 @@ def test_stale_owner_cleanup_cannot_release_another_gate(admission_context):
     assert charged == (1, 1, 1, 2)
 
     def cleanup_first() -> None:
+        first._close()
+        first._owner.release()
         first.abort()
         assert first.__exit__(None, None, None) is False
         with first:
@@ -2316,9 +2347,11 @@ def test_stale_owner_cleanup_cannot_release_another_gate(admission_context):
     thread = threading.Thread(target=third)
     try:
         thread.start()
-        assert started.wait(2), outcomes
+        assert started.wait(2) and queued.wait(2), outcomes
         assert not entered.wait(0.2) and not finished.wait(0.2), outcomes
         cleanup_first()
+        assert budget_module._ProcessGate.owner is second._owner.token
+        assert releases.count(first._owner.token) == 1
         assert not entered.wait(0.2) and not finished.wait(0.2), (
             "stale cleanup released the second owner's gate"
         )
@@ -2624,7 +2657,7 @@ def _accounting_snapshot(ctx):
 
 
 def test_rolled_back_settlement_and_stale_cleanup_keep_successor_excluded(
-    admission_context, monkeypatch
+    admission_context, staged_accounting, monkeypatch
 ):
     """Rollback blocks another send; resolved owner's cleanup cannot free its successor."""
     ctx = admission_context
@@ -2740,7 +2773,7 @@ def test_rolled_back_settlement_and_stale_cleanup_keep_successor_excluded(
 
 @pytest.mark.parametrize("fault_kind", ["rollback-before-commit", "commit-then-raise"])
 def test_resolution_locks_original_identity_after_commit_failure(
-    admission_context, monkeypatch, fault_kind
+    admission_context, staged_accounting, monkeypatch, fault_kind
 ):
     """Resolution locks captured identities after root/lease/stop changes; fresh sends refuse."""
     ctx = admission_context
@@ -2939,7 +2972,7 @@ def test_resolution_locks_original_identity_after_commit_failure(
 
 @pytest.mark.parametrize("fault_kind", ["rollback-before-commit", "commit-then-raise"])
 def test_bound_uncertainty_retains_failure_and_reconciles_once(
-    admission_context, monkeypatch, fault_kind
+    admission_context, staged_accounting, monkeypatch, fault_kind
 ):
     """A failed actual write cannot replace bound accounting while commit is uncertain."""
     ctx = admission_context
@@ -3073,7 +3106,7 @@ def test_bound_uncertainty_retains_failure_and_reconciles_once(
 
 
 def test_orphan_usage_conflict_preserves_accounting_and_reachable_owner(
-    admission_context
+    admission_context, staged_accounting
 ):
     """Usage lacking a call receipt conflicts unchanged until repaired and reconciled."""
     ctx = admission_context
@@ -3117,13 +3150,13 @@ def test_orphan_usage_conflict_preserves_accounting_and_reachable_owner(
         waiter, waiting, finished, outcomes = _start_gate_waiter(ctx, other, "orphan-waiter")
         assert waiting.wait(2) and not finished.wait(0.2)
         with pytest.raises(ModelProxyBudgetError) as conflict:
-            admission._resolve()
+            admission._resolve_accounting()
         assert conflict.value.code == "idempotency_conflict"
         assert not finished.wait(0.2) and _accounting_snapshot(ctx) == snapshot
         remove_orphan()
         assert _accounting_snapshot(ctx) == baseline
         bound = admission._admitted_bound_payload()
-        result = admission._resolve()
+        result = admission._resolve_accounting()
         waiter.join(timeout=7)
         assert not waiter.is_alive() and outcomes == ["admitted"]
         assert result["actual_usd"] == Decimal(2)
@@ -3140,7 +3173,7 @@ def test_orphan_usage_conflict_preserves_accounting_and_reachable_owner(
             remove_orphan()
         elif not admission.settled:
             remove_orphan()
-            admission._resolve()
+            admission._resolve_accounting()
         if waiter is not None:
             waiter.join(timeout=7)
             assert not waiter.is_alive()
@@ -3424,8 +3457,13 @@ def _admit_and_fail_settle(ctx, prepared, payload, *, commit_then_raise=False, *
     ctx.budget._jobs.transaction = failing_tx
     try:
         admission = _admit(ctx, prepared, **kw)
-        with pytest.raises(RuntimeError, match="simulated commit failure"):
-            admission.settle(**payload)
+        def pause_resolution(self, deadline=None):
+            raise RuntimeError("simulated commit failure")
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(budget_module.ModelCallAdmission, "_resolve", pause_resolution)
+            with pytest.raises(RuntimeError, match="simulated commit failure"):
+                admission.settle(**payload)
         assert admission.closed and not admission.settled
         return admission
     finally:
@@ -3474,7 +3512,7 @@ def test_resolve_default_deadline_phases_and_absent_fallback(admission_context, 
     monkeypatch.setattr(ctx.budget._jobs, "transaction", tracking_transaction)
     try:
         start = time.monotonic()
-        result = admission._resolve()
+        result = admission._resolve_accounting()
         assert admission.closed and admission.settled
         # Absent receipt charges estimated $2
         assert result["actual_usd"] == Decimal(2)
@@ -3503,7 +3541,7 @@ def test_resolve_default_deadline_phases_and_absent_fallback(admission_context, 
     finally:
         monkeypatch.setattr(ctx.budget._jobs, "transaction", original)
         if not admission.settled:
-            admission._resolve()
+            admission._resolve_accounting()
 
 
 @pytest.mark.parametrize("change, code", [
@@ -3561,7 +3599,7 @@ def test_resolve_fallback_uses_captured_authority(admission_context, monkeypatch
 
     def resolve():
         try:
-            outcomes.append(admission._resolve(deadline=time.monotonic() + 10))
+            outcomes.append(admission._resolve_accounting(deadline=time.monotonic() + 10))
         except BaseException as error:
             errors.append(error)
 
@@ -3642,7 +3680,7 @@ def test_resolve_fallback_uses_captured_authority(admission_context, monkeypatch
             assert not resolver.is_alive()
         monkeypatch.setattr(ctx.budget._jobs, "transaction", original)
         if not admission.settled:
-            admission._resolve()
+            admission._resolve_accounting()
 
 
 def test_resolve_receipt_inserted_between_lookup_and_fallback(admission_context, monkeypatch):
@@ -3664,7 +3702,7 @@ def test_resolve_receipt_inserted_between_lookup_and_fallback(admission_context,
 
     def resolve():
         try:
-            outcomes.append(admission._resolve(deadline=time.monotonic() + 10))
+            outcomes.append(admission._resolve_accounting(deadline=time.monotonic() + 10))
         except BaseException as error:
             errors.append(error)
 
@@ -3707,7 +3745,7 @@ def test_resolve_receipt_inserted_between_lookup_and_fallback(admission_context,
         monkeypatch.setattr(ctx.budget._jobs, "transaction", original)
         monkeypatch.setattr(budget_module.ModelCallAdmission, "_persist", persist)
         if not admission.settled:
-            admission._resolve()
+            admission._resolve_accounting()
 
 
 def test_resolve_matching_receipt_preserves_actual_without_bound_equality(
@@ -3727,7 +3765,7 @@ def test_resolve_matching_receipt_preserves_actual_without_bound_equality(
 
     monkeypatch.setattr(ctx.budget, "lock_captured_identity", spy_lock_identity)
     try:
-        result = admission._resolve()
+        result = admission._resolve_accounting()
         assert admission.closed and admission.settled
         # Matching receipt preserves stored actual usage $1, even though bound was $2
         assert result["actual_usd"] == Decimal(1)
@@ -3738,7 +3776,7 @@ def test_resolve_matching_receipt_preserves_actual_without_bound_equality(
     finally:
         monkeypatch.setattr(ctx.budget, "lock_captured_identity", original_lock)
         if not admission.settled:
-            admission._resolve()
+            admission._resolve_accounting()
 
 
 def test_resolve_lookup_failure_reaches_fresh_fallback(admission_context, monkeypatch):
@@ -3763,7 +3801,7 @@ def test_resolve_lookup_failure_reaches_fresh_fallback(admission_context, monkey
 
     monkeypatch.setattr(ctx.budget._jobs, "transaction", tracking_lookup)
     try:
-        result = admission._resolve()
+        result = admission._resolve_accounting()
         assert admission.closed and admission.settled
         assert result["actual_usd"] == Decimal(2)
         with _admit(ctx, prepared, request_id="resolve-lookup-failure-test") as replay:
@@ -3771,7 +3809,7 @@ def test_resolve_lookup_failure_reaches_fresh_fallback(admission_context, monkey
     finally:
         monkeypatch.setattr(ctx.budget._jobs, "transaction", original)
         if not admission.settled:
-            admission._resolve()
+            admission._resolve_accounting()
 
 
 @pytest.mark.parametrize("durable_receipt", [False, True])
@@ -3837,7 +3875,7 @@ def test_resolve_lookup_cleanup_failure_still_uses_one_fresh_fallback(
     monkeypatch.setattr(psycopg.Connection, "_exec_command", failing_rollback)
     try:
         start = time.monotonic()
-        result = admission._resolve()
+        result = admission._resolve_accounting()
         assert admission.closed and admission.settled
         assert len(deadlines) == 2, "resolve must use exactly one fresh fallback"
         assert 0 < deadlines[0] - start <= 1.05
@@ -3885,7 +3923,7 @@ def test_resolve_lookup_cleanup_failure_still_uses_one_fresh_fallback(
         monkeypatch.setattr(psycopg.Cursor, "execute", original_execute)
         monkeypatch.setattr(psycopg.Connection, "_exec_command", original_command)
         if not admission.settled:
-            admission._resolve()
+            admission._resolve_accounting()
 
 
 @pytest.mark.parametrize("deadline", [float("nan"), float("inf"), -float("inf")])
@@ -3897,11 +3935,11 @@ def test_resolve_rejects_nonfinite_deadline(admission_context, deadline):
     )
     try:
         with pytest.raises(ValueError, match="finite"):
-            admission._resolve(deadline=deadline)
+            admission._resolve_accounting(deadline=deadline)
         assert admission.closed and not admission.settled
     finally:
         if not admission.settled:
-            admission._resolve()
+            admission._resolve_accounting()
 
 
 def test_resolve_past_deadline_raises_deadline_exceeded(admission_context):
@@ -3912,11 +3950,11 @@ def test_resolve_past_deadline_raises_deadline_exceeded(admission_context):
     )
     try:
         with pytest.raises(TransactionDeadlineExceeded):
-            admission._resolve(deadline=time.monotonic() - 1.0)
+            admission._resolve_accounting(deadline=time.monotonic() - 1.0)
         assert admission.closed and not admission.settled
     finally:
         if not admission.settled:
-            admission._resolve()
+            admission._resolve_accounting()
 
 
 def test_resolve_fallback_fresh_mismatch_conflicts_without_overwrite(admission_context):
@@ -3944,7 +3982,7 @@ def test_resolve_fallback_fresh_mismatch_conflicts_without_overwrite(admission_c
 
     try:
         with pytest.raises(ModelProxyBudgetError) as exc:
-            admission._resolve()
+            admission._resolve_accounting()
         assert exc.value.code == "idempotency_conflict"
         assert admission.closed and not admission.settled
 
@@ -3960,7 +3998,7 @@ def test_resolve_fallback_fresh_mismatch_conflicts_without_overwrite(admission_c
         with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
             cur.execute("DELETE FROM omp_jobs.operations WHERE operation_id=%s", (receipt_id,))
         if not admission.settled:
-            admission._resolve()
+            admission._resolve_accounting()
 
 
 def test_resolve_failed_fallback_retains_owner_no_reauthorization(
@@ -3986,7 +4024,7 @@ def test_resolve_failed_fallback_retains_owner_no_reauthorization(
     waiter = None
     try:
         with pytest.raises(RuntimeError, match="simulated persist failure in fallback"):
-            admission._resolve()
+            admission._resolve_accounting()
         assert admission.closed and not admission.settled
 
         # Verify owner is still held and gate is retained: a second admit blocks
@@ -3995,7 +4033,7 @@ def test_resolve_failed_fallback_retains_owner_no_reauthorization(
     finally:
         monkeypatch.undo()
         if not admission.settled:
-            admission._resolve()
+            admission._resolve_accounting()
         if waiter is not None:
             waiter.join(timeout=7)
             assert not waiter.is_alive()
@@ -4432,8 +4470,20 @@ def test_outer_transport_deadlines_keep_gate_through_resolution(
                     "VALUES (%s, %s, 'late-write', %s, '{}'::jsonb)",
                     ("transport-late-write", ctx.workspace_id, "0" * 64),
                 )
-            assert len(errors) == 1
-            assert isinstance(errors[0], RuntimeError if fresh == "fail-commit" else TransactionDeadlineExceeded)
+            if fresh != "normal":
+                waiter.join(timeout=2)
+                assert not waiter.is_alive()
+            assert len(errors) == (1 if fresh == "normal" else 2)
+            if fresh != "normal":
+                assert all(isinstance(error, ModelProxyBudgetError) and error.code == "accounting_unconfirmed" for error in errors)
+                assert budget_module._ProcessGate.unconfirmed is admission
+                assert not admission.settled and not successor_entered.is_set()
+                assert _admission_counts(ctx) == (0, 0, 0, 0)
+                for thread in threads:
+                    thread.join(timeout=2)
+                assert all(not thread.is_alive() for thread in threads)
+                return
+            assert isinstance(errors[0], TransactionDeadlineExceeded)
             if fresh == "normal":
                 assert errors[0].outcome_uncertain is (outer == "commit")
             if fresh != "normal":
@@ -4480,6 +4530,11 @@ def test_outer_transport_deadlines_keep_gate_through_resolution(
         finally:
             stop_barriers.set()
             release_successor.set()
+            if admission is not None and not admission.closed:
+                admission.abort()
+            for thread in threads:
+                thread.join(timeout=6)
+            assert all(not thread.is_alive() for thread in threads)
             monkeypatch.setattr(ctx.budget._jobs, "transaction", transaction)
             monkeypatch.setattr(psycopg.Connection, "_exec_command", command)
             monkeypatch.setattr(psycopg.Cursor, "execute", execute)
@@ -4493,9 +4548,172 @@ def test_outer_transport_deadlines_keep_gate_through_resolution(
                 if admission is not None:
                     if not admission.closed:
                         admission.abort()
-                    elif not admission.settled:
+                    elif not admission.settled and budget_module._ProcessGate.unconfirmed is None:
                         admission._resolve()
             finally:
                 for thread in threads:
                     thread.join(timeout=6)
+                assert all(not thread.is_alive() for thread in threads)
+                with budget_module._ProcessGate.transition:
+                    budget_module._ProcessGate.unconfirmed = None
                 assert all(not thread.is_alive() for thread in threads), "budget test thread survived cleanup"
+
+
+@pytest.mark.parametrize("fault", [
+    "sql", "commit", "receipt-lock", "connect", "statement", "commit-ack", "cleanup",
+])
+def test_persistent_accounting_failure_closes_process_before_waking_callers(
+    admission_context, monkeypatch, fault,
+):
+    """Consumed accounting has 5s + 300ms scheduling allowance, then CLOSED.
+
+    Reuse transaction transport seam: assertions here cover lifecycle, atomic
+    ledgers and queued callers, rather than duplicating primitive SQL tests.
+    """
+    ctx = admission_context
+    admission = _admit(ctx, _prepared("2"), request_id=f"persistent-{fault}")
+    identity, intent, bounds = admission._identity, admission._receipt_request, admission.bounds
+    admission.cursor.connection.close()
+    original_reason = RuntimeError("provider consumed request; usage unavailable")
+    transaction = ctx.budget._jobs.transaction
+    execute_command = psycopg.Connection._exec_command
+    persist = budget_module.ModelCallAdmission._persist
+    wait = budget_module._ProcessGate.transition.wait
+    queued = threading.Event()
+    queued_count = 0
+    results, threads, deadlines, connections, sends = [], [], [], [], ["upstream"]
+    active_transport = {}
+
+    def observed_wait(timeout=None):
+        nonlocal queued_count
+        queued_count += 1
+        if queued_count == 2:
+            queued.set()
+        return wait(timeout)
+
+    def caller(index):
+        try:
+            with ModelProxyBudget(ctx.service.config).admit(
+                ctx.workspace_id, ctx.actor_id, None, None, ctx.work_id,
+                None, None, None, f"persistent-waiter-{index}", None, _prepared("1"),
+            ):
+                sends.append("unexpected")
+        except BaseException as error:
+            results.append(error)
+
+    with ExitStack() as resources:
+        holder = resources.enter_context(psycopg.connect(
+            **ctx.service.config.connection_kwargs("postgres"), autocommit=True,
+        ))
+        receipt_id = f"model_call:receipt:{identity}"
+        if fault == "receipt-lock":
+            holder.execute(
+                "SELECT pg_advisory_lock(hashtextextended('omp_jobs.operation:' || %s, 0))",
+                (receipt_id,),
+            )
+
+        @contextmanager
+        def failing_transaction(workspace_id, actor_id, **kwargs):
+            assert all(conn.closed for conn in connections)
+            deadlines.append(kwargs["deadline"])
+            store = NativeJobStore(ctx.service.config)
+            if fault in ("connect", "commit-ack", "cleanup"):
+                config, blocked, committed = resources.enter_context(_transport(
+                    ctx.service.config, stall_connect=fault == "connect",
+                ))
+                store = NativeJobStore(config)
+            with store.transaction(workspace_id, actor_id, **kwargs) as cur:
+                connections.append(cur.connection)
+                if fault in ("commit-ack", "cleanup") and len(deadlines) == 2:
+                    active_transport[cur.connection] = (blocked, committed)
+                yield cur
+
+        def failed_persist(self, cur, captured):
+            if self is admission:
+                if fault == "statement":
+                    cur.execute("SELECT pg_sleep(6)")
+                if fault == "cleanup":
+                    raise RuntimeError("fallback write failed before stalled rollback")
+                result = persist(self, cur, captured)
+                if fault == "sql":
+                    cur.execute("SELECT 1/0")
+                return result
+            return persist(self, cur, captured)
+
+        def failed_command(conn, command, *args, **kwargs):
+            if len(deadlines) == 2 and connections and conn is connections[-1]:
+                if fault == "commit" and command == b"COMMIT":
+                    raise RuntimeError("persistent fallback COMMIT failure")
+                if conn in active_transport and command == (b"COMMIT" if fault == "commit-ack" else b"ROLLBACK"):
+                    active_transport[conn][0].set()
+            return (yield from execute_command(conn, command, *args, **kwargs))
+
+        monkeypatch.setattr(ctx.budget._jobs, "transaction", failing_transaction)
+        monkeypatch.setattr(budget_module.ModelCallAdmission, "_persist", failed_persist)
+        monkeypatch.setattr(psycopg.Connection, "_exec_command", failed_command)
+        monkeypatch.setattr(budget_module._ProcessGate.transition, "wait", observed_wait)
+        try:
+            for index in range(2):
+                thread = threading.Thread(target=caller, args=(index,))
+                threads.append(thread)
+                thread.start()
+            assert queued.wait(2), "both callers must wait under gate before settlement"
+            start = time.monotonic()
+            with pytest.raises(ModelProxyBudgetError) as raised:
+                admission.settle_unmeasurable_failure(original_reason)
+            assert time.monotonic() - start < 5.3
+            assert raised.value.code == "accounting_unconfirmed"
+            assert raised.value.original_reason is original_reason
+            assert raised.value.__cause__ is not original_reason
+            for thread in threads:
+                thread.join(timeout=1)
+            assert all(not thread.is_alive() for thread in threads)
+            assert len(results) == 2
+            assert all(isinstance(error, ModelProxyBudgetError) and error.code == "accounting_unconfirmed" for error in results)
+            assert sends == ["upstream"]
+            assert len(deadlines) == 2, "at most one fallback; no transaction retry"
+            assert deadlines[0] <= start + 1.05 and deadlines[1] <= start + 5.05
+            assert all(conn.closed for conn in connections)
+            assert admission.closed and not admission.settled
+            assert budget_module._ProcessGate.owner is None
+            retained = budget_module._ProcessGate.unconfirmed
+            assert retained is admission
+            assert (retained._identity, retained._receipt_request, retained.bounds) == (identity, intent, bounds)
+            assert retained.max_usd == Decimal(2) and retained.max_tokens == 150
+            snapshot = _accounting_snapshot(ctx)
+            assert _admission_counts(ctx) == ((1, 1, 1, 2) if fault == "commit-ack" else (0, 0, 0, 0))
+
+            def forbidden_transaction(*args, **kwargs):
+                pytest.fail("CLOSED admission reached database")
+
+            monkeypatch.setattr(NativeJobStore, "transaction", forbidden_transaction)
+            monkeypatch.setattr(ctx.budget._jobs, "transaction", forbidden_transaction)
+            for budget in (ctx.budget, ModelProxyBudget(ctx.service.config)):
+                with pytest.raises(ModelProxyBudgetError) as refused:
+                    budget.admit(
+                        ctx.workspace_id, ctx.actor_id, None, None, ctx.work_id,
+                        None, None, None, "closed-fresh", None, _prepared("1"),
+                    )
+                assert refused.value.code == "accounting_unconfirmed"
+            with pytest.raises(ModelProxyBudgetError) as retry:
+                admission._resolve()
+            assert retry.value.code == "accounting_unconfirmed"
+            with pytest.raises(ModelProxyBudgetError) as primitive_retry:
+                admission._resolve_accounting()
+            assert primitive_retry.value.code == "accounting_unconfirmed"
+            admission.abort()
+            admission.__exit__(None, None, None)
+            admission._owner.release()
+            assert budget_module._ProcessGate.unconfirmed is retained
+            monkeypatch.undo()
+            assert _accounting_snapshot(ctx) == snapshot, "late write or partial accounting"
+        finally:
+            for thread in threads:
+                thread.join(timeout=6)
+            assert all(not thread.is_alive() for thread in threads)
+            monkeypatch.undo()
+            # Test-only reset after bounded joins. Disposable database owns rows.
+            with budget_module._ProcessGate.transition:
+                budget_module._ProcessGate.unconfirmed = None
+                if budget_module._ProcessGate.owner is admission._owner.token:
+                    admission._owner.release()

@@ -20,9 +20,10 @@ receipt replay, settlement, abort, and context exit all go through the owner.
 A consumed exit stack is not a live transaction. Cross-process exclusion is the
 database lock itself. Completed receipts are checked before authorization so
 retries can replay after cancellation or stop without another upstream call.
-Unresolved settlements retain their owner until private reconciliation verifies or
-commits the captured accounting in a fresh transaction. A receipt replay whose
-read-transaction commit fails before ``admit`` returns keeps that closed,
+Consumed settlements resolve within 5s including cleanup and one fallback.
+Unconfirmed accounting latches process-wide CLOSED before releasing the gate,
+retaining captured identity and USD/token bounds without reopening. A receipt
+replay whose read-transaction commit fails before ``admit`` returns keeps that closed,
 unresolved owner in process-wide state. A later identical admit resolves it
 before acquiring another gate, and only after a durable matching receipt is
 read and cleaned up. Changed intent conflicts and leaves the retained owner in
@@ -79,6 +80,8 @@ class _ProcessGate:
     owner: object | None = None
     # Call identity -> replay admission whose commit failed before admit returned.
     retained_replay: dict[str, ModelCallAdmission] = {}
+    # Terminal process latch; retains identity, authority and USD/token bounds.
+    unconfirmed: ModelCallAdmission | None = None
 
 
 def _acquire_process_gate(token: object, identity: str) -> ModelCallAdmission | None:
@@ -89,6 +92,8 @@ def _acquire_process_gate(token: object, identity: str) -> ModelCallAdmission | 
     """
     with _ProcessGate.transition:
         while True:
+            if _ProcessGate.unconfirmed is not None:
+                raise ModelProxyBudgetError("accounting_unconfirmed")
             retained = _ProcessGate.retained_replay.get(identity)
             if retained is not None:
                 return retained
@@ -143,6 +148,7 @@ class _LifecycleOwner:
         self.stack = stack
         self._mu = threading.Lock()
         self._claimed = False
+        self._released = False
 
     @classmethod
     def acquire(cls, identity: str) -> _LifecycleOwner | ModelCallAdmission:
@@ -176,7 +182,11 @@ class _LifecycleOwner:
         return True
 
     def release(self) -> None:
-        _release_process_gate(self.token)
+        with self._mu:
+            if self._released:
+                return
+            self._released = True
+            _release_process_gate(self.token)
 
     def complete(self, error: BaseException | None = None) -> bool:
         """Clean up the transaction, then release this token's gate once."""
@@ -188,11 +198,17 @@ class _LifecycleOwner:
             self.release()
 
 
+def _no_effect_existing_receipt() -> dict[str, object]:
+    """Operation effect callback when a receipt is already known to exist."""
+    raise AssertionError("existing receipt disappeared under operation lock")
+
+
 class ModelProxyBudgetError(Exception):
     """Raised when model-call admission or settlement is refused."""
 
     def __init__(self, code: str, detail: str | None = None) -> None:
         self.code = code
+        self.original_reason: BaseException | str | None = None
         self.detail = detail or code
         super().__init__(f"{code}: {self.detail}" if detail and detail != code else code)
 
@@ -355,12 +371,9 @@ class ModelProxyBudget:
             )
             cur.execute("SELECT 1 FROM omp_jobs.operations WHERE operation_id=%s", (receipt_id,))
             if cur.fetchone() is not None:
-                def no_effect() -> dict[str, object]:
-                    raise AssertionError("existing receipt disappeared under operation lock")
-
                 try:
                     receipt = self._jobs.run_operation(
-                        cur, receipt_id, workspace_uuid, "model_call_receipt", receipt_request, no_effect,
+                        cur, receipt_id, workspace_uuid, "model_call_receipt", receipt_request, _no_effect_existing_receipt,
                     ).result
                 except JobError as refused:
                     raise ModelProxyBudgetError(refused.code) from refused
@@ -504,7 +517,7 @@ class _AdmissionState:
     closed: bool = False
     receipt: dict[str, object] | None = None
     unresolved: _Settlement | None = None
-    failure: BaseException | None = None
+    failure: BaseException | str | None = None
     transition: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
 
@@ -577,7 +590,8 @@ class ModelCallAdmission:
         The spend row uses authorization captured at admission. A rolled-back
         write charges the admitted bound before surfacing the original error.
         Failed original transactions resolve within the same deadline without
-        reauthorization. Failed resolution retains the consumed call and gate.
+        reauthorization. Failed resolution retains the consumed call and closes
+        the process.
         """
         with self._state.transition:
             if self.closed and not self.settled and self._state.unresolved is None:
@@ -673,23 +687,12 @@ class ModelCallAdmission:
                                     bound_settlement.payload, self.decision, error,
                                 )
                             self._state.unresolved = captured
-                            self._state.failure = error
+                            if self._state.failure is None:
+                                self._state.failure = error
                             if conflict:
                                 raise
                             self._cur.execute("ROLLBACK TO SAVEPOINT model_call_settlement")
                 except BaseException as error:
-                    conflict = (
-                        isinstance(error, (JobError, ModelProxyBudgetError))
-                        and error.code == "idempotency_conflict"
-                    )
-                    if conflict:
-                        self._state.closed = True
-                        self._state.unresolved = captured
-                        self._owner.claim()
-                        self._owner.consume(error)
-                        if isinstance(error, JobError):
-                            raise ModelProxyBudgetError(error.code) from error
-                        raise
                     original_error = error
 
             # If write_error occurred but savepoint rollback succeeded on intact connection:
@@ -734,6 +737,10 @@ class ModelCallAdmission:
                 self._owner.consume(original_error)
             except BaseException:
                 pass
+
+            # Preserve consumed-call failure separately from resolution failure.
+            if self._state.failure is None:
+                self._state.failure = write_error if write_error is not None else original_error
 
             # Shared resolution in same attempt.
             self._resolve(deadline=total_deadline)
@@ -784,6 +791,31 @@ class ModelCallAdmission:
         return receipt
 
     def _resolve(self, deadline: float | None = None) -> dict[str, object]:
+        """One bounded resolution attempt; unconfirmed accounting closes process.
+
+        Total allowance is 5s, including original cleanup, receipt lookup and
+        one fallback with cleanup. No retry, reset or restart recovery exists.
+        """
+        if deadline is not None and not math.isfinite(deadline):
+            raise ValueError("transaction deadline must be finite")
+        with self._state.transition:
+            if self._state.unresolved is None or not self.closed or self.settled:
+                raise ModelProxyBudgetError("already_settled", "no unresolved settlement")
+            with _ProcessGate.transition:
+                if _ProcessGate.unconfirmed is not None:
+                    raise ModelProxyBudgetError("accounting_unconfirmed")
+            try:
+                return self._resolve_accounting(deadline)
+            except BaseException as failure:
+                error = ModelProxyBudgetError("accounting_unconfirmed", str(failure))
+                error.original_reason = self._state.failure or self._state.unresolved.failure
+                # Publish CLOSED while still owning gate, before waking waiters.
+                with _ProcessGate.transition:
+                    _ProcessGate.unconfirmed = self
+                self._owner.release()
+                raise error from failure
+
+    def _resolve_accounting(self, deadline: float | None = None) -> dict[str, object]:
         """Resolve only a failed consumed call; never acquire fresh authority.
 
         Reconciliation executes in two finite phases:
@@ -798,10 +830,13 @@ class ModelCallAdmission:
            spend and identity locks in admission order, and rechecks receipt before
            _persist. Only absence permits atomic write of _admitted_bound_payload
            with captured SpendDecision (never measured payload). A fresh mismatch
-           conflicts without overwrite. A failed fallback retains the lifecycle
-           owner without loops, reauthorization, or upstream sends.
+           conflicts without overwrite. The lifecycle wrapper closes the process
+           after failed fallback, before releasing its owner.
         """
         with self._state.transition:
+            with _ProcessGate.transition:
+                if _ProcessGate.unconfirmed is not None:
+                    raise ModelProxyBudgetError("accounting_unconfirmed")
             captured = self._state.unresolved
             if captured is None or not self.closed or self.settled:
                 raise ModelProxyBudgetError("already_settled", "no unresolved settlement")
@@ -844,16 +879,13 @@ class ModelCallAdmission:
                             (receipt_id,),
                         )
                         if cur.fetchone() is not None:
-                            def no_effect() -> dict[str, object]:
-                                raise AssertionError("existing receipt disappeared under operation lock")
-
                             outcome = self.budget._jobs.run_operation(
                                 cur,
                                 receipt_id,
                                 self.workspace_id,
                                 "model_call_receipt",
                                 receipt_request_obj,
-                                no_effect,
+                                _no_effect_existing_receipt,
                             )
                             cand = outcome.result
                             if (
@@ -898,9 +930,6 @@ class ModelCallAdmission:
                     (receipt_id,),
                 )
                 if cur.fetchone() is not None:
-                    def no_effect() -> dict[str, object]:
-                        raise AssertionError("existing receipt disappeared under operation lock")
-
                     try:
                         outcome = self.budget._jobs.run_operation(
                             cur,
@@ -908,7 +937,7 @@ class ModelCallAdmission:
                             self.workspace_id,
                             "model_call_receipt",
                             receipt_request_obj,
-                            no_effect,
+                            _no_effect_existing_receipt,
                         )
                         cand = outcome.result
                     except JobError as refused:
@@ -966,9 +995,6 @@ class ModelCallAdmission:
                 )
             )
 
-            def no_effect() -> dict[str, object]:
-                raise AssertionError("existing receipt disappeared under operation lock")
-
             try:
                 receipt = self.budget._jobs.run_operation(
                     cur,
@@ -976,7 +1002,7 @@ class ModelCallAdmission:
                     self.workspace_id,
                     "model_call_receipt",
                     json.loads(self._receipt_request),
-                    no_effect,
+                    _no_effect_existing_receipt,
                 ).result
             except JobError as refused:
                 raise ModelProxyBudgetError(refused.code) from refused
@@ -1012,7 +1038,10 @@ class ModelCallAdmission:
         be measured; ``Prepared`` documents that the caller then charges
         ``max_usd`` and ``max_tokens``.
         """
-        self._settle_admitted_bound()
+        with self._state.transition:
+            if self._state.failure is None:
+                self._state.failure = error
+            self._settle_admitted_bound()
         detail = str(error) if error is not None else "unmeasurable upstream failure"
         raise ModelProxyBudgetError("unmeasurable_failure", detail)
 
