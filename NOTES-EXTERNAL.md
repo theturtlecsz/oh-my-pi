@@ -763,3 +763,47 @@ the owner/operator's decision when the patch lands (the correct fix is to give
 the second slice a real consumed path or make both roots independent, not to
 weaken the gate). This session changed no external file.
 
+
+## OMP-319 — M5 bounded recursive study; owner work pending
+
+OMP-319-s06 adds `research/recursive_lab.py` and fixture source proof mapped in
+`docs/programme/M5-ACCEPTANCE.md`. Waiting for Chris: s07/s08. Real adoption,
+installed qualification and deployment remain unresolved. No live releases,
+services, scheduler, hardware or paid experiments were changed or run.
+These notes confer no authority (E0060).
+
+Owner must supply original signed caller grants, live standing-policy/action
+context, full recipe/spec/lineage bindings, preregistered observation/quality/cost
+bounds, disjoint development/confirmation datasets, existing native trial IDs,
+measured usage/ownership costs (unknown axes stay unknown), candidate and named
+stable replacement bundle pins, and local upstream-check JSON with consumed
+path/content and base/candidate commit pins. JSON, packets and fixture signatures
+are not substitutes for real owner decisions. No fabricated measurements or
+approval may fill missing fields. Explicit local OperationsConfig points at
+owner-authorized controller; input contains credential paths, not passwords.
+
+Owner invocation after separate authorization and input preparation:
+
+```python
+from omp_work.research.recursive_lab import load_packet, run_study
+result = run_study("owner-study-input.json", "owner-study-packet", chosen_method_sha256=None)
+packet = load_packet("owner-study-packet", result["packet_sha256"])
+```
+
+Run this Python with `uv run --project python/omp-work python` in authorized
+checkout. Chosen digest is generated source SHA-256, selecting only this bounded
+run; shared recipe-executor digest does not distinguish two recipes. Retirement
+proposes named, baseline-bound stable replacement and retains retired evidence.
+No installed default activation follows from `eligible` or chosen digest.
+
+Source-proof command:
+
+```sh
+OMP_WORK_POSTGRES_INTEGRATION=1 uv run --project python/omp-work --extra dev pytest python/omp-work/tests/test_research_m5_study.py
+```
+
+Drift emits pending QuestionItem unless owner supplies `reevaluation_input_path`
+for separately authorized, active window and fresh native evidence. Rerun uses
+same pipeline and retained consumption history. Chris must decide deployment,
+installed qualification and any ongoing programme; this slice cannot authorize
+those actions. No external credentials or external changes were used here.
