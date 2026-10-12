@@ -1,12 +1,15 @@
 """Intake commands expose wire revisions without changing storage history."""
 from __future__ import annotations
 
+from copy import deepcopy
 import hashlib
 import json
 import os
 from uuid import uuid4
 
 import pytest
+
+from omp_work.contracts.nsi.v1 import models as nsi
 
 from omp_work.contracts.nsi.v1.validate import content_hash
 from omp_work.intake_repository import append_revision, lock_revision, read_revision, revision_hashes
@@ -1151,3 +1154,210 @@ def test_http_claim_relations_read_replay_and_collision(service, http_intake, re
             ("idempotency_conflict", "mission", mission_id, {"code": "idempotency_conflict"}),
         ]
         assert all("mission_id" not in payload for _, _, _, payload in operation_events)
+
+
+def test_claim_admission_preserves_storage_copies_and_rejects_mutations(service, http_intake):
+    workspace_id, mission_id = http_intake
+    rule_bundle_hash = "1" * 64
+    schema_hash = "2" * 64
+    contract_hash = "3" * 64
+
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        seeded = revision_body(workspace_id, revision=0)
+        seeded["snapshot"]["state"] = "reasoning"
+        seeded["supersessions"] = {}
+        proposed_claim = seeded["snapshot"]["claims"][0]
+        span = proposed_claim["evidence"][0]
+        other_claim = seeded["snapshot"]["claims"][1]
+        other_claim["evidence"] = [span]
+        seeded["evidence_links"] = [
+            dict(claim_id=proposed_claim["id"], relation="supports", **span),
+            dict(claim_id=other_claim["id"], relation="neither", **span),
+        ]
+        seeded["binding"]["rule_bundle_hash"] = rule_bundle_hash
+        seeded["binding"]["schema_hash"] = schema_hash
+        seeded["binding"]["contract_hash"] = contract_hash
+        seeded_snapshot = nsi.IntakeSnapshot.model_validate(seeded["snapshot"])
+        c_hash, s_hash = revision_hashes(seeded_snapshot, seeded["artifact_bytes"])
+        seeded["binding"]["claim_set_hash"] = c_hash
+        seeded["binding"]["source_hash"] = s_hash
+
+        locked = lock_revision(
+            cur, workspace_id=workspace_id, run_id="run-1", expected_revision=-1,
+            mission_id=mission_id, operation_id=uuid4(),
+        )
+        append_revision(cur, locked, seeded, operation_id=uuid4())
+
+        baseline = read_revision(cur, workspace_id=workspace_id, run_id="run-1", revision=0)
+        assert baseline.body.decisions and baseline.body.derivations
+        assert len(baseline.snapshot.claims) > 1
+
+    W = 1
+    valid_admitted_by = {"id": str(OWNER), "kind": "owner"}
+    valid_claim = deepcopy(proposed_claim)
+    valid_claim.update(
+        state="admitted",
+        truth="true",
+        admitted_by=valid_admitted_by,
+    )
+    valid_links = [dict(span=span, relation="supports")]
+
+    mutations = [
+        # value
+        (
+            {**valid_claim, "value": {"type": "number", "value": 42.0}},
+            valid_links,
+        ),
+        # predicate
+        (
+            {**valid_claim, "predicate_id": "other_predicate"},
+            valid_links,
+        ),
+        # relation
+        (
+            valid_claim,
+            [dict(span=span, relation="contradicts")],
+        ),
+        # asserted_by
+        (
+            {**valid_claim, "asserted_by": {"id": "other-model", "kind": "model"}},
+            valid_links,
+        ),
+        # other state change: proposed
+        (
+            {**valid_claim, "state": "proposed"},
+            valid_links,
+        ),
+        # other state change: contested
+        (
+            {**valid_claim, "state": "contested"},
+            valid_links,
+        ),
+    ]
+
+    for bad_claim, bad_links in mutations:
+        bad_cmd = {
+            "type": "record_intake_claim",
+            "payload": {
+                "run_id": "run-1",
+                "expected_revision": W,
+                "claim": bad_claim,
+                "evidence_links": bad_links,
+            },
+        }
+        status, resp = _command(service, workspace_id, bad_cmd)
+        assert status == 400
+        assert resp["error"]["code"] == "invalid_request"
+        with connection(service, workspace_id) as conn:
+            assert conn.execute(
+                "SELECT current_revision FROM omp_work.intake_heads WHERE workspace_id=%s", (workspace_id,),
+            ).fetchone() == (0,)
+            assert conn.execute(
+                "SELECT count(*) FROM omp_work.intake_claim_supersessions WHERE workspace_id=%s", (workspace_id,),
+            ).fetchone() == (0,)
+
+    admit_cmd = {
+        "type": "record_intake_claim",
+        "payload": {
+            "run_id": "run-1",
+            "expected_revision": W,
+            "claim": valid_claim,
+            "evidence_links": valid_links,
+        },
+    }
+    status, body = _command(service, workspace_id, admit_cmd)
+    assert status == 200
+    result = body["result"]
+    assert result == {
+        "type": "record_intake_claim",
+        "run_id": "run-1",
+        "expected_revision": W,
+        "revision": W + 1,
+    }
+    assert set(result) == {"type", "run_id", "expected_revision", "revision"}
+    assert "evidence_status" not in result
+    assert "mission_id" not in result
+
+    with connection(service, workspace_id) as conn:
+        events = conn.execute(
+            "SELECT event_type, aggregate_type, aggregate_id, payload FROM omp_audit.domain_events "
+            "WHERE workspace_id=%s ORDER BY sequence", (workspace_id,),
+        ).fetchall()
+        assert len(events) == 1
+        event_type, agg_type, agg_id, event_payload = events[0]
+        assert event_type == "record_intake_claim"
+        assert agg_type == "mission"
+        assert agg_id == mission_id
+        assert event_payload == {**result, "evidence_status": "supported"}
+        assert set(event_payload) == {"type", "run_id", "expected_revision", "revision", "evidence_status"}
+        assert "mission_id" not in event_payload
+
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        assert conn.execute(
+            "SELECT current_revision FROM omp_work.intake_heads WHERE workspace_id=%s", (workspace_id,),
+        ).fetchone() == (W,)
+        assert conn.execute(
+            "SELECT count(*) FROM omp_work.intake_claim_supersessions WHERE workspace_id=%s", (workspace_id,),
+        ).fetchone() == (0,)
+
+        stored = read_revision(cur, workspace_id=workspace_id, run_id="run-1", revision=W)
+
+        # storage revision W has state admitted, that truth, that admitted_by, the same asserted_by
+        admitted = next(c for c in stored.snapshot.claims if c.id == proposed_claim["id"])
+        assert admitted.state == "admitted"
+        assert admitted.truth == "true"
+        assert admitted.admitted_by.model_dump() == valid_admitted_by
+        assert admitted.asserted_by.model_dump() == proposed_claim["asserted_by"]
+
+        # supersession count 0
+        assert stored.body.supersessions == {}
+
+        # copies: entities, ontology, artifacts, bytes, run state, and other claims
+        assert stored.snapshot.entities == baseline.snapshot.entities
+        assert stored.snapshot.ontology == baseline.snapshot.ontology
+        assert stored.snapshot.artifacts == baseline.snapshot.artifacts
+        assert stored.artifact_bytes == baseline.artifact_bytes
+        assert stored.snapshot.state == baseline.snapshot.state
+        other_claims_stored = [c for c in stored.snapshot.claims if c.id != proposed_claim["id"]]
+        other_claims_baseline = [c for c in baseline.snapshot.claims if c.id != proposed_claim["id"]]
+        assert other_claims_stored == other_claims_baseline
+        assert len(other_claims_stored) > 0
+
+        # empty lists: decisions, assessments, derivations
+        assert stored.body.decisions == []
+        assert stored.body.assessments == []
+        assert stored.body.derivations == []
+
+        # both hashes equal revision_hashes
+        expected_claim_set_hash, expected_source_hash = revision_hashes(stored.snapshot, stored.artifact_bytes)
+        assert stored.body.binding.claim_set_hash == expected_claim_set_hash
+        assert stored.body.binding.source_hash == expected_source_hash
+
+        # those three hashes
+        assert (
+            stored.body.binding.rule_bundle_hash,
+            stored.body.binding.schema_hash,
+            stored.body.binding.contract_hash,
+        ) == (rule_bundle_hash, schema_hash, contract_hash)
+
+    # Post-admit: any other state change on the admitted claim is 400, head unchanged, count 0
+    post_admit_cmd = {
+        "type": "record_intake_claim",
+        "payload": {
+            "run_id": "run-1",
+            "expected_revision": W + 1,
+            "claim": valid_claim,
+            "evidence_links": valid_links,
+        },
+    }
+    status, body = _command(service, workspace_id, post_admit_cmd)
+    assert status == 400
+    assert body["error"]["code"] == "invalid_request"
+    with connection(service, workspace_id) as conn:
+        assert conn.execute(
+            "SELECT current_revision FROM omp_work.intake_heads WHERE workspace_id=%s", (workspace_id,),
+        ).fetchone() == (W,)
+        assert conn.execute(
+            "SELECT count(*) FROM omp_work.intake_claim_supersessions WHERE workspace_id=%s", (workspace_id,),
+        ).fetchone() == (0,)
+

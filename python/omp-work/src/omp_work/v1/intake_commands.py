@@ -1,6 +1,7 @@
 """Intake wire commands over caller-owned repository transactions."""
 from __future__ import annotations
 
+from collections import Counter
 import hashlib
 from uuid import UUID
 
@@ -185,44 +186,66 @@ def record_intake_claim(
         )
         previous = stored.snapshot
         claim = payload.claim
-        if any(c.id == claim.id for c in previous.claims):
-            raise WorkStoreError("invalid_request")
-        if claim.asserted_by != actor:
-            raise WorkStoreError("forbidden")
-        predicate = next((p for p in previous.ontology.predicates if p.id == claim.predicate_id), None)
-        if predicate is None:
-            raise WorkStoreError("invalid_request")
-        stored_entities = {entity.id: entity.type for entity in previous.entities}
-        subject_type = stored_entities.get(claim.subject.id)
-        if subject_type is None or subject_type != claim.subject.type:
-            raise WorkStoreError("invalid_request")
-        if subject_type not in predicate.subject_types:
-            raise WorkStoreError("invalid_request")
-        if claim.value.type == "entity":
-            target_id = claim.value.value.id
-            target_type = stored_entities.get(target_id)
-            if target_type is None or target_type != claim.value.value.type or target_type not in predicate.object_types:
+        existing_claim = next((c for c in previous.claims if c.id == claim.id), None)
+        if existing_claim is not None:
+            if existing_claim.state != "proposed" or claim.state != "admitted":
                 raise WorkStoreError("invalid_request")
-        previous_claim_ids = {c.id for c in previous.claims}
-        for premise_id in claim.premise_ids:
-            if premise_id == claim.id or premise_id not in previous_claim_ids:
+            if claim.admitted_by is None:
                 raise WorkStoreError("invalid_request")
-        if not claim.evidence or not payload.evidence_links:
-            raise WorkStoreError("invalid_request")
-        claim_spans = [(s.artifact_id, s.start_byte, s.end_byte, s.quote) for s in claim.evidence]
-        if len(claim_spans) != len(set(claim_spans)):
-            raise WorkStoreError("invalid_request")
-        link_spans = [
-            (link.span.artifact_id, link.span.start_byte, link.span.end_byte, link.span.quote)
-            for link in payload.evidence_links
-        ]
-        if len(link_spans) != len(set(link_spans)):
-            raise WorkStoreError("invalid_request")
-        if set(claim_spans) != set(link_spans):
-            raise WorkStoreError("invalid_request")
-        known_artifact_ids = {a.id for a in previous.artifacts}
-        if any(s.artifact_id not in known_artifact_ids for s in claim.evidence):
-            raise WorkStoreError("invalid_request")
+            if claim.model_dump(exclude={"state", "truth", "admitted_by"}) != existing_claim.model_dump(
+                exclude={"state", "truth", "admitted_by"}
+            ):
+                raise WorkStoreError("invalid_request")
+            stored_claim_links = [
+                (link.artifact_id, link.start_byte, link.end_byte, link.quote, link.relation)
+                for link in stored.body.evidence_links
+                if link.claim_id == claim.id
+            ]
+            payload_claim_links = [
+                (link.span.artifact_id, link.span.start_byte, link.span.end_byte, link.span.quote, link.relation)
+                for link in payload.evidence_links
+            ]
+            if len(stored_claim_links) != len(payload_claim_links) or Counter(stored_claim_links) != Counter(
+                payload_claim_links
+            ):
+                raise WorkStoreError("invalid_request")
+        else:
+            if claim.asserted_by != actor:
+                raise WorkStoreError("forbidden")
+            predicate = next((p for p in previous.ontology.predicates if p.id == claim.predicate_id), None)
+            if predicate is None:
+                raise WorkStoreError("invalid_request")
+            stored_entities = {entity.id: entity.type for entity in previous.entities}
+            subject_type = stored_entities.get(claim.subject.id)
+            if subject_type is None or subject_type != claim.subject.type:
+                raise WorkStoreError("invalid_request")
+            if subject_type not in predicate.subject_types:
+                raise WorkStoreError("invalid_request")
+            if claim.value.type == "entity":
+                target_id = claim.value.value.id
+                target_type = stored_entities.get(target_id)
+                if target_type is None or target_type != claim.value.value.type or target_type not in predicate.object_types:
+                    raise WorkStoreError("invalid_request")
+            previous_claim_ids = {c.id for c in previous.claims}
+            for premise_id in claim.premise_ids:
+                if premise_id == claim.id or premise_id not in previous_claim_ids:
+                    raise WorkStoreError("invalid_request")
+            if not claim.evidence or not payload.evidence_links:
+                raise WorkStoreError("invalid_request")
+            claim_spans = [(s.artifact_id, s.start_byte, s.end_byte, s.quote) for s in claim.evidence]
+            if len(claim_spans) != len(set(claim_spans)):
+                raise WorkStoreError("invalid_request")
+            link_spans = [
+                (link.span.artifact_id, link.span.start_byte, link.span.end_byte, link.span.quote)
+                for link in payload.evidence_links
+            ]
+            if len(link_spans) != len(set(link_spans)):
+                raise WorkStoreError("invalid_request")
+            if set(claim_spans) != set(link_spans):
+                raise WorkStoreError("invalid_request")
+            known_artifact_ids = {a.id for a in previous.artifacts}
+            if any(s.artifact_id not in known_artifact_ids for s in claim.evidence):
+                raise WorkStoreError("invalid_request")
 
         added_links = [
             EvidenceLinkRecord(
@@ -237,10 +260,17 @@ def record_intake_claim(
         ]
         evidence_status = status_from_labels([link.relation for link in payload.evidence_links])
 
+        if existing_claim is None:
+            new_claims = [*previous.claims, claim]
+            new_links = [*stored.body.evidence_links, *added_links]
+        else:
+            new_claims = [claim if c.id == claim.id else c for c in previous.claims]
+            new_links = [link for link in stored.body.evidence_links if link.claim_id != claim.id] + added_links
+
         snapshot = nsi.IntakeSnapshot(
             run_id=payload.run_id, revision=wire, state=previous.state,
             ontology=previous.ontology, entities=list(previous.entities),
-            claims=[*previous.claims, claim], artifacts=list(previous.artifacts),
+            claims=new_claims, artifacts=list(previous.artifacts),
         )
         artifact_bytes = {
             artifact_id: bytes(data) for artifact_id, data in stored.artifact_bytes.items()
@@ -249,7 +279,7 @@ def record_intake_claim(
         prior = stored.body.binding
         append_revision(cur, locked, IntakeRevisionBody(
             workspace_id=envelope.workspace_id, snapshot=snapshot, artifact_bytes=artifact_bytes,
-            evidence_links=[*stored.body.evidence_links, *added_links],
+            evidence_links=new_links,
             binding=nsi.Binding(
                 run_id=payload.run_id, revision=wire,
                 claim_set_hash=claim_set_hash, source_hash=source_hash,
