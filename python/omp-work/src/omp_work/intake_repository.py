@@ -6,6 +6,7 @@ failure, including deferred constraint failures at commit.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Literal
 from uuid import UUID
@@ -16,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .contracts.nsi.v1 import models
 from .contracts.nsi.v1.validate import content_hash
-from .v1.api_models import IntakeCriterionLink, IntakeDecisionRecord, IntakeIssueRecord
+from .v1.api_models import IntakeAssessmentView, IntakeCriterionLink, IntakeDecisionRecord, IntakeIssueRecord
 
 
 class IntakeRepositoryError(ValueError):
@@ -140,6 +141,47 @@ def _insert(cur: Cursor, table: str, values: dict[str, object]) -> None:
             sql.SQL(",").join(sql.Placeholder() for _ in values),
         ), list(values.values()),
     )
+
+
+def append_assessment(
+    cur: Cursor, locked: LockedHead, view: IntakeAssessmentView, operation_id: UUID,
+) -> None:
+    """Append evaluation records at the locked semantic revision, without advancing it.
+
+    Evaluation bindings belong to the evaluation, not the revision's legacy
+    hash placeholders. Full views retain provenance, issues and receipt links.
+    """
+    view = IntakeAssessmentView.model_validate_json(view.model_dump_json(exclude_unset=True))
+    binding = view.binding
+    if ((binding.run_id, binding.revision) != (locked.run_id, locked.current_revision)
+        or (view.provenance.run_id, view.provenance.revision) != (locked.run_id, locked.current_revision)):
+        raise IntakeRepositoryError("scope_mismatch")
+    binding_fields = binding.model_dump()
+    for record in (view.assessment, *view.receipts):
+        if {name: getattr(record, name) for name in binding_fields} != binding_fields:
+            raise IntakeRepositoryError("scope_mismatch")
+    if set(view.assessment.derivation_receipt_ids) != {receipt.id for receipt in view.receipts}:
+        raise IntakeRepositoryError("receipt_links_mismatch")
+    common = dict(workspace_id=locked.workspace_id, run_id=locked.run_id,
+                  revision=locked.current_revision, operation_id=operation_id, nsi_version="nsi/v1")
+    assessment = view.assessment
+    _insert(cur, "intake_assessments", common | dict(
+        assessment_id=view.id, assessed_revision=assessment.revision,
+        status=assessment.status.lower(), assessed_by=assessment.assessed_by.id,
+        created_at=assessment.created_at,
+        full_record=Jsonb(view.model_dump(mode="json", exclude_unset=True)),
+    ))
+    for receipt in view.receipts:
+        _insert(cur, "intake_derivations", common | dict(
+            derivation_id=receipt.id, rule_id=receipt.rule_id,
+            derived_by=receipt.derived_by.id, created_at=receipt.created_at,
+            full_record=Jsonb(receipt.model_dump(mode="json", exclude_unset=True)),
+        ))
+        for role, ids in (("premise", receipt.premise_ids), ("conclusion", receipt.conclusion_ids)):
+            for claim_id in ids:
+                _insert(cur, "intake_derivation_claims", common | dict(
+                    derivation_id=receipt.id, claim_id=claim_id, role=role,
+                ))
 
 
 def append_revision(
@@ -299,6 +341,7 @@ class IntakeRevisionView:
     rule_bundle_hash: str
     schema_hash: str
     body: IntakeRevisionBody
+    assessments: tuple[IntakeAssessmentView, ...] = ()
 
     @property
     def claim_set_hash(self) -> str:
@@ -439,6 +482,7 @@ def read_revision(
             **{name: row[name] for name in ("question_id", "answer", "reason", "created_at")}),
         settled_claim_ids=[link["claim_id"] for link in settled if link["decision_id"] == row["decision_id"]])
         for row in rows("owner_decisions")]
+    derivation_rows = rows("derivations")
     derivation_claims = rows("derivation_claims")
     derivations = [models.DerivationReceipt(
         id=row["derivation_id"], **binding.model_dump(), rule_id=row["rule_id"],
@@ -447,11 +491,24 @@ def read_revision(
                      if link["derivation_id"] == row["derivation_id"] and link["role"] == "premise"],
         conclusion_ids=[link["claim_id"] for link in derivation_claims
                         if link["derivation_id"] == row["derivation_id"] and link["role"] == "conclusion"])
-        for row in rows("derivations")]
+        for row in derivation_rows if row["full_record"] is None]
     assessments = []
-    # Writes place assessments at their assessed revision. Operation provenance
-    # locates the append that owns them, without leaking later assessments into history.
+    full_receipts = {
+        row["derivation_id"]: models.DerivationReceipt.model_validate(row["full_record"])
+        for row in derivation_rows if row["full_record"] is not None
+    }
+    assessment_views = tuple(
+        IntakeAssessmentView.model_validate_json(json.dumps(row["full_record"]))
+        for row in rows("assessments") if row["full_record"] is not None
+    )
+    assessment_views = tuple(view.model_copy(update={
+        "receipts": tuple(full_receipts[receipt.id] for receipt in view.receipts),
+    }) for view in assessment_views)
+    # Legacy semantic appends may own assessments stored at a prior revision.
+    # Keep that read path only for summaries; full records are revision-local.
     for row in rows("assessments", operation_id=stored["operation_id"]):
+        if row["full_record"] is not None:
+            continue
         cur.execute(
             "SELECT source_hash,claim_set_hash,rule_bundle_hash,schema_hash,contract_hash "
             "FROM omp_work.intake_revisions WHERE workspace_id=%s AND run_id=%s AND revision=%s",
@@ -486,4 +543,9 @@ def read_revision(
                   for row in rows("criteria")],
         assessments=assessments, derivations=derivations, supersessions=supersessions,
     )
-    return IntakeRevisionView(revision, snapshot, artifact_bytes, binding.rule_bundle_hash, binding.schema_hash, body)
+    # Evaluation records stay outside the semantic body so copying it into a
+    # subsequent semantic revision cannot carry forward an old READY assessment.
+    return IntakeRevisionView(
+        revision, snapshot, artifact_bytes, binding.rule_bundle_hash, binding.schema_hash,
+        body, assessment_views,
+    )
