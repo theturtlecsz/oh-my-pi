@@ -301,7 +301,8 @@ def create_app(config: ProxyConfig, *, transport: Transport | None = None) -> Fa
                         grant.spent += cur.fetchone()["usd"]
                     raise
                 result = guarded.result
-                assert result is not None
+                if result is None:
+                    raise AssertionError
                 with jobs.transaction(task.workspace_id, actor) as cur:
                     authority(task, cur)
                 active(grant)
