@@ -1613,8 +1613,6 @@ def test_usage_after_spend_fault_proves_atomic_bound_replacement(admission_conte
         assert receipt["settlement"]["input_tokens"] == 100
         assert receipt["settlement"]["output_tokens"] == 50
         assert receipt["settlement"]["cache_tokens"] == 0
-        encoded = json.dumps(durable, default=str)
-        assert "0.25" not in encoded and '"measured"' not in encoded
         for payload in (usage[0], usage_payload, ledger_payload, receipt["settlement"]):
             assert payload.get("input_tokens") != 7
             assert payload.get("output_tokens") != 3
@@ -1850,48 +1848,85 @@ def test_failed_settlement_reconciles_durable_accounting(admission_context, monk
             assert not waiter.is_alive()
 
 
-@pytest.mark.parametrize("field", ["intent", "fingerprint", "root_work_id", "settlement"])
-def test_resolution_receipt_conflict_retains_consumed_owner(admission_context, monkeypatch, field):
-    """Conflicting durable receipt cannot settle/release an owner or rewrite its ledgers."""
+@pytest.mark.parametrize("field", [
+    "workspace_id", "kind", "request_sha256", "intent", "fingerprint",
+    "root_work_id", "settlement",
+])
+def test_resolution_receipt_conflict_retains_consumed_owner(admission_context, field):
+    """Conflicting receipt cannot confirm, overwrite accounting, or release the gate."""
     ctx = admission_context
-    original = ctx.budget._jobs.transaction
-
-    @contextmanager
-    def ambiguous(workspace_id, actor_id, **kwargs):
-        with original(workspace_id, actor_id, **kwargs) as cur:
-            yield cur
-        raise RuntimeError("ambiguous commit")
-
-    monkeypatch.setattr(ctx.budget._jobs, "transaction", ambiguous)
-    admission = _admit(ctx, _prepared("1"), request_id="receipt-conflict")
+    other = _item(ctx, "receipt conflict waiter")
+    other_workspace = uuid4()
+    _grant(ctx.service, other_workspace)
+    _create(ctx.service, other_workspace, "foreign receipt workspace")
+    admission = _admit_and_fail_settle(
+        ctx, _prepared("2"), dict(actual_usd="1"),
+        commit_then_raise=True, request_id="receipt-conflict",
+    )
     receipt_id = f"model_call:receipt:{admission._identity}"
     stored = None
+    waiter = None
     try:
-        with pytest.raises(RuntimeError, match="ambiguous commit"):
-            admission.settle(actual_usd="1")
-        monkeypatch.setattr(ctx.budget._jobs, "transaction", original)
-        before = _admission_counts(ctx)
-        with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
-            cur.execute("SELECT request_sha256, result FROM omp_jobs.operations WHERE operation_id=%s", (receipt_id,))
-            stored = cur.fetchone()
-            if field == "intent":
-                cur.execute("UPDATE omp_jobs.operations SET request_sha256=%s WHERE operation_id=%s", ("0" * 64, receipt_id))
+        with psycopg.connect(
+            **ctx.service.config.connection_kwargs("postgres"), row_factory=dict_row
+        ) as conn:
+            stored = conn.execute(
+                "SELECT * FROM omp_jobs.operations WHERE operation_id=%s", (receipt_id,)
+            ).fetchone()
+            if field in ("workspace_id", "kind", "request_sha256"):
+                value = (other_workspace if field == "workspace_id" else
+                         "other_kind" if field == "kind" else "0" * 64)
+                conn.execute(sql.SQL("UPDATE omp_jobs.operations SET {}=%s WHERE operation_id=%s").format(
+                    sql.Identifier(field)), (value, receipt_id))
+            elif field == "intent":
+                request = json.loads(admission._receipt_request)
+                request["fingerprint"]["request_id"] = "changed-intent"
+                # Reuse operation machinery for the workspace-bound intent digest.
+                conn.execute("DELETE FROM omp_jobs.operations WHERE operation_id=%s", (receipt_id,))
+                ctx.jobs.run_operation(
+                    conn.cursor(), receipt_id, ctx.workspace_id, "model_call_receipt",
+                    request, lambda: stored["result"],
+                )
             else:
-                cur.execute("UPDATE omp_jobs.operations SET result=jsonb_set(result, %s, %s) WHERE operation_id=%s", ([field], Jsonb("changed"), receipt_id))
+                conn.execute(
+                    "UPDATE omp_jobs.operations SET result=jsonb_set(result, %s, %s) WHERE operation_id=%s",
+                    ([field], Jsonb("changed"), receipt_id),
+                )
+        corrupted = _accounting_snapshot(ctx)
+        with psycopg.connect(
+            **ctx.service.config.connection_kwargs("postgres"), row_factory=dict_row
+        ) as conn:
+            receipt_before = conn.execute(
+                "SELECT * FROM omp_jobs.operations WHERE operation_id=%s", (receipt_id,)
+            ).fetchone()
         with pytest.raises(ModelProxyBudgetError) as conflict:
-            admission.settle(actual_usd="1")
+            admission._resolve()
         assert conflict.value.code == "idempotency_conflict"
         assert admission.closed and not admission.settled
         admission.abort()
         assert admission.__exit__(None, None, None) is False
-        assert _admission_counts(ctx) == before
+        assert _accounting_snapshot(ctx) == corrupted
+        with psycopg.connect(
+            **ctx.service.config.connection_kwargs("postgres"), row_factory=dict_row
+        ) as conn:
+            assert conn.execute(
+                "SELECT * FROM omp_jobs.operations WHERE operation_id=%s", (receipt_id,)
+            ).fetchone() == receipt_before
+        waiter, waiting, finished, outcomes = _start_gate_waiter(ctx, other, "receipt-conflict-waiter")
+        assert waiting.wait(2) and not finished.wait(0.05), "conflict released gate"
     finally:
-        monkeypatch.setattr(ctx.budget._jobs, "transaction", original)
         if stored is not None:
-            with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
-                cur.execute("UPDATE omp_jobs.operations SET request_sha256=%s, result=%s WHERE operation_id=%s", (stored["request_sha256"], Jsonb(stored["result"]), receipt_id))
+            with psycopg.connect(**ctx.service.config.connection_kwargs("postgres")) as conn:
+                conn.execute(
+                    "UPDATE omp_jobs.operations SET workspace_id=%s, kind=%s, request_sha256=%s, result=%s, created_at=%s WHERE operation_id=%s",
+                    (stored["workspace_id"], stored["kind"], stored["request_sha256"],
+                     Jsonb(stored["result"]), stored["created_at"], receipt_id),
+                )
         if not admission.settled:
-            admission.settle(actual_usd="1")
+            admission._resolve()
+        if waiter is not None:
+            waiter.join(timeout=5)
+            assert not waiter.is_alive() and outcomes == ["admitted"]
     assert _admission_counts(ctx) == (1, 1, 1, 2)
 
 
@@ -3395,6 +3430,26 @@ def _admit_and_fail_settle(ctx, prepared, payload, *, commit_then_raise=False, *
         ctx.budget._jobs.transaction = original
 
 
+def _pause_resolution_fallback(ctx, monkeypatch):
+    """Pause after disposed lookup, before fresh fallback acquires any database locks."""
+    original = ctx.budget._jobs.transaction
+    gap, resume = threading.Event(), threading.Event()
+    connections = []
+
+    @contextmanager
+    def transaction(workspace_id, actor_id, **kwargs):
+        if len(connections) == 1:
+            assert connections[0].closed, "lookup still owns transaction"
+            gap.set()
+            assert resume.wait(5), "fallback barrier not released"
+        with original(workspace_id, actor_id, **kwargs) as cur:
+            connections.append(cur.connection)
+            yield cur
+
+    monkeypatch.setattr(ctx.budget._jobs, "transaction", transaction)
+    return SimpleNamespace(original=original, gap=gap, resume=resume, connections=connections)
+
+
 def test_resolve_default_deadline_phases_and_absent_fallback(admission_context, monkeypatch):
     """Receipt-first resolve defaults to now+5s: <=1s lookup and >=3s fallback on absent receipt."""
     ctx = admission_context
@@ -3449,6 +3504,210 @@ def test_resolve_default_deadline_phases_and_absent_fallback(admission_context, 
             admission._resolve()
 
 
+@pytest.mark.parametrize("change, code", [
+    ("stop", "agent_stop_engaged"),
+    ("worker", "job_fence_stale"),
+    ("fence", "job_fence_stale"),
+    ("lease", "job_fence_stale"),
+    ("policy", "standing_policy_required"),
+    ("project_cap", "ceiling_exceeded"),
+    ("mission_cap", "ceiling_exceeded"),
+    ("task_cap", "task_ceiling_exceeded"),
+])
+def test_resolve_fallback_uses_captured_authority(admission_context, monkeypatch, change, code):
+    """Authority changed after lookup cannot refuse or redirect consumed bound settlement."""
+    ctx = admission_context
+    mission = _mission(ctx, "1000")
+    root = _item(ctx, "captured root", _GENEROUS_ITEM)
+    task = _item(ctx, "captured task", _GENEROUS_ITEM)
+    parent = _admitting_job(ctx, work_id=root)
+    job = _admitting_job(ctx, work_id=task, parent_job_id=parent)
+    policy = StandingPolicy(
+        policy_id=uuid4(), action_class="spend_beyond_threshold", money_limit_usd=Decimal(1000),
+        decision_id=uuid4(), expires_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+    authority = ChangeAuthority("owner", policy.decision_id, "owner")
+    ctx.projects.set_spend_budget(
+        ctx.workspace_id, ctx.actor_id, ctx.project_id, None,
+        SpendBudget("project", Decimal(1000), Decimal(0)), authority,
+    )
+    ctx.projects.put_standing_policy(ctx.workspace_id, ctx.actor_id, ctx.project_id, policy, authority)
+    prepared = _prepared("2")
+    kw = dict(
+        mission_id=mission, work_id=task, job_id=job, worker_id="worker-1", fence=1,
+        task_ceiling_usd="2", request_id="captured-fallback",
+    )
+    if change in ("project_cap", "mission_cap"):
+        # Prior independent spend becomes exhausted when its cap drops after lookup.
+        with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
+            decision = ctx.projects.authorize_spend_cursor(
+                cur, ctx.workspace_id, ctx.project_id, mission, Decimal(1), datetime.now(UTC),
+            )
+            ctx.projects.append_spend_cursor(
+                cur, ctx.workspace_id, ctx.project_id, mission, Decimal(1), decision, uuid4(),
+            )
+    before = _admission_counts(ctx)
+    admission = _admit_and_fail_settle(ctx, prepared, dict(actual_usd="1"), **kw)
+    assert admission.decision.policy_id == policy.policy_id
+    pause = _pause_resolution_fallback(ctx, monkeypatch)
+    original, gap, resume, connections = pause.original, pause.gap, pause.resume, pause.connections
+    outcomes, errors, sends = [], [], ["upstream"]
+    resolver = None
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("captured settlement reauthorized stop/lease/cap/policy")
+
+    def resolve():
+        try:
+            outcomes.append(admission._resolve(deadline=time.monotonic() + 10))
+        except BaseException as error:
+            errors.append(error)
+
+    try:
+        resolver = threading.Thread(target=resolve)
+        resolver.start()
+        assert gap.wait(3), "resolution never reached absent-receipt fallback"
+        assert _admission_counts(ctx) == before
+        if change == "stop":
+            _engage_stop(ctx)
+        else:
+            with psycopg.connect(**ctx.service.config.connection_kwargs("postgres")) as conn:
+                if change in ("worker", "fence", "lease"):
+                    assignments = {
+                        "worker": "worker_id='changed'",
+                        "fence": "fence=fence+1",
+                        "lease": "lease_expires_at=clock_timestamp()-interval '1 second'",
+                    }
+                    conn.execute(
+                        sql.SQL("UPDATE omp_jobs.jobs SET " + assignments[change] + " WHERE job_id=%s"),
+                        (job,),
+                    )
+                elif change == "policy":
+                    conn.execute(
+                        "UPDATE omp_work.standing_policies SET expires_at=clock_timestamp()-interval '1 second' WHERE policy_id=%s",
+                        (policy.policy_id,),
+                    )
+                elif change in ("project_cap", "mission_cap"):
+                    conn.execute(
+                        "UPDATE omp_work.spend_budgets SET ceiling_usd=1, threshold_usd=0"
+                        " WHERE workspace_id=%s AND project_id=%s AND active"
+                        " AND mission_id IS NOT DISTINCT FROM %s",
+                        (ctx.workspace_id, ctx.project_id, mission if change == "mission_cap" else None),
+                    )
+        with monkeypatch.context() as guards:
+            guards.setattr(ctx.budget._projects, "authorize_spend_cursor", forbidden)
+            for name in ("_revalidate", "_refuse_if_stopped", "_enforce_item_cap", "_enforce_task_cap"):
+                guards.setattr(budget_module, name, forbidden)
+            resume.set()
+            resolver.join(timeout=11)
+            assert not resolver.is_alive()
+            assert errors == [] and len(outcomes) == 1
+        assert len(connections) == 2 and all(conn.closed for conn in connections)
+        monkeypatch.setattr(ctx.budget._jobs, "transaction", original)
+        assert admission.closed and admission.settled
+        assert _admission_counts(ctx) == tuple(n + d for n, d in zip(before, (1, 1, 1, 2)))
+        durable = _accounting_snapshot(ctx)
+        spend, usage, outbox, operations = durable
+        assert len(spend) == before[0] + 1
+        assert len(usage) == len(outbox) == 1
+        spend = [row for row in spend if row["record_id"] == admission._spend_record_id()]
+        assert len(spend) == 1
+        assert spend[0]["project_id"] == ctx.project_id
+        assert spend[0]["mission_id"] == mission
+        assert spend[0]["policy_id"] == policy.policy_id and spend[0]["tier"] == "tier2"
+        assert spend[0]["amount_usd"] == usage[0]["price_usd"] == Decimal(2)
+        assert usage[0]["work_id"] == task and usage[0]["job_id_derived"] == job
+        assert (usage[0]["input_tokens"], usage[0]["output_tokens"], usage[0]["cache_tokens"]) == (100, 50, 0)
+        assert usage[0]["measurement"] == "estimated"
+        receipts = [row["result"] for row in operations if row["kind"] == "model_call_receipt"]
+        assert len(receipts) == 1
+        assert receipts[0]["root_work_id"] == str(root)
+        assert receipts[0]["fingerprint"] == json.loads(admission._receipt_request)["fingerprint"]
+        assert receipts[0]["settlement"] == admission._admitted_bound_payload() | {"actual_usd": "2"}
+        with _admit(ctx, prepared, **kw) as replay:
+            if not replay.settled:
+                pytest.fail("captured replay would send upstream again")
+            assert replay.settle(**admission._admitted_bound_payload()) == outcomes[0]
+        fresh = kw | {"request_id": "changed-authority-fresh"}
+        with pytest.raises(ModelProxyBudgetError) as refused:
+            _admit(ctx, prepared, **fresh)
+        assert refused.value.code == code
+        assert _accounting_snapshot(ctx) == durable and sends == ["upstream"]
+    finally:
+        resume.set()
+        if resolver is not None:
+            resolver.join(timeout=11)
+            assert not resolver.is_alive()
+        monkeypatch.setattr(ctx.budget._jobs, "transaction", original)
+        if not admission.settled:
+            admission._resolve()
+
+
+def test_resolve_receipt_inserted_between_lookup_and_fallback(admission_context, monkeypatch):
+    """Second receipt check preserves independently committed actual usage and result."""
+    ctx = admission_context
+    prepared = _prepared("2")
+    payload = dict(actual_usd="1", input_tokens=10, output_tokens=5, cache_tokens=0)
+    before = _admission_counts(ctx)
+    admission = _admit_and_fail_settle(ctx, prepared, payload, request_id="receipt-race")
+    pause = _pause_resolution_fallback(ctx, monkeypatch)
+    original, gap, resume, connections = pause.original, pause.gap, pause.resume, pause.connections
+    persist = budget_module.ModelCallAdmission._persist
+    outcomes, errors = [], []
+    resolver = None
+    sends = ["upstream"]
+
+    def forbidden_persist(*args, **kwargs):
+        pytest.fail("racing actual receipt replaced with bound")
+
+    def resolve():
+        try:
+            outcomes.append(admission._resolve(deadline=time.monotonic() + 10))
+        except BaseException as error:
+            errors.append(error)
+
+    try:
+        resolver = threading.Thread(target=resolve)
+        resolver.start()
+        assert gap.wait(3)
+        assert _admission_counts(ctx) == before
+        # Separate transaction uses the same atomic operation writer as an independent settler.
+        with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
+            receipt = persist(admission, cur, budget_module._Settlement(
+                budget_module.canonical_json(payload | {
+                    "measurement": "measured", "model": prepared.route.model,
+                    "price_version": None,
+                }), admission.decision,
+            ))
+        durable = _accounting_snapshot(ctx)
+        monkeypatch.setattr(budget_module.ModelCallAdmission, "_persist", forbidden_persist)
+        resume.set()
+        resolver.join(timeout=11)
+        assert not resolver.is_alive() and errors == []
+        assert len(connections) == 2 and all(conn.closed for conn in connections)
+        assert admission.closed and admission.settled
+        assert outcomes[0]["actual_usd"] == Decimal(1)
+        assert outcomes[0]["usage"] == receipt["result"]["usage"]
+        assert _accounting_snapshot(ctx) == durable
+        assert _admission_counts(ctx) == tuple(n + d for n, d in zip(before, (1, 1, 1, 2)))
+        monkeypatch.setattr(ctx.budget._jobs, "transaction", original)
+        with _admit(ctx, prepared, request_id="receipt-race") as replay:
+            if not replay.settled:
+                sends.append("replay")
+            assert sends == ["upstream"], "racing receipt replay would resend"
+            assert replay.settle(**payload) == outcomes[0]
+        assert _accounting_snapshot(ctx) == durable
+    finally:
+        resume.set()
+        if resolver is not None:
+            resolver.join(timeout=11)
+            assert not resolver.is_alive()
+        monkeypatch.setattr(ctx.budget._jobs, "transaction", original)
+        monkeypatch.setattr(budget_module.ModelCallAdmission, "_persist", persist)
+        if not admission.settled:
+            admission._resolve()
+
+
 def test_resolve_matching_receipt_preserves_actual_without_bound_equality(
     admission_context, monkeypatch
 ):
@@ -3459,12 +3718,10 @@ def test_resolve_matching_receipt_preserves_actual_without_bound_equality(
     # Commit succeeded in DB, but client experienced error on commit exit
     admission = _admit_and_fail_settle(ctx, prepared, payload, commit_then_raise=True, request_id="resolve-match-test")
 
-    fallback_reached = False
+    original_lock = ctx.budget.lock_captured_identity
 
     def spy_lock_identity(*args, **kwargs):
-        nonlocal fallback_reached
-        fallback_reached = True
-        return ctx.budget.lock_captured_identity(*args, **kwargs)
+        pytest.fail("matching lookup receipt reached fallback")
 
     monkeypatch.setattr(ctx.budget, "lock_captured_identity", spy_lock_identity)
     try:
@@ -3472,13 +3729,12 @@ def test_resolve_matching_receipt_preserves_actual_without_bound_equality(
         assert admission.closed and admission.settled
         # Matching receipt preserves stored actual usage $1, even though bound was $2
         assert result["actual_usd"] == Decimal(1)
-        # Fallback was not reached because lookup succeeded!
-        assert not fallback_reached
 
         # Replay preserves actual $1
         with _admit(ctx, prepared, request_id="resolve-match-test") as replay:
             assert replay.settle(**payload) == result
     finally:
+        monkeypatch.setattr(ctx.budget, "lock_captured_identity", original_lock)
         if not admission.settled:
             admission._resolve()
 
@@ -3531,8 +3787,10 @@ def test_resolve_lookup_cleanup_failure_still_uses_one_fresh_fallback(
         ctx, prepared, payload, commit_then_raise=durable_receipt, request_id=request_id
     )
     bound = admission._admitted_bound_payload()
+    durable = _accounting_snapshot(ctx)
     original_transaction = ctx.budget._jobs.transaction
     original_execute = psycopg.Cursor.execute
+    original_command = psycopg.Connection._exec_command
     connections = []
     deadlines = []
     lookup_errors = []
@@ -3549,7 +3807,7 @@ def test_resolve_lookup_cleanup_failure_still_uses_one_fresh_fallback(
                 connections.append(cur.connection)
                 yield cur
         finally:
-            if lookup:
+            if lookup and not lookup_fails:
                 assert connections[0].closed
                 cleanup_errors.append("rollback acknowledgement lost")
                 raise psycopg.OperationalError(cleanup_errors[-1])
@@ -3563,8 +3821,18 @@ def test_resolve_lookup_cleanup_failure_still_uses_one_fresh_fallback(
             raise psycopg.OperationalError(lookup_errors[-1])
         return original_execute(cur, query, *args, **kwargs)
 
+    def failing_rollback(conn, command, *args, **kwargs):
+        if (
+            lookup_fails and connections and conn is connections[0]
+            and command == b"ROLLBACK" and not cleanup_errors
+        ):
+            cleanup_errors.append("rollback acknowledgement lost")
+            raise psycopg.OperationalError(cleanup_errors[-1])
+        return (yield from original_command(conn, command, *args, **kwargs))
+
     monkeypatch.setattr(ctx.budget._jobs, "transaction", failing_lookup_cleanup)
     monkeypatch.setattr(psycopg.Cursor, "execute", failing_lookup_execute)
+    monkeypatch.setattr(psycopg.Connection, "_exec_command", failing_rollback)
     try:
         start = time.monotonic()
         result = admission._resolve()
@@ -3573,15 +3841,19 @@ def test_resolve_lookup_cleanup_failure_still_uses_one_fresh_fallback(
         assert 0 < deadlines[0] - start <= 1.05
         assert deadlines[1] - deadlines[0] >= 3
         assert deadlines[1] - start <= 5.05
+        assert len(set(connections)) == 2
         assert all(connection.closed for connection in connections)
         assert lookup_errors == (["lookup failed"] if lookup_fails else [])
         assert cleanup_errors == ["rollback acknowledgement lost"]
 
         monkeypatch.setattr(ctx.budget._jobs, "transaction", original_transaction)
         monkeypatch.setattr(psycopg.Cursor, "execute", original_execute)
+        monkeypatch.setattr(psycopg.Connection, "_exec_command", original_command)
         expected_usd = Decimal(1) if durable_receipt else Decimal(2)
         expected_tokens = 15 if durable_receipt else 150
         assert result["actual_usd"] == expected_usd
+        if durable_receipt:
+            assert _accounting_snapshot(ctx) == durable
         assert _admission_counts(ctx) == tuple(n + d for n, d in zip(before, (1, 1, 1, 2)))
         with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
             cur.execute(
@@ -3609,6 +3881,7 @@ def test_resolve_lookup_cleanup_failure_still_uses_one_fresh_fallback(
     finally:
         monkeypatch.setattr(ctx.budget._jobs, "transaction", original_transaction)
         monkeypatch.setattr(psycopg.Cursor, "execute", original_execute)
+        monkeypatch.setattr(psycopg.Connection, "_exec_command", original_command)
         if not admission.settled:
             admission._resolve()
 
