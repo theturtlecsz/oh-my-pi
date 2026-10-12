@@ -321,6 +321,7 @@ def test_journey_check_explain_malformed_id(store, receipt, capsys, raw_campaign
 
 
 @pytest.mark.parametrize("json_flag", [False, True])
+@pytest.mark.parametrize("explain", [False, True])
 @pytest.mark.parametrize(
     "raw_campaign,expected_substr",
     [
@@ -333,11 +334,19 @@ def test_journey_check_explain_malformed_id(store, receipt, capsys, raw_campaign
             {"campaign_id": CAMPAIGN_ID, "state": 42},
             f"campaign {CAMPAIGN_ID} has invalid state: 42",
         ),
+        (
+            {"campaign_id": CAMPAIGN_ID, "state": []},
+            f"campaign {CAMPAIGN_ID} has invalid state: []",
+        ),
+        (
+            {"campaign_id": CAMPAIGN_ID, "state": {}},
+            f"campaign {CAMPAIGN_ID} has invalid state: {{}}",
+        ),
     ],
-    ids=["missing-state", "bogus-state", "numeric-state"],
+    ids=["missing-state", "bogus-state", "numeric-state", "list-state", "dict-state"],
 )
 def test_journey_check_explain_malformed_state(
-    store, receipt, capsys, raw_campaign, expected_substr, json_flag
+    store, receipt, capsys, raw_campaign, expected_substr, json_flag, explain
 ):
     propose(store, receipt)
     client = ResearchClient([raw_campaign])
@@ -346,7 +355,7 @@ def test_journey_check_explain_malformed_state(
         client,
         capsys,
         passed=False,
-        explain=True,
+        explain=explain,
         json_flag=json_flag,
         expected_reason_substr=expected_substr,
     )

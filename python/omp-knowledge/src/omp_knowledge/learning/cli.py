@@ -489,7 +489,7 @@ def main(
                                 reason = f"campaign at index {idx} has missing or blank campaign_id"
                                 break
                             state = campaign.get("state")
-                            if state is None or state not in VALID_CAMPAIGN_STATES:
+                            if not isinstance(state, str) or state not in VALID_CAMPAIGN_STATES:
                                 reason = (
                                     f"campaign {cid} has missing or invalid state"
                                     if state is None
