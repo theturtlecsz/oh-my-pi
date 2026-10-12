@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
-from datetime import datetime
 from typing import Literal
 
 from pydantic import AwareDatetime, Field, model_validator
@@ -217,7 +216,8 @@ def maintenance_plan(
         drift = False
         regression = False
         for result in results:
-            assert result.primary is not None
+            if result.primary is None:
+                raise AssertionError
             drift |= run_canary(policy.reference_primary, result.primary, policy.drift_tolerance,
                                 policy.tested_artifact_sha256, release.bundle_sha256)["status"] == "drift_detected"
             loss = policy.reference_primary - result.primary
