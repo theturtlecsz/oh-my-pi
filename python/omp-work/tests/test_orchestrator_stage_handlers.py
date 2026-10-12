@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from uuid import uuid4, uuid5
+from uuid import UUID, uuid4, uuid5
 
 import pytest
 
@@ -218,3 +218,31 @@ def test_non_plain_stage_does_not_sign(
     )
     result = run_stage(ctx)
     assert result.outcome == ("failed" if controls.get("fails") and not prior else "succeeded")
+
+
+def test_plain_audit_without_step_metadata_still_records_signed_pass(tmp_path: Path) -> None:
+    key = tmp_path / "verifier.key"
+    records = []
+
+    def record_intent(intent_key: str, action: str, target: dict[str, str]) -> None:
+        records.append((intent_key, action, target))
+
+    ctx = SimpleNamespace(
+        stage="audit", request={}, prior={},
+        config=SimpleNamespace(verifier_key_path=key),
+        intents=SimpleNamespace(record_intent=record_intent),
+    )
+
+    result = run_stage(ctx)
+
+    assert result.verdict == "pass"
+    intent_key, action, record = records.pop()
+    assert not records
+    mission_id = UUID(int=0)
+    assert intent_key == f"audit-accept:{mission_id}:0"
+    assert action == "sign_verdict"
+    assert accept_candidate(
+        key.read_bytes(), record,
+        candidate_sha256=hashlib.sha256(f"stub:{mission_id}".encode()).hexdigest(),
+        attempt_id=str(uuid5(mission_id, "stub-audit")), producer_id="worker",
+    )
