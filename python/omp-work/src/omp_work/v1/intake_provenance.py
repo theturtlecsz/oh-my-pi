@@ -162,24 +162,63 @@ def settle_provenance(
     current_question_ids = set(merged_questions.keys())
     snapshot_claim_ids = {c.id for c in settlement_copy.snapshot.claims}
 
+    # Identify original history decisions and supersessions before filtering
+    original_history_by_id = {d.decision.id: d for d in settlement_copy.history.decisions}
+    original_superseded = {
+        d.superseded_decision_id
+        for d in settlement_copy.history.decisions
+        if d.superseded_decision_id is not None
+    }
+
+    # Step 1: Filter history decisions with current question/claim membership
     reconciled_history_decisions: list[IntakeDecisionRecord] = []
     for d in settlement_copy.history.decisions:
         if d.decision.question_id in current_question_ids and set(d.claim_ids) <= snapshot_claim_ids:
             reconciled_history_decisions.append(d.model_copy(deep=True))
+
+    # Preserve supersession exclusions from original history:
+    # A decision that was superseded in original history must not reactivate as an active survivor.
+    # It can only remain in history if a surviving decision still supersedes it.
+    while True:
+        surviving_superseded_ids = {
+            d.superseded_decision_id
+            for d in reconciled_history_decisions
+            if d.superseded_decision_id is not None
+        }
+        pruned = [
+            d for d in reconciled_history_decisions
+            if d.decision.id not in original_superseded or d.decision.id in surviving_superseded_ids
+        ]
+        if len(pruned) == len(reconciled_history_decisions):
+            break
+        reconciled_history_decisions = pruned
+
     settlement_copy.history.decisions = reconciled_history_decisions
 
-    history_by_id = {d.decision.id: d for d in reconciled_history_decisions}
+    # Step 2: Reconcile body.decisions.
+    # Original history has precedence over body.decisions.
+    # If a decision existed in original history:
+    # - If its original history coverage is obsolete (question or claims removed),
+    #   it is obsolete and must NOT fall back to broader body.decisions coverage.
+    # - If it was superseded in original history, it must NOT be an active decision in body.decisions.
+    # - If it survives, its coverage must match original history (never broadened).
+    # If a decision was NOT in original history (snapshot-only):
+    # - It survives if its question and claims are in current membership.
     reconciled_body_decisions: list[DecisionRecord] = []
     for d in settlement_copy.decisions:
         if d.decision.question_id not in current_question_ids:
             continue
-        hist = history_by_id.get(d.decision.id)
-        if hist is not None:
-            original_claims = list(hist.claim_ids)
-            if set(original_claims) <= snapshot_claim_ids:
-                reconciled_body_decisions.append(
-                    d.model_copy(deep=True, update={"settled_claim_ids": original_claims})
-                )
+        if d.decision.id in original_history_by_id:
+            orig = original_history_by_id[d.decision.id]
+            if orig.decision.id in original_superseded:
+                continue
+            if orig.decision.question_id not in current_question_ids:
+                continue
+            if not (set(orig.claim_ids) <= snapshot_claim_ids):
+                continue
+            reconciled_body_decisions.append(
+                d.model_copy(deep=True, update={"settled_claim_ids": list(orig.claim_ids)})
+            )
         else:
             if set(d.settled_claim_ids) <= snapshot_claim_ids:
                 reconciled_body_decisions.append(d.model_copy(deep=True))

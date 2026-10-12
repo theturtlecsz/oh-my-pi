@@ -12,7 +12,7 @@ from omp_work.contracts.nsi.v1.compat import bounded_to_nsi, nsi_to_bounded
 from omp_work.contracts.nsi.v1.models import TypedBooleanValue, TypedIntegerValue
 from omp_work.contracts.nsi.v1.validate import content_hash
 from omp_work.intake_repository import DecisionRecord, read_revision
-from omp_work.v1.api_models import IntakeIssueRecord
+from omp_work.v1.api_models import IntakeDecisionRecord, IntakeIssueRecord
 from omp_work.v1.intake_provenance import (
     evaluate_intake_provenance,
     evaluate_provenance_projection,
@@ -281,24 +281,139 @@ def test_latest_conflict_gap_links_and_empty_override(service, write_repository)
 
 def test_regenerated_question_retaining_open_conflict(service, write_repository):
     workspace_id = write_repository[0]
+    draft = _draft(drop_unknowns=False)
+    draft = draft.model_copy(update={"acceptance_criteria": tuple(
+        ac.model_copy(update={"oracle": None}) if ac.id == "ac-export" else ac
+        for ac in draft.acceptance_criteria
+    )})
     body = make_body(workspace_id, relay=False)
+    snapshot = bounded_to_nsi(draft).model_copy(update={"run_id": RUN, "revision": 0})
+    extra_claims = [c for c in body.snapshot.claims if c.id in {"ancestor", "mid", "sibling", "leaf", "late", "retired"}]
+    all_claims = _retarget(list(snapshot.claims)) + extra_claims
+    body.snapshot = snapshot.model_copy(update={
+        "artifacts": body.snapshot.artifacts,
+        "claims": all_claims,
+        "entities": _entities(all_claims),
+    })
+    c1, l1 = _criterion("ac-export", "req-ac-export", "Owner edited export requirement.", "absent", ["ac-export", "goal-ready"])
+    body.criteria = [c1, body.criteria[1]]
+    body.history.criteria = [l1, body.history.criteria[1]]
+
     live_conflict = nsi.Conflict(
         id="conflict:live", claim_ids=["goal-ready", "ancestor"],
         predicate_id="bounded.constraint", reason="Live conflict",
     )
     body.conflicts = [live_conflict]
-    # The persisted question links the live conflict.
-    body.questions[0].conflict_ids = ["conflict:live"]
+    body.gaps = [
+        body.gaps[0],
+        nsi.Gap(
+            id="gap:oracle:ac-export", dimension_id="missing_verification_oracle", premise_id="ac-export",
+            reason="Export requirement oracle missing", materiality="critical", waiver_policy="never",
+        ),
+    ]
+    persisted_q = nsi.ClarificationQuestion(
+        id="question:oracle:ac-export",
+        question="Export requirement oracle missing",
+        gap_ids=["gap:oracle:ac-export"],
+        conflict_ids=["conflict:live"],
+        category="completion_signals",
+    )
+    body.questions = [body.questions[0], persisted_q]
     with connection(service, workspace_id) as conn, conn.cursor() as cur:
         append_body(cur, write_repository, body, uuid4(), -1)
         stored = read_revision(cur, workspace_id=workspace_id, run_id=RUN, revision=0).body
         resolved = resolve_provenance_closure(cur, stored)
         before = stored.model_dump(mode="json")
 
+        evaluation = evaluate_provenance_projection(stored, resolved, settle=False)
+        assert any(q.id == "question:oracle:ac-export" for q in evaluation.findings.questions)
+
         result = settle_provenance(stored, resolved)
         assert stored.model_dump(mode="json") == before
-        q = next(item for item in result.settlement.questions if item.id == "question-1")
+        q = next(item for item in result.settlement.questions if item.id == "question:oracle:ac-export")
         assert "conflict:live" in q.conflict_ids
+        assert any(item.id == "conflict:live" for item in result.unresolved)
+
+
+def test_broader_body_coverage_does_not_replace_original_owner_coverage(service, write_repository):
+    workspace_id = write_repository[0]
+    body = make_body(workspace_id, relay=False)
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        append_body(cur, write_repository, body, uuid4(), -1)
+        stored = read_revision(cur, workspace_id=workspace_id, run_id=RUN, revision=0).body
+        resolved = resolve_provenance_closure(cur, stored)
+
+        body_probe = stored.model_copy(deep=True)
+        # Original history decision covers ("goal-ready", "late")
+        body_probe.history.decisions[0] = body_probe.history.decisions[0].model_copy(update={
+            "claim_ids": ("goal-ready", "late"),
+        })
+        # Broader revision copy covers ("goal-ready", "leaf")
+        body_probe.decisions[0].settled_claim_ids = ["goal-ready", "leaf"]
+
+        # Remove "late" from snapshot claims so history decision has an obsolete target
+        body_probe.snapshot.claims = [c for c in body_probe.snapshot.claims if c.id != "late"]
+        body_probe.snapshot.entities = _entities(body_probe.snapshot.claims)
+
+        # Current live conflict requires ("goal-ready", "leaf")
+        live_conflict = nsi.Conflict(
+            id="conflict:live", claim_ids=["goal-ready", "leaf"],
+            predicate_id="bounded.constraint", reason="Conflict requiring leaf",
+        )
+        body_probe.conflicts = [live_conflict]
+        body_probe.questions[0].conflict_ids = ["conflict:live"]
+
+        result = settle_provenance(body_probe, resolved)
+        # Broader body coverage must NOT replace owner history coverage.
+        # Conflict remains unresolved because owner never authorized leaf.
+        assert any(item.id == "conflict:live" for item in result.unresolved)
+
+
+def test_superseded_decision_does_not_reactivate_when_successor_has_stale_claims(service, write_repository):
+    workspace_id = write_repository[0]
+    body = make_body(workspace_id, relay=False)
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        append_body(cur, write_repository, body, uuid4(), -1)
+        stored = read_revision(cur, workspace_id=workspace_id, run_id=RUN, revision=0).body
+        resolved = resolve_provenance_closure(cur, stored)
+
+        # D1 covers ("goal-ready", "leaf")
+        d1_record = stored.history.decisions[0].model_copy(update={
+            "claim_ids": ("goal-ready", "leaf"),
+        })
+        # D2 supersedes D1 on same question, covers ("goal-ready", "late")
+        d2_decision = d1_record.decision.model_copy(update={
+            "id": "decision-2",
+            "reason": "Superseding decision covering late",
+        })
+        d2_record = IntakeDecisionRecord(
+            decision=d2_decision,
+            claim_ids=("goal-ready", "late"),
+            instruction=d1_record.instruction,
+            superseded_decision_id="decision-1",
+        )
+        body_probe = stored.model_copy(deep=True)
+        body_probe.history.decisions = [d1_record, d2_record]
+        body_probe.decisions = [
+            DecisionRecord(decision=d1_record.decision.model_copy(deep=True), settled_claim_ids=["goal-ready", "leaf"]),
+            DecisionRecord(decision=d2_decision.model_copy(deep=True), settled_claim_ids=["goal-ready", "late"]),
+        ]
+
+        # Remove "late" from snapshot claims so D2 has an obsolete target
+        body_probe.snapshot.claims = [c for c in body_probe.snapshot.claims if c.id != "late"]
+        body_probe.snapshot.entities = _entities(body_probe.snapshot.claims)
+
+        # Current live conflict requires ("goal-ready", "leaf")
+        live_conflict = nsi.Conflict(
+            id="conflict:live", claim_ids=["goal-ready", "leaf"],
+            predicate_id="bounded.constraint", reason="Conflict requiring leaf",
+        )
+        body_probe.conflicts = [live_conflict]
+        body_probe.questions[0].conflict_ids = ["conflict:live"]
+
+        result = settle_provenance(body_probe, resolved)
+        # D2 drops due to obsolete target "late".
+        # D1 was superseded in original history, so it must not reactivate and settle the conflict.
         assert any(item.id == "conflict:live" for item in result.unresolved)
 
 
