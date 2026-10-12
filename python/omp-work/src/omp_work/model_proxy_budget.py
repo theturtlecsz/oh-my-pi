@@ -188,6 +188,11 @@ class _LifecycleOwner:
             self.release()
 
 
+def _no_effect_existing_receipt() -> dict[str, object]:
+    """Operation effect callback when a receipt is already known to exist."""
+    raise AssertionError("existing receipt disappeared under operation lock")
+
+
 class ModelProxyBudgetError(Exception):
     """Raised when model-call admission or settlement is refused."""
 
@@ -355,12 +360,9 @@ class ModelProxyBudget:
             )
             cur.execute("SELECT 1 FROM omp_jobs.operations WHERE operation_id=%s", (receipt_id,))
             if cur.fetchone() is not None:
-                def no_effect() -> dict[str, object]:
-                    raise AssertionError("existing receipt disappeared under operation lock")
-
                 try:
                     receipt = self._jobs.run_operation(
-                        cur, receipt_id, workspace_uuid, "model_call_receipt", receipt_request, no_effect,
+                        cur, receipt_id, workspace_uuid, "model_call_receipt", receipt_request, _no_effect_existing_receipt,
                     ).result
                 except JobError as refused:
                     raise ModelProxyBudgetError(refused.code) from refused
@@ -844,16 +846,13 @@ class ModelCallAdmission:
                             (receipt_id,),
                         )
                         if cur.fetchone() is not None:
-                            def no_effect() -> dict[str, object]:
-                                raise AssertionError("existing receipt disappeared under operation lock")
-
                             outcome = self.budget._jobs.run_operation(
                                 cur,
                                 receipt_id,
                                 self.workspace_id,
                                 "model_call_receipt",
                                 receipt_request_obj,
-                                no_effect,
+                                _no_effect_existing_receipt,
                             )
                             cand = outcome.result
                             if (
@@ -898,9 +897,6 @@ class ModelCallAdmission:
                     (receipt_id,),
                 )
                 if cur.fetchone() is not None:
-                    def no_effect() -> dict[str, object]:
-                        raise AssertionError("existing receipt disappeared under operation lock")
-
                     try:
                         outcome = self.budget._jobs.run_operation(
                             cur,
@@ -908,7 +904,7 @@ class ModelCallAdmission:
                             self.workspace_id,
                             "model_call_receipt",
                             receipt_request_obj,
-                            no_effect,
+                            _no_effect_existing_receipt,
                         )
                         cand = outcome.result
                     except JobError as refused:
@@ -966,9 +962,6 @@ class ModelCallAdmission:
                 )
             )
 
-            def no_effect() -> dict[str, object]:
-                raise AssertionError("existing receipt disappeared under operation lock")
-
             try:
                 receipt = self.budget._jobs.run_operation(
                     cur,
@@ -976,7 +969,7 @@ class ModelCallAdmission:
                     self.workspace_id,
                     "model_call_receipt",
                     json.loads(self._receipt_request),
-                    no_effect,
+                    _no_effect_existing_receipt,
                 ).result
             except JobError as refused:
                 raise ModelProxyBudgetError(refused.code) from refused
