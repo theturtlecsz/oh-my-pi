@@ -92,3 +92,59 @@ def test_max_workers_uses_configured_when_rollout_passed() -> None:
     record = passing(ATTENDED_CHECKS)
     record[ROLLOUT_CHECK] = {"result": "pass", "release": OTHER_RELEASE}
     assert max_workers(4, record) == 4
+
+
+# ==============================================================================
+# An unattended run with no release identity refuses a complete proof outright.
+# ==============================================================================
+
+
+def test_unattended_empty_release_refuses_labelled_complete_proof() -> None:
+    record = passing(UNATTENDED_CHECKS)
+    assert qualified(record, unattended=True, release="") == (False, UNATTENDED_CHECKS)
+
+
+def test_unattended_empty_release_refuses_all_empty_complete_proof() -> None:
+    record = passing(UNATTENDED_CHECKS, release="")
+    assert qualified(record, unattended=True, release="") == (False, UNATTENDED_CHECKS)
+
+
+def test_attended_empty_release_does_not_use_the_unattended_refusal() -> None:
+    record = passing(ATTENDED_CHECKS, release="")
+    assert qualified(record, unattended=False, release="") == (True, ())
+
+
+# ==============================================================================
+# max_workers release filtering: None keeps any rollout, strings match exactly.
+# ==============================================================================
+
+
+def test_max_workers_release_selects_the_matching_rollout() -> None:
+    record = passing(ATTENDED_CHECKS)
+    record[ROLLOUT_CHECK] = {"result": "pass", "release": "r0"}
+    assert max_workers(4, record, "r0") == 4
+    assert max_workers(4, record, "r1") == 1
+
+
+def test_max_workers_matching_release_uses_configured() -> None:
+    record = passing(ATTENDED_CHECKS)
+    record[ROLLOUT_CHECK] = {"result": "pass", "release": "r1"}
+    assert max_workers(4, record, "r1") == 4
+
+
+def test_max_workers_explicit_empty_release_requires_an_empty_label() -> None:
+    record = passing(ATTENDED_CHECKS)
+    record[ROLLOUT_CHECK] = {"result": "pass", "release": ""}
+    assert max_workers(4, record, "") == 4
+    record[ROLLOUT_CHECK] = {"result": "pass", "release": "r1"}
+    assert max_workers(4, record, "") == 1
+    record[ROLLOUT_CHECK] = {"result": "pass"}
+    assert max_workers(4, record, "") == 1
+
+
+def test_max_workers_none_release_ignores_the_rollout_label() -> None:
+    record = passing(ATTENDED_CHECKS)
+    record[ROLLOUT_CHECK] = {"result": "pass", "release": ""}
+    assert max_workers(4, record, None) == 4
+    record[ROLLOUT_CHECK] = {"result": "pass", "release": "r1"}
+    assert max_workers(4, record) == 4
