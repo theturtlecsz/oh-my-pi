@@ -9,12 +9,14 @@ from psycopg import Cursor
 from ..contracts.nsi.v1 import models as nsi
 from ..contracts.nsi.v1.validate import content_hash
 from ..intake_repository import (
-    IntakeRepositoryError, IntakeRevisionBody, append_revision, lock_revision,
-    read_revision, revision_hashes,
+    EvidenceLinkRecord, IntakeRepositoryError, IntakeRevisionBody, append_revision,
+    lock_revision, read_revision, revision_hashes,
 )
+from ..report_evidence import status_from_labels
 from .api_models import IntakeProvenance, IntakeRecordView, RegisterIntakeEvidenceResult
 from .models import (
-    CommandEnvelope, IntakeClaimEvidenceLink, RegisterIntakeEvidenceCommand, StartIntakeCommand,
+    CommandEnvelope, IntakeClaimEvidenceLink, RecordIntakeClaimCommand,
+    RegisterIntakeEvidenceCommand, StartIntakeCommand,
 )
 from .store_shared import WorkStoreError
 
@@ -137,10 +139,138 @@ def register_intake_evidence(
     ).model_dump(mode="json")
 
 
+class _RecordIntakeClaimResult(dict):
+    def __init__(self, data: dict[str, object], evidence_status: str) -> None:
+        super().__init__(data)
+        self._evidence_status = evidence_status
+
+    def __iter__(self):
+        yield from super().__iter__()
+        yield "evidence_status"
+
+    def keys(self):
+        yield from super().keys()
+        yield "evidence_status"
+
+    def __getitem__(self, key: str) -> object:
+        if key == "evidence_status":
+            return self._evidence_status
+        return super().__getitem__(key)
+
+
 def record_intake_claim(
     cur: Cursor, envelope: CommandEnvelope, actor_id: UUID, actor_kind: str,
 ) -> dict[str, object]:
-    raise WorkStoreError("unavailable")
+    actor = intake_actor(actor_kind, actor_id)
+    if not isinstance(envelope.command, RecordIntakeClaimCommand):
+        raise WorkStoreError("invalid_request")
+    payload = envelope.command.payload
+    wire = payload.expected_revision
+    cur.execute(
+        "SELECT mission_id,current_revision FROM omp_work.intake_heads "
+        "WHERE workspace_id=%s AND run_id=%s",
+        (envelope.workspace_id, payload.run_id),
+    )
+    head = cur.fetchone()
+    if head is None or head[1] != wire - 1:
+        raise WorkStoreError("stale_intake")
+    try:
+        locked = lock_revision(
+            cur, workspace_id=envelope.workspace_id, run_id=payload.run_id,
+            expected_revision=wire - 1, mission_id=head[0],
+            operation_id=envelope.operation_id,
+        )
+        stored = read_revision(
+            cur, workspace_id=envelope.workspace_id, run_id=payload.run_id, revision=wire - 1,
+        )
+        previous = stored.snapshot
+        claim = payload.claim
+        if any(c.id == claim.id for c in previous.claims):
+            raise WorkStoreError("invalid_request")
+        if claim.asserted_by != actor:
+            raise WorkStoreError("forbidden")
+        predicate = next((p for p in previous.ontology.predicates if p.id == claim.predicate_id), None)
+        if predicate is None:
+            raise WorkStoreError("invalid_request")
+        stored_entities = {entity.id: entity.type for entity in previous.entities}
+        subject_type = stored_entities.get(claim.subject.id)
+        if subject_type is None or subject_type != claim.subject.type:
+            raise WorkStoreError("invalid_request")
+        if subject_type not in predicate.subject_types:
+            raise WorkStoreError("invalid_request")
+        if claim.value.type == "entity":
+            target_id = claim.value.value.id
+            target_type = stored_entities.get(target_id)
+            if target_type is None or target_type != claim.value.value.type or target_type not in predicate.object_types:
+                raise WorkStoreError("invalid_request")
+        previous_claim_ids = {c.id for c in previous.claims}
+        for premise_id in claim.premise_ids:
+            if premise_id == claim.id or premise_id not in previous_claim_ids:
+                raise WorkStoreError("invalid_request")
+        if not claim.evidence or not payload.evidence_links:
+            raise WorkStoreError("invalid_request")
+        claim_spans = [(s.artifact_id, s.start_byte, s.end_byte, s.quote) for s in claim.evidence]
+        if len(claim_spans) != len(set(claim_spans)):
+            raise WorkStoreError("invalid_request")
+        link_spans = [
+            (link.span.artifact_id, link.span.start_byte, link.span.end_byte, link.span.quote)
+            for link in payload.evidence_links
+        ]
+        if len(link_spans) != len(set(link_spans)):
+            raise WorkStoreError("invalid_request")
+        if set(claim_spans) != set(link_spans):
+            raise WorkStoreError("invalid_request")
+        known_artifact_ids = {a.id for a in previous.artifacts}
+        if any(s.artifact_id not in known_artifact_ids for s in claim.evidence):
+            raise WorkStoreError("invalid_request")
+
+        added_links = [
+            EvidenceLinkRecord(
+                claim_id=claim.id,
+                artifact_id=link.span.artifact_id,
+                start_byte=link.span.start_byte,
+                end_byte=link.span.end_byte,
+                quote=link.span.quote,
+                relation=link.relation,
+            )
+            for link in payload.evidence_links
+        ]
+        evidence_status = status_from_labels([link.relation for link in payload.evidence_links])
+
+        snapshot = nsi.IntakeSnapshot(
+            run_id=payload.run_id, revision=wire, state=previous.state,
+            ontology=previous.ontology, entities=list(previous.entities),
+            claims=[*previous.claims, claim], artifacts=list(previous.artifacts),
+        )
+        artifact_bytes = {
+            artifact_id: bytes(data) for artifact_id, data in stored.artifact_bytes.items()
+        }
+        claim_set_hash, source_hash = revision_hashes(snapshot, artifact_bytes)
+        prior = stored.body.binding
+        append_revision(cur, locked, IntakeRevisionBody(
+            workspace_id=envelope.workspace_id, snapshot=snapshot, artifact_bytes=artifact_bytes,
+            evidence_links=[*stored.body.evidence_links, *added_links],
+            binding=nsi.Binding(
+                run_id=payload.run_id, revision=wire,
+                claim_set_hash=claim_set_hash, source_hash=source_hash,
+                rule_bundle_hash=prior.rule_bundle_hash, schema_hash=prior.schema_hash,
+                contract_hash=prior.contract_hash,
+            ),
+        ), operation_id=envelope.operation_id)
+    except IntakeRepositoryError as exc:
+        raise WorkStoreError(
+            "stale_intake" if str(exc) == "stale_revision" else "invalid_request",
+        ) from exc
+
+    return _RecordIntakeClaimResult(
+        {
+            "type": envelope.command.type,
+            "run_id": payload.run_id,
+            "expected_revision": wire,
+            "revision": wire + 1,
+        },
+        evidence_status,
+    )
 
 
 def execute_intake(
