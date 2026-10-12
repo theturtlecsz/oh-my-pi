@@ -956,3 +956,103 @@ def test_http_claim_accepts_reversed_distinct_evidence_links_and_persists_quotes
             (claim_id, "artifact-added", 6, 10, "beta", "contradicts"),
         }
         assert len(stored.body.evidence_links) == 2
+
+
+def test_claim_storage_copy_preserves_records_quotes_and_clears_derived(service, write_repository):
+    workspace_id, mission_id = write_repository
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        seeded = revision_body(workspace_id, revision=0)
+        seeded["snapshot"]["state"] = "reasoning"
+        seeded["binding"]["rule_bundle_hash"] = "1" * 64
+        seeded["binding"]["schema_hash"] = "2" * 64
+        seeded["binding"]["contract_hash"] = "3" * 64
+        prior_claim = seeded["snapshot"]["claims"][0]
+        seeded["evidence_links"] = [dict(
+            claim_id=prior_claim["id"], relation="supports", **prior_claim["evidence"][0],
+        )]
+        append_revision(cur, lock_revision(
+            cur, workspace_id=workspace_id, run_id="run-1", expected_revision=-1,
+            mission_id=mission_id, operation_id=uuid4(),
+        ), seeded, operation_id=uuid4())
+
+        baseline = read_revision(cur, workspace_id=workspace_id, run_id="run-1", revision=0)
+        assert baseline.body.decisions and baseline.body.assessments and baseline.body.derivations
+
+        new_claim_id = "claim-2"
+        artifact_id = baseline.snapshot.artifacts[0].id
+        new_span = dict(artifact_id=artifact_id, start_byte=0, end_byte=4, quote="hell")
+        envelope = claim_envelope(
+            workspace_id, OWNER, "owner",
+            claim_id=new_claim_id,
+            expected_revision=1,
+            artifact_id=artifact_id,
+            predicate_id=baseline.snapshot.ontology.predicates[0].id,
+            subject=baseline.snapshot.entities[0].model_dump(),
+            evidence=[new_span],
+            evidence_links=[dict(span=new_span, relation="contradicts")],
+        )
+        result, event = execute_intake(cur, envelope, OWNER, "owner")
+        assert result["type"] == "record_intake_claim"
+        assert result["expected_revision"] == 1
+        assert result["revision"] == 2
+        assert event["revision"] == 2
+
+        stored = read_revision(cur, workspace_id=workspace_id, run_id="run-1", revision=1)
+
+        assert stored.snapshot.entities == baseline.snapshot.entities
+        assert stored.snapshot.ontology == baseline.snapshot.ontology
+        assert stored.snapshot.artifacts == baseline.snapshot.artifacts
+        assert stored.artifact_bytes == baseline.artifact_bytes
+        assert stored.snapshot.state == baseline.snapshot.state == "reasoning"
+
+        assert stored.snapshot.claims[:-1] == baseline.snapshot.claims
+        assert stored.snapshot.claims[-1].id == new_claim_id
+        assert len(stored.snapshot.claims) == len(baseline.snapshot.claims) + 1
+
+        old_links = {
+            (link.claim_id, link.artifact_id, link.start_byte, link.end_byte, link.quote, link.relation)
+            for link in baseline.body.evidence_links
+        }
+        added_links = {
+            (new_claim_id, new_span["artifact_id"], new_span["start_byte"], new_span["end_byte"], new_span["quote"], "contradicts")
+        }
+        stored_links = {
+            (link.claim_id, link.artifact_id, link.start_byte, link.end_byte, link.quote, link.relation)
+            for link in stored.body.evidence_links
+        }
+        assert stored_links == old_links | added_links
+        assert len(stored.body.evidence_links) == len(baseline.body.evidence_links) + len(added_links)
+
+        assert stored.body.decisions == []
+        assert stored.body.assessments == []
+        assert stored.body.derivations == []
+
+        baseline_after = read_revision(cur, workspace_id=workspace_id, run_id="run-1", revision=0)
+        assert baseline_after.snapshot == baseline.snapshot
+        assert baseline_after.body.binding == baseline.body.binding
+        assert baseline_after.artifact_bytes == baseline.artifact_bytes
+        assert baseline_after.body.evidence_links == baseline.body.evidence_links
+        assert baseline_after.body.decisions == baseline.body.decisions
+        assert baseline_after.body.assessments == baseline.body.assessments
+        assert baseline_after.body.derivations == baseline.body.derivations
+
+        expected_claim_set_hash, expected_source_hash = revision_hashes(stored.snapshot, stored.artifact_bytes)
+        assert stored.body.binding.claim_set_hash == expected_claim_set_hash
+        assert stored.body.binding.source_hash == expected_source_hash
+        assert (
+            stored.body.binding.rule_bundle_hash,
+            stored.body.binding.schema_hash,
+            stored.body.binding.contract_hash,
+        ) == (
+            baseline.body.binding.rule_bundle_hash,
+            baseline.body.binding.schema_hash,
+            baseline.body.binding.contract_hash,
+        ) == ("1" * 64, "2" * 64, "3" * 64)
+        assert stored.snapshot.revision == 1
+        assert stored.body.binding.revision == 1
+
+        assert conn.execute(
+            "SELECT current_revision FROM omp_work.intake_heads WHERE workspace_id=%s AND run_id='run-1'",
+            (workspace_id,),
+        ).fetchone() == (1,)
+
