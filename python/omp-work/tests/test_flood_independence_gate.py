@@ -1067,6 +1067,91 @@ def test_manual_plan_promotion_waits_then_promotes_only_a_valid_plan(staged_floo
     _manual_promotion(staged_flood, tmp_path, consume=True)
 
 
+@pytest.mark.parametrize("promotion", ["auto", "manual"])
+@pytest.mark.parametrize("source", ["outputs", "evidence", "both"])
+@pytest.mark.parametrize("invalid_edge", ["producer_exclusion", "consumer_exclusion", "unnamed_result"])
+def test_owner_result_promotion_refuses_invalid_evidence_then_promotes_repair(
+        staged_flood, tmp_path, promotion, source, invalid_edge):
+    """Every entry path preserves invalid owner proposals and promotes only a consumed, eligible result."""
+    mod, _, _ = staged_flood
+    repo = _make_repo(tmp_path)
+    cfg = _make_config(tmp_path, repo, promotion=promotion)
+    pdir = _plan_tree(tmp_path)
+    result = "artifacts/result.json"
+
+    def proposal(*, repaired: bool):
+        producer_exclusion = result if not repaired and invalid_edge == "producer_exclusion" else "none"
+        consumer_exclusion = result if not repaired and invalid_edge == "consumer_exclusion" else "none"
+        work = ("Implement independent widget." if not repaired and invalid_edge == "unnamed_result"
+                else f"Consume {result} to implement widget.")
+        evidence = result if source in {"evidence", "both"} else "check complete"
+        write_slice(pdir, "ITEM-s01", owner=True,
+                    outputs=[result] if source in {"outputs", "both"} else [],
+                    body=f"Owner runs: check\nEvidence: {evidence}\n"
+                         f"Done when: passes.\nDo not touch: {producer_exclusion}")
+        write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/consumer.ts"],
+                    body=f"{work}\nDone when: test_consumer.py passes.\nDo not touch: {consumer_exclusion}")
+        return {p.name: p.read_bytes() for p in pdir.iterdir()}
+
+    def cli(command: str):
+        return subprocess.run(
+            [sys.executable, str(Path(mod.__file__).resolve()), command, "ITEM", "--config", str(cfg)],
+            capture_output=True, text=True,
+        )
+
+    proposed = proposal(repaired=False)
+    f = _reviewed_plan(mod, cfg)
+    expected = "ITEM-s02: depends_on ITEM-s01 lacks affirmative owner result evidence"
+    invalid = cli("check-plan")
+    assert invalid.returncode == 1, (invalid.stdout, invalid.stderr)
+    assert len(invalid.stdout.splitlines()) == 1, invalid.stdout
+    assert expected in invalid.stdout
+    _assert_proposed_unchanged(f, pdir, proposed)
+
+    f.plan_passed(f.tasks["ITEM"])
+    reloaded = mod.Flood(json.loads(cfg.read_text()), cfg.parent)
+    st = reloaded.state.task("ITEM")
+    assert st["status"] == "plan_ready", st
+    if promotion == "auto":
+        assert st["last_error"].startswith("plan gate failed:")
+        assert expected in st["last_error"]
+        assert st["last_error"] == f.state.task("ITEM")["last_error"]
+    else:
+        refused = cli("promote")
+        assert refused.returncode != 0, (refused.stdout, refused.stderr)
+        assert expected in refused.stdout
+    assert not (pdir / "PROMOTE").exists()
+    reloaded.settle_plans()
+    saved = mod.Flood(json.loads(cfg.read_text()), cfg.parent)
+    assert saved.state.task("ITEM")["status"] == "plan_ready"
+    assert all(sid not in saved.tasks for sid in ["ITEM-s01", "ITEM-s02"])
+    if promotion == "auto":
+        assert saved.state.task("ITEM")["last_error"] == st["last_error"]
+    _assert_proposed_unchanged(saved, pdir, proposed)
+
+    repaired = proposal(repaired=True)
+    valid = cli("check-plan")
+    assert valid.returncode == 0, (valid.stdout, valid.stderr)
+    assert valid.stdout.startswith("OK: 2 slices pass the plan gate")
+    _assert_proposed_unchanged(saved, pdir, repaired)
+    if promotion == "auto":
+        saved.state.task("ITEM").update(status="running", phase="plan-review", attempts=2)
+        saved.state.save()
+        saved.plan_passed(saved.tasks["ITEM"])
+    else:
+        saved.settle_plans()
+        _assert_proposed_unchanged(saved, pdir, repaired)
+        approved = cli("promote")
+        assert approved.returncode == 0, (approved.stdout, approved.stderr)
+        assert (pdir / "PROMOTE").is_file()
+        assert {p.name: p.read_bytes() for p in pdir.glob("*.md")} == repaired
+        saved = mod.Flood(json.loads(cfg.read_text()), cfg.parent)
+        assert saved.state.task("ITEM")["status"] == "plan_ready"
+        assert all(not (saved.tasks_dir / name).exists() for name in repaired)
+        saved.settle_plans()
+    _assert_promoted(mod, cfg, repaired)
+
+
 @pytest.mark.parametrize("label", ["Do not touch", "Assumptions", "Deferred"])
 @pytest.mark.parametrize("marker", ["", "**{label}:**", "**{label}**:", "- {label}:", "* {label}:", "+ {label}:", "1. {label}:", "1) {label}:"])
 def test_dependency_context_inline_exclusions_keep_peer_work(staged_flood, label, marker):
