@@ -17540,6 +17540,1572 @@
       "title": "HealthView",
       "type": "object"
     },
+    "IntakeAdmissionProvenance": {
+      "$defs": {
+        "IntakeOperationRef": {
+          "additionalProperties": false,
+          "properties": {
+            "event_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Event Id"
+            },
+            "operation_id": {
+              "format": "uuid",
+              "title": "Operation Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation_id"
+          ],
+          "title": "IntakeOperationRef",
+          "type": "object"
+        },
+        "OwnerRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "owner",
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "title": "OwnerRef",
+          "type": "object"
+        },
+        "RuleEngineRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "rule_engine",
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "title": "RuleEngineRef",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "admitted_by": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OwnerRef"
+            },
+            {
+              "$ref": "#/$defs/RuleEngineRef"
+            }
+          ],
+          "title": "Admitted By"
+        },
+        "claim_id": {
+          "minLength": 1,
+          "title": "Claim Id",
+          "type": "string"
+        },
+        "operation": {
+          "$ref": "#/$defs/IntakeOperationRef"
+        }
+      },
+      "required": [
+        "claim_id",
+        "admitted_by",
+        "operation"
+      ],
+      "title": "IntakeAdmissionProvenance",
+      "type": "object"
+    },
+    "IntakeAssessmentView": {
+      "$defs": {
+        "ActorRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "owner",
+                "service",
+                "model",
+                "tool",
+                "rule_engine"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "title": "ActorRef",
+          "type": "object"
+        },
+        "Binding": {
+          "additionalProperties": false,
+          "properties": {
+            "claim_set_hash": {
+              "title": "Claim Set Hash",
+              "type": "string"
+            },
+            "contract_hash": {
+              "title": "Contract Hash",
+              "type": "string"
+            },
+            "revision": {
+              "title": "Revision",
+              "type": "integer"
+            },
+            "rule_bundle_hash": {
+              "title": "Rule Bundle Hash",
+              "type": "string"
+            },
+            "run_id": {
+              "title": "Run Id",
+              "type": "string"
+            },
+            "schema_hash": {
+              "title": "Schema Hash",
+              "type": "string"
+            },
+            "source_hash": {
+              "title": "Source Hash",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "revision",
+            "contract_hash",
+            "claim_set_hash",
+            "rule_bundle_hash",
+            "schema_hash",
+            "source_hash"
+          ],
+          "title": "Binding",
+          "type": "object"
+        },
+        "ClarificationQuestion": {
+          "additionalProperties": false,
+          "properties": {
+            "category": {
+              "enum": [
+                "functional_scope_and_behavior",
+                "domain_and_data_model",
+                "interaction_and_ux_flow",
+                "non_functional_qualities",
+                "integrations_and_external_dependencies",
+                "edge_cases_and_failure_handling",
+                "constraints_and_tradeoffs",
+                "terminology",
+                "completion_signals",
+                "placeholders_and_ambiguities",
+                "scope_boundaries"
+              ],
+              "title": "Category",
+              "type": "string"
+            },
+            "conflict_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Conflict Ids",
+              "type": "array"
+            },
+            "gap_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Gap Ids",
+              "type": "array"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "question": {
+              "title": "Question",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "question",
+            "gap_ids",
+            "conflict_ids",
+            "category"
+          ],
+          "title": "ClarificationQuestion",
+          "type": "object"
+        },
+        "Conflict": {
+          "additionalProperties": false,
+          "properties": {
+            "claim_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Claim Ids",
+              "type": "array"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "predicate_id": {
+              "title": "Predicate Id",
+              "type": "string"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "claim_ids",
+            "predicate_id",
+            "reason"
+          ],
+          "title": "Conflict",
+          "type": "object"
+        },
+        "DerivationReceipt": {
+          "additionalProperties": false,
+          "properties": {
+            "claim_set_hash": {
+              "title": "Claim Set Hash",
+              "type": "string"
+            },
+            "conclusion_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Conclusion Ids",
+              "type": "array"
+            },
+            "contract_hash": {
+              "title": "Contract Hash",
+              "type": "string"
+            },
+            "created_at": {
+              "title": "Created At",
+              "type": "string"
+            },
+            "derived_by": {
+              "$ref": "#/$defs/RuleEngineRef"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "premise_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Premise Ids",
+              "type": "array"
+            },
+            "revision": {
+              "title": "Revision",
+              "type": "integer"
+            },
+            "rule_bundle_hash": {
+              "title": "Rule Bundle Hash",
+              "type": "string"
+            },
+            "rule_id": {
+              "title": "Rule Id",
+              "type": "string"
+            },
+            "run_id": {
+              "title": "Run Id",
+              "type": "string"
+            },
+            "schema_hash": {
+              "title": "Schema Hash",
+              "type": "string"
+            },
+            "source_hash": {
+              "title": "Source Hash",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "run_id",
+            "revision",
+            "contract_hash",
+            "claim_set_hash",
+            "rule_bundle_hash",
+            "schema_hash",
+            "source_hash",
+            "rule_id",
+            "premise_ids",
+            "conclusion_ids",
+            "derived_by",
+            "created_at"
+          ],
+          "title": "DerivationReceipt",
+          "type": "object"
+        },
+        "EntityRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "type": {
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "type"
+          ],
+          "title": "EntityRef",
+          "type": "object"
+        },
+        "EvidenceArtifact": {
+          "additionalProperties": false,
+          "properties": {
+            "actor": {
+              "$ref": "#/$defs/ActorRef"
+            },
+            "content_hash": {
+              "title": "Content Hash",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "media_type": {
+              "title": "Media Type",
+              "type": "string"
+            },
+            "revision": {
+              "title": "Revision",
+              "type": "string"
+            },
+            "uri": {
+              "title": "Uri",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "uri",
+            "content_hash",
+            "revision",
+            "actor",
+            "media_type"
+          ],
+          "title": "EvidenceArtifact",
+          "type": "object"
+        },
+        "EvidenceSpan": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_id": {
+              "title": "Artifact Id",
+              "type": "string"
+            },
+            "end_byte": {
+              "title": "End Byte",
+              "type": "integer"
+            },
+            "quote": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Quote"
+            },
+            "start_byte": {
+              "title": "Start Byte",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "artifact_id",
+            "start_byte",
+            "end_byte"
+          ],
+          "title": "EvidenceSpan",
+          "type": "object"
+        },
+        "Gap": {
+          "additionalProperties": false,
+          "properties": {
+            "dimension_id": {
+              "title": "Dimension Id",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "materiality": {
+              "enum": [
+                "critical",
+                "material",
+                "minor"
+              ],
+              "title": "Materiality",
+              "type": "string"
+            },
+            "premise_id": {
+              "title": "Premise Id",
+              "type": "string"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            },
+            "waiver_policy": {
+              "enum": [
+                "never",
+                "owner_with_reason"
+              ],
+              "title": "Waiver Policy",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "dimension_id",
+            "premise_id",
+            "reason",
+            "materiality",
+            "waiver_policy"
+          ],
+          "title": "Gap",
+          "type": "object"
+        },
+        "InstructionProvenance": {
+          "additionalProperties": false,
+          "description": "Where an owner instruction was received.",
+          "properties": {
+            "channel": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Channel",
+              "type": "string"
+            },
+            "message_ref": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Message Ref",
+              "type": "string"
+            },
+            "received_at": {
+              "format": "date-time",
+              "title": "Received At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "channel",
+            "message_ref",
+            "received_at"
+          ],
+          "title": "InstructionProvenance",
+          "type": "object"
+        },
+        "IntakeAdmissionProvenance": {
+          "additionalProperties": false,
+          "properties": {
+            "admitted_by": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/OwnerRef"
+                },
+                {
+                  "$ref": "#/$defs/RuleEngineRef"
+                }
+              ],
+              "title": "Admitted By"
+            },
+            "claim_id": {
+              "minLength": 1,
+              "title": "Claim Id",
+              "type": "string"
+            },
+            "operation": {
+              "$ref": "#/$defs/IntakeOperationRef"
+            }
+          },
+          "required": [
+            "claim_id",
+            "admitted_by",
+            "operation"
+          ],
+          "title": "IntakeAdmissionProvenance",
+          "type": "object"
+        },
+        "IntakeClaim": {
+          "additionalProperties": false,
+          "properties": {
+            "admitted_by": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/OwnerRef"
+                },
+                {
+                  "$ref": "#/$defs/RuleEngineRef"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Admitted By"
+            },
+            "asserted_by": {
+              "$ref": "#/$defs/ActorRef"
+            },
+            "category": {
+              "enum": [
+                "functional_scope_and_behavior",
+                "domain_and_data_model",
+                "interaction_and_ux_flow",
+                "non_functional_qualities",
+                "integrations_and_external_dependencies",
+                "edge_cases_and_failure_handling",
+                "constraints_and_tradeoffs",
+                "terminology",
+                "completion_signals",
+                "placeholders_and_ambiguities",
+                "scope_boundaries"
+              ],
+              "title": "Category",
+              "type": "string"
+            },
+            "evidence": {
+              "items": {
+                "$ref": "#/$defs/EvidenceSpan"
+              },
+              "title": "Evidence",
+              "type": "array"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "modality": {
+              "enum": [
+                "observed",
+                "desired",
+                "required",
+                "prohibited",
+                "possible",
+                "unknown"
+              ],
+              "title": "Modality",
+              "type": "string"
+            },
+            "origin": {
+              "enum": [
+                "owner_statement",
+                "policy_rule",
+                "repository_observation",
+                "tool_receipt",
+                "model_proposal",
+                "rule_derivation"
+              ],
+              "title": "Origin",
+              "type": "string"
+            },
+            "polarity": {
+              "enum": [
+                "positive",
+                "negative"
+              ],
+              "title": "Polarity",
+              "type": "string"
+            },
+            "predicate_id": {
+              "title": "Predicate Id",
+              "type": "string"
+            },
+            "premise_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Premise Ids",
+              "type": "array"
+            },
+            "state": {
+              "enum": [
+                "proposed",
+                "admitted",
+                "rejected",
+                "superseded"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "subject": {
+              "$ref": "#/$defs/EntityRef"
+            },
+            "truth": {
+              "enum": [
+                "true",
+                "false",
+                "unknown"
+              ],
+              "title": "Truth",
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TypedStringValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedIntegerValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNumberValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedBooleanValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNullValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedEntityValue"
+                }
+              ],
+              "title": "Value"
+            }
+          },
+          "required": [
+            "id",
+            "category",
+            "subject",
+            "predicate_id",
+            "value",
+            "origin",
+            "state",
+            "modality",
+            "polarity",
+            "truth",
+            "asserted_by",
+            "evidence",
+            "premise_ids"
+          ],
+          "title": "IntakeClaim",
+          "type": "object"
+        },
+        "IntakeClaimEvidenceLink": {
+          "additionalProperties": false,
+          "properties": {
+            "relation": {
+              "enum": [
+                "supports",
+                "contradicts",
+                "neither"
+              ],
+              "title": "Relation",
+              "type": "string"
+            },
+            "span": {
+              "$ref": "#/$defs/EvidenceSpan"
+            }
+          },
+          "required": [
+            "span",
+            "relation"
+          ],
+          "title": "IntakeClaimEvidenceLink",
+          "type": "object"
+        },
+        "IntakeClaimProvenance": {
+          "additionalProperties": false,
+          "properties": {
+            "ancestry_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Ancestry Ids",
+              "type": "array"
+            },
+            "artifacts": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/EvidenceArtifact"
+              },
+              "title": "Artifacts",
+              "type": "array"
+            },
+            "claim": {
+              "$ref": "#/$defs/IntakeClaim"
+            },
+            "evidence_links": {
+              "additionalProperties": {
+                "items": {
+                  "$ref": "#/$defs/IntakeClaimEvidenceLink"
+                },
+                "type": "array"
+              },
+              "title": "Evidence Links",
+              "type": "object"
+            }
+          },
+          "required": [
+            "claim"
+          ],
+          "title": "IntakeClaimProvenance",
+          "type": "object"
+        },
+        "IntakeDecisionProvenance": {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "$ref": "#/$defs/IntakeOperationRef"
+            },
+            "record": {
+              "$ref": "#/$defs/IntakeDecisionRecord"
+            }
+          },
+          "required": [
+            "record",
+            "operation"
+          ],
+          "title": "IntakeDecisionProvenance",
+          "type": "object"
+        },
+        "IntakeDecisionRecord": {
+          "additionalProperties": false,
+          "properties": {
+            "claim_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Claim Ids",
+              "type": "array"
+            },
+            "decision": {
+              "$ref": "#/$defs/OwnerDecision"
+            },
+            "instruction": {
+              "$ref": "#/$defs/OwnerInstruction"
+            },
+            "superseded_decision_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Superseded Decision Id"
+            },
+            "verified_relay_operation_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Verified Relay Operation Id"
+            }
+          },
+          "required": [
+            "decision",
+            "claim_ids",
+            "instruction"
+          ],
+          "title": "IntakeDecisionRecord",
+          "type": "object"
+        },
+        "IntakeIssueRecord": {
+          "additionalProperties": false,
+          "properties": {
+            "gaps": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Gaps",
+              "type": "array"
+            },
+            "issue": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Conflict"
+                },
+                {
+                  "$ref": "#/$defs/ClarificationQuestion"
+                }
+              ],
+              "title": "Issue"
+            }
+          },
+          "required": [
+            "issue",
+            "gaps"
+          ],
+          "title": "IntakeIssueRecord",
+          "type": "object"
+        },
+        "IntakeOperationRef": {
+          "additionalProperties": false,
+          "properties": {
+            "event_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Event Id"
+            },
+            "operation_id": {
+              "format": "uuid",
+              "title": "Operation Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation_id"
+          ],
+          "title": "IntakeOperationRef",
+          "type": "object"
+        },
+        "IntakeProvenance": {
+          "additionalProperties": false,
+          "properties": {
+            "admissions": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeAdmissionProvenance"
+              },
+              "title": "Admissions",
+              "type": "array"
+            },
+            "claims": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeClaimProvenance"
+              },
+              "title": "Claims",
+              "type": "array"
+            },
+            "decisions": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeDecisionProvenance"
+              },
+              "title": "Decisions",
+              "type": "array"
+            },
+            "relays": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeRelayProvenance"
+              },
+              "title": "Relays",
+              "type": "array"
+            },
+            "revision": {
+              "minimum": 0,
+              "title": "Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            },
+            "source_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Source Sha256",
+              "type": "string"
+            },
+            "sources": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeSourceProvenance"
+              },
+              "title": "Sources",
+              "type": "array"
+            },
+            "supersessions": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeSupersessionProvenance"
+              },
+              "title": "Supersessions",
+              "type": "array"
+            },
+            "traces": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeTrace"
+              },
+              "title": "Traces",
+              "type": "array"
+            }
+          },
+          "required": [
+            "run_id",
+            "revision",
+            "source_sha256"
+          ],
+          "title": "IntakeProvenance",
+          "type": "object"
+        },
+        "IntakeReadinessAssessment": {
+          "additionalProperties": false,
+          "properties": {
+            "assessed_by": {
+              "$ref": "#/$defs/RuleEngineRef"
+            },
+            "claim_set_hash": {
+              "title": "Claim Set Hash",
+              "type": "string"
+            },
+            "conflicts": {
+              "items": {
+                "$ref": "#/$defs/Conflict"
+              },
+              "title": "Conflicts",
+              "type": "array"
+            },
+            "contract_hash": {
+              "title": "Contract Hash",
+              "type": "string"
+            },
+            "created_at": {
+              "title": "Created At",
+              "type": "string"
+            },
+            "derivation_receipt_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Derivation Receipt Ids",
+              "type": "array"
+            },
+            "gaps": {
+              "items": {
+                "$ref": "#/$defs/Gap"
+              },
+              "title": "Gaps",
+              "type": "array"
+            },
+            "revision": {
+              "title": "Revision",
+              "type": "integer"
+            },
+            "rule_bundle_hash": {
+              "title": "Rule Bundle Hash",
+              "type": "string"
+            },
+            "run_id": {
+              "title": "Run Id",
+              "type": "string"
+            },
+            "schema_hash": {
+              "title": "Schema Hash",
+              "type": "string"
+            },
+            "source_hash": {
+              "title": "Source Hash",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "READY_FOR_RATIFICATION",
+                "NEEDS_SPEC",
+                "CONFLICTED"
+              ],
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "revision",
+            "contract_hash",
+            "claim_set_hash",
+            "rule_bundle_hash",
+            "schema_hash",
+            "source_hash",
+            "status",
+            "gaps",
+            "conflicts",
+            "derivation_receipt_ids",
+            "assessed_by",
+            "created_at"
+          ],
+          "title": "IntakeReadinessAssessment",
+          "type": "object"
+        },
+        "IntakeRelayProvenance": {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "$ref": "#/$defs/IntakeOperationRef"
+            },
+            "relay": {
+              "$ref": "#/$defs/RelayProvenance"
+            }
+          },
+          "required": [
+            "relay",
+            "operation"
+          ],
+          "title": "IntakeRelayProvenance",
+          "type": "object"
+        },
+        "IntakeSource": {
+          "additionalProperties": false,
+          "properties": {
+            "sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Sha256",
+              "type": "string"
+            },
+            "spans": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeSourceSpan"
+              },
+              "title": "Spans",
+              "type": "array"
+            },
+            "text": {
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "sha256"
+          ],
+          "title": "IntakeSource",
+          "type": "object"
+        },
+        "IntakeSourceProvenance": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact": {
+              "$ref": "#/$defs/EvidenceArtifact"
+            },
+            "operation": {
+              "$ref": "#/$defs/IntakeOperationRef"
+            },
+            "source": {
+              "$ref": "#/$defs/IntakeSource"
+            }
+          },
+          "required": [
+            "artifact",
+            "source",
+            "operation"
+          ],
+          "title": "IntakeSourceProvenance",
+          "type": "object"
+        },
+        "IntakeSourceSpan": {
+          "additionalProperties": false,
+          "properties": {
+            "end": {
+              "title": "End",
+              "type": "integer"
+            },
+            "exact_text_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Exact Text Sha256",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "start": {
+              "minimum": 0,
+              "title": "Start",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "start",
+            "end",
+            "exact_text_sha256"
+          ],
+          "title": "IntakeSourceSpan",
+          "type": "object"
+        },
+        "IntakeSupersessionProvenance": {
+          "additionalProperties": false,
+          "properties": {
+            "decision_id": {
+              "minLength": 1,
+              "title": "Decision Id",
+              "type": "string"
+            },
+            "old_claim_id": {
+              "minLength": 1,
+              "title": "Old Claim Id",
+              "type": "string"
+            },
+            "operation": {
+              "$ref": "#/$defs/IntakeOperationRef"
+            },
+            "replacement_claim_id": {
+              "minLength": 1,
+              "title": "Replacement Claim Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "old_claim_id",
+            "replacement_claim_id",
+            "decision_id",
+            "operation"
+          ],
+          "title": "IntakeSupersessionProvenance",
+          "type": "object"
+        },
+        "IntakeTrace": {
+          "additionalProperties": false,
+          "properties": {
+            "claim_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Claim Ids",
+              "type": "array"
+            },
+            "criterion_id": {
+              "minLength": 1,
+              "title": "Criterion Id",
+              "type": "string"
+            },
+            "requirement_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Requirement Ids",
+              "type": "array"
+            }
+          },
+          "required": [
+            "criterion_id",
+            "requirement_ids",
+            "claim_ids"
+          ],
+          "title": "IntakeTrace",
+          "type": "object"
+        },
+        "OwnerDecision": {
+          "additionalProperties": false,
+          "properties": {
+            "actor": {
+              "$ref": "#/$defs/OwnerRef"
+            },
+            "answer": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TypedStringValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedIntegerValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNumberValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedBooleanValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNullValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedEntityValue"
+                }
+              ],
+              "title": "Answer"
+            },
+            "created_at": {
+              "title": "Created At",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "question_id": {
+              "title": "Question Id",
+              "type": "string"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            },
+            "revision": {
+              "title": "Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "run_id",
+            "revision",
+            "actor",
+            "question_id",
+            "answer",
+            "reason",
+            "created_at"
+          ],
+          "title": "OwnerDecision",
+          "type": "object"
+        },
+        "OwnerInstruction": {
+          "additionalProperties": false,
+          "description": "The owner's words and the message they arrived on.",
+          "properties": {
+            "provenance": {
+              "$ref": "#/$defs/InstructionProvenance"
+            },
+            "text": {
+              "maxLength": 8000,
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "provenance"
+          ],
+          "title": "OwnerInstruction",
+          "type": "object"
+        },
+        "OwnerRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "owner",
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "title": "OwnerRef",
+          "type": "object"
+        },
+        "RelayProvenance": {
+          "additionalProperties": false,
+          "properties": {
+            "instruction": {
+              "$ref": "#/$defs/RelayedInstruction"
+            },
+            "relayed_by": {
+              "format": "uuid",
+              "title": "Relayed By",
+              "type": "string"
+            },
+            "signed": {
+              "title": "Signed",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "instruction",
+            "relayed_by",
+            "signed"
+          ],
+          "title": "RelayProvenance",
+          "type": "object"
+        },
+        "RelayedInstruction": {
+          "additionalProperties": false,
+          "properties": {
+            "owner_authored": {
+              "const": true,
+              "title": "Owner Authored",
+              "type": "boolean"
+            },
+            "received_at": {
+              "format": "date-time",
+              "title": "Received At",
+              "type": "string"
+            },
+            "source_message_ref": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Source Message Ref",
+              "type": "string"
+            },
+            "text": {
+              "maxLength": 8000,
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "source_message_ref",
+            "owner_authored",
+            "received_at"
+          ],
+          "title": "RelayedInstruction",
+          "type": "object"
+        },
+        "RuleEngineRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "rule_engine",
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "title": "RuleEngineRef",
+          "type": "object"
+        },
+        "TypedBooleanValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "boolean",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedBooleanValue",
+          "type": "object"
+        },
+        "TypedEntityValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "entity",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/EntityRef"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedEntityValue",
+          "type": "object"
+        },
+        "TypedIntegerValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "integer",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedIntegerValue",
+          "type": "object"
+        },
+        "TypedNullValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "null",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "null"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedNullValue",
+          "type": "object"
+        },
+        "TypedNumberValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "number",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "integer"
+                }
+              ],
+              "title": "Value"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedNumberValue",
+          "type": "object"
+        },
+        "TypedStringValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "string",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedStringValue",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "assessment": {
+          "$ref": "#/$defs/IntakeReadinessAssessment"
+        },
+        "binding": {
+          "$ref": "#/$defs/Binding"
+        },
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/IntakeProvenance"
+        },
+        "receipts": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DerivationReceipt"
+          },
+          "title": "Receipts",
+          "type": "array"
+        },
+        "unresolved_issues": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IntakeIssueRecord"
+          },
+          "title": "Unresolved Issues",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "assessment",
+        "binding",
+        "provenance"
+      ],
+      "title": "IntakeAssessmentView",
+      "type": "object"
+    },
     "IntakeBlockingQuestion": {
       "additionalProperties": false,
       "properties": {
@@ -17643,6 +19209,511 @@
         "relation"
       ],
       "title": "IntakeClaimEvidenceLink",
+      "type": "object"
+    },
+    "IntakeClaimProvenance": {
+      "$defs": {
+        "ActorRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "owner",
+                "service",
+                "model",
+                "tool",
+                "rule_engine"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "title": "ActorRef",
+          "type": "object"
+        },
+        "EntityRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "type": {
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "type"
+          ],
+          "title": "EntityRef",
+          "type": "object"
+        },
+        "EvidenceArtifact": {
+          "additionalProperties": false,
+          "properties": {
+            "actor": {
+              "$ref": "#/$defs/ActorRef"
+            },
+            "content_hash": {
+              "title": "Content Hash",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "media_type": {
+              "title": "Media Type",
+              "type": "string"
+            },
+            "revision": {
+              "title": "Revision",
+              "type": "string"
+            },
+            "uri": {
+              "title": "Uri",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "uri",
+            "content_hash",
+            "revision",
+            "actor",
+            "media_type"
+          ],
+          "title": "EvidenceArtifact",
+          "type": "object"
+        },
+        "EvidenceSpan": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_id": {
+              "title": "Artifact Id",
+              "type": "string"
+            },
+            "end_byte": {
+              "title": "End Byte",
+              "type": "integer"
+            },
+            "quote": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Quote"
+            },
+            "start_byte": {
+              "title": "Start Byte",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "artifact_id",
+            "start_byte",
+            "end_byte"
+          ],
+          "title": "EvidenceSpan",
+          "type": "object"
+        },
+        "IntakeClaim": {
+          "additionalProperties": false,
+          "properties": {
+            "admitted_by": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/OwnerRef"
+                },
+                {
+                  "$ref": "#/$defs/RuleEngineRef"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Admitted By"
+            },
+            "asserted_by": {
+              "$ref": "#/$defs/ActorRef"
+            },
+            "category": {
+              "enum": [
+                "functional_scope_and_behavior",
+                "domain_and_data_model",
+                "interaction_and_ux_flow",
+                "non_functional_qualities",
+                "integrations_and_external_dependencies",
+                "edge_cases_and_failure_handling",
+                "constraints_and_tradeoffs",
+                "terminology",
+                "completion_signals",
+                "placeholders_and_ambiguities",
+                "scope_boundaries"
+              ],
+              "title": "Category",
+              "type": "string"
+            },
+            "evidence": {
+              "items": {
+                "$ref": "#/$defs/EvidenceSpan"
+              },
+              "title": "Evidence",
+              "type": "array"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "modality": {
+              "enum": [
+                "observed",
+                "desired",
+                "required",
+                "prohibited",
+                "possible",
+                "unknown"
+              ],
+              "title": "Modality",
+              "type": "string"
+            },
+            "origin": {
+              "enum": [
+                "owner_statement",
+                "policy_rule",
+                "repository_observation",
+                "tool_receipt",
+                "model_proposal",
+                "rule_derivation"
+              ],
+              "title": "Origin",
+              "type": "string"
+            },
+            "polarity": {
+              "enum": [
+                "positive",
+                "negative"
+              ],
+              "title": "Polarity",
+              "type": "string"
+            },
+            "predicate_id": {
+              "title": "Predicate Id",
+              "type": "string"
+            },
+            "premise_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Premise Ids",
+              "type": "array"
+            },
+            "state": {
+              "enum": [
+                "proposed",
+                "admitted",
+                "rejected",
+                "superseded"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "subject": {
+              "$ref": "#/$defs/EntityRef"
+            },
+            "truth": {
+              "enum": [
+                "true",
+                "false",
+                "unknown"
+              ],
+              "title": "Truth",
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TypedStringValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedIntegerValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNumberValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedBooleanValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNullValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedEntityValue"
+                }
+              ],
+              "title": "Value"
+            }
+          },
+          "required": [
+            "id",
+            "category",
+            "subject",
+            "predicate_id",
+            "value",
+            "origin",
+            "state",
+            "modality",
+            "polarity",
+            "truth",
+            "asserted_by",
+            "evidence",
+            "premise_ids"
+          ],
+          "title": "IntakeClaim",
+          "type": "object"
+        },
+        "IntakeClaimEvidenceLink": {
+          "additionalProperties": false,
+          "properties": {
+            "relation": {
+              "enum": [
+                "supports",
+                "contradicts",
+                "neither"
+              ],
+              "title": "Relation",
+              "type": "string"
+            },
+            "span": {
+              "$ref": "#/$defs/EvidenceSpan"
+            }
+          },
+          "required": [
+            "span",
+            "relation"
+          ],
+          "title": "IntakeClaimEvidenceLink",
+          "type": "object"
+        },
+        "OwnerRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "owner",
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "title": "OwnerRef",
+          "type": "object"
+        },
+        "RuleEngineRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "rule_engine",
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "title": "RuleEngineRef",
+          "type": "object"
+        },
+        "TypedBooleanValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "boolean",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedBooleanValue",
+          "type": "object"
+        },
+        "TypedEntityValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "entity",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/EntityRef"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedEntityValue",
+          "type": "object"
+        },
+        "TypedIntegerValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "integer",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedIntegerValue",
+          "type": "object"
+        },
+        "TypedNullValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "null",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "null"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedNullValue",
+          "type": "object"
+        },
+        "TypedNumberValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "number",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "integer"
+                }
+              ],
+              "title": "Value"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedNumberValue",
+          "type": "object"
+        },
+        "TypedStringValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "string",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedStringValue",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "ancestry_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Ancestry Ids",
+          "type": "array"
+        },
+        "artifacts": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EvidenceArtifact"
+          },
+          "title": "Artifacts",
+          "type": "array"
+        },
+        "claim": {
+          "$ref": "#/$defs/IntakeClaim"
+        },
+        "evidence_links": {
+          "additionalProperties": {
+            "items": {
+              "$ref": "#/$defs/IntakeClaimEvidenceLink"
+            },
+            "type": "array"
+          },
+          "title": "Evidence Links",
+          "type": "object"
+        }
+      },
+      "required": [
+        "claim"
+      ],
+      "title": "IntakeClaimProvenance",
       "type": "object"
     },
     "IntakeCriterionLink": {
@@ -17920,6 +19991,386 @@
         "requirements"
       ],
       "title": "IntakeCriterionLink",
+      "type": "object"
+    },
+    "IntakeDecisionProvenance": {
+      "$defs": {
+        "EntityRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "type": {
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "type"
+          ],
+          "title": "EntityRef",
+          "type": "object"
+        },
+        "InstructionProvenance": {
+          "additionalProperties": false,
+          "description": "Where an owner instruction was received.",
+          "properties": {
+            "channel": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Channel",
+              "type": "string"
+            },
+            "message_ref": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Message Ref",
+              "type": "string"
+            },
+            "received_at": {
+              "format": "date-time",
+              "title": "Received At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "channel",
+            "message_ref",
+            "received_at"
+          ],
+          "title": "InstructionProvenance",
+          "type": "object"
+        },
+        "IntakeDecisionRecord": {
+          "additionalProperties": false,
+          "properties": {
+            "claim_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Claim Ids",
+              "type": "array"
+            },
+            "decision": {
+              "$ref": "#/$defs/OwnerDecision"
+            },
+            "instruction": {
+              "$ref": "#/$defs/OwnerInstruction"
+            },
+            "superseded_decision_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Superseded Decision Id"
+            },
+            "verified_relay_operation_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Verified Relay Operation Id"
+            }
+          },
+          "required": [
+            "decision",
+            "claim_ids",
+            "instruction"
+          ],
+          "title": "IntakeDecisionRecord",
+          "type": "object"
+        },
+        "IntakeOperationRef": {
+          "additionalProperties": false,
+          "properties": {
+            "event_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Event Id"
+            },
+            "operation_id": {
+              "format": "uuid",
+              "title": "Operation Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation_id"
+          ],
+          "title": "IntakeOperationRef",
+          "type": "object"
+        },
+        "OwnerDecision": {
+          "additionalProperties": false,
+          "properties": {
+            "actor": {
+              "$ref": "#/$defs/OwnerRef"
+            },
+            "answer": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TypedStringValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedIntegerValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNumberValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedBooleanValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNullValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedEntityValue"
+                }
+              ],
+              "title": "Answer"
+            },
+            "created_at": {
+              "title": "Created At",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "question_id": {
+              "title": "Question Id",
+              "type": "string"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            },
+            "revision": {
+              "title": "Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "run_id",
+            "revision",
+            "actor",
+            "question_id",
+            "answer",
+            "reason",
+            "created_at"
+          ],
+          "title": "OwnerDecision",
+          "type": "object"
+        },
+        "OwnerInstruction": {
+          "additionalProperties": false,
+          "description": "The owner's words and the message they arrived on.",
+          "properties": {
+            "provenance": {
+              "$ref": "#/$defs/InstructionProvenance"
+            },
+            "text": {
+              "maxLength": 8000,
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "provenance"
+          ],
+          "title": "OwnerInstruction",
+          "type": "object"
+        },
+        "OwnerRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "owner",
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "title": "OwnerRef",
+          "type": "object"
+        },
+        "TypedBooleanValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "boolean",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedBooleanValue",
+          "type": "object"
+        },
+        "TypedEntityValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "entity",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/EntityRef"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedEntityValue",
+          "type": "object"
+        },
+        "TypedIntegerValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "integer",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedIntegerValue",
+          "type": "object"
+        },
+        "TypedNullValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "null",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "null"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedNullValue",
+          "type": "object"
+        },
+        "TypedNumberValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "number",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "integer"
+                }
+              ],
+              "title": "Value"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedNumberValue",
+          "type": "object"
+        },
+        "TypedStringValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "string",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedStringValue",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "$ref": "#/$defs/IntakeOperationRef"
+        },
+        "record": {
+          "$ref": "#/$defs/IntakeDecisionRecord"
+        }
+      },
+      "required": [
+        "record",
+        "operation"
+      ],
+      "title": "IntakeDecisionProvenance",
       "type": "object"
     },
     "IntakeDecisionRecord": {
@@ -18400,91 +20851,36 @@
       "title": "IntakeIssueRecord",
       "type": "object"
     },
-    "IntakeProvenance": {
+    "IntakeOperationRef": {
       "additionalProperties": false,
       "properties": {
-        "revision": {
-          "minimum": 0,
-          "title": "Revision",
-          "type": "integer"
+        "event_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Event Id"
         },
-        "run_id": {
-          "minLength": 1,
-          "title": "Run Id",
-          "type": "string"
-        },
-        "source_sha256": {
-          "pattern": "^[0-9a-f]{64}$",
-          "title": "Source Sha256",
+        "operation_id": {
+          "format": "uuid",
+          "title": "Operation Id",
           "type": "string"
         }
       },
       "required": [
-        "run_id",
-        "revision",
-        "source_sha256"
+        "operation_id"
       ],
-      "title": "IntakeProvenance",
+      "title": "IntakeOperationRef",
       "type": "object"
     },
-    "IntakeRecordView": {
+    "IntakeProvenance": {
       "$defs": {
-        "AcceptanceCriterion": {
-          "additionalProperties": false,
-          "properties": {
-            "description": {
-              "title": "Description",
-              "type": "string"
-            },
-            "expected_result": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/TypedStringValue"
-                },
-                {
-                  "$ref": "#/$defs/TypedIntegerValue"
-                },
-                {
-                  "$ref": "#/$defs/TypedNumberValue"
-                },
-                {
-                  "$ref": "#/$defs/TypedBooleanValue"
-                },
-                {
-                  "$ref": "#/$defs/TypedNullValue"
-                },
-                {
-                  "$ref": "#/$defs/TypedEntityValue"
-                }
-              ],
-              "title": "Expected Result"
-            },
-            "id": {
-              "title": "Id",
-              "type": "string"
-            },
-            "requirement_ids": {
-              "items": {
-                "type": "string"
-              },
-              "title": "Requirement Ids",
-              "type": "array"
-            },
-            "verification_method": {
-              "title": "Verification Method",
-              "type": "string"
-            }
-          },
-          "required": [
-            "id",
-            "requirement_ids",
-            "description",
-            "verification_method",
-            "expected_result"
-          ],
-          "title": "AcceptanceCriterion",
-          "type": "object"
-        },
         "ActorRef": {
           "additionalProperties": false,
           "properties": {
@@ -18509,149 +20905,6 @@
             "kind"
           ],
           "title": "ActorRef",
-          "type": "object"
-        },
-        "Applicability": {
-          "additionalProperties": false,
-          "properties": {
-            "entity_types": {
-              "items": {
-                "type": "string"
-              },
-              "title": "Entity Types",
-              "type": "array"
-            },
-            "predicate_ids": {
-              "items": {
-                "type": "string"
-              },
-              "title": "Predicate Ids",
-              "type": "array"
-            }
-          },
-          "required": [
-            "entity_types",
-            "predicate_ids"
-          ],
-          "title": "Applicability",
-          "type": "object"
-        },
-        "AssessIntakeResult": {
-          "additionalProperties": false,
-          "properties": {
-            "assessed_revision": {
-              "minimum": 1,
-              "title": "Assessed Revision",
-              "type": "integer"
-            },
-            "revision": {
-              "minimum": 1,
-              "title": "Revision",
-              "type": "integer"
-            },
-            "run_id": {
-              "minLength": 1,
-              "title": "Run Id",
-              "type": "string"
-            },
-            "type": {
-              "const": "assess_intake",
-              "title": "Type",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "run_id",
-            "revision",
-            "assessed_revision"
-          ],
-          "title": "AssessIntakeResult",
-          "type": "object"
-        },
-        "ClarificationQuestion": {
-          "additionalProperties": false,
-          "properties": {
-            "category": {
-              "enum": [
-                "functional_scope_and_behavior",
-                "domain_and_data_model",
-                "interaction_and_ux_flow",
-                "non_functional_qualities",
-                "integrations_and_external_dependencies",
-                "edge_cases_and_failure_handling",
-                "constraints_and_tradeoffs",
-                "terminology",
-                "completion_signals",
-                "placeholders_and_ambiguities",
-                "scope_boundaries"
-              ],
-              "title": "Category",
-              "type": "string"
-            },
-            "conflict_ids": {
-              "items": {
-                "type": "string"
-              },
-              "title": "Conflict Ids",
-              "type": "array"
-            },
-            "gap_ids": {
-              "items": {
-                "type": "string"
-              },
-              "title": "Gap Ids",
-              "type": "array"
-            },
-            "id": {
-              "title": "Id",
-              "type": "string"
-            },
-            "question": {
-              "title": "Question",
-              "type": "string"
-            }
-          },
-          "required": [
-            "id",
-            "question",
-            "gap_ids",
-            "conflict_ids",
-            "category"
-          ],
-          "title": "ClarificationQuestion",
-          "type": "object"
-        },
-        "Conflict": {
-          "additionalProperties": false,
-          "properties": {
-            "claim_ids": {
-              "items": {
-                "type": "string"
-              },
-              "title": "Claim Ids",
-              "type": "array"
-            },
-            "id": {
-              "title": "Id",
-              "type": "string"
-            },
-            "predicate_id": {
-              "title": "Predicate Id",
-              "type": "string"
-            },
-            "reason": {
-              "title": "Reason",
-              "type": "string"
-            }
-          },
-          "required": [
-            "id",
-            "claim_ids",
-            "predicate_id",
-            "reason"
-          ],
-          "title": "Conflict",
           "type": "object"
         },
         "EntityRef": {
@@ -18775,6 +21028,37 @@
             "received_at"
           ],
           "title": "InstructionProvenance",
+          "type": "object"
+        },
+        "IntakeAdmissionProvenance": {
+          "additionalProperties": false,
+          "properties": {
+            "admitted_by": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/OwnerRef"
+                },
+                {
+                  "$ref": "#/$defs/RuleEngineRef"
+                }
+              ],
+              "title": "Admitted By"
+            },
+            "claim_id": {
+              "minLength": 1,
+              "title": "Claim Id",
+              "type": "string"
+            },
+            "operation": {
+              "$ref": "#/$defs/IntakeOperationRef"
+            }
+          },
+          "required": [
+            "claim_id",
+            "admitted_by",
+            "operation"
+          ],
+          "title": "IntakeAdmissionProvenance",
           "type": "object"
         },
         "IntakeClaim": {
@@ -18956,6 +21240,1475 @@
           "title": "IntakeClaimEvidenceLink",
           "type": "object"
         },
+        "IntakeClaimProvenance": {
+          "additionalProperties": false,
+          "properties": {
+            "ancestry_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Ancestry Ids",
+              "type": "array"
+            },
+            "artifacts": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/EvidenceArtifact"
+              },
+              "title": "Artifacts",
+              "type": "array"
+            },
+            "claim": {
+              "$ref": "#/$defs/IntakeClaim"
+            },
+            "evidence_links": {
+              "additionalProperties": {
+                "items": {
+                  "$ref": "#/$defs/IntakeClaimEvidenceLink"
+                },
+                "type": "array"
+              },
+              "title": "Evidence Links",
+              "type": "object"
+            }
+          },
+          "required": [
+            "claim"
+          ],
+          "title": "IntakeClaimProvenance",
+          "type": "object"
+        },
+        "IntakeDecisionProvenance": {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "$ref": "#/$defs/IntakeOperationRef"
+            },
+            "record": {
+              "$ref": "#/$defs/IntakeDecisionRecord"
+            }
+          },
+          "required": [
+            "record",
+            "operation"
+          ],
+          "title": "IntakeDecisionProvenance",
+          "type": "object"
+        },
+        "IntakeDecisionRecord": {
+          "additionalProperties": false,
+          "properties": {
+            "claim_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Claim Ids",
+              "type": "array"
+            },
+            "decision": {
+              "$ref": "#/$defs/OwnerDecision"
+            },
+            "instruction": {
+              "$ref": "#/$defs/OwnerInstruction"
+            },
+            "superseded_decision_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Superseded Decision Id"
+            },
+            "verified_relay_operation_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Verified Relay Operation Id"
+            }
+          },
+          "required": [
+            "decision",
+            "claim_ids",
+            "instruction"
+          ],
+          "title": "IntakeDecisionRecord",
+          "type": "object"
+        },
+        "IntakeOperationRef": {
+          "additionalProperties": false,
+          "properties": {
+            "event_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Event Id"
+            },
+            "operation_id": {
+              "format": "uuid",
+              "title": "Operation Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation_id"
+          ],
+          "title": "IntakeOperationRef",
+          "type": "object"
+        },
+        "IntakeRelayProvenance": {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "$ref": "#/$defs/IntakeOperationRef"
+            },
+            "relay": {
+              "$ref": "#/$defs/RelayProvenance"
+            }
+          },
+          "required": [
+            "relay",
+            "operation"
+          ],
+          "title": "IntakeRelayProvenance",
+          "type": "object"
+        },
+        "IntakeSource": {
+          "additionalProperties": false,
+          "properties": {
+            "sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Sha256",
+              "type": "string"
+            },
+            "spans": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeSourceSpan"
+              },
+              "title": "Spans",
+              "type": "array"
+            },
+            "text": {
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "sha256"
+          ],
+          "title": "IntakeSource",
+          "type": "object"
+        },
+        "IntakeSourceProvenance": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact": {
+              "$ref": "#/$defs/EvidenceArtifact"
+            },
+            "operation": {
+              "$ref": "#/$defs/IntakeOperationRef"
+            },
+            "source": {
+              "$ref": "#/$defs/IntakeSource"
+            }
+          },
+          "required": [
+            "artifact",
+            "source",
+            "operation"
+          ],
+          "title": "IntakeSourceProvenance",
+          "type": "object"
+        },
+        "IntakeSourceSpan": {
+          "additionalProperties": false,
+          "properties": {
+            "end": {
+              "title": "End",
+              "type": "integer"
+            },
+            "exact_text_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Exact Text Sha256",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "start": {
+              "minimum": 0,
+              "title": "Start",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "start",
+            "end",
+            "exact_text_sha256"
+          ],
+          "title": "IntakeSourceSpan",
+          "type": "object"
+        },
+        "IntakeSupersessionProvenance": {
+          "additionalProperties": false,
+          "properties": {
+            "decision_id": {
+              "minLength": 1,
+              "title": "Decision Id",
+              "type": "string"
+            },
+            "old_claim_id": {
+              "minLength": 1,
+              "title": "Old Claim Id",
+              "type": "string"
+            },
+            "operation": {
+              "$ref": "#/$defs/IntakeOperationRef"
+            },
+            "replacement_claim_id": {
+              "minLength": 1,
+              "title": "Replacement Claim Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "old_claim_id",
+            "replacement_claim_id",
+            "decision_id",
+            "operation"
+          ],
+          "title": "IntakeSupersessionProvenance",
+          "type": "object"
+        },
+        "IntakeTrace": {
+          "additionalProperties": false,
+          "properties": {
+            "claim_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Claim Ids",
+              "type": "array"
+            },
+            "criterion_id": {
+              "minLength": 1,
+              "title": "Criterion Id",
+              "type": "string"
+            },
+            "requirement_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Requirement Ids",
+              "type": "array"
+            }
+          },
+          "required": [
+            "criterion_id",
+            "requirement_ids",
+            "claim_ids"
+          ],
+          "title": "IntakeTrace",
+          "type": "object"
+        },
+        "OwnerDecision": {
+          "additionalProperties": false,
+          "properties": {
+            "actor": {
+              "$ref": "#/$defs/OwnerRef"
+            },
+            "answer": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TypedStringValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedIntegerValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNumberValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedBooleanValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNullValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedEntityValue"
+                }
+              ],
+              "title": "Answer"
+            },
+            "created_at": {
+              "title": "Created At",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "question_id": {
+              "title": "Question Id",
+              "type": "string"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            },
+            "revision": {
+              "title": "Revision",
+              "type": "integer"
+            },
+            "run_id": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "run_id",
+            "revision",
+            "actor",
+            "question_id",
+            "answer",
+            "reason",
+            "created_at"
+          ],
+          "title": "OwnerDecision",
+          "type": "object"
+        },
+        "OwnerInstruction": {
+          "additionalProperties": false,
+          "description": "The owner's words and the message they arrived on.",
+          "properties": {
+            "provenance": {
+              "$ref": "#/$defs/InstructionProvenance"
+            },
+            "text": {
+              "maxLength": 8000,
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "provenance"
+          ],
+          "title": "OwnerInstruction",
+          "type": "object"
+        },
+        "OwnerRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "owner",
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "title": "OwnerRef",
+          "type": "object"
+        },
+        "RelayProvenance": {
+          "additionalProperties": false,
+          "properties": {
+            "instruction": {
+              "$ref": "#/$defs/RelayedInstruction"
+            },
+            "relayed_by": {
+              "format": "uuid",
+              "title": "Relayed By",
+              "type": "string"
+            },
+            "signed": {
+              "title": "Signed",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "instruction",
+            "relayed_by",
+            "signed"
+          ],
+          "title": "RelayProvenance",
+          "type": "object"
+        },
+        "RelayedInstruction": {
+          "additionalProperties": false,
+          "properties": {
+            "owner_authored": {
+              "const": true,
+              "title": "Owner Authored",
+              "type": "boolean"
+            },
+            "received_at": {
+              "format": "date-time",
+              "title": "Received At",
+              "type": "string"
+            },
+            "source_message_ref": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Source Message Ref",
+              "type": "string"
+            },
+            "text": {
+              "maxLength": 8000,
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "source_message_ref",
+            "owner_authored",
+            "received_at"
+          ],
+          "title": "RelayedInstruction",
+          "type": "object"
+        },
+        "RuleEngineRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "const": "rule_engine",
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "title": "RuleEngineRef",
+          "type": "object"
+        },
+        "TypedBooleanValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "boolean",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedBooleanValue",
+          "type": "object"
+        },
+        "TypedEntityValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "entity",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/EntityRef"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedEntityValue",
+          "type": "object"
+        },
+        "TypedIntegerValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "integer",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedIntegerValue",
+          "type": "object"
+        },
+        "TypedNullValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "null",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "null"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedNullValue",
+          "type": "object"
+        },
+        "TypedNumberValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "number",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "integer"
+                }
+              ],
+              "title": "Value"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedNumberValue",
+          "type": "object"
+        },
+        "TypedStringValue": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "string",
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "TypedStringValue",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "admissions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IntakeAdmissionProvenance"
+          },
+          "title": "Admissions",
+          "type": "array"
+        },
+        "claims": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IntakeClaimProvenance"
+          },
+          "title": "Claims",
+          "type": "array"
+        },
+        "decisions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IntakeDecisionProvenance"
+          },
+          "title": "Decisions",
+          "type": "array"
+        },
+        "relays": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IntakeRelayProvenance"
+          },
+          "title": "Relays",
+          "type": "array"
+        },
+        "revision": {
+          "minimum": 0,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        },
+        "sources": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IntakeSourceProvenance"
+          },
+          "title": "Sources",
+          "type": "array"
+        },
+        "supersessions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IntakeSupersessionProvenance"
+          },
+          "title": "Supersessions",
+          "type": "array"
+        },
+        "traces": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IntakeTrace"
+          },
+          "title": "Traces",
+          "type": "array"
+        }
+      },
+      "required": [
+        "run_id",
+        "revision",
+        "source_sha256"
+      ],
+      "title": "IntakeProvenance",
+      "type": "object"
+    },
+    "IntakeRecordView": {
+      "$defs": {
+        "AcceptanceCriterion": {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "title": "Description",
+              "type": "string"
+            },
+            "expected_result": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TypedStringValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedIntegerValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNumberValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedBooleanValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNullValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedEntityValue"
+                }
+              ],
+              "title": "Expected Result"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "requirement_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Requirement Ids",
+              "type": "array"
+            },
+            "verification_method": {
+              "title": "Verification Method",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "requirement_ids",
+            "description",
+            "verification_method",
+            "expected_result"
+          ],
+          "title": "AcceptanceCriterion",
+          "type": "object"
+        },
+        "ActorRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "owner",
+                "service",
+                "model",
+                "tool",
+                "rule_engine"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "title": "ActorRef",
+          "type": "object"
+        },
+        "Applicability": {
+          "additionalProperties": false,
+          "properties": {
+            "entity_types": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Entity Types",
+              "type": "array"
+            },
+            "predicate_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Predicate Ids",
+              "type": "array"
+            }
+          },
+          "required": [
+            "entity_types",
+            "predicate_ids"
+          ],
+          "title": "Applicability",
+          "type": "object"
+        },
+        "Binding": {
+          "additionalProperties": false,
+          "properties": {
+            "claim_set_hash": {
+              "title": "Claim Set Hash",
+              "type": "string"
+            },
+            "contract_hash": {
+              "title": "Contract Hash",
+              "type": "string"
+            },
+            "revision": {
+              "title": "Revision",
+              "type": "integer"
+            },
+            "rule_bundle_hash": {
+              "title": "Rule Bundle Hash",
+              "type": "string"
+            },
+            "run_id": {
+              "title": "Run Id",
+              "type": "string"
+            },
+            "schema_hash": {
+              "title": "Schema Hash",
+              "type": "string"
+            },
+            "source_hash": {
+              "title": "Source Hash",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "revision",
+            "contract_hash",
+            "claim_set_hash",
+            "rule_bundle_hash",
+            "schema_hash",
+            "source_hash"
+          ],
+          "title": "Binding",
+          "type": "object"
+        },
+        "ClarificationQuestion": {
+          "additionalProperties": false,
+          "properties": {
+            "category": {
+              "enum": [
+                "functional_scope_and_behavior",
+                "domain_and_data_model",
+                "interaction_and_ux_flow",
+                "non_functional_qualities",
+                "integrations_and_external_dependencies",
+                "edge_cases_and_failure_handling",
+                "constraints_and_tradeoffs",
+                "terminology",
+                "completion_signals",
+                "placeholders_and_ambiguities",
+                "scope_boundaries"
+              ],
+              "title": "Category",
+              "type": "string"
+            },
+            "conflict_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Conflict Ids",
+              "type": "array"
+            },
+            "gap_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Gap Ids",
+              "type": "array"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "question": {
+              "title": "Question",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "question",
+            "gap_ids",
+            "conflict_ids",
+            "category"
+          ],
+          "title": "ClarificationQuestion",
+          "type": "object"
+        },
+        "Conflict": {
+          "additionalProperties": false,
+          "properties": {
+            "claim_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Claim Ids",
+              "type": "array"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "predicate_id": {
+              "title": "Predicate Id",
+              "type": "string"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "claim_ids",
+            "predicate_id",
+            "reason"
+          ],
+          "title": "Conflict",
+          "type": "object"
+        },
+        "DerivationReceipt": {
+          "additionalProperties": false,
+          "properties": {
+            "claim_set_hash": {
+              "title": "Claim Set Hash",
+              "type": "string"
+            },
+            "conclusion_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Conclusion Ids",
+              "type": "array"
+            },
+            "contract_hash": {
+              "title": "Contract Hash",
+              "type": "string"
+            },
+            "created_at": {
+              "title": "Created At",
+              "type": "string"
+            },
+            "derived_by": {
+              "$ref": "#/$defs/RuleEngineRef"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "premise_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Premise Ids",
+              "type": "array"
+            },
+            "revision": {
+              "title": "Revision",
+              "type": "integer"
+            },
+            "rule_bundle_hash": {
+              "title": "Rule Bundle Hash",
+              "type": "string"
+            },
+            "rule_id": {
+              "title": "Rule Id",
+              "type": "string"
+            },
+            "run_id": {
+              "title": "Run Id",
+              "type": "string"
+            },
+            "schema_hash": {
+              "title": "Schema Hash",
+              "type": "string"
+            },
+            "source_hash": {
+              "title": "Source Hash",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "run_id",
+            "revision",
+            "contract_hash",
+            "claim_set_hash",
+            "rule_bundle_hash",
+            "schema_hash",
+            "source_hash",
+            "rule_id",
+            "premise_ids",
+            "conclusion_ids",
+            "derived_by",
+            "created_at"
+          ],
+          "title": "DerivationReceipt",
+          "type": "object"
+        },
+        "EntityRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "type": {
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "type"
+          ],
+          "title": "EntityRef",
+          "type": "object"
+        },
+        "EvidenceArtifact": {
+          "additionalProperties": false,
+          "properties": {
+            "actor": {
+              "$ref": "#/$defs/ActorRef"
+            },
+            "content_hash": {
+              "title": "Content Hash",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "media_type": {
+              "title": "Media Type",
+              "type": "string"
+            },
+            "revision": {
+              "title": "Revision",
+              "type": "string"
+            },
+            "uri": {
+              "title": "Uri",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "uri",
+            "content_hash",
+            "revision",
+            "actor",
+            "media_type"
+          ],
+          "title": "EvidenceArtifact",
+          "type": "object"
+        },
+        "EvidenceSpan": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_id": {
+              "title": "Artifact Id",
+              "type": "string"
+            },
+            "end_byte": {
+              "title": "End Byte",
+              "type": "integer"
+            },
+            "quote": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Quote"
+            },
+            "start_byte": {
+              "title": "Start Byte",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "artifact_id",
+            "start_byte",
+            "end_byte"
+          ],
+          "title": "EvidenceSpan",
+          "type": "object"
+        },
+        "Gap": {
+          "additionalProperties": false,
+          "properties": {
+            "dimension_id": {
+              "title": "Dimension Id",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "materiality": {
+              "enum": [
+                "critical",
+                "material",
+                "minor"
+              ],
+              "title": "Materiality",
+              "type": "string"
+            },
+            "premise_id": {
+              "title": "Premise Id",
+              "type": "string"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            },
+            "waiver_policy": {
+              "enum": [
+                "never",
+                "owner_with_reason"
+              ],
+              "title": "Waiver Policy",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "dimension_id",
+            "premise_id",
+            "reason",
+            "materiality",
+            "waiver_policy"
+          ],
+          "title": "Gap",
+          "type": "object"
+        },
+        "InstructionProvenance": {
+          "additionalProperties": false,
+          "description": "Where an owner instruction was received.",
+          "properties": {
+            "channel": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Channel",
+              "type": "string"
+            },
+            "message_ref": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Message Ref",
+              "type": "string"
+            },
+            "received_at": {
+              "format": "date-time",
+              "title": "Received At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "channel",
+            "message_ref",
+            "received_at"
+          ],
+          "title": "InstructionProvenance",
+          "type": "object"
+        },
+        "IntakeAdmissionProvenance": {
+          "additionalProperties": false,
+          "properties": {
+            "admitted_by": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/OwnerRef"
+                },
+                {
+                  "$ref": "#/$defs/RuleEngineRef"
+                }
+              ],
+              "title": "Admitted By"
+            },
+            "claim_id": {
+              "minLength": 1,
+              "title": "Claim Id",
+              "type": "string"
+            },
+            "operation": {
+              "$ref": "#/$defs/IntakeOperationRef"
+            }
+          },
+          "required": [
+            "claim_id",
+            "admitted_by",
+            "operation"
+          ],
+          "title": "IntakeAdmissionProvenance",
+          "type": "object"
+        },
+        "IntakeAssessmentView": {
+          "additionalProperties": false,
+          "properties": {
+            "assessment": {
+              "$ref": "#/$defs/IntakeReadinessAssessment"
+            },
+            "binding": {
+              "$ref": "#/$defs/Binding"
+            },
+            "id": {
+              "minLength": 1,
+              "title": "Id",
+              "type": "string"
+            },
+            "provenance": {
+              "$ref": "#/$defs/IntakeProvenance"
+            },
+            "receipts": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/DerivationReceipt"
+              },
+              "title": "Receipts",
+              "type": "array"
+            },
+            "unresolved_issues": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeIssueRecord"
+              },
+              "title": "Unresolved Issues",
+              "type": "array"
+            }
+          },
+          "required": [
+            "id",
+            "assessment",
+            "binding",
+            "provenance"
+          ],
+          "title": "IntakeAssessmentView",
+          "type": "object"
+        },
+        "IntakeClaim": {
+          "additionalProperties": false,
+          "properties": {
+            "admitted_by": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/OwnerRef"
+                },
+                {
+                  "$ref": "#/$defs/RuleEngineRef"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Admitted By"
+            },
+            "asserted_by": {
+              "$ref": "#/$defs/ActorRef"
+            },
+            "category": {
+              "enum": [
+                "functional_scope_and_behavior",
+                "domain_and_data_model",
+                "interaction_and_ux_flow",
+                "non_functional_qualities",
+                "integrations_and_external_dependencies",
+                "edge_cases_and_failure_handling",
+                "constraints_and_tradeoffs",
+                "terminology",
+                "completion_signals",
+                "placeholders_and_ambiguities",
+                "scope_boundaries"
+              ],
+              "title": "Category",
+              "type": "string"
+            },
+            "evidence": {
+              "items": {
+                "$ref": "#/$defs/EvidenceSpan"
+              },
+              "title": "Evidence",
+              "type": "array"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "modality": {
+              "enum": [
+                "observed",
+                "desired",
+                "required",
+                "prohibited",
+                "possible",
+                "unknown"
+              ],
+              "title": "Modality",
+              "type": "string"
+            },
+            "origin": {
+              "enum": [
+                "owner_statement",
+                "policy_rule",
+                "repository_observation",
+                "tool_receipt",
+                "model_proposal",
+                "rule_derivation"
+              ],
+              "title": "Origin",
+              "type": "string"
+            },
+            "polarity": {
+              "enum": [
+                "positive",
+                "negative"
+              ],
+              "title": "Polarity",
+              "type": "string"
+            },
+            "predicate_id": {
+              "title": "Predicate Id",
+              "type": "string"
+            },
+            "premise_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Premise Ids",
+              "type": "array"
+            },
+            "state": {
+              "enum": [
+                "proposed",
+                "admitted",
+                "rejected",
+                "superseded"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "subject": {
+              "$ref": "#/$defs/EntityRef"
+            },
+            "truth": {
+              "enum": [
+                "true",
+                "false",
+                "unknown"
+              ],
+              "title": "Truth",
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TypedStringValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedIntegerValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNumberValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedBooleanValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedNullValue"
+                },
+                {
+                  "$ref": "#/$defs/TypedEntityValue"
+                }
+              ],
+              "title": "Value"
+            }
+          },
+          "required": [
+            "id",
+            "category",
+            "subject",
+            "predicate_id",
+            "value",
+            "origin",
+            "state",
+            "modality",
+            "polarity",
+            "truth",
+            "asserted_by",
+            "evidence",
+            "premise_ids"
+          ],
+          "title": "IntakeClaim",
+          "type": "object"
+        },
+        "IntakeClaimEvidenceLink": {
+          "additionalProperties": false,
+          "properties": {
+            "relation": {
+              "enum": [
+                "supports",
+                "contradicts",
+                "neither"
+              ],
+              "title": "Relation",
+              "type": "string"
+            },
+            "span": {
+              "$ref": "#/$defs/EvidenceSpan"
+            }
+          },
+          "required": [
+            "span",
+            "relation"
+          ],
+          "title": "IntakeClaimEvidenceLink",
+          "type": "object"
+        },
+        "IntakeClaimProvenance": {
+          "additionalProperties": false,
+          "properties": {
+            "ancestry_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Ancestry Ids",
+              "type": "array"
+            },
+            "artifacts": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/EvidenceArtifact"
+              },
+              "title": "Artifacts",
+              "type": "array"
+            },
+            "claim": {
+              "$ref": "#/$defs/IntakeClaim"
+            },
+            "evidence_links": {
+              "additionalProperties": {
+                "items": {
+                  "$ref": "#/$defs/IntakeClaimEvidenceLink"
+                },
+                "type": "array"
+              },
+              "title": "Evidence Links",
+              "type": "object"
+            }
+          },
+          "required": [
+            "claim"
+          ],
+          "title": "IntakeClaimProvenance",
+          "type": "object"
+        },
         "IntakeCriterionLink": {
           "additionalProperties": false,
           "properties": {
@@ -18975,6 +22728,23 @@
             "requirements"
           ],
           "title": "IntakeCriterionLink",
+          "type": "object"
+        },
+        "IntakeDecisionProvenance": {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "$ref": "#/$defs/IntakeOperationRef"
+            },
+            "record": {
+              "$ref": "#/$defs/IntakeDecisionRecord"
+            }
+          },
+          "required": [
+            "record",
+            "operation"
+          ],
+          "title": "IntakeDecisionProvenance",
           "type": "object"
         },
         "IntakeDecisionRecord": {
@@ -19082,9 +22852,69 @@
           "title": "IntakeOntology",
           "type": "object"
         },
+        "IntakeOperationRef": {
+          "additionalProperties": false,
+          "properties": {
+            "event_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Event Id"
+            },
+            "operation_id": {
+              "format": "uuid",
+              "title": "Operation Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation_id"
+          ],
+          "title": "IntakeOperationRef",
+          "type": "object"
+        },
         "IntakeProvenance": {
           "additionalProperties": false,
           "properties": {
+            "admissions": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeAdmissionProvenance"
+              },
+              "title": "Admissions",
+              "type": "array"
+            },
+            "claims": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeClaimProvenance"
+              },
+              "title": "Claims",
+              "type": "array"
+            },
+            "decisions": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeDecisionProvenance"
+              },
+              "title": "Decisions",
+              "type": "array"
+            },
+            "relays": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeRelayProvenance"
+              },
+              "title": "Relays",
+              "type": "array"
+            },
             "revision": {
               "minimum": 0,
               "title": "Revision",
@@ -19099,6 +22929,30 @@
               "pattern": "^[0-9a-f]{64}$",
               "title": "Source Sha256",
               "type": "string"
+            },
+            "sources": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeSourceProvenance"
+              },
+              "title": "Sources",
+              "type": "array"
+            },
+            "supersessions": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeSupersessionProvenance"
+              },
+              "title": "Supersessions",
+              "type": "array"
+            },
+            "traces": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeTrace"
+              },
+              "title": "Traces",
+              "type": "array"
             }
           },
           "required": [
@@ -19107,6 +22961,110 @@
             "source_sha256"
           ],
           "title": "IntakeProvenance",
+          "type": "object"
+        },
+        "IntakeReadinessAssessment": {
+          "additionalProperties": false,
+          "properties": {
+            "assessed_by": {
+              "$ref": "#/$defs/RuleEngineRef"
+            },
+            "claim_set_hash": {
+              "title": "Claim Set Hash",
+              "type": "string"
+            },
+            "conflicts": {
+              "items": {
+                "$ref": "#/$defs/Conflict"
+              },
+              "title": "Conflicts",
+              "type": "array"
+            },
+            "contract_hash": {
+              "title": "Contract Hash",
+              "type": "string"
+            },
+            "created_at": {
+              "title": "Created At",
+              "type": "string"
+            },
+            "derivation_receipt_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Derivation Receipt Ids",
+              "type": "array"
+            },
+            "gaps": {
+              "items": {
+                "$ref": "#/$defs/Gap"
+              },
+              "title": "Gaps",
+              "type": "array"
+            },
+            "revision": {
+              "title": "Revision",
+              "type": "integer"
+            },
+            "rule_bundle_hash": {
+              "title": "Rule Bundle Hash",
+              "type": "string"
+            },
+            "run_id": {
+              "title": "Run Id",
+              "type": "string"
+            },
+            "schema_hash": {
+              "title": "Schema Hash",
+              "type": "string"
+            },
+            "source_hash": {
+              "title": "Source Hash",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "READY_FOR_RATIFICATION",
+                "NEEDS_SPEC",
+                "CONFLICTED"
+              ],
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "revision",
+            "contract_hash",
+            "claim_set_hash",
+            "rule_bundle_hash",
+            "schema_hash",
+            "source_hash",
+            "status",
+            "gaps",
+            "conflicts",
+            "derivation_receipt_ids",
+            "assessed_by",
+            "created_at"
+          ],
+          "title": "IntakeReadinessAssessment",
+          "type": "object"
+        },
+        "IntakeRelayProvenance": {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "$ref": "#/$defs/IntakeOperationRef"
+            },
+            "relay": {
+              "$ref": "#/$defs/RelayProvenance"
+            }
+          },
+          "required": [
+            "relay",
+            "operation"
+          ],
+          "title": "IntakeRelayProvenance",
           "type": "object"
         },
         "IntakeSnapshot": {
@@ -19172,6 +23130,117 @@
             "ontology"
           ],
           "title": "IntakeSnapshot",
+          "type": "object"
+        },
+        "IntakeSource": {
+          "additionalProperties": false,
+          "properties": {
+            "sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Sha256",
+              "type": "string"
+            },
+            "spans": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeSourceSpan"
+              },
+              "title": "Spans",
+              "type": "array"
+            },
+            "text": {
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "sha256"
+          ],
+          "title": "IntakeSource",
+          "type": "object"
+        },
+        "IntakeSourceProvenance": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact": {
+              "$ref": "#/$defs/EvidenceArtifact"
+            },
+            "operation": {
+              "$ref": "#/$defs/IntakeOperationRef"
+            },
+            "source": {
+              "$ref": "#/$defs/IntakeSource"
+            }
+          },
+          "required": [
+            "artifact",
+            "source",
+            "operation"
+          ],
+          "title": "IntakeSourceProvenance",
+          "type": "object"
+        },
+        "IntakeSourceSpan": {
+          "additionalProperties": false,
+          "properties": {
+            "end": {
+              "title": "End",
+              "type": "integer"
+            },
+            "exact_text_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Exact Text Sha256",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "start": {
+              "minimum": 0,
+              "title": "Start",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "start",
+            "end",
+            "exact_text_sha256"
+          ],
+          "title": "IntakeSourceSpan",
+          "type": "object"
+        },
+        "IntakeSupersessionProvenance": {
+          "additionalProperties": false,
+          "properties": {
+            "decision_id": {
+              "minLength": 1,
+              "title": "Decision Id",
+              "type": "string"
+            },
+            "old_claim_id": {
+              "minLength": 1,
+              "title": "Old Claim Id",
+              "type": "string"
+            },
+            "operation": {
+              "$ref": "#/$defs/IntakeOperationRef"
+            },
+            "replacement_claim_id": {
+              "minLength": 1,
+              "title": "Replacement Claim Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "old_claim_id",
+            "replacement_claim_id",
+            "decision_id",
+            "operation"
+          ],
+          "title": "IntakeSupersessionProvenance",
           "type": "object"
         },
         "IntakeTrace": {
@@ -19380,6 +23449,65 @@
             "authority"
           ],
           "title": "PredicateDefinition",
+          "type": "object"
+        },
+        "RelayProvenance": {
+          "additionalProperties": false,
+          "properties": {
+            "instruction": {
+              "$ref": "#/$defs/RelayedInstruction"
+            },
+            "relayed_by": {
+              "format": "uuid",
+              "title": "Relayed By",
+              "type": "string"
+            },
+            "signed": {
+              "title": "Signed",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "instruction",
+            "relayed_by",
+            "signed"
+          ],
+          "title": "RelayProvenance",
+          "type": "object"
+        },
+        "RelayedInstruction": {
+          "additionalProperties": false,
+          "properties": {
+            "owner_authored": {
+              "const": true,
+              "title": "Owner Authored",
+              "type": "boolean"
+            },
+            "received_at": {
+              "format": "date-time",
+              "title": "Received At",
+              "type": "string"
+            },
+            "source_message_ref": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Source Message Ref",
+              "type": "string"
+            },
+            "text": {
+              "maxLength": 8000,
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "source_message_ref",
+            "owner_authored",
+            "received_at"
+          ],
+          "title": "RelayedInstruction",
           "type": "object"
         },
         "RequirementClause": {
@@ -19654,7 +23782,7 @@
       "properties": {
         "assessments": {
           "items": {
-            "$ref": "#/$defs/AssessIntakeResult"
+            "$ref": "#/$defs/IntakeAssessmentView"
           },
           "title": "Assessments",
           "type": "array"
@@ -19736,6 +23864,408 @@
         "provenance"
       ],
       "title": "IntakeRecordView",
+      "type": "object"
+    },
+    "IntakeRelayProvenance": {
+      "$defs": {
+        "IntakeOperationRef": {
+          "additionalProperties": false,
+          "properties": {
+            "event_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Event Id"
+            },
+            "operation_id": {
+              "format": "uuid",
+              "title": "Operation Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation_id"
+          ],
+          "title": "IntakeOperationRef",
+          "type": "object"
+        },
+        "RelayProvenance": {
+          "additionalProperties": false,
+          "properties": {
+            "instruction": {
+              "$ref": "#/$defs/RelayedInstruction"
+            },
+            "relayed_by": {
+              "format": "uuid",
+              "title": "Relayed By",
+              "type": "string"
+            },
+            "signed": {
+              "title": "Signed",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "instruction",
+            "relayed_by",
+            "signed"
+          ],
+          "title": "RelayProvenance",
+          "type": "object"
+        },
+        "RelayedInstruction": {
+          "additionalProperties": false,
+          "properties": {
+            "owner_authored": {
+              "const": true,
+              "title": "Owner Authored",
+              "type": "boolean"
+            },
+            "received_at": {
+              "format": "date-time",
+              "title": "Received At",
+              "type": "string"
+            },
+            "source_message_ref": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Source Message Ref",
+              "type": "string"
+            },
+            "text": {
+              "maxLength": 8000,
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "source_message_ref",
+            "owner_authored",
+            "received_at"
+          ],
+          "title": "RelayedInstruction",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "$ref": "#/$defs/IntakeOperationRef"
+        },
+        "relay": {
+          "$ref": "#/$defs/RelayProvenance"
+        }
+      },
+      "required": [
+        "relay",
+        "operation"
+      ],
+      "title": "IntakeRelayProvenance",
+      "type": "object"
+    },
+    "IntakeSource": {
+      "$defs": {
+        "IntakeSourceSpan": {
+          "additionalProperties": false,
+          "properties": {
+            "end": {
+              "title": "End",
+              "type": "integer"
+            },
+            "exact_text_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Exact Text Sha256",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "start": {
+              "minimum": 0,
+              "title": "Start",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "start",
+            "end",
+            "exact_text_sha256"
+          ],
+          "title": "IntakeSourceSpan",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "spans": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IntakeSourceSpan"
+          },
+          "title": "Spans",
+          "type": "array"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "sha256"
+      ],
+      "title": "IntakeSource",
+      "type": "object"
+    },
+    "IntakeSourceProvenance": {
+      "$defs": {
+        "ActorRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "owner",
+                "service",
+                "model",
+                "tool",
+                "rule_engine"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "title": "ActorRef",
+          "type": "object"
+        },
+        "EvidenceArtifact": {
+          "additionalProperties": false,
+          "properties": {
+            "actor": {
+              "$ref": "#/$defs/ActorRef"
+            },
+            "content_hash": {
+              "title": "Content Hash",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "media_type": {
+              "title": "Media Type",
+              "type": "string"
+            },
+            "revision": {
+              "title": "Revision",
+              "type": "string"
+            },
+            "uri": {
+              "title": "Uri",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "uri",
+            "content_hash",
+            "revision",
+            "actor",
+            "media_type"
+          ],
+          "title": "EvidenceArtifact",
+          "type": "object"
+        },
+        "IntakeOperationRef": {
+          "additionalProperties": false,
+          "properties": {
+            "event_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Event Id"
+            },
+            "operation_id": {
+              "format": "uuid",
+              "title": "Operation Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation_id"
+          ],
+          "title": "IntakeOperationRef",
+          "type": "object"
+        },
+        "IntakeSource": {
+          "additionalProperties": false,
+          "properties": {
+            "sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Sha256",
+              "type": "string"
+            },
+            "spans": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeSourceSpan"
+              },
+              "title": "Spans",
+              "type": "array"
+            },
+            "text": {
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "sha256"
+          ],
+          "title": "IntakeSource",
+          "type": "object"
+        },
+        "IntakeSourceSpan": {
+          "additionalProperties": false,
+          "properties": {
+            "end": {
+              "title": "End",
+              "type": "integer"
+            },
+            "exact_text_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Exact Text Sha256",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "start": {
+              "minimum": 0,
+              "title": "Start",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "start",
+            "end",
+            "exact_text_sha256"
+          ],
+          "title": "IntakeSourceSpan",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/EvidenceArtifact"
+        },
+        "operation": {
+          "$ref": "#/$defs/IntakeOperationRef"
+        },
+        "source": {
+          "$ref": "#/$defs/IntakeSource"
+        }
+      },
+      "required": [
+        "artifact",
+        "source",
+        "operation"
+      ],
+      "title": "IntakeSourceProvenance",
+      "type": "object"
+    },
+    "IntakeSupersessionProvenance": {
+      "$defs": {
+        "IntakeOperationRef": {
+          "additionalProperties": false,
+          "properties": {
+            "event_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Event Id"
+            },
+            "operation_id": {
+              "format": "uuid",
+              "title": "Operation Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation_id"
+          ],
+          "title": "IntakeOperationRef",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "decision_id": {
+          "minLength": 1,
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "old_claim_id": {
+          "minLength": 1,
+          "title": "Old Claim Id",
+          "type": "string"
+        },
+        "operation": {
+          "$ref": "#/$defs/IntakeOperationRef"
+        },
+        "replacement_claim_id": {
+          "minLength": 1,
+          "title": "Replacement Claim Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "old_claim_id",
+        "replacement_claim_id",
+        "decision_id",
+        "operation"
+      ],
+      "title": "IntakeSupersessionProvenance",
       "type": "object"
     },
     "IntakeTrace": {

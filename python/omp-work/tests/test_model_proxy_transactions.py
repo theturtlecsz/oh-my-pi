@@ -13,7 +13,7 @@ from uuid import uuid4
 import psycopg
 import pytest
 
-from omp_work.jobs.store import NativeJobStore, TransactionDeadlineExceeded
+from omp_work.jobs.store import NativeJobStore, TransactionDeadline, TransactionDeadlineExceeded
 from test_workflow_service import OWNER, _grant, _seed_project, service
 
 pytestmark = pytest.mark.skipif(
@@ -221,3 +221,75 @@ def test_expiry_between_statements_prevents_commit(service):
             time.sleep(0.21)
     _assert_backend_gone(service, pid)
     assert _count(service, operation) == 0
+
+
+@pytest.mark.parametrize("fault", ["statement", "commit", "rollback"])
+def test_late_armed_deadline_bounds_sql_and_cleanup(service, fault):
+    workspace, operation = uuid4(), str(uuid4())
+    control = TransactionDeadline()
+    transport = (
+        _transport(service.config) if fault != "statement"
+        else nullcontext((service.config, None, None))
+    )
+    with transport as (config, blocked, commit):
+        with pytest.raises(TransactionDeadlineExceeded) as raised:
+            with NativeJobStore(config).transaction(workspace, OWNER, deadline_control=control) as cur:
+                cur.execute("SELECT pg_backend_pid() AS pid")
+                pid = cur.fetchone()["pid"]
+                _insert(cur, workspace, operation)
+                # Upstream work outlasts the eventual resolution allowance.
+                time.sleep(0.6)
+                cur.execute("SELECT 1")
+                start = time.monotonic()
+                control.arm(start + 0.4)
+                if fault == "statement":
+                    cur.execute("SELECT pg_sleep(3)")
+                    _insert(cur, workspace, operation + "-late")
+                else:
+                    blocked.set()
+                    if fault == "rollback":
+                        raise ValueError("upstream failure; rollback reply lost")
+        assert time.monotonic() - start < 0.7
+        assert raised.value.outcome_uncertain is (fault == "commit")
+        assert cur.connection.closed
+        if fault == "commit":
+            assert commit.wait(timeout=0.2)
+        elif commit is not None:
+            assert not commit.is_set()
+        with pytest.raises((TransactionDeadlineExceeded, psycopg.OperationalError)):
+            _insert(cur, workspace, operation + "-late")
+        if blocked is not None:
+            blocked.clear()
+    _assert_backend_gone(service, pid)
+    assert _count(service, operation) == (1 if fault == "commit" else 0)
+    assert _count(service, operation + "-late") == 0
+
+
+def test_inactive_control_preserves_commit_and_rollback(service):
+    store = NativeJobStore(service.config)
+    workspace, committed, rolled_back = uuid4(), str(uuid4()), str(uuid4())
+    with store.transaction(workspace, OWNER, deadline_control=TransactionDeadline()) as cur:
+        _insert(cur, workspace, committed)
+    with pytest.raises(ValueError):
+        with store.transaction(workspace, OWNER, deadline_control=TransactionDeadline()) as cur:
+            _insert(cur, workspace, rolled_back)
+            raise ValueError("caller failed before arming")
+    assert _count(service, committed) == 1
+    assert _count(service, rolled_back) == 0
+
+
+@pytest.mark.parametrize("deadline", [float("nan"), float("inf"), -float("inf")])
+def test_control_rejects_nonfinite_deadline_without_losing_budget(deadline):
+    control = TransactionDeadline()
+    with pytest.raises(ValueError, match="finite"):
+        control.arm(deadline)
+    control.arm(time.monotonic() + 1)
+    with pytest.raises(ValueError, match="already armed"):
+        control.arm(time.monotonic() + 10)
+
+
+def test_late_bounded_mode_rejects_unsupported_libpq(service, monkeypatch):
+    monkeypatch.setattr(psycopg.pq, "version", lambda: 160000)
+    with pytest.raises(RuntimeError, match="libpq >= 17"):
+        with NativeJobStore(service.config).transaction(uuid4(), OWNER, deadline_control=TransactionDeadline()):
+            pytest.fail("unsupported bounded mode reached transaction body")

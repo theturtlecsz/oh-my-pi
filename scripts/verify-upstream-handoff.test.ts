@@ -578,7 +578,7 @@ describe("parseArgs", () => {
 describe("ci workflow guardrail wiring", () => {
 	const ciPath = join(import.meta.dir, "..", ".github", "workflows", "ci.yml");
 	interface CiWorkflow {
-		on: { push: { paths: string[] }; pull_request: { paths: string[] } };
+		on: { push: { paths: string[] }; pull_request: { branches: string[]; paths?: string[] } };
 		jobs: { check: { steps: Array<{ name?: string; run?: string }> } };
 	}
 	const workflow = Bun.YAML.parse(readFileSync(ciPath, "utf8")) as CiWorkflow;
@@ -587,13 +587,14 @@ describe("ci workflow guardrail wiring", () => {
 	);
 
 	test("a baseline-only upstream-update PR triggers CI (docs/** in the paths filters)", () => {
-		expect(workflow.on.pull_request.paths).toContain("docs/**");
+		expect(workflow.on.pull_request.branches).toEqual(["main", "omp2"]);
+		expect(workflow.on.pull_request.paths).toBeUndefined();
 		expect(workflow.on.push.paths).toContain("docs/**");
-		expect(workflow.on.pull_request.paths).not.toContain("docs/upstream/**");
 		expect(workflow.on.push.paths).not.toContain("docs/upstream/**");
 	});
 	test("doc-only PRs touching inventoried paths trigger CI (docs/** in the paths filters)", () => {
-		expect(workflow.on.pull_request.paths).toContain("docs/**");
+		expect(workflow.on.pull_request.branches).toEqual(["main", "omp2"]);
+		expect(workflow.on.pull_request.paths).toBeUndefined();
 		expect(workflow.on.push.paths).toContain("docs/**");
 	});
 	test("the required check job carries the guardrail step", () => {

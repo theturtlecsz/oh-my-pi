@@ -160,7 +160,8 @@ def _run(raw: dict, directory: Path, chosen: str | None, history: ConsumptionHis
                 links.append(ArmLink(arm.source_sha256, arm.bundle_sha256, arm.receipt_sha256, ids))
             comparisons.append(ConfirmationComparison(
                 execution.domain, execution.task_id, studies[1].evaluator_artifact_sha256,
-                observed_at, *links, execution, content_sha256=execution.content_sha256,
+                observed_at, baseline=links[0], candidate=links[1], result=execution,
+                content_sha256=execution.content_sha256,
             ))
             if not execution.ok:
                 continue

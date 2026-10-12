@@ -122,6 +122,11 @@ def _publish_fixture(
     return store, snapshot_id
 
 
+def _healthy_prober(profile: RouteProfile) -> RouteHealth:
+    """Fake prober reporting every declared profile healthy; dials nothing."""
+    return RouteHealth(name=profile.name, ok=True, detail="ok", latency_ms=0.0)
+
+
 def _routes_payload(profile: EmbeddingProfile) -> dict[str, object]:
     return {
         "routes": [
@@ -554,6 +559,7 @@ def test_cli_build_json_and_human(tmp_path: Path) -> None:
             "--json",
         ],
         embedder=embedder,
+        prober=_healthy_prober,
         stdout=stdout,
     )
     assert code == EXIT_OK
@@ -580,6 +586,7 @@ def test_cli_build_json_and_human(tmp_path: Path) -> None:
             str(routes_file),
         ],
         embedder=embedder,
+        prober=_healthy_prober,
         stdout=stdout_human,
     )
     assert code_human == EXIT_OK
@@ -610,6 +617,7 @@ def test_cli_errors_exit_2(tmp_path: Path) -> None:
             "--routes",
             str(routes_file),
         ],
+        prober=_healthy_prober,
         stderr=stderr,
     )
     assert code == EXIT_ERROR
@@ -629,6 +637,7 @@ def test_cli_errors_exit_2(tmp_path: Path) -> None:
             "--routes",
             str(tmp_path / "nonexistent.json"),
         ],
+        prober=_healthy_prober,
         stderr=stderr2,
     )
     assert code2 == EXIT_ERROR
@@ -650,6 +659,7 @@ def test_cli_errors_exit_2(tmp_path: Path) -> None:
             str(routes_file),
         ],
         embedder=embedder,
+        prober=_healthy_prober,
         stderr=stderr3,
     )
     assert code3 == EXIT_ERROR

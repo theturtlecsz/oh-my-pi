@@ -43,38 +43,6 @@ on:
          - ".github/workflows/**"
    pull_request:
       branches: [main, omp2]
-      paths:
-         - "packages/**"
-         - "python/**"
-         - "infra/work-ledger/**"
-         - "session-system/**"
-         - "crates/**"
-         - "scripts/**"
-         - "bazel/**"
-         - "MODULE.bazel"
-         - "MODULE.bazel.lock"
-         - "BUILD.bazel"
-         - ".bazelrc"
-         - ".bazelignore"
-         - ".bazelversion"
-         - "Cargo.toml"
-         - "Cargo.lock"
-         - "deny.toml"
-         - "about.toml"
-         - "LICENSE"
-         - "THIRD-PARTY-NOTICES.txt"
-         - "rust-toolchain.toml"
-         - "rustfmt.toml"
-         - "bun.lock"
-         - "bunfig.toml"
-         - "package.json"
-         - "patches/**"
-         # Doc-only PRs touching inventoried paths (e.g. docs/upstream-guardrail.md)
-         # must still run the inventory check or their rows go stale, misattributing
-         # the failure to the next PR (OMP-229).
-         - "docs/**"
-         - ".github/**"
-         - ".github/workflows/**"
    workflow_dispatch:
       inputs:
          release_tag:
@@ -1569,6 +1537,8 @@ jobs:
            with:
               targets: linux-x64-baseline linux-x64-modern
          - uses: astral-sh/setup-uv@v6
+         - name: Run omp-knowledge tests
+           run: uv run --project python/omp-knowledge --extra dev pytest -q python/omp-knowledge/tests
          - name: Expose PostgreSQL binaries
            run: |
               if ! command -v pg_config >/dev/null 2>&1 || [ "$(pg_config --version | grep -oE '[0-9]+' | head -n1)" != "18" ]; then

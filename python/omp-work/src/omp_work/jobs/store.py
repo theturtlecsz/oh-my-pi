@@ -132,6 +132,31 @@ class TransactionDeadlineExceeded(TimeoutError):
         )
 
 
+class TransactionDeadline:
+    """One-shot internal budget, armable after admission or upstream work."""
+
+    def __init__(self) -> None:
+        self._deadline: float | None = None
+        self._operation_deadline: float | None = None
+
+    @property
+    def deadline(self) -> float | None:
+        return self._deadline
+
+    @property
+    def operation_deadline(self) -> float | None:
+        return self._operation_deadline
+
+    def arm(self, deadline: float) -> None:
+        if not math.isfinite(deadline):
+            raise ValueError("transaction deadline must be finite")
+        if self._deadline is not None:
+            raise ValueError("transaction deadline already armed")
+        allowance = max(0.0, deadline - time.monotonic())
+        self._operation_deadline = deadline - min(0.25, allowance / 4)
+        self._deadline = deadline
+
+
 def _remaining(deadline: float) -> float:
     remaining = deadline - time.monotonic()
     if remaining <= 0:
@@ -142,14 +167,17 @@ def _remaining(deadline: float) -> float:
 class _DeadlineConnection(psycopg.Connection[dict[str, object]]):
     """Drive psycopg's nonblocking generators without a background writer."""
 
-    deadline: float
+    deadline_control: TransactionDeadline
 
     def wait(self, gen: PQGen[_R], interval: float = 0.1) -> _R:
+        deadline = self.deadline_control.operation_deadline
+        if deadline is None:
+            return super().wait(gen, interval)
         try:
-            _remaining(self.deadline)
+            _remaining(deadline)
             state = next(gen)
             while True:
-                remaining = _remaining(self.deadline)
+                remaining = _remaining(deadline)
                 fd = self.pgconn.socket
                 readable, writable, _ = select.select(
                     [fd] if state & Wait.R else [],
@@ -157,7 +185,7 @@ class _DeadlineConnection(psycopg.Connection[dict[str, object]]):
                     [],
                     remaining,
                 )
-                _remaining(self.deadline)
+                _remaining(deadline)
                 ready = Ready.NONE
                 if readable:
                     ready |= Ready.R
@@ -194,34 +222,41 @@ def _poll(
 @contextmanager
 def _deadline_connection(
     params: dict[str, object],
-    deadline: float,
+    control: TransactionDeadline,
 ) -> Iterator[_DeadlineConnection]:
     # Reserve part of the *total* allowance for safe cancellation and disposal.
     # libpq <17 cancel() is blocking, so reject it rather than silently falling back.
     if pq.version() < 170000:
         raise RuntimeError("bounded transactions require libpq >= 17")
-    allowance = _remaining(deadline)
-    operation_deadline = deadline - min(0.25, allowance / 4)
-    # DNS resolution inside libpq is synchronous. Internal bounded callers must
-    # use a numeric address (or Unix socket); ordinary callers remain unrestricted.
-    host = str(params["host"])
-    if not host.startswith("/"):
-        params = {**params, "hostaddr": str(ipaddress.ip_address(host))}
-    _remaining(operation_deadline)
-    pgconn = pq.PGconn.connect_start(make_conninfo(**params).encode())
+    operation_deadline = control.operation_deadline
+    pgconn = None
     conn = None
     try:
-        _poll(pgconn, pgconn.connect_poll, operation_deadline)
-        pgconn.nonblocking = 1
-        conn = _DeadlineConnection(pgconn, row_factory=dict_row)
-        conn.deadline = operation_deadline
+        if operation_deadline is None:
+            # Admission/setup is unbounded until the caller arms the control.
+            conn = _DeadlineConnection.connect(**params, row_factory=dict_row)
+            pgconn = conn.pgconn
+        else:
+            # DNS inside libpq is synchronous: bounded connect requires a
+            # numeric address (or Unix socket).
+            host = str(params["host"])
+            if not host.startswith("/"):
+                params = {**params, "hostaddr": str(ipaddress.ip_address(host))}
+            _remaining(operation_deadline)
+            pgconn = pq.PGconn.connect_start(make_conninfo(**params).encode())
+            _poll(pgconn, pgconn.connect_poll, operation_deadline)
+            pgconn.nonblocking = 1
+            conn = _DeadlineConnection(pgconn, row_factory=dict_row)
+        conn.deadline_control = control
         yield conn
     finally:
         if conn is not None:
             try:
-                remaining = deadline - time.monotonic()
+                deadline = control.deadline
+                remaining = deadline - time.monotonic() if deadline is not None else 0
                 if (
-                    remaining > 0
+                    deadline is not None
+                    and remaining > 0
                     and pgconn.transaction_status == pq.TransactionStatus.ACTIVE
                 ):
                     cancel = pgconn.cancel_conn()
@@ -236,7 +271,7 @@ def _deadline_connection(
                 pass
             finally:
                 conn.close()
-        else:
+        elif pgconn is not None:
             pgconn.finish()
 
 
@@ -251,6 +286,7 @@ class NativeJobStore:
         actor_id: UUID,
         *,
         deadline: float | None = None,
+        deadline_control: TransactionDeadline | None = None,
     ) -> Iterator[psycopg.Cursor[dict[str, object]]]:
         """Run with existing RLS identity, optionally bounded by monotonic time.
 
@@ -263,18 +299,26 @@ class NativeJobStore:
         cannot send SQL or commit after expiry. Numeric hosts/Unix sockets and
         libpq >=17 are required on this path to avoid blocking DNS/cancellation.
 
+        ``deadline_control`` selects the same bounded machinery but may remain
+        inactive through admission/upstream work. Arm it while the cursor is
+        open to bound subsequent SQL, commit/rollback and disposal. Caller
+        Python work before arming consumes no budget. Supply only one API.
+
         Lost COMMIT acknowledgement raises with ``outcome_uncertain=True``;
         disposal does not prove rollback of a COMMIT already sent to PostgreSQL.
         """
-        if deadline is not None and not math.isfinite(deadline):
-            raise ValueError("transaction deadline must be finite")
+        if deadline is not None:
+            if deadline_control is not None:
+                raise ValueError("supply deadline or deadline_control, not both")
+            deadline_control = TransactionDeadline()
+            deadline_control.arm(deadline)
         connection = (
             psycopg.connect(
                 **self._config.connection_kwargs("omp_work_app"), row_factory=dict_row
             )
-            if deadline is None
+            if deadline_control is None
             else _deadline_connection(
-                self._config.connection_kwargs("omp_work_app"), deadline,
+                self._config.connection_kwargs("omp_work_app"), deadline_control,
             )
         )
         with connection as conn:

@@ -9,11 +9,18 @@ from pydantic import AwareDatetime, Field, field_serializer, field_validator, mo
 
 from ..contracts.nsi.v1.models import (
     AcceptanceCriterion as NSIAcceptanceCriterion,
+    Binding as NSIBinding,
     ClarificationQuestion as NSIClarificationQuestion,
     Conflict as NSIConflict,
+    DerivationReceipt as NSIDerivationReceipt,
+    EvidenceArtifact as NSIEvidenceArtifact,
+    IntakeClaim as NSIIntakeClaim,
+    IntakeReadinessAssessment as NSIIntakeReadinessAssessment,
     IntakeSnapshot as NSIIntakeSnapshot,
     OwnerDecision as NSIOwnerDecision,
+    OwnerRef as NSIOwnerRef,
     RequirementClause as NSIRequirementClause,
+    RuleEngineRef as NSIRuleEngineRef,
 )
 from .models import (
     AuditManifest,
@@ -27,6 +34,7 @@ from .models import (
     FindingSeverity,
     IntakeBlockingQuestion,
     IntakeClaimEvidenceLink,
+    IntakeSource,
     ItemBudget,
     MissionDraft,
     MissionEventType,
@@ -827,12 +835,6 @@ class AssessIntakeResult(StrictModel):
         return self
 
 
-class IntakeProvenance(StrictModel):
-    run_id: str = Field(min_length=1)
-    revision: int = Field(ge=0)
-    source_sha256: hex64
-
-
 class IntakeDecisionRecord(StrictModel):
     decision: NSIOwnerDecision
     claim_ids: tuple[str, ...]
@@ -857,6 +859,83 @@ class IntakeTrace(StrictModel):
     claim_ids: tuple[str, ...]
 
 
+class IntakeOperationRef(StrictModel):
+    operation_id: UUID
+    event_id: UUID | None = None
+
+
+class IntakeSourceProvenance(StrictModel):
+    artifact: NSIEvidenceArtifact
+    source: IntakeSource
+    operation: IntakeOperationRef
+
+
+class IntakeAdmissionProvenance(StrictModel):
+    claim_id: str = Field(min_length=1)
+    admitted_by: NSIOwnerRef | NSIRuleEngineRef
+    operation: IntakeOperationRef
+
+
+class IntakeClaimProvenance(StrictModel):
+    claim: NSIIntakeClaim
+    ancestry_ids: tuple[str, ...] = ()
+    evidence_links: dict[str, tuple[IntakeClaimEvidenceLink, ...]] = Field(default_factory=dict)
+    artifacts: tuple[NSIEvidenceArtifact, ...] = ()
+
+    @field_serializer("claim")
+    def serialize_claim(self, claim: NSIIntakeClaim) -> dict[str, object]:
+        # Preserve absent NSI optional fields and explicit null typed values.
+        return claim.model_dump(mode="json", exclude_unset=True)
+
+    @field_serializer("evidence_links")
+    def serialize_evidence_links(
+        self, links: dict[str, tuple[IntakeClaimEvidenceLink, ...]],
+    ) -> dict[str, list[dict[str, object]]]:
+        return {
+            claim_id: [link.model_dump(mode="json", exclude_unset=True) for link in claim_links]
+            for claim_id, claim_links in links.items()
+        }
+
+
+class IntakeDecisionProvenance(StrictModel):
+    record: IntakeDecisionRecord
+    operation: IntakeOperationRef
+
+
+class IntakeSupersessionProvenance(StrictModel):
+    old_claim_id: str = Field(min_length=1)
+    replacement_claim_id: str = Field(min_length=1)
+    decision_id: str = Field(min_length=1)
+    operation: IntakeOperationRef
+
+
+class IntakeRelayProvenance(StrictModel):
+    relay: RelayProvenance
+    operation: IntakeOperationRef
+
+
+class IntakeProvenance(StrictModel):
+    run_id: str = Field(min_length=1)
+    revision: int = Field(ge=0)
+    source_sha256: hex64
+    sources: tuple[IntakeSourceProvenance, ...] = ()
+    claims: tuple[IntakeClaimProvenance, ...] = ()
+    admissions: tuple[IntakeAdmissionProvenance, ...] = ()
+    decisions: tuple[IntakeDecisionProvenance, ...] = ()
+    supersessions: tuple[IntakeSupersessionProvenance, ...] = ()
+    relays: tuple[IntakeRelayProvenance, ...] = ()
+    traces: tuple[IntakeTrace, ...] = ()
+
+
+class IntakeAssessmentView(StrictModel):
+    id: str = Field(min_length=1)
+    assessment: NSIIntakeReadinessAssessment
+    binding: NSIBinding
+    receipts: tuple[NSIDerivationReceipt, ...] = ()
+    unresolved_issues: tuple[IntakeIssueRecord, ...] = ()
+    provenance: IntakeProvenance
+
+
 class IntakeRecordView(StrictModel):
     workspace_id: UUID
     mission_id: UUID
@@ -868,7 +947,7 @@ class IntakeRecordView(StrictModel):
     decisions: tuple[IntakeDecisionRecord, ...]
     issues: tuple[IntakeIssueRecord, ...]
     traces: tuple[IntakeTrace, ...]
-    assessments: tuple[AssessIntakeResult, ...]
+    assessments: tuple[IntakeAssessmentView, ...]
     provenance: IntakeProvenance
 
     @field_serializer("snapshot")

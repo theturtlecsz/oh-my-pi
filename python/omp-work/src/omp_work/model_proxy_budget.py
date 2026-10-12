@@ -34,7 +34,9 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import math
 import threading
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -44,7 +46,7 @@ from uuid import UUID
 import psycopg
 
 from omp_work.jobs.budget import item_budget, item_spend, root_work_id
-from omp_work.jobs.store import JobError, NativeJobStore
+from omp_work.jobs.store import JobError, NativeJobStore, TransactionDeadlineExceeded
 from omp_work.jobs.usage import record_usage, validate_usage_counts
 from omp_work.model_proxy_upstream import Prepared
 from omp_work.operations.config import OperationsConfig
@@ -710,26 +712,155 @@ class ModelCallAdmission:
             raise ModelProxyBudgetError("idempotency_conflict", "settlement receipt changed")
         return receipt
 
-    def _resolve(self) -> dict[str, object]:
-        """Resolve only a failed consumed call; never acquire fresh authority."""
+    def _resolve(self, deadline: float | None = None) -> dict[str, object]:
+        """Resolve only a failed consumed call; never acquire fresh authority.
+
+        Reconciliation executes in two finite phases:
+        1. Bounded receipt lookup (<=1s including cleanup, reserving >=3s of
+           budget for fallback). Checks stable receipt identity under advisory lock
+           and validates workspace, kind, intent, root_work_id, and fingerprint
+           via run_operation. If a matching receipt is found, preserves stored
+           actual usage and result without requiring bound-payload equality.
+        2. Fresh fallback under lock_captured_identity locks (reserving >=3s). If
+           Phase 1 is absent, nonmatching, or encounters a lookup/rollback failure,
+           fallback enters a fresh transaction with remaining budget, reacquires
+           spend and identity locks in admission order, and rechecks receipt before
+           _persist. Only absence permits atomic write of _admitted_bound_payload
+           with captured SpendDecision (never measured payload). A fresh mismatch
+           conflicts without overwrite. A failed fallback retains the lifecycle
+           owner without loops, reauthorization, or upstream sends.
+        """
         with self._state.transition:
             captured = self._state.unresolved
             if captured is None or not self.closed or self.settled:
                 raise ModelProxyBudgetError("already_settled", "no unresolved settlement")
-            stack = _OneShotExitStack()
+
+            now = time.monotonic()
+            if deadline is None:
+                deadline = now + 5.0
+            elif not math.isfinite(deadline):
+                raise ValueError("transaction deadline must be finite")
+
+            remaining = deadline - now
+            if remaining <= 0:
+                raise TransactionDeadlineExceeded()
+
+            receipt_id = f"model_call:receipt:{self._identity}"
+            receipt_request_obj = json.loads(self._receipt_request)
+            fingerprint = receipt_request_obj["fingerprint"]
+
+            lookup_matched = False
+            matching_receipt: dict[str, object] | None = None
+
+            # Phase 1: Receipt-first lookup (<=1s including cleanup; reserve >=3s for fresh fallback).
+            lookup_duration = min(1.0, max(0.0, remaining - 3.0))
+            if lookup_duration > 0:
+                lookup_deadline = now + lookup_duration
+                try:
+                    with _OneShotExitStack() as lookup_stack:
+                        cur = lookup_stack.enter_context(
+                            self.budget._jobs.transaction(
+                                self.workspace_id, self.actor_id, deadline=lookup_deadline
+                            )
+                        )
+                        # Lock stable receipt identity
+                        cur.execute(
+                            "SELECT pg_advisory_xact_lock(hashtextextended('omp_jobs.operation:' || %s, 0))",
+                            (receipt_id,),
+                        )
+                        cur.execute(
+                            "SELECT 1 FROM omp_jobs.operations WHERE operation_id=%s",
+                            (receipt_id,),
+                        )
+                        if cur.fetchone() is not None:
+                            def no_effect() -> dict[str, object]:
+                                raise AssertionError("existing receipt disappeared under operation lock")
+
+                            outcome = self.budget._jobs.run_operation(
+                                cur,
+                                receipt_id,
+                                self.workspace_id,
+                                "model_call_receipt",
+                                receipt_request_obj,
+                                no_effect,
+                            )
+                            cand = outcome.result
+                            if (
+                                cand.get("root_work_id") == str(self.root_work_id)
+                                and cand.get("fingerprint") == fingerprint
+                                and isinstance(cand.get("settlement"), dict)
+                            ):
+                                matching_receipt = cand
+                                lookup_matched = True
+                except BaseException:
+                    # Lookup is advisory: even rollback failure must reach
+                    # the single fresh fallback after transaction disposal.
+                    pass
+                else:
+                    if lookup_matched and matching_receipt is not None:
+                        return self._finish_settlement(matching_receipt)
+
+            # Phase 2: Fresh fallback while budget remains (ONE fresh fallback).
+            now = time.monotonic()
+            if deadline - now <= 0:
+                raise TransactionDeadlineExceeded()
+
+            fallback_stack = _OneShotExitStack()
             try:
-                cur = stack.enter_context(
-                    self.budget._jobs.transaction(self.workspace_id, self.actor_id)
+                cur = fallback_stack.enter_context(
+                    self.budget._jobs.transaction(
+                        self.workspace_id, self.actor_id, deadline=deadline
+                    )
                 )
                 self.budget.lock_captured_identity(
-                    cur, self.workspace_id, f"model_call:receipt:{self._identity}",
-                    project_id=self.project_id, mission_id=self.mission_id,
-                    root_work_id=self.root_work_id, work_id=self.work_id, job_id=self.job_id,
+                    cur,
+                    self.workspace_id,
+                    receipt_id,
+                    project_id=self.project_id,
+                    mission_id=self.mission_id,
+                    root_work_id=self.root_work_id,
+                    work_id=self.work_id,
+                    job_id=self.job_id,
                 )
-                receipt = self._persist(cur, captured)
-                stack.close()
+                cur.execute(
+                    "SELECT 1 FROM omp_jobs.operations WHERE operation_id=%s",
+                    (receipt_id,),
+                )
+                if cur.fetchone() is not None:
+                    def no_effect() -> dict[str, object]:
+                        raise AssertionError("existing receipt disappeared under operation lock")
+
+                    try:
+                        outcome = self.budget._jobs.run_operation(
+                            cur,
+                            receipt_id,
+                            self.workspace_id,
+                            "model_call_receipt",
+                            receipt_request_obj,
+                            no_effect,
+                        )
+                        cand = outcome.result
+                    except JobError as refused:
+                        raise ModelProxyBudgetError(refused.code) from refused
+
+                    if (
+                        cand.get("root_work_id") != str(self.root_work_id)
+                        or cand.get("fingerprint") != fingerprint
+                        or not isinstance(cand.get("settlement"), dict)
+                    ):
+                        raise ModelProxyBudgetError(
+                            "idempotency_conflict", "settlement receipt changed"
+                        )
+                    receipt = cand
+                else:
+                    bound = self._admitted_bound_payload()
+                    bound["actual_usd"] = _decimal_text(self.max_usd)
+                    bound_settlement = _Settlement(canonical_json(bound), self.decision)
+                    receipt = self._persist(cur, bound_settlement)
+
+                fallback_stack.close()
             except BaseException as error:
-                stack.__exit__(type(error), error, error.__traceback__)
+                fallback_stack.__exit__(type(error), error, error.__traceback__)
                 if isinstance(error, JobError):
                     raise ModelProxyBudgetError(error.code) from error
                 raise

@@ -369,7 +369,7 @@ def test_structural_snapshots_inspection(tmp_path: Path) -> None:
     assert snaps[0]["published_at"] == "2026-09-27T01:00:00Z"
 
 
-def test_web_server_ephemeral_port_and_endpoints(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_web_server_ephemeral_port_and_endpoints(tmp_path: Path, capsys: pytest.CaptureFixture[str], live_loopback: None) -> None:
     """Over HTTP against an ephemeral port, /api/procedures matches CLI JSON, / escapes <script>, and POST is 405."""
     state_root = tmp_path / "web_root"
     state_root.mkdir()
@@ -457,7 +457,7 @@ def test_web_server_ephemeral_port_and_endpoints(tmp_path: Path, capsys: pytest.
         server.server_close()
 
 
-def test_report_rebuilt_per_request(tmp_path: Path) -> None:
+def test_report_rebuilt_per_request(tmp_path: Path, live_loopback: None) -> None:
     """Web server rebuilds the report dynamically on every request."""
     state_root = tmp_path / "dynamic_root"
     state_root.mkdir()
