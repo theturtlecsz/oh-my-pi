@@ -296,10 +296,10 @@ class ModelProxyBudget:
                 admission._state.consumed = False
                 admission.abort()
                 raise ModelProxyBudgetError("upstream_refused") from None
-            except BaseException:
-                admission.settle_unmeasurable_failure()
+            except BaseException as invoke_error:
+                admission.settle_unmeasurable_failure(invoke_error)
             if not _valid_upstream_result(result, prepared):
-                admission.settle_unmeasurable_failure()
+                admission.settle_unmeasurable_failure("invalid upstream result")
             try:
                 return admission.settle(
                     actual_usd=result.usd, input_tokens=result.input_tokens,
@@ -353,7 +353,6 @@ class ModelProxyBudget:
         work_uuid = _as_uuid("work_id", work_id)
         project_uuid = _as_uuid("project_id", project_id)
         mission_uuid = _as_uuid("mission_id", mission_id)
-        now = now or datetime.now(UTC)
 
         _require_prepared(prepared)
         max_usd = prepared.max_usd
@@ -498,23 +497,6 @@ class ModelProxyBudget:
                 job_id=job_id,
             )
 
-            decision: SpendDecision | None = None
-            if project_uuid is not None:
-                # Locks the mission budget then the project budget, in the
-                # existing spend order, and pins them until settlement.
-                try:
-                    decision = self._projects.authorize_spend_cursor(
-                        cur,
-                        workspace_uuid,
-                        project_uuid,
-                        mission_uuid,
-                        max_usd,
-                        now,
-                        reject_exhausted=True,
-                    )
-                except ProjectAuthorityRefused as refused:
-                    raise ModelProxyBudgetError(refused.code, str(refused)) from refused
-
             _revalidate(
                 cur,
                 workspace_uuid,
@@ -524,6 +506,24 @@ class ModelProxyBudget:
                 fence,
                 root_before,
             )
+
+            decision: SpendDecision | None = None
+            if project_uuid is not None:
+                # Locks the mission budget then the project budget, in the
+                # existing spend order, and pins them until settlement.
+                spend_now = now if now is not None else datetime.now(UTC)
+                try:
+                    decision = self._projects.authorize_spend_cursor(
+                        cur,
+                        workspace_uuid,
+                        project_uuid,
+                        mission_uuid,
+                        max_usd,
+                        spend_now,
+                        reject_exhausted=True,
+                    )
+                except ProjectAuthorityRefused as refused:
+                    raise ModelProxyBudgetError(refused.code, str(refused)) from refused
 
             _enforce_item_cap(cur, workspace_uuid, budget_work_id, max_usd, max_tokens)
             if task_ceiling is not None:
@@ -1098,7 +1098,14 @@ class ModelCallAdmission:
         with self._state.transition:
             if self._state.failure is None:
                 self._state.failure = error
-            self._settle_admitted_bound()
+            try:
+                self._settle_admitted_bound()
+            except BaseException as settle_error:
+                if (
+                    isinstance(settle_error, ModelProxyBudgetError)
+                    and settle_error.code == "accounting_unconfirmed"
+                ):
+                    raise
         detail = str(error) if error is not None else "unmeasurable upstream failure"
         raise ModelProxyBudgetError("unmeasurable_failure", detail)
 
