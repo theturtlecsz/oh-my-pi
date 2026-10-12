@@ -13,7 +13,8 @@ from uuid import UUID, uuid4, uuid5
 
 import pytest
 
-from omp_work.orchestrator.service import OrchestratorHandler, _REGISTRY, submit
+from omp_work.orchestrator.service import OrchestratorHandler, Outcome, _REGISTRY, submit
+from omp_work.orchestrator.stages import ActionVerdict
 from omp_work.orchestrator.verifier import accept_candidate, sign_verdict
 from orchestrator_test_ops import run_stage
 from test_orchestrator_service import _until, _worker, open_world
@@ -385,3 +386,75 @@ def test_audit_acceptance_rejects_untrusted_intent_target(tmp_path: Path, invali
         target["candidate_sha256" if invalid == "sha" else "attempt_id"] = None
 
     assert OrchestratorHandler.__new__(OrchestratorHandler)._audit_accepted(ctx) is False
+
+
+def _audit_without_intent_pauses(service, tmp_path: Path, produced: Outcome, rule_id: str) -> list[dict]:
+    world = open_world(service, tmp_path)
+    OrchestratorHandler(world["config"])
+    world["config"] = replace(world["config"], operations=())
+    _REGISTRY["audit"] = lambda ctx: produced
+    submit(world["config"], world["request"])
+    worker = _worker(service, world["config"], world["workspace_id"])
+    view = _until(
+        worker, world["config"], world["mission_id"],
+        lambda item: item["status"] in ("paused", "completed"),
+    )
+    assert view["status"] == "paused"
+    assert [step["rule_id"] for step in view["steps"] if step["kind"] == "pause"] == [rule_id]
+    assert not any(step["stage"] == "merge" for step in view["steps"])
+    assert not any(step["rule_id"] == "mission-complete" for step in view["steps"])
+    handler = OrchestratorHandler(world["config"])
+    handler.mission_id = world["mission_id"]
+    steps = handler.steps()
+    assert not any(step["kind"] == "external_intent" for step in steps)
+    audits = [step for step in steps if step["kind"] == "outcome" and step["stage"] == "audit"]
+    assert audits
+    return audits
+
+
+def test_audit_succeeded_none_reaches_repair_bound(service, tmp_path: Path) -> None:
+    audits = _audit_without_intent_pauses(
+        service, tmp_path, Outcome(outcome="succeeded", verdict="none"), "repair-bound",
+    )
+    assert all(step["outcome"] == "succeeded" and step["verdict"] == "none" for step in audits)
+
+
+def test_audit_pass_without_acceptance_reaches_repair_bound(service, tmp_path: Path) -> None:
+    audits = _audit_without_intent_pauses(
+        service, tmp_path, Outcome(outcome="succeeded", verdict="pass"), "repair-bound",
+    )
+    for audit in audits:
+        assert audit["outcome"] == "failed"
+        assert audit["verdict"] == "fail"
+        assert audit["data"] == {"stage": "audit", "code": "candidate_rejected"}
+        assert audit["blocker"] is None
+
+
+@pytest.mark.parametrize(
+    ("condition", "rule_id"),
+    [
+        ({"blocker": "needs-owner"}, "unrecoverable-blocker"),
+        ({"action": ActionVerdict(3, "unlisted", None, False, "held")}, "d35-tier3"),
+        ({"new_scope": True}, "d21-new-scope"),
+        ({"budget_exhausted": True}, "budget-exhausted"),
+    ],
+)
+def test_audit_pass_with_extra_condition_is_left_alone(
+    service, tmp_path: Path, condition: dict, rule_id: str,
+) -> None:
+    audits = _audit_without_intent_pauses(
+        service, tmp_path, Outcome(outcome="succeeded", verdict="pass", **condition), rule_id,
+    )
+    assert len(audits) == 1
+    audit = audits[0]
+    assert audit["outcome"] == "succeeded"
+    assert audit["verdict"] == "pass"
+    assert audit["data"] == {}
+    for field, value in condition.items():
+        if field == "action":
+            assert audit[field] == {
+                "tier": value.tier, "action_class": value.action_class,
+                "target_sha256": value.target_sha256, "allowed": value.allowed, "code": value.code,
+            }
+        else:
+            assert audit[field] == value

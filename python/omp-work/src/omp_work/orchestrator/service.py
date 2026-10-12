@@ -1167,8 +1167,18 @@ class OrchestratorHandler:
             work_id=work_id,
         )
         produced = run(ctx)
-        if stage == "audit" and produced.verdict == "none" and produced.outcome == "succeeded":
-            produced.verdict = "pass"
+        if stage == "audit" and produced.verdict == "pass" and produced.outcome == "succeeded":
+            if (
+                produced.blocker is not None or produced.action is not None
+                or produced.new_scope or produced.budget_exhausted
+            ):
+                return produced
+            if not self._audit_accepted(ctx):
+                return Outcome(
+                    outcome="failed",
+                    data={"stage": stage, "code": "candidate_rejected"},
+                    verdict="fail",
+                )
         return produced
 
     def _facts(self, steps: list[dict[str, Any]], step_index: int, stage: str, outcome: Outcome | None) -> Facts:
