@@ -1495,7 +1495,7 @@ def test_usage_after_spend_fault_proves_atomic_bound_replacement(admission_conte
             ctx, unrelated_item, f"gate-waiter-{uuid4()}"
         )
         assert gate_waiting.wait(5), "gate waiter did not start"
-        assert not gate_finished.wait(0.2), "gate released at rollback gap"
+        assert not gate_finished.wait(0.02), "gate released at rollback gap"
 
         waiter_thread = threading.Thread(target=wait_on_project)
         waiter_thread.start()
@@ -1505,27 +1505,27 @@ def test_usage_after_spend_fault_proves_atomic_bound_replacement(admission_conte
         release.set()
 
         assert bound_entered.wait(5), "bound write was not entered"
-        assert not gate_finished.wait(0.2), "gate released before bound write"
+        assert not gate_finished.wait(0.02), "gate released before bound write"
         allow_bound_write.set()
 
         assert bound_returned.wait(5), "bound write did not return"
-        assert not gate_finished.wait(0.2), "gate released at bound return pause"
+        assert not gate_finished.wait(0.02), "gate released at bound return pause"
         allow_bound_return.set()
 
         assert pauses.cursor_closing.wait(5), "settlement never reached cursor close"
         assert _admission_counts(ctx) == before
-        assert not gate_finished.wait(0.2), "gate released before cursor close"
+        assert not gate_finished.wait(0.02), "gate released before cursor close"
         pauses.allow_cursor.set()
 
         assert pauses.committing.wait(5), "settlement never reached commit"
         assert _admission_counts(ctx) == before
-        assert not gate_finished.wait(0.2), "gate released before commit"
+        assert not gate_finished.wait(0.02), "gate released before commit"
         pauses.allow_commit.set()
 
         assert pauses.connection_closing.wait(5), "settlement never reached connection close"
         assert _admission_counts(ctx) == committed_counts
         assert not admission.settled
-        assert not gate_finished.wait(0.2), "gate released before connection cleanup"
+        assert not gate_finished.wait(0.02), "gate released before connection cleanup"
         pauses.allow_connection.set()
 
         settlement_thread.join(timeout=7)
@@ -1796,7 +1796,7 @@ def test_failed_settlement_reconciles_durable_accounting(admission_context, monk
             admission.settle(**payload)
         assert _admission_counts(ctx) == expected
         assert not admission.settled
-        assert len(connections) == 3 and len(set(connections)) == 3
+        assert len(connections) == 5 and len(set(connections)) == 5
         assert all(conn.closed for conn in connections)
 
         bound = admission._admitted_bound_payload()
@@ -2093,18 +2093,18 @@ def test_process_gate_stays_held_until_settlement_commit(admission_context, monk
             ctx, other, "commit-waiter"
         )
         assert waiting.wait(2)
-        assert not finished.wait(0.2), "gate released before cursor cleanup"
+        assert not finished.wait(0.02), "gate released before cursor cleanup"
         pauses.allow_cursor.set()
 
         assert pauses.committing.wait(5), outcomes
         assert _admission_counts(ctx) == (0, 0, 0, 0)
-        assert not finished.wait(0.2), "gate released before commit"
+        assert not finished.wait(0.02), "gate released before commit"
         pauses.allow_commit.set()
 
         assert pauses.connection_closing.wait(5), outcomes
         assert _admission_counts(ctx) == (1, 1, 1, 2)
         assert not admission.settled
-        assert not finished.wait(0.2), "gate released before connection cleanup"
+        assert not finished.wait(0.02), "gate released before connection cleanup"
     finally:
         pauses.release()
         settlement.join(timeout=7)
@@ -2154,11 +2154,11 @@ def test_abort_and_receipt_replay_release_gate_after_cleanup(admission_context, 
             ctx, abort_waiter_work, "abort-waiter"
         )
         assert waiting.wait(2)
-        assert not finished.wait(0.2), "gate released before abort cursor cleanup"
+        assert not finished.wait(0.02), "gate released before abort cursor cleanup"
         pauses.allow_cursor.set()
         assert pauses.connection_closing.wait(5), outcomes
         assert _admission_counts(ctx) == (0, 0, 0, 0)
-        assert not finished.wait(0.2), "gate released before abort connection cleanup"
+        assert not finished.wait(0.02), "gate released before abort connection cleanup"
     finally:
         pauses.release()
         worker.join(timeout=7)
@@ -2205,15 +2205,15 @@ def test_abort_and_receipt_replay_release_gate_after_cleanup(admission_context, 
             ctx, replay_waiter_work, "replay-waiter"
         )
         assert waiting.wait(2)
-        assert not finished.wait(0.2), "gate released before replay cursor cleanup"
+        assert not finished.wait(0.02), "gate released before replay cursor cleanup"
         pauses.allow_cursor.set()
         assert pauses.committing.wait(5), replay_outcomes
         assert _admission_counts(ctx) == charged
-        assert not finished.wait(0.2), "gate released before replay commit"
+        assert not finished.wait(0.02), "gate released before replay commit"
         pauses.allow_commit.set()
         assert pauses.connection_closing.wait(5), replay_outcomes
         assert _admission_counts(ctx) == charged
-        assert not finished.wait(0.2), "gate released before replay connection cleanup"
+        assert not finished.wait(0.02), "gate released before replay connection cleanup"
     finally:
         pauses.release()
         worker.join(timeout=7)
@@ -2648,7 +2648,7 @@ def test_rolled_back_settlement_and_stale_cleanup_keep_successor_excluded(
             admission.settle(**payload)
         assert not entered.wait(0.2) and not done.is_set()
         assert sends == ["first"] and _accounting_snapshot(ctx) == [[], [], [], []]
-        assert len(connections) == 3 and all(conn.closed for conn in connections)
+        assert len(connections) == 5 and all(conn.closed for conn in connections)
 
         fault = False
         result = admission.settle(**payload)
@@ -2809,8 +2809,8 @@ def test_resolution_locks_original_identity_after_commit_failure(
             resolution.start()
             assert locked.wait(5), results
             # Old admission connection is closed: these locks belong to resolution only.
-            assert len(connections) == 3 and connections[0].closed and connections[1].closed
-            assert not connections[2].closed
+            assert len(connections) == 5 and all(conn.closed for conn in connections[:-1])
+            assert not connections[-1].closed
             probes = [
                 ("SELECT pg_advisory_xact_lock(hashtextextended('omp_jobs.operation:' || %s, 0))", (f"model_call:receipt:{admission._identity}",)),
                 ("SELECT project_id FROM omp_work.projects WHERE workspace_id=%s AND project_id=%s FOR UPDATE", (ctx.workspace_id, ctx.project_id)),
@@ -3723,4 +3723,230 @@ def test_resolve_failed_fallback_retains_owner_no_reauthorization(
             admission._resolve()
         if waiter is not None:
             waiter.join(timeout=7)
+            assert not waiter.is_alive()
+
+
+@pytest.mark.parametrize("fault", [
+    "rollback-before-commit", "commit-then-raise", "closed-connection",
+    "connection-loss", "connection-loss-cleanup", "savepoint-rollback", "bound-write", "bound-commit",
+    "bound-outer-commit", "blocked-write",
+])
+def test_original_settlement_fault_resolves_before_return(admission_context, monkeypatch, fault):
+    """One consumed send resolves actual or estimated accounting before gate release."""
+    ctx = admission_context
+    transaction = ctx.budget._jobs.transaction
+    persist = budget_module.ModelCallAdmission._persist
+    execute = psycopg.Cursor.execute
+    exec_command = psycopg.Connection._exec_command
+    release = budget_module._LifecycleOwner.release
+    connections, deadlines, writes, releases = [], [], [], []
+    injected = RuntimeError(fault)
+    bound_written = False
+    admission = None
+    start = None
+
+    @contextmanager
+    def observed_transaction(workspace_id, actor_id, **kwargs):
+        original = "deadline_control" in kwargs
+        if not original:
+            assert connections[0].closed, "resolution preceded original disposal"
+            assert all(conn.closed for conn in connections), "fresh cleanup overlapped"
+            deadlines.append(kwargs["deadline"])
+        try:
+            with transaction(workspace_id, actor_id, **kwargs) as cur:
+                connections.append(cur.connection)
+                yield cur
+                if original:
+                    control = kwargs["deadline_control"]
+                    assert control.deadline is not None
+                    assert 0 < control.deadline - start <= 1.05
+                    if fault in {"rollback-before-commit", "bound-outer-commit"}:
+                        raise injected
+            if original and fault == "commit-then-raise":
+                raise injected
+        finally:
+            if original and fault == "connection-loss-cleanup":
+                assert connections[0].closed
+                raise RuntimeError("original cleanup acknowledgement lost")
+
+    def faulty_persist(owner, cur, captured):
+        nonlocal bound_written
+        measurement = json.loads(captured.payload)["measurement"]
+        writes.append((cur.connection, measurement))
+        if cur.connection is connections[0]:
+            assert owner._deadline_control.deadline is not None
+            if measurement == "measured":
+                if fault in {"connection-loss", "connection-loss-cleanup"}:
+                    cur.connection.close()
+                    if fault == "connection-loss-cleanup":
+                        raise JobError("invalid_request", ("connection lost during write",))
+                    raise injected
+                if fault == "blocked-write":
+                    cur.execute("SELECT pg_sleep(2)")
+                if fault in {"savepoint-rollback", "bound-write", "bound-commit", "bound-outer-commit"}:
+                    # Real database write precedes failure; rollback must remove it.
+                    persist(owner, cur, captured)
+                    raise JobError("invalid_request", ("measured write rejected",))
+            elif fault == "bound-write":
+                persist(owner, cur, captured)
+                raise injected
+        result = persist(owner, cur, captured)
+        if cur.connection is connections[0] and measurement == "estimated":
+            bound_written = True
+        return result
+
+    def faulty_execute(cur, query, *args, **kwargs):
+        if (
+            fault == "savepoint-rollback" and connections and cur.connection is connections[0]
+            and query == "ROLLBACK TO SAVEPOINT model_call_settlement"
+        ):
+            raise injected
+        return execute(cur, query, *args, **kwargs)
+
+    def faulty_command(conn, command, *args, **kwargs):
+        command_bytes = command.as_bytes(conn) if isinstance(command, sql.Composable) else command
+        if (
+            fault == "bound-commit" and connections and conn is connections[0]
+            and command_bytes.startswith(b"RELEASE ") and bound_written
+        ):
+            raise injected
+        return (yield from exec_command(conn, command, *args, **kwargs))
+
+    def observed_release(owner):
+        if admission is not None and owner is admission._owner:
+            assert all(conn.closed for conn in connections), "gate freed before cleanup"
+            assert admission.settled, "gate freed without durable confirmation"
+            releases.append(_accounting_snapshot(ctx))
+        return release(owner)
+
+    monkeypatch.setattr(ctx.budget._jobs, "transaction", observed_transaction)
+    monkeypatch.setattr(budget_module.ModelCallAdmission, "_persist", faulty_persist)
+    monkeypatch.setattr(psycopg.Cursor, "execute", faulty_execute)
+    monkeypatch.setattr(psycopg.Connection, "_exec_command", faulty_command)
+    monkeypatch.setattr(budget_module._LifecycleOwner, "release", observed_release)
+    sends = []
+    payload = dict(actual_usd="1", input_tokens=10, output_tokens=5, cache_tokens=0)
+    try:
+        admission = _admit(ctx, _prepared("2"), request_id=f"immediate-{fault}")
+        sends.append("upstream")
+        if fault == "closed-connection":
+            admission.cursor.connection.close()
+        start = time.monotonic()
+        error_type = (
+            ModelProxyBudgetError if fault in {
+                "connection-loss-cleanup", "savepoint-rollback", "bound-write", "bound-commit", "bound-outer-commit"
+            } else psycopg.OperationalError if fault == "closed-connection"
+            else TransactionDeadlineExceeded if fault == "blocked-write" else RuntimeError
+        )
+        with pytest.raises(error_type) as error:
+            admission.settle(**payload)
+        if error_type is ModelProxyBudgetError:
+            assert error.value.code == "invalid_request"
+        elif error_type is RuntimeError:
+            assert error.value is injected
+        assert time.monotonic() - start < 5.1
+        assert admission.closed and admission.settled
+        assert all(conn.closed for conn in connections)
+        assert len(connections) == (2 if fault == "commit-then-raise" else 3)
+        assert 0 < deadlines[0] - start <= 2.05
+        assert all(deadline <= start + 5.05 for deadline in deadlines)
+        if len(deadlines) == 2:
+            assert deadlines[1] - deadlines[0] >= 2.9
+        if fault in {"closed-connection", "connection-loss", "connection-loss-cleanup", "savepoint-rollback", "blocked-write"}:
+            assert not any(
+                conn is connections[0] and measurement == "estimated"
+                for conn, measurement in writes
+            ), "broken original received bound write"
+        durable = _accounting_snapshot(ctx)
+        assert releases == [durable]
+        assert _admission_counts(ctx) == (1, 1, 1, 2)
+        spend, usage, _, operations = durable
+        actual = fault == "commit-then-raise"
+        assert spend[0]["amount_usd"] == usage[0]["price_usd"] == Decimal(1 if actual else 2)
+        assert usage[0]["tokens"] == (15 if actual else 150)
+        receipt = next(row["result"] for row in operations if row["kind"] == "model_call_receipt")
+        expected = payload if actual else admission._admitted_bound_payload()
+        result = admission.settle(**expected)
+        assert result["usage"]["usage_id"] == usage[0]["usage_id"]
+        assert receipt["settlement"]["measurement"] == ("measured" if actual else "estimated")
+        # Restore injection before replay; replay never sends or charges again.
+        monkeypatch.setattr(ctx.budget._jobs, "transaction", transaction)
+        with _admit(ctx, _prepared("2"), request_id=f"immediate-{fault}") as replay:
+            if not replay.settled:
+                sends.append("replay")
+            assert replay.settle(**expected) == result
+        assert sends == ["upstream"] and _accounting_snapshot(ctx) == durable
+        admission.abort()
+        assert len(releases) == 1, "stale owner released gate twice"
+    finally:
+        monkeypatch.setattr(ctx.budget._jobs, "transaction", transaction)
+        monkeypatch.setattr(budget_module.ModelCallAdmission, "_persist", persist)
+        monkeypatch.setattr(psycopg.Cursor, "execute", execute)
+        monkeypatch.setattr(psycopg.Connection, "_exec_command", exec_command)
+        monkeypatch.setattr(budget_module._LifecycleOwner, "release", release)
+        if admission is not None:
+            if not admission.closed:
+                admission.abort()
+            elif not admission.settled:
+                admission._resolve()
+
+
+def test_receipt_replay_commit_is_bounded_and_owner_reachable(admission_context, monkeypatch):
+    """Blocked replay COMMIT expires, disposes original, and permits identical reconciliation."""
+    ctx = admission_context
+    prepared = _prepared("1")
+    request_id = "bounded-replay"
+    payload = dict(actual_usd="1", input_tokens=1)
+    with _admit(ctx, prepared, request_id=request_id) as admission:
+        first = admission.settle(**payload)
+    durable = _accounting_snapshot(ctx)
+    transaction = ctx.budget._jobs.transaction
+    exec_command = psycopg.Connection._exec_command
+    connections, controls = [], []
+    waiter = None
+    unrelated = _item(ctx, "bounded replay gate waiter")
+
+    @contextmanager
+    def observed_transaction(workspace_id, actor_id, **kwargs):
+        if "deadline_control" in kwargs:
+            controls.append(kwargs["deadline_control"])
+        else:
+            assert kwargs["deadline"] <= time.monotonic() + 5.0
+        with transaction(workspace_id, actor_id, **kwargs) as cur:
+            connections.append(cur.connection)
+            yield cur
+
+    def blocked_commit(conn, command, *args, **kwargs):
+        if connections and conn is connections[0] and command == b"COMMIT":
+            assert controls[0].deadline is not None
+            yield from exec_command(conn, b"SELECT pg_sleep(2)")
+        return (yield from exec_command(conn, command, *args, **kwargs))
+
+    monkeypatch.setattr(ctx.budget._jobs, "transaction", observed_transaction)
+    monkeypatch.setattr(psycopg.Connection, "_exec_command", blocked_commit)
+    try:
+        start = time.monotonic()
+        with pytest.raises(TransactionDeadlineExceeded):
+            _admit(ctx, prepared, request_id=request_id)
+        assert time.monotonic() - start < 1.1
+        assert connections[0].closed
+        assert 0 < controls[0].deadline - start <= 1.05
+        waiter, waiting, finished, outcomes = _start_gate_waiter(ctx, unrelated, "replay-timeout-waiter")
+        assert waiting.wait(2)
+        assert not finished.wait(0.02), "failed replay released unresolved gate"
+        monkeypatch.setattr(psycopg.Connection, "_exec_command", exec_command)
+        with _admit(ctx, prepared, request_id=request_id) as replay:
+            assert replay.settled and replay.settle(**payload) == first
+        assert finished.wait(5)
+        waiter.join(timeout=5)
+        assert not waiter.is_alive() and outcomes == ["admitted"]
+        assert all(conn.closed for conn in connections)
+        assert _accounting_snapshot(ctx) == durable
+    finally:
+        monkeypatch.setattr(psycopg.Connection, "_exec_command", exec_command)
+        monkeypatch.setattr(ctx.budget._jobs, "transaction", transaction)
+        with _admit(ctx, prepared, request_id=request_id) as cleaned:
+            assert cleaned.settled
+        if waiter is not None:
+            waiter.join(timeout=5)
             assert not waiter.is_alive()

@@ -378,6 +378,8 @@ class ModelProxyBudget:
                 # Commit the read, then publish settled and release this owner once.
                 # A commit exception happens before return: keep the owner reachable
                 # and do not free the gate for another send.
+                total_deadline = time.monotonic() + 5.0
+                deadline_control.arm(min(time.monotonic() + 1.0, total_deadline - 3.0))
                 admission._state.closed = True
                 try:
                     if not owner.claim() or not owner.consume():
@@ -574,8 +576,8 @@ class ModelCallAdmission:
 
         The spend row uses authorization captured at admission. A rolled-back
         write charges the admitted bound before surfacing the original error.
-        Failed bound writes or outer commits retain the consumed call and gate
-        for reconciliation without reauthorization.
+        Failed original transactions resolve within the same deadline without
+        reauthorization. Failed resolution retains the consumed call and gate.
         """
         with self._state.transition:
             if self.closed and not self.settled and self._state.unresolved is None:
@@ -959,7 +961,9 @@ class ModelCallAdmission:
         stack = _OneShotExitStack()
         try:
             cur = stack.enter_context(
-                self.budget._jobs.transaction(self.workspace_id, self.actor_id)
+                self.budget._jobs.transaction(
+                    self.workspace_id, self.actor_id, deadline=time.monotonic() + 5.0
+                )
             )
 
             def no_effect() -> dict[str, object]:
