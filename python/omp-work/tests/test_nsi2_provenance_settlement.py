@@ -8,19 +8,20 @@ import pytest
 
 from omp_work.contracts.nsi.v1 import models as nsi
 from omp_work.intake_repository import (
-    DecisionRecord, IntakeRevisionBody, append_revision, read_revision, revision_hashes,
+    DecisionRecord, IntakeRevisionBody, append_revision, lock_revision, read_revision, revision_hashes,
 )
 from omp_work.v1.api_models import IntakeDecisionRecord, IntakeIssueRecord, IntakeRecordView
-from omp_work.v1.intake_commands import read_intake_view
+from omp_work.v1.intake_commands import execute_intake, read_intake_view
 from omp_work.v1.intake_decisions import (
     _decision, _latest_findings, _settlement_membership, compute_settlement_assessment, open_issues,
     unresolved_findings,
 )
 from omp_work.v1.store_shared import WorkStoreError
 from test_nsi2_repository import connection, locked, revision_body, write_repository  # noqa: F401
-from test_nsi2_decisions import INSTRUCTION, decision, envelope
+from test_nsi2_claims import http_intake  # noqa: F401
+from test_nsi2_decisions import INSTRUCTION, decision, envelope, seeded  # noqa: F401
 from test_nsi_schemas import ASSESSMENT
-from test_workflow_service import service  # noqa: F401
+from test_workflow_service import OWNER, service  # noqa: F401
 
 
 @pytest.fixture
@@ -334,6 +335,191 @@ def _with_hashes(raw):
     claim_hash, source_hash = revision_hashes(parsed.snapshot, parsed.artifact_bytes)
     raw["binding"].update(claim_set_hash=claim_hash, source_hash=source_hash)
     return raw
+
+
+def append_assessed_revision(cur, workspace_id, mission_id, body):
+    """Copy a revision while retaining original wire decisions in history."""
+    revision = body.snapshot.revision + 1
+    raw = body.model_dump()
+    raw["snapshot"]["revision"] = raw["binding"]["revision"] = revision
+    for record in raw["decisions"]:
+        record["decision"]["revision"] = revision
+    raw = _with_hashes(raw)
+    raw["derivations"] = revision_body(workspace_id, revision)["derivations"]
+    for receipt in raw["derivations"]:
+        receipt.update(raw["binding"])
+        receipt["created_at"] = receipt["created_at"].replace("Z", "+00:00")
+    raw["assessments"] = [dict(id=f"assessment-{revision}", assessment={
+        **ASSESSMENT, **raw["binding"], "gaps": [], "conflicts": [],
+        "created_at": ASSESSMENT["created_at"].replace("Z", "+00:00"),
+        "derivation_receipt_ids": [receipt["id"] for receipt in raw["derivations"]],
+    })]
+    live = IntakeRevisionBody.model_validate(raw)
+    operation_id = uuid4()
+    head = lock_revision(cur, workspace_id=workspace_id, run_id="run-1",
+                         expected_revision=revision - 1, mission_id=mission_id,
+                         operation_id=operation_id)
+    assert append_revision(cur, head, live, operation_id=operation_id) == revision
+    return live
+
+
+def assert_reconnected_settlement(service, live, expected_ids):
+    """Live resolution, reopened storage and serialized API expose one settlement."""
+    assert remaining(live) == expected_ids
+    computed = compute_settlement_assessment(live, live.assessments[0].assessment)
+    with connection(service, live.workspace_id, "omp_work_readonly") as conn, conn.cursor() as cur:
+        reopened = read_revision(cur, workspace_id=live.workspace_id, run_id="run-1",
+                                 revision=live.snapshot.revision).body
+        view = read_intake_view(cur, live.workspace_id, "run-1")
+        serialized = IntakeRecordView.model_validate_json(view.model_dump_json())
+        assert serialized == IntakeRecordView.model_validate(view.model_dump(mode="json")) == view
+        assert remaining(reopened) == expected_ids
+        assert {item.id: item.model_dump() for item in unresolved_findings(reopened)} == {
+            item.id: item.model_dump() for item in unresolved_findings(live)
+        }
+        assert serialized.issues == open_issues(reopened) == open_issues(live)
+        assessment = serialized.assessments[0]
+        assert assessment.assessment == compute_settlement_assessment(
+            reopened, reopened.assessments[0].assessment,
+        ) == computed
+        assert assessment.unresolved_issues == serialized.issues
+        assert assessment.binding == reopened.binding == live.binding
+        assert assessment.receipts == tuple(reopened.derivations) == tuple(live.derivations)
+        assert assessment.assessment.revision == live.snapshot.revision
+        assert assessment.assessment.derivation_receipt_ids == [item.id for item in assessment.receipts]
+        assert reopened.history == live.history
+        assert serialized.decisions == tuple(live.history.decisions)
+    return serialized
+
+
+postgres_settlement = pytest.mark.skipif(
+    os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1",
+    reason="set OMP_WORK_POSTGRES_INTEGRATION=1",
+)
+
+
+@postgres_settlement
+def test_renewed_settlement_reconnects_open_until_full_successor(service, seeded):
+    ws, mission, _ = seeded
+    with connection(service, ws) as conn, conn.cursor() as cur:
+        execute_intake(cur, envelope(ws, decision()), OWNER, "owner")
+        original = read_revision(cur, workspace_id=ws, run_id="run-1", revision=1).body
+        historical = read_intake_view(cur, ws, "run-1@2")
+        assert historical.issues == ()
+        renewed = original.model_copy(deep=True)
+        renewed.snapshot.claims.append(renewed.snapshot.claims[0].model_copy(update={"id": "third"}))
+        renewed.conflicts[0].claim_ids.append("third")
+        renewed.history.issues = [
+            IntakeIssueRecord(issue=original.conflicts[0], gaps=("gap-1",)),
+            IntakeIssueRecord(issue=original.questions[0], gaps=("gap-1",)),
+        ]
+        # A broader copied row must not replace the original owner coverage.
+        renewed.decisions[0].settled_claim_ids.append("third")
+        renewed = append_assessed_revision(cur, ws, mission, renewed)
+    reopened = assert_reconnected_settlement(service, renewed, {"gap-1", "conflict-1", "question-1"})
+    assessment = reopened.assessments[0].assessment
+    assert assessment.status == "CONFLICTED"
+    assert assessment.conflicts == renewed.conflicts
+    assert assessment.gaps == renewed.gaps
+    assert next(i for i in reopened.issues if i.issue.id == "conflict-1").gaps == ("gap-1",)
+    assert reopened.decisions[0].decision.revision == 1
+    assert reopened.decisions[0].claim_ids == ("claim-1", "prior")
+
+    command = decision(3, claim_ids=["claim-1", "prior", "third"], superseded_decision_id="decision-1")
+    command["payload"]["decision"]["id"] = "complete"
+    with connection(service, ws) as conn, conn.cursor() as cur:
+        _, result = execute_intake(cur, envelope(ws, command), OWNER, "owner")
+        assert result["revision"] == 4
+        complete = read_revision(cur, workspace_id=ws, run_id="run-1", revision=3).body
+        assert remaining(complete) == set()
+        complete = append_assessed_revision(cur, ws, mission, complete)
+    settled = assert_reconnected_settlement(service, complete, set())
+    assert settled.assessments[0].assessment.gaps == settled.assessments[0].assessment.conflicts == []
+    assert complete.history.issues == renewed.history.issues
+    assert complete.history.decisions[0] == original.history.decisions[0]
+    assert complete.questions == renewed.questions
+    assert complete.conflicts == renewed.conflicts
+    assert complete.gaps == renewed.gaps
+    successor = settled.decisions[1]
+    assert successor.decision.revision == 3
+    assert successor.superseded_decision_id == "decision-1"
+    assert successor.instruction.model_dump(mode="json") == INSTRUCTION
+    assert successor.decision.answer.model_dump(mode="json") == command["payload"]["decision"]["answer"]
+    assert successor.decision.reason == command["payload"]["decision"]["reason"]
+    assert complete.artifact_bytes["instruction:complete"] == INSTRUCTION["text"].encode("utf-8")
+    with connection(service, ws, "omp_work_readonly") as conn, conn.cursor() as cur:
+        assert read_revision(cur, workspace_id=ws, run_id="run-1", revision=1).body == original
+        assert read_intake_view(cur, ws, "run-1@2") == historical
+        assert read_intake_view(cur, ws, "run-1@3") == reopened
+        assert read_intake_view(cur, ws, "run-1@4").issues == ()
+
+
+@postgres_settlement
+def test_persisted_superseded_full_coverage_cannot_settle_partial_successor(service, seeded):
+    ws, mission, _ = seeded
+    with connection(service, ws) as conn, conn.cursor() as cur:
+        execute_intake(cur, envelope(ws, decision()), OWNER, "owner")
+        original = read_revision(cur, workspace_id=ws, run_id="run-1", revision=1).body
+        partial = original.model_copy(deep=True)
+        record = stored_decision(partial, ["claim-1"], decision_id="partial", superseded="decision-1")
+        record = record.model_copy(update={"decision": record.decision.model_copy(update={"revision": 2})})
+        partial.history.decisions.append(record)
+        partial.decisions.append(DecisionRecord(decision=record.decision, settled_claim_ids=["claim-1"]))
+        partial.history.issues = [IntakeIssueRecord(issue=partial.conflicts[0], gaps=("gap-1",))]
+        partial = append_assessed_revision(cur, ws, mission, partial)
+    reopened = assert_reconnected_settlement(service, partial, {"gap-1", "conflict-1", "question-1"})
+    assert reopened.assessments[0].assessment.status == "CONFLICTED"
+    assert reopened.assessments[0].assessment.conflicts == partial.conflicts
+    assert reopened.assessments[0].assessment.gaps == partial.gaps
+    assert reopened.decisions[0].claim_ids == ("claim-1", "prior")
+    assert reopened.decisions[1].claim_ids == ("claim-1",)
+    assert reopened.decisions[1].superseded_decision_id == "decision-1"
+    with connection(service, ws, "omp_work_readonly") as conn, conn.cursor() as cur:
+        assert read_revision(cur, workspace_id=ws, run_id="run-1", revision=1).body == original
+        assert read_intake_view(cur, ws, "run-1@2").issues == ()
+
+
+@postgres_settlement
+def test_history_only_question_owner_write_settles_after_reconnect(service, seeded):
+    ws, mission, _ = seeded
+    with connection(service, ws) as conn, conn.cursor() as cur:
+        body = read_revision(cur, workspace_id=ws, run_id="run-1", revision=0).body
+        question, conflict = body.questions.pop(), body.conflicts.pop()
+        question.question = "  Which café?\r\n\t🙂  "
+        body.history.issues = [IntakeIssueRecord(issue=conflict, gaps=("gap-1",)),
+                               IntakeIssueRecord(issue=question, gaps=("gap-1",))]
+        live = append_assessed_revision(cur, ws, mission, body)
+    prior = assert_reconnected_settlement(service, live, {"gap-1", "conflict-1", "question-1"})
+    command = decision(2)
+    with connection(service, ws) as conn, conn.cursor() as cur:
+        original = read_revision(cur, workspace_id=ws, run_id="run-1", revision=1).body
+        for actor, kind in ((OWNER, "agent"), (uuid4(), "owner")):
+            with pytest.raises(WorkStoreError, match="^forbidden$"), conn.transaction():
+                execute_intake(cur, envelope(ws, command), actor, kind)
+        for changes, error in (({"verified_relay_operation_id": str(uuid4())}, "forbidden"),
+                               ({"claim_ids": ["claim-1"]}, "invalid_request")):
+            invalid = deepcopy(command)
+            invalid["payload"].update(changes)
+            with pytest.raises(WorkStoreError, match=f"^{error}$"), conn.transaction():
+                execute_intake(cur, envelope(ws, invalid), OWNER, "owner")
+        assert read_intake_view(cur, ws, "run-1") == prior
+        _, result = execute_intake(cur, envelope(ws, command), OWNER, "owner")
+        assert result["revision"] == 3
+        settled = read_revision(cur, workspace_id=ws, run_id="run-1", revision=2).body
+        assert settled.questions == [question]
+        assert settled.conflicts == [conflict]
+        settled = append_assessed_revision(cur, ws, mission, settled)
+    reopened = assert_reconnected_settlement(service, settled, set())
+    assert settled.history.issues == live.history.issues
+    assert reopened.decisions[0].instruction.model_dump(mode="json") == INSTRUCTION
+    assert reopened.decisions[0].decision.answer.model_dump(mode="json") == command["payload"]["decision"]["answer"]
+    assert reopened.decisions[0].decision.reason == command["payload"]["decision"]["reason"]
+    assert settled.artifact_bytes["instruction:decision-1"] == INSTRUCTION["text"].encode("utf-8")
+    assert settled.questions[0].question == "  Which café?\r\n\t🙂  "
+    with connection(service, ws, "omp_work_readonly") as conn, conn.cursor() as cur:
+        assert read_revision(cur, workspace_id=ws, run_id="run-1", revision=1).body == original
+        assert read_intake_view(cur, ws, "run-1@2") == prior
+        assert read_intake_view(cur, ws, "run-1@3").issues == ()
 
 
 @pytest.mark.skipif(os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1",
