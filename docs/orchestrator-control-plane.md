@@ -17,6 +17,12 @@ Each authority is decided only by the modules named in its row.
 | budgets | `python/omp-work/src/omp_work/jobs/budget.py`, `python/omp-work/src/omp_work/project_store.py` |
 | progress events | `python/omp-work/src/omp_work/orchestrator/step_log.py`, `python/omp-work/src/omp_work/jobs/store.py` |
 
+## Verifier launch contract
+
+Production audit launches the verifier through `run_worker` with exact argv `["/usr/bin/python3","-P","-m","omp_work.orchestrator.verify_main"]`, not the test launcher. Its cwd is `/work`; the candidate checkout is read-only, while `/work/.omp` is the writable audit directory. Linked git metadata and trusted `PYTHONPATH` runtime roots are mounted read-only, with `PYTHONSAFEPATH=1` so the candidate cannot shadow the verifier runtime.
+
+The verifier reads `.omp/verify-task.json`, publishes `.omp/audit-report.txt`, then writes `.omp/verdict.json`. The outer verifier receives a read-only signing-key bind; inner `run_tests` runs against a frozen, read-only snapshot with no key bind. The launch timeout is the remaining stage lease, which also bounds the task's test timeout. A signed PASS settles only for the frozen candidate digest and attempt.
+
 ## Parallel streams features
 
 Where the file-backed loop's feature lives in the control plane. `none` means no control-plane component decides it yet.

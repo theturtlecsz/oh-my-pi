@@ -4,6 +4,7 @@
 
 ### Added
 
+- Audit integration launches `/usr/bin/python3 -P -m omp_work.orchestrator.verify_main`; a signed PASS settles only for the frozen digest and attempt; failing tests, an out-of-envelope candidate, a drifted checkout, a wrong-attempt replay, and a key-theft or forge command do not settle a PASS.
 - `omp-work research run` executes content-addressed research campaigns on a work item through from draft to concluded with trial jobs scored by METRIC harness output ([#590](https://github.com/theturtlecsz/oh-my-pi/issues/590)).
 - Versioned NSI-1 intake schemas and authority matrix distinguish model proposals, rule-engine readiness, and owner ratification/publication while preserving bounded intake compatibility (OMP-521).
 

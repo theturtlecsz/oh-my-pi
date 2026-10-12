@@ -5,7 +5,30 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
+from .models import SourceIdentity
 from .store import LearningStore
+
+
+def _is_empty_source_json(raw: str | None) -> bool:
+    if raw is None:
+        return False
+    try:
+        val = json.loads(raw)
+        return isinstance(val, dict) and len(val) == 0
+    except json.JSONDecodeError:
+        return False
+
+
+def _parse_source_identity(raw: str | None) -> SourceIdentity | None:
+    if raw is None:
+        return None
+    s = raw.strip()
+    if not s or s == "{}":
+        return None
+    try:
+        return SourceIdentity.model_validate_json(s)
+    except Exception:
+        return None
 
 PROMOTION_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS journey_passes (
@@ -139,18 +162,23 @@ def request_promotion(
         if pending_row is not None:
             return json.loads(pending_row["decision_json"])
 
-        # Check for journey pass
-        pass_row = conn.execute(
+        # Check for visible journey passes
+        pass_rows = conn.execute(
             """
-            SELECT 1 FROM journey_passes
+            SELECT work_id, workspace_id
+            FROM journey_passes
             WHERE capability = 'research_to_learning'
               AND (workspace_id = ? OR workspace_id IS NULL)
-            LIMIT 1
             """,
             (ws_str,),
-        ).fetchone()
-        if pass_row is None:
+        ).fetchall()
+        if not pass_rows:
             return None
+
+        has_null_work_id_pass = any(pr["work_id"] is None for pr in pass_rows)
+        item_pass_work_ids = {
+            str(pr["work_id"]) for pr in pass_rows if pr["work_id"] is not None
+        }
 
         # Find active procedures at current version
         rows = conn.execute(
@@ -174,12 +202,68 @@ def request_promotion(
         ).fetchall()
         batched = {(br["procedure_id"], int(br["version"])) for br in batched_rows}
 
-        eligible = [
+        unbatched = [
             r for r in rows
             if (r["procedure_id"], int(r["current_version"])) not in batched
         ]
+        if not unbatched:
+            return None
+
+        unbatched_proc_ids = [r["procedure_id"] for r in unbatched]
+        placeholders = ",".join("?" for _ in unbatched_proc_ids)
+
+        accepted_props = conn.execute(
+            f"SELECT procedure_id, source_json FROM proposals WHERE procedure_id IN ({placeholders}) AND status = 'accepted'",  # nosec B608
+            unbatched_proc_ids,
+        ).fetchall()
+        props_by_proc: dict[str, list[dict[str, Any]]] = {}
+        for p in accepted_props:
+            props_by_proc.setdefault(p["procedure_id"], []).append(p)
+
+        proc_versions = conn.execute(
+            f"SELECT procedure_id, source_json FROM procedure_versions WHERE procedure_id IN ({placeholders})",  # nosec B608
+            unbatched_proc_ids,
+        ).fetchall()
+        versions_by_proc: dict[str, list[dict[str, Any]]] = {}
+        for pv in proc_versions:
+            versions_by_proc.setdefault(pv["procedure_id"], []).append(pv)
+
+        eligible: list[Any] = []
+        for r in unbatched:
+            proc_id = r["procedure_id"]
+            prop_rows = props_by_proc.get(proc_id, [])
+            ver_rows = versions_by_proc.get(proc_id, [])
+
+            valid_sources: list[SourceIdentity] = []
+            for p_row in prop_rows:
+                src = _parse_source_identity(p_row["source_json"])
+                if src is not None:
+                    valid_sources.append(src)
+            for v_row in ver_rows:
+                src = _parse_source_identity(v_row["source_json"])
+                if src is not None:
+                    valid_sources.append(src)
+
+            has_accepted_props = len(prop_rows) > 0
+            all_versions_empty = len(ver_rows) > 0 and all(
+                _is_empty_source_json(v["source_json"]) for v in ver_rows
+            )
+            is_legacy = (not has_accepted_props) and all_versions_empty
+
+            if is_legacy:
+                if has_null_work_id_pass:
+                    eligible.append(r)
+            elif valid_sources:
+                if any(
+                    str(src.workspace_id) == ws_str
+                    and str(src.aggregate_id) in item_pass_work_ids
+                    for src in valid_sources
+                ):
+                    eligible.append(r)
+
         if not eligible:
             return None
+
 
         batch = [
             {

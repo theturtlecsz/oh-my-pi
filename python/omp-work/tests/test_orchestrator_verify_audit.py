@@ -153,7 +153,7 @@ def _open_world(
     work_id = UUID(str(submitted["work_id"]))
     _seed_item_budget(world, service_fixture, work_id)
 
-    verifier_argv = ("/usr/bin/python3", "-P", "-m", "omp_work.orchestrator.verify_main")
+    verifier_argv = (sys.executable, "-P", "-m", "omp_work.orchestrator.verify_main")
     world.config = dataclasses.replace(
         world.config,
         verifier_argv=verifier_argv,

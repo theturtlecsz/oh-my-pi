@@ -40,6 +40,7 @@ from omp_work.spend_budget import SpendBudget
 from omp_work.standing_change import ChangeAuthority
 from omp_work.standing_policy import StandingPolicy
 from omp_work.v1.store import PostgresWorkStore
+from psycopg import sql
 from psycopg.errors import CheckViolation, LockNotAvailable
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
@@ -1324,6 +1325,413 @@ def test_settlement_failure_rolls_back_usage_receipt_and_cancellation(admission_
         if not admission.settled:
             admission._resolve()
 
+
+def test_usage_after_spend_fault_proves_atomic_bound_replacement(admission_context, monkeypatch):
+    """SQL failure replaces spend with one bound under held locks; replay adds no effects."""
+    ctx = admission_context
+    mission = _mission(ctx, "1000")
+    root = _item(ctx, "SQL fault root", {**_GENEROUS_ITEM, "usd": "1"})
+    task = _item(ctx, "SQL fault task", _GENEROUS_ITEM)
+    unrelated_item = _item(ctx, "SQL fault gate waiter", _GENEROUS_ITEM)
+    assert root != task
+    parent = _admitting_job(ctx, work_id=root)
+    child = _admitting_job(ctx, work_id=task, parent_job_id=parent)
+    request_id = f"usage-after-spend-{uuid4()}"
+    identity = budget_module.sha256({
+        "workspace_id": str(ctx.workspace_id), "work_id": str(task),
+        "job_id": child, "request_id": request_id,
+    })
+    record_id = UUID(bytes=bytes.fromhex(identity[:32]))
+    usage_request = f"model_call:request:{identity}"
+    fault_name = f"usage_after_spend_{uuid4().hex}"
+    trigger = sql.Identifier(fault_name)
+    function = sql.Identifier("omp_jobs", fault_name)
+    kwargs = ctx.service.config.connection_kwargs("postgres")
+    admission = None
+    pauses = None
+    gap, release, bound_entered = (threading.Event() for _ in range(3))
+    allow_bound_write, bound_returned, allow_bound_return = (threading.Event() for _ in range(3))
+    gate_waiter = None
+    gate_outcomes = []
+    settlement_thread = waiter_thread = None
+    probe = monitor = waiter = None
+    settlement_errors, waiter_errors, waiter_rows = [], [], []
+    sends: list[str] = []
+    execute = psycopg.Cursor.execute
+    persist = budget_module.ModelCallAdmission._persist
+    row_probes = (
+        ("SELECT project_id FROM omp_work.projects"
+         " WHERE workspace_id=%s AND project_id=%s", (ctx.workspace_id, ctx.project_id)),
+        ("SELECT mission_id FROM omp_work.project_missions"
+         " WHERE workspace_id=%s AND project_id=%s AND mission_id=%s",
+         (ctx.workspace_id, ctx.project_id, mission)),
+        ("SELECT budget_id FROM omp_work.spend_budgets"
+         " WHERE workspace_id=%s AND project_id=%s AND active AND mission_id=%s",
+         (ctx.workspace_id, ctx.project_id, mission)),
+        ("SELECT budget_id FROM omp_work.spend_budgets"
+         " WHERE workspace_id=%s AND project_id=%s AND active AND mission_id IS NULL",
+         (ctx.workspace_id, ctx.project_id)),
+        ("SELECT job_id FROM omp_jobs.jobs WHERE workspace_id=%s AND job_id=%s",
+         (ctx.workspace_id, child)),
+    )
+
+    def probe_locks(held):
+        for key in (
+            f"omp_jobs.operation:model_call:receipt:{admission._identity}",
+            f"omp_work.item_budget:{ctx.workspace_id}:{root}",
+            f"omp_work.task_budget:{ctx.workspace_id}:{task}",
+        ):
+            with probe.transaction():
+                assert probe.execute(
+                    "SELECT pg_try_advisory_xact_lock(hashtextextended(%s, 0))", (key,),
+                ).fetchone() == (not held,)
+        for query, params in row_probes:
+            if held:
+                # Catch outside transaction: a failed NOWAIT probe must roll back
+                # before the next lock is tested on this independent connection.
+                with pytest.raises(LockNotAvailable):
+                    with probe.transaction():
+                        probe.execute(query + " FOR UPDATE NOWAIT", params)
+            else:
+                with probe.transaction():
+                    rows = probe.execute(query + " FOR UPDATE NOWAIT", params).fetchall()
+                    assert len(rows) == 1
+
+    def pause_after_rollback(cur, query, *args, **kwargs):
+        result = execute(cur, query, *args, **kwargs)
+        if cur is admission._cur and query == "ROLLBACK TO SAVEPOINT model_call_settlement":
+            gap.set()
+            assert release.wait(5), "rollback-gap barrier was not released"
+        return result
+
+    def observe_persist(owner, cur, captured):
+        if owner is admission and json.loads(captured.payload)["measurement"] == "estimated":
+            bound_entered.set()
+            assert release.is_set(), "bound write entered before rollback-gap probes"
+            assert allow_bound_write.wait(5), "bound-write pause was not released"
+            result = persist(owner, cur, captured)
+            bound_returned.set()
+            assert allow_bound_return.wait(5), "bound-return pause was not released"
+            return result
+        return persist(owner, cur, captured)
+
+    def settle():
+        try:
+            # The upstream send is the caller's, before settlement observes the SQL error.
+            if not admission.settled:
+                sends.append("upstream")
+            admission.settle(
+                actual_usd="0.25", input_tokens=7, output_tokens=3,
+                cache_tokens=2, measurement="measured", price_version="p1",
+            )
+        except BaseException as error:
+            settlement_errors.append(error)
+
+    def wait_on_project():
+        try:
+            with waiter.transaction():
+                waiter.execute("SET LOCAL statement_timeout = '20s'")
+                query, params = row_probes[0]
+                waiter_rows.extend(waiter.execute(query + " FOR UPDATE", params).fetchall())
+        except BaseException as error:
+            waiter_errors.append(error)
+
+    try:
+        with psycopg.connect(**kwargs) as conn:
+            conn.execute(sql.SQL("""
+                CREATE FUNCTION {function}() RETURNS trigger LANGUAGE plpgsql AS $$
+                DECLARE captured omp_work.spend_records%ROWTYPE;
+                BEGIN
+                    IF NEW.workspace_id = {workspace}
+                       AND NEW.request_id = {request}
+                       AND NEW.measurement = 'measured' THEN
+                        SELECT * INTO captured FROM omp_work.spend_records
+                        WHERE workspace_id = {workspace} AND record_id = {record};
+                        IF NOT FOUND OR captured.amount_usd <> 0.25 THEN
+                            RAISE EXCEPTION 'measured spend absent before usage'
+                                USING ERRCODE = 'P0001';
+                        END IF;
+                        RAISE EXCEPTION 'measured usage rejected after spend'
+                            USING ERRCODE = '23514',
+                                  DETAIL = format('record_id=%s amount_usd=%s',
+                                                  captured.record_id, captured.amount_usd);
+                    END IF;
+                    RETURN NEW;
+                END;
+                $$
+            """).format(
+                function=function, workspace=sql.Literal(ctx.workspace_id),
+                request=sql.Literal(usage_request), record=sql.Literal(record_id),
+            ))
+            conn.execute(sql.SQL(
+                "CREATE TRIGGER {trigger} BEFORE INSERT ON omp_jobs.usage_events"
+                " FOR EACH ROW EXECUTE FUNCTION {function}()"
+            ).format(trigger=trigger, function=function))
+
+        pauses = _arm_cleanup_pauses(monkeypatch, ctx.budget._jobs)
+        admission = _admit(
+            ctx, _prepared("1", 100, 50), mission_id=mission, work_id=task,
+            job_id=child, worker_id="worker-1", fence=1,
+            request_id=request_id, task_ceiling_usd=Decimal("1000"),
+        )
+        assert admission.root_work_id == root
+        assert admission._spend_record_id() == record_id
+        probe = psycopg.connect(**kwargs, autocommit=True)
+        monitor = psycopg.connect(**kwargs, autocommit=True)
+        waiter = psycopg.connect(**kwargs, autocommit=True)
+        holder_pid = admission._cur.connection.info.backend_pid
+        monkeypatch.setattr(psycopg.Cursor, "execute", pause_after_rollback)
+        monkeypatch.setattr(budget_module.ModelCallAdmission, "_persist", observe_persist)
+        settlement_thread = threading.Thread(target=settle)
+        settlement_thread.start()
+        assert gap.wait(5), "settlement never reached rollback gap"
+        assert not bound_entered.is_set()
+
+        before = _admission_counts(ctx)
+        assert before == (0, 0, 0, 2)
+        committed_counts = (1, 1, 4, 4)
+
+        gate_waiter, gate_waiting, gate_finished, gate_outcomes = _start_gate_waiter(
+            ctx, unrelated_item, f"gate-waiter-{uuid4()}"
+        )
+        assert gate_waiting.wait(5), "gate waiter did not start"
+        assert not gate_finished.wait(0.2), "gate released at rollback gap"
+
+        waiter_thread = threading.Thread(target=wait_on_project)
+        waiter_thread.start()
+        _wait_for_blocker(monitor, holder_pid)
+        probe_locks(held=True)
+        assert not bound_entered.is_set()
+        release.set()
+
+        assert bound_entered.wait(5), "bound write was not entered"
+        assert not gate_finished.wait(0.2), "gate released before bound write"
+        allow_bound_write.set()
+
+        assert bound_returned.wait(5), "bound write did not return"
+        assert not gate_finished.wait(0.2), "gate released at bound return pause"
+        allow_bound_return.set()
+
+        assert pauses.cursor_closing.wait(5), "settlement never reached cursor close"
+        assert _admission_counts(ctx) == before
+        assert not gate_finished.wait(0.2), "gate released before cursor close"
+        pauses.allow_cursor.set()
+
+        assert pauses.committing.wait(5), "settlement never reached commit"
+        assert _admission_counts(ctx) == before
+        assert not gate_finished.wait(0.2), "gate released before commit"
+        pauses.allow_commit.set()
+
+        assert pauses.connection_closing.wait(5), "settlement never reached connection close"
+        assert _admission_counts(ctx) == committed_counts
+        assert not admission.settled
+        assert not gate_finished.wait(0.2), "gate released before connection cleanup"
+        pauses.allow_connection.set()
+
+        settlement_thread.join(timeout=7)
+        gate_waiter.join(timeout=7)
+        waiter_thread.join(timeout=22)
+        assert not settlement_thread.is_alive()
+        assert not gate_waiter.is_alive()
+        assert not waiter_thread.is_alive()
+        assert gate_outcomes == ["admitted"]
+        assert _admission_counts(ctx) == committed_counts
+        assert waiter_errors == []
+        assert waiter_rows == [(ctx.project_id,)]
+        assert bound_entered.is_set()
+        probe_locks(held=False)
+        assert len(settlement_errors) == 1
+        error = settlement_errors[0]
+        assert isinstance(error, CheckViolation)
+        assert error.sqlstate == "23514"
+        assert error.diag.message_primary == "measured usage rejected after spend"
+        detail = dict(part.split("=", 1) for part in error.diag.message_detail.split())
+        assert UUID(detail["record_id"]) == record_id
+        assert Decimal(detail["amount_usd"]) == Decimal("0.25")
+        assert fault_name in error.diag.context
+        assert admission.closed and admission.settled
+        assert sends == ["upstream"]
+
+        # Counts cannot tell a wrong bound from the admitted one, or a second effect
+        # hiding beside a matching row. Compare the captured payload and identity.
+        bound = {
+            "actual_usd": "1", "input_tokens": 100, "output_tokens": 50,
+            "cache_tokens": 0, "measurement": "estimated", "model": "test-model",
+            "price_version": "p1",
+        }
+        durable = _accounting_snapshot(ctx)
+        spend, usage, outbox, operations = durable
+        assert len(spend) == len(usage) == 1
+        assert spend[0]["record_id"] == record_id
+        assert spend[0]["amount_usd"] == Decimal(1)
+        assert spend[0]["mission_id"] == mission
+        assert spend[0]["amount_usd"] != Decimal("0.25")
+        assert usage[0]["request_id"] == usage_request
+        assert usage[0]["work_id"] == task and usage[0]["job_id_derived"] == child
+        assert usage[0]["price_usd"] == Decimal(1)
+        assert usage[0]["model"] == "test-model"
+        assert usage[0]["measurement"] == "estimated"
+        assert usage[0]["price_version"] == "p1"
+        assert usage[0]["input_tokens"] == 100
+        assert usage[0]["output_tokens"] == 50
+        assert usage[0]["cache_tokens"] == 0
+        assert usage[0]["tokens"] == 150
+        usage_payload = usage[0]["payload"]
+        assert usage_payload["price_usd"] == "1"
+        assert usage_payload["input_tokens"] == 100
+        assert usage_payload["output_tokens"] == 50
+        assert usage_payload["cache_tokens"] == 0
+        assert usage_payload["measurement"] == "estimated"
+        assert usage_payload["model"] == "test-model"
+        assert usage_payload["price_version"] == "p1"
+        ledgers = [row for row in outbox if row["kind"] == "usage_ledger"]
+        assert len(ledgers) == 1
+        assert ledgers[0]["event_id"] == f"usage:{usage[0]['usage_id']}"
+        ledger_payload = ledgers[0]["payload"]
+        assert ledger_payload["price_usd"] == "1"
+        assert ledger_payload["input_tokens"] == 100
+        assert ledger_payload["output_tokens"] == 50
+        assert ledger_payload["cache_tokens"] == 0
+        assert ledger_payload["measurement"] == "estimated"
+        assert ledger_payload["model"] == "test-model"
+        assert ledger_payload["price_version"] == "p1"
+        receipts = [row for row in operations if row["kind"] == "model_call_receipt"]
+        assert len(receipts) == 1
+        assert admission._identity == identity
+        assert receipts[0]["operation_id"] == f"model_call:receipt:{admission._identity}"
+        receipt = receipts[0]["result"]
+        captured_fingerprint = json.loads(admission._receipt_request)["fingerprint"]
+        assert receipt["root_work_id"] == str(root)
+        assert receipt["fingerprint"] == captured_fingerprint
+        assert receipt["fingerprint"]["work_id"] == str(task)
+        assert receipt["fingerprint"]["job_id"] == child
+        assert receipt["fingerprint"]["worker_id"] == "worker-1"
+        assert receipt["fingerprint"]["fence"] == 1
+        assert receipt["fingerprint"]["request_id"] == request_id
+        assert receipt["fingerprint"]["mission_id"] == str(mission)
+        assert receipt["settlement"] == bound
+        assert receipt["settlement"]["input_tokens"] == 100
+        assert receipt["settlement"]["output_tokens"] == 50
+        assert receipt["settlement"]["cache_tokens"] == 0
+        encoded = json.dumps(durable, default=str)
+        assert "0.25" not in encoded and '"measured"' not in encoded
+        for payload in (usage[0], usage_payload, ledger_payload, receipt["settlement"]):
+            assert payload.get("input_tokens") != 7
+            assert payload.get("output_tokens") != 3
+            assert payload.get("cache_tokens") != 2
+            assert payload.get("measurement") != "measured"
+
+        with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
+            cur.execute(
+                "SELECT job_id, status, cancel_reason FROM omp_jobs.jobs"
+                " WHERE workspace_id=%s AND job_id = ANY(%s) ORDER BY job_id",
+                (ctx.workspace_id, [parent, child]),
+            )
+            job_states = cur.fetchall()
+            cur.execute(
+                "SELECT payload FROM omp_jobs.outbox"
+                " WHERE workspace_id=%s AND kind='budget_alert'"
+                " AND payload->>'event'='budget.exceeded'",
+                (ctx.workspace_id,),
+            )
+            exceeded = cur.fetchall()
+        assert len(job_states) == 2
+        assert {row["job_id"] for row in job_states} == {parent, child}
+        assert all(
+            row["status"] == "cancelled" and row["cancel_reason"] == "budget_exceeded"
+            for row in job_states
+        )
+        assert len(exceeded) == 1
+        assert exceeded[0]["payload"]["dimension"] == "usd"
+        assert exceeded[0]["payload"]["work_id"] == str(root)
+        assert sum(
+            1 for row in outbox
+            if row["kind"] == "budget_alert" and row["payload"]["event"] == "budget.exceeded"
+        ) == 1
+
+        # The measured-usage trigger stays installed across replay and is dropped in finally.
+        pauses.enabled["on"] = False
+        assert probe.execute(
+            "SELECT 1 FROM pg_trigger WHERE tgname=%s", (fault_name,),
+        ).fetchone() is not None
+        with _admit(
+            ctx, _prepared("1", 100, 50), mission_id=mission, work_id=task,
+            job_id=child, worker_id="worker-1", fence=1,
+            request_id=request_id, task_ceiling_usd=Decimal("1000"),
+        ) as replay:
+            if not replay.settled:
+                sends.append("replay")
+            assert replay.settled
+            replayed = replay.settle(**bound)
+        assert replayed["status"] == "settled"
+        assert replayed["actual_usd"] == Decimal(1)
+        assert replayed["usage"]["usage_id"] == usage[0]["usage_id"]
+        assert sends == ["upstream"]
+        assert _accounting_snapshot(ctx) == durable
+        assert _admission_counts(ctx) == committed_counts
+        with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
+            cur.execute(
+                "SELECT operation_id, result FROM omp_jobs.operations"
+                " WHERE workspace_id=%s AND operation_id=%s",
+                (ctx.workspace_id, f"model_call:receipt:{admission._identity}"),
+            )
+            stable_receipt = cur.fetchone()
+            cur.execute(
+                "SELECT job_id, status, cancel_reason FROM omp_jobs.jobs"
+                " WHERE workspace_id=%s AND job_id = ANY(%s) ORDER BY job_id",
+                (ctx.workspace_id, [parent, child]),
+            )
+            assert cur.fetchall() == job_states
+        assert stable_receipt["operation_id"] == receipts[0]["operation_id"]
+        assert stable_receipt["result"] == receipt
+    finally:
+        if pauses is not None:
+            pauses.enabled["on"] = False
+            pauses.release()
+        release.set()
+        allow_bound_write.set()
+        allow_bound_return.set()
+        try:
+            if settlement_thread is not None:
+                settlement_thread.join(timeout=7)
+                assert not settlement_thread.is_alive(), "settlement thread did not stop"
+        finally:
+            try:
+                try:
+                    with psycopg.connect(**kwargs) as conn:
+                        conn.execute(sql.SQL(
+                            "DROP TRIGGER IF EXISTS {trigger} ON omp_jobs.usage_events"
+                        ).format(trigger=trigger))
+                        conn.execute(sql.SQL("DROP FUNCTION IF EXISTS {function}()"
+                                             ).format(function=function))
+                finally:
+                    monkeypatch.setattr(psycopg.Cursor, "execute", execute)
+                    monkeypatch.setattr(budget_module.ModelCallAdmission, "_persist", persist)
+            finally:
+                try:
+                    if admission is not None:
+                        if not admission.closed:
+                            admission.abort()
+                        elif not admission.settled:
+                            admission._resolve()
+                finally:
+                    try:
+                        for thread in (waiter_thread, gate_waiter):
+                            if thread is not None:
+                                thread.join(timeout=22)
+                                assert not thread.is_alive(), "waiter thread did not stop"
+                    finally:
+                        for connection in (probe, monitor, waiter):
+                            if connection is not None:
+                                connection.close()
+        with psycopg.connect(**kwargs) as conn:
+            assert conn.execute(
+                "SELECT 1 FROM pg_trigger WHERE tgname=%s", (fault_name,),
+            ).fetchone() is None
+            assert conn.execute(
+                "SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace"
+                " WHERE n.nspname='omp_jobs' AND p.proname=%s", (fault_name,),
+            ).fetchone() is None
 
 @pytest.mark.parametrize("fault", ["rollback-before-commit", "commit-then-raise"])
 def test_failed_settlement_reconciles_durable_accounting(admission_context, monkeypatch, fault):

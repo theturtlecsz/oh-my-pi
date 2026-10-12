@@ -22,7 +22,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from pydantic import ValidationError
 
 import omp_work
-from omp_work import control_actions
+from omp_work import control_actions, event_push
 from omp_work.action_classify import ResolvedTarget, classify, parse_submission
 from omp_work.mission_intake_rules import scope_draft
 from omp_work.operations import database, fingerprints
@@ -42,6 +42,7 @@ from omp_work.orchestrator.service import (
     register_stage_operation,
 )
 from omp_work.orchestrator.stages import ActionVerdict
+from omp_work.push_http import PushDeliveryError
 from omp_work.standing_policy import RepositoryRecord
 from omp_work.v1.canonical import canonical_json, sha256, text_sha256
 from omp_work.v1.models import (
@@ -1903,8 +1904,62 @@ def run_merge(ctx: StageContext) -> Outcome:
     return Outcome(outcome="succeeded", data=data, action=verdict)
 
 
+_RENDERED_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def _attest_delivery(
+    ctx: StageContext,
+    event_id: str,
+    rendered_sha256: str,
+    status: str,
+    *,
+    key: str,
+) -> str | None:
+    """One ``attest_checkpoint_delivery`` command; the refusal reason_code or None."""
+    result = ctx.command(
+        "attest_checkpoint_delivery",
+        {
+            "event_id": event_id,
+            "owner_session_id": f"orchestrator:{ctx.mission_id}",
+            "rendered_sha256": rendered_sha256,
+            "status": status,
+        },
+        key=key,
+    )
+    if result.get("status") != "refused":
+        return None
+    event_row = result.get("event")
+    if isinstance(event_row, Mapping) and event_row.get("reason_code"):
+        return str(event_row["reason_code"])
+    return "attest_refused"
+
+
+def _checkpoint_route(ctx: StageContext) -> tuple[str, str] | None:
+    """The first subscribed push destination that carries non-ops event types."""
+    page = ctx.service.event_subscriptions(ctx.principal, ctx.workspace_id)
+    rows = page.get("subscriptions") if isinstance(page, Mapping) else None
+    for row in rows or ():
+        if not isinstance(row, Mapping):
+            continue
+        push_url = row.get("push_url")
+        if not isinstance(push_url, str) or not push_url.strip():
+            continue
+        types = row.get("event_types") or ()
+        if not any(
+            isinstance(event_type, str) and not event_type.startswith("ops.")
+            for event_type in types
+        ):
+            continue
+        return push_url, str(row.get("subscription_id"))
+    return None
+
+
 def _deliver_checkpoints(ctx: StageContext, view: Mapping[str, Any]) -> Outcome | None:
-    """Attest one delivery per owed requires_delivery event. None when all delivered."""
+    """Deliver each owed requires_delivery event, then attest. None when all delivered.
+
+    A send is confirmed before the delivered attestation; the destination is
+    fixed by the open intent ``checkpoint:{event_id}`` so a retry reuses it.
+    """
     deliveries: dict[str, list[Mapping[str, Any]]] = {}
     for row in view.get("checkpoint_deliveries") or ():
         if isinstance(row, Mapping):
@@ -1913,36 +1968,85 @@ def _deliver_checkpoints(ctx: StageContext, view: Mapping[str, Any]) -> Outcome 
         if not isinstance(event, Mapping) or not event.get("requires_delivery"):
             continue
         event_id = str(event.get("event_id"))
-        resolved = any(
-            str(delivery.get("status")) in ("delivered", "waived")
-            for delivery in deliveries.get(event_id, ())
+        rows = deliveries.get(event_id, ())
+        latest = max(
+            rows,
+            key=lambda row: int(row.get("delivery_sequence") or 0),
+            default=None,
         )
-        if resolved:
+        if latest is not None and str(latest.get("status")) in ("delivered", "waived"):
             continue
         rendered = event.get("rendered_sha256")
-        if not isinstance(rendered, str) or not rendered:
+        rendered_text = event.get("rendered_text")
+        if not isinstance(rendered, str) or _RENDERED_RE.fullmatch(rendered) is None:
             return Outcome(
-                outcome="failed", data={"stage": "close", "code": "rendered_missing"}
+                outcome="failed", data={"stage": "close", "code": "rendered_mismatch"}
             )
-        result = ctx.command(
-            "attest_checkpoint_delivery",
-            {
-                "event_id": event_id,
-                "owner_session_id": f"orchestrator:{ctx.mission_id}",
-                "rendered_sha256": rendered,
-                "status": "delivered",
-            },
-            key=f"attest:{event_id}",
-        )
-        if result.get("status") == "refused":
-            event_row = result.get("event")
-            code = (
-                str(event_row.get("reason_code"))
-                if isinstance(event_row, Mapping) and event_row.get("reason_code")
-                else "attest_refused"
+        if not isinstance(rendered_text, str) or text_sha256(rendered_text) != rendered:
+            code = _attest_delivery(
+                ctx,
+                event_id,
+                rendered,
+                "failed",
+                key=f"attest-failed:{event_id}:{len(rows) + 1}",
             )
-            if code != "delivery_already_resolved":
+            if code is None:
+                code = "rendered_mismatch"
+            if code == "delivery_already_resolved":
+                continue
+            return Outcome(outcome="failed", data={"stage": "close", "code": code})
+        intent_key = f"checkpoint:{event_id}"
+        open_intent = ctx.intents.open(intent_key)
+        target = open_intent.get("target") if open_intent is not None else None
+        if isinstance(target, Mapping) and target.get("push_url"):
+            push_url = str(target["push_url"])
+            subscription_id = str(target["subscription_id"])
+        else:
+            route = _checkpoint_route(ctx)
+            if route is None:
+                code = _attest_delivery(
+                    ctx, event_id, rendered, "failed", key=f"attest-failed:{event_id}:1"
+                )
+                if code is None:
+                    code = "delivery_route_missing"
+                if code == "delivery_already_resolved":
+                    continue
                 return Outcome(outcome="failed", data={"stage": "close", "code": code})
+            push_url, subscription_id = route
+            ctx.intents.record_intent(
+                intent_key,
+                "checkpoint_delivery",
+                {"push_url": push_url, "subscription_id": subscription_id},
+            )
+        key = event_push.subscription_key(
+            event_push.load_master_key(ctx.config.ops.config_dir), subscription_id
+        )
+        body = {
+            "event_id": event_id,
+            "event_type": str(event.get("event_type") or ""),
+            "rendered_sha256": rendered,
+            "rendered_text": rendered_text,
+        }
+        try:
+            event_push.send_signed(push_url, intent_key, body, key=key)
+        except PushDeliveryError:
+            code = _attest_delivery(
+                ctx,
+                event_id,
+                rendered,
+                "failed",
+                key=f"attest-failed:{event_id}:{len(rows) + 1}",
+            )
+            if code is None:
+                code = "delivery_send_failed"
+            if code == "delivery_already_resolved":
+                ctx.intents.mark_done(intent_key, f"attest:{event_id}")
+                continue
+            return Outcome(outcome="failed", data={"stage": "close", "code": code})
+        code = _attest_delivery(ctx, event_id, rendered, "delivered", key=f"attest:{event_id}")
+        if code is not None and code != "delivery_already_resolved":
+            return Outcome(outcome="failed", data={"stage": "close", "code": code})
+        ctx.intents.mark_done(intent_key, f"attest:{event_id}")
     return None
 
 

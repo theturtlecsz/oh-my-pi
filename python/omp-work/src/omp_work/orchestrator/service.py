@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import os
 import subprocess  # nosec B404 - pytest argv is a list; the executable is this interpreter
 import sys
 import time
@@ -123,6 +124,7 @@ class OrchestratorConfig:
     control_repo: Path
     worktrees_dir: Path
     live_checkout: Path
+    release: str = ""
     repair_rounds: int = 3
     max_workers: int = 1
     lease_seconds: int = 60
@@ -283,6 +285,7 @@ def load_config(path: Path | None = None, ops: OperationsConfig | None = None) -
         control_repo=_path("control_repo"),
         worktrees_dir=_path("worktrees_dir"),
         live_checkout=_path("live_checkout"),
+        release=str(data.get("release") or os.environ.get("OMP_ORCHESTRATOR_RELEASE") or ""),
         repair_rounds=int(data.get("repair_rounds", 3)),
         max_workers=int(data.get("max_workers", 1)),
         lease_seconds=int(data.get("lease_seconds", 60)),
@@ -377,6 +380,17 @@ def qualification_record(path: Path) -> tuple[dict[str, dict[str, str]] | None, 
             if not release and entry.get("release"):
                 release = str(entry["release"])
     return (record or None), release
+
+
+def _expected_release(config: OrchestratorConfig, *, unattended: bool, proof_release: str) -> str:
+    return config.release or ("" if unattended else proof_release)
+
+
+def _release_qualified(config: OrchestratorConfig, *, unattended: bool) -> bool:
+    record, release = qualification_record(config.qualification_path)
+    expected = _expected_release(config, unattended=unattended, proof_release=release)
+    qualified, _missing = qualification.qualified(record, unattended=unattended, release=expected)
+    return release == expected and qualified
 
 
 def _require_jobs(config: OperationsConfig) -> None:
@@ -1089,8 +1103,12 @@ class OrchestratorHandler:
             raise AssertionError("stage context is unbound")
         run = _REGISTRY.get(stage)
         if run is None:
-            verdict = "pass" if stage == "audit" else "none"
-            return Outcome(outcome="succeeded", data={"stage": stage}, verdict=verdict)
+            return Outcome(
+                outcome="failed",
+                data={"stage": stage, "code": "missing_stage_handler"},
+                blocker="missing_stage_handler",
+                verdict="none",
+            )
         work_id = UUID(str(job["work_id"]))
         ctx = StageContext(
             self,
@@ -1115,12 +1133,7 @@ class OrchestratorHandler:
     def _facts(self, steps: list[dict[str, Any]], step_index: int, stage: str, outcome: Outcome | None) -> Facts:
         if self.mission_id is None or self.project_id is None or self._request is None:
             raise AssertionError("stage context is unbound")
-        record, release = qualification_record(self.config.qualification_path)
-        qualified, _missing = qualification.qualified(
-            record,
-            unattended=bool(self._request.get("unattended")),
-            release=release,
-        )
+        qualified = _release_qualified(self.config, unattended=bool(self._request.get("unattended")))
         mission = self._mission()
         produced = outcome or Outcome(outcome="none")
         budget = produced.budget_exhausted or self._budget_hit(UUID(str(self._work_id(steps))))
@@ -1463,8 +1476,13 @@ class OrchestratorHandler:
     def _capacity_free(self) -> bool:
         if self.mission_id is None:
             raise AssertionError("mission_id is None")
-        record, _release = qualification_record(self.config.qualification_path)
-        limit = qualification.max_workers(self.config.max_workers, record)
+        if self._request is None:
+            raise AssertionError("request is None")
+        record, release = qualification_record(self.config.qualification_path)
+        expected = _expected_release(
+            self.config, unattended=bool(self._request.get("unattended")), proof_release=release
+        )
+        limit = qualification.max_workers(self.config.max_workers, record, expected)
         prefix = f"orch:{self.mission_id}:"
         with self.store.transaction(self.config.workspace_id, self.principal.actor_id) as cur:
             cur.execute(
@@ -1754,10 +1772,7 @@ def submit(config: OrchestratorConfig, request: MissionRequest) -> dict[str, Any
         work_id = _existing_work_id(config, request.mission_id)
     else:
         work_id = UUID(str(created["items"][0]["work_id"]))
-    record, release = qualification_record(config.qualification_path)
-    qualified, _missing = qualification.qualified(
-        record, unattended=request.unattended, release=release
-    )
+    qualified = _release_qualified(config, unattended=request.unattended)
     if not qualified:
         facts = Facts(
             mission_id=str(request.mission_id),
@@ -1928,10 +1943,7 @@ def request_terminal(
 
 def dry_run(config: OrchestratorConfig, request: MissionRequest) -> dict[str, Any]:
     """Decide the next step and write nothing."""
-    record, release = qualification_record(config.qualification_path)
-    qualified, _missing = qualification.qualified(
-        record, unattended=request.unattended, release=release
-    )
+    qualified = _release_qualified(config, unattended=request.unattended)
     facts = Facts(
         mission_id=str(request.mission_id),
         project_id=request.project_id,

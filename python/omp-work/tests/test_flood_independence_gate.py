@@ -13,8 +13,12 @@ Contract defended:
   Deferred) are parsed out, so a path named only under an exclusion cannot justify an edge.
 - Owner dependents, issue-linked owner approvals, consumed owner results and final changelog
   aggregation are preserved; union-merged inventory never justifies ordering.
-- `check-plan` and both plan-promotion paths (`plan_promotion=auto` and the manual `promote`
-  command) apply the same gate, so a disjoint order-only chain is refused as invalid.
+- `check-plan`, manual `promote`, `Flood.promote_plan` and automatic/PROMOTE-marker
+  promotion share `check_plan`/`validate_slices`. The gate runs before a PROMOTE marker is
+  created or removed and before slice files move. An invalid plan, including one that already
+  has a PROMOTE marker, keeps its proposed files and the gate diagnostic; it does not publish
+  tasks or mark the parent planned. Unknown dependencies, cycles, unordered non-union edits,
+  malformed front matter and missing owner Runs/Evidence sections keep their original diagnostics.
 
 Staging contract:
 - OMP584_FLOOD_SOURCE names a directory holding an already-patched flood.py. The tests copy it
@@ -943,109 +947,382 @@ def test_raw_stage_preserves_source_support_and_patch_hashes(tmp_path, monkeypat
         assert not list(src_dir.rglob(pattern)), f"staging left {pattern} in source directory"
 
 
-def test_check_plan_cli_uses_the_gate_and_manual_promote_blocks_invalid(staged_flood, tmp_path):
-    """check-plan reports the violation, and the manual `promote` command refuses on it."""
+def _reviewed_plan(mod, cfg: Path):
+    """Load a real parent and persist the eligible plan-review state before passing it."""
+    parent = cfg.parent / "tasks" / "ITEM.md"
+    parent.write_text("---\nid: ITEM\nkind: plan\n---\nPlan independent implementation slices.\n")
+    f = mod.Flood(json.loads(cfg.read_text()), cfg.parent)
+    f.state.task("ITEM").update(status="running", phase="plan-review", attempts=1)
+    f.state.save()
+    return f
+
+
+def _assert_proposed_unchanged(f, pdir: Path, proposed: dict[str, bytes]):
+    assert {p.name: p.read_bytes() for p in pdir.iterdir()} == proposed
+    assert all(not (f.tasks_dir / name).exists() for name in proposed)
+
+
+def _assert_promoted(mod, cfg: Path, proposed: dict[str, bytes]):
+    """Reload persisted parent/slices and verify all proposed bytes moved intact."""
+    saved = mod.Flood(json.loads(cfg.read_text()), cfg.parent)
+    st = saved.state.task("ITEM")
+    assert st["status"] == "planned", st
+    assert st["slices"] == ["ITEM-s01", "ITEM-s02"]
+    assert all(sid in saved.tasks for sid in st["slices"])
+    assert {name: (saved.tasks_dir / name).read_bytes() for name in proposed} == proposed
+    assert not list(saved.proposed_dir("ITEM").iterdir())
+
+
+def _persist_plan_ready(mod, cfg: Path):
+    """Write ITEM as plan_ready before CLI promote, so the status check is not the refusal."""
+    parent = cfg.parent / "tasks" / "ITEM.md"
+    parent.parent.mkdir(parents=True, exist_ok=True)
+    if not parent.exists():
+        parent.write_text("---\nid: ITEM\nkind: plan\n---\nPlan independent implementation slices.\n")
+    flood = mod.Flood(json.loads(cfg.read_text()), cfg.parent)
+    flood.state.task("ITEM").update(status="plan_ready", phase=None, job=None, attempts=1, last_error=None)
+    flood.state.save()
+    saved = json.loads((cfg.parent / "state.json").read_text())
+    assert saved["tasks"]["ITEM"]["status"] == "plan_ready"
+    return flood
+
+
+def _flood_cli(flood_py: Path, cfg: Path, command: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(flood_py), command, "ITEM", "--config", str(cfg)],
+        capture_output=True, text=True,
+    )
+
+
+def _clear_proposed(pdir: Path) -> None:
+    for child in pdir.iterdir():
+        child.unlink()
+
+
+def _assert_texts(haystack: str, expected: str | tuple[str, ...]) -> None:
+    for text in ((expected,) if isinstance(expected, str) else expected):
+        assert text in haystack, haystack
+
+
+def _assert_promotion_refused(mod, cfg: Path, flood_py: Path, pdir: Path, proposed: dict[str, bytes],
+                              diagnostic: str | tuple[str, ...]) -> None:
+    """check-plan, CLI promote, direct promote_plan and marker settlement all stop at the gate."""
+    _persist_plan_ready(mod, cfg)
+    marker = pdir / "PROMOTE"
+    marker.unlink(missing_ok=True)
+
+    checked = _flood_cli(flood_py, cfg, "check-plan")
+    assert checked.returncode == 1, (checked.stdout, checked.stderr)
+    _assert_texts(checked.stdout, diagnostic)
+    assert not marker.exists()
+    assert {path.name: path.read_bytes() for path in pdir.glob("*.md")} == proposed
+
+    refused = _flood_cli(flood_py, cfg, "promote")
+    assert refused.returncode == 1, (refused.stdout, refused.stderr)
+    assert "plan gate failed:" in refused.stdout
+    _assert_texts(refused.stdout, diagnostic)
+    assert not marker.exists()
+    held = mod.Flood(json.loads(cfg.read_text()), cfg.parent)
+    assert held.state.task("ITEM")["status"] == "plan_ready"
+    assert {path.name: path.read_bytes() for path in pdir.glob("*.md")} == proposed
+    assert all(not (held.tasks_dir / name).exists() for name in proposed)
+
+    marker.touch()
+    held.promote_plan(held.tasks["ITEM"])
+    st = held.state.task("ITEM")
+    assert st["status"] == "plan_ready", st
+    assert not st.get("slices")
+    assert st["last_error"].startswith("plan gate failed:")
+    _assert_texts(st["last_error"], diagnostic)
+    assert marker.is_file()
+    assert {path.name: path.read_bytes() for path in pdir.glob("*.md")} == proposed
+    assert all(not (held.tasks_dir / name).exists() for name in proposed)
+    saved = mod.Flood(json.loads(cfg.read_text()), cfg.parent)
+    assert saved.state.task("ITEM")["status"] == "plan_ready"
+    assert saved.state.task("ITEM")["last_error"] == st["last_error"]
+    saved.settle_plans()
+    assert saved.state.task("ITEM")["status"] == "plan_ready"
+    assert not saved.state.task("ITEM").get("slices")
+    _assert_texts(saved.state.task("ITEM")["last_error"], diagnostic)
+    assert marker.is_file()
+    assert {path.name: path.read_bytes() for path in pdir.glob("*.md")} == proposed
+    assert all(sid not in saved.tasks for sid in ("ITEM-s01", "ITEM-s02"))
+
+
+def _manual_promotion(staged_flood, tmp_path: Path, *, consume: bool):
     mod, _, _ = staged_flood
     repo = _make_repo(tmp_path)
     cfg = _make_config(tmp_path, repo, promotion="manual")
     flood_py = Path(mod.__file__).resolve()
-    pdir = _plan_tree(tmp_path, "ITEM")
+    pdir = _plan_tree(tmp_path)
+    write_slice(pdir, "ITEM-s01", files=["src/a.ts"])
+    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"])
+    proposed = {p.name: p.read_bytes() for p in pdir.iterdir()}
+    f = _reviewed_plan(mod, cfg)
+    f.plan_passed(f.tasks["ITEM"])
+    assert mod.Flood(json.loads(cfg.read_text()), cfg.parent).state.task("ITEM")["status"] == "plan_ready"
+    f.settle_plans()
+    _assert_proposed_unchanged(f, pdir, proposed)
 
-    write_slice(pdir, "ITEM-s01", deps=[], files=["src/a.ts"],
-                body="Implement ITEM-s01.\nDone when: test_ITEM_s01.py passes.\nDo not touch: none")
-    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"],
-                body="Implement ITEM-s02.\nDone when: test_ITEM_s02.py passes.\nDo not touch: src/a.ts")
+    def cli(command: str):
+        return subprocess.run(
+            [sys.executable, str(flood_py), command, "ITEM", "--config", str(cfg)],
+            capture_output=True, text=True,
+        )
 
-    # Park the task at plan_ready (manual mode) so promote's own status precondition passes and the
-    # gate is the only thing that can refuse the plan.
-    f = mod.Flood(json.loads(cfg.read_text()), cfg.parent)
-    f.plan_passed({"id": "ITEM"})
-    assert f.state.task("ITEM")["status"] == "plan_ready"
-
-    invalid = subprocess.run([sys.executable, str(flood_py), "check-plan", "ITEM", "--config", str(cfg)],
-                             capture_output=True, text=True)
-    assert invalid.returncode == 1, f"check-plan should fail on an order-only plan:\n{invalid.stdout}\n{invalid.stderr}"
     expected = ("ITEM-s02: depends_on ITEM-s01 orders the slice only; leave depends_on empty, "
                 "edit a file ITEM-s01 also edits, or name a file or output of ITEM-s01 "
                 "that this slice reads, imports, consumes or extends")
+    invalid = cli("check-plan")
+    assert invalid.returncode == 1, (invalid.stdout, invalid.stderr)
     assert expected in invalid.stdout
-
-    promote = subprocess.run([sys.executable, str(flood_py), "promote", "ITEM", "--config", str(cfg)],
-                             capture_output=True, text=True)
-    assert promote.returncode != 0, f"manual promote must refuse an invalid plan:\n{promote.stdout}\n{promote.stderr}"
+    promote = cli("promote")
+    assert promote.returncode != 0, (promote.stdout, promote.stderr)
     assert expected in promote.stdout
-    assert not (tmp_path / "tasks" / "ITEM-s01.md").exists(), "nothing may be promoted on an invalid plan"
+    assert not (pdir / "PROMOTE").exists()
+    reloaded = mod.Flood(json.loads(cfg.read_text()), cfg.parent)
+    reloaded.settle_plans()
+    assert reloaded.state.task("ITEM")["status"] == "plan_ready"
+    _assert_proposed_unchanged(reloaded, pdir, proposed)
 
-    (pdir / "ITEM-s02.md").unlink()
-    write_slice(pdir, "ITEM-s02", deps=[], files=["src/b.ts"],
-                body="Implement ITEM-s02.\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
-
-    valid = subprocess.run([sys.executable, str(flood_py), "check-plan", "ITEM", "--config", str(cfg)],
-                           capture_output=True, text=True)
-    assert valid.returncode == 0, f"check-plan should pass on independent slices:\n{valid.stdout}\n{valid.stderr}"
+    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"] if consume else [], files=["src/b.ts"],
+                body=("Import src/a.ts into src/b.ts." if consume else "Implement independent widget.")
+                     + "\nDone when: test_consumer.py passes.\nDo not touch: none")
+    repaired = {p.name: p.read_bytes() for p in pdir.iterdir()}
+    valid = cli("check-plan")
+    assert valid.returncode == 0, (valid.stdout, valid.stderr)
     assert valid.stdout.startswith("OK: 2 slices pass the plan gate")
+    reloaded = mod.Flood(json.loads(cfg.read_text()), cfg.parent)
+    reloaded.settle_plans()
+    assert reloaded.state.task("ITEM")["status"] == "plan_ready"
+    _assert_proposed_unchanged(reloaded, pdir, repaired)
+    approved = cli("promote")
+    assert approved.returncode == 0, (approved.stdout, approved.stderr)
+    assert (pdir / "PROMOTE").is_file()
+    assert all(not (f.tasks_dir / name).exists() for name in repaired)
+    assert {p.name: p.read_bytes() for p in pdir.glob("*.md")} == repaired
+    reloaded = mod.Flood(json.loads(cfg.read_text()), cfg.parent)
+    assert reloaded.state.task("ITEM")["status"] == "plan_ready"
+    reloaded.settle_plans()
+    _assert_promoted(mod, cfg, repaired)
+
+
+def test_check_plan_cli_uses_the_gate_and_manual_promote_blocks_invalid(staged_flood, tmp_path):
+    """CLI refuses an order-only plan, then approves repaired independent roots for settlement."""
+    _manual_promotion(staged_flood, tmp_path, consume=False)
 
 
 def test_auto_plan_promotion_refuses_disjoint_order_only_chain(staged_flood, tmp_path):
-    """plan_promotion=auto reaches promote_plan, which the gate must reject, leaving the plan ready."""
+    """Auto plan_passed preserves invalid proposals; a repaired review pass moves every slice."""
     mod, _, _ = staged_flood
     repo = _make_repo(tmp_path)
     cfg = _make_config(tmp_path, repo, promotion="auto")
-    f = mod.Flood(json.loads(cfg.read_text()), cfg.parent)
-    pdir = _plan_tree(tmp_path, "ITEM")
-    write_slice(pdir, "ITEM-s01", deps=[], files=["src/a.ts"],
-                body="Implement ITEM-s01.\nDone when: test_ITEM_s01.py passes.\nDo not touch: none")
-    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"],
-                body="Implement ITEM-s02.\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
-
-    f.promote_plan({"id": "ITEM"})
+    pdir = _plan_tree(tmp_path)
+    write_slice(pdir, "ITEM-s01", files=["src/a.ts"])
+    write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"])
+    proposed = {p.name: p.read_bytes() for p in pdir.iterdir()}
+    f = _reviewed_plan(mod, cfg)
+    f.plan_passed(f.tasks["ITEM"])
 
     st = f.state.task("ITEM")
-    assert st["status"] == "plan_ready", f"invalid plan must not promote; state={st}"
+    assert st["status"] == "plan_ready", st
     assert st["last_error"].startswith("plan gate failed:")
     assert "ITEM-s02: depends_on ITEM-s01 orders the slice only" in st["last_error"]
+    assert "that this slice reads, imports, consumes or extends" in st["last_error"]
     saved = mod.Flood(json.loads(cfg.read_text()), cfg.parent).state.task("ITEM")
     assert saved["status"] == "plan_ready"
     assert saved["last_error"] == st["last_error"]
-    assert not (tmp_path / "tasks" / "ITEM-s01.md").exists()
-    assert (pdir / "ITEM-s01.md").exists()
+    _assert_proposed_unchanged(f, pdir, proposed)
 
-    # Repairing the plan to independent roots promotes it.
-    write_slice(pdir, "ITEM-s02", deps=[], files=["src/b.ts"],
-                body="Implement ITEM-s02.\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
-    f.tasks = mod.load_tasks(f.tasks_dir)
-    f.promote_plan({"id": "ITEM"})
-    st = f.state.task("ITEM")
-    assert st["status"] == "planned", f"valid plan must promote; state={st}"
-    assert (tmp_path / "tasks" / "ITEM-s01.md").exists() and (tmp_path / "tasks" / "ITEM-s02.md").exists()
+    write_slice(pdir, "ITEM-s02", files=["src/b.ts"])
+    repaired = {p.name: p.read_bytes() for p in pdir.iterdir()}
+    f.state.task("ITEM").update(status="running", phase="plan-review", attempts=2)
+    f.state.save()
+    f.plan_passed(f.tasks["ITEM"])
+    _assert_promoted(mod, cfg, repaired)
 
 
 def test_manual_plan_promotion_waits_then_promotes_only_a_valid_plan(staged_flood, tmp_path):
-    """plan_promotion=manual parks at plan_ready; the gate re-checks on every promote path."""
+    """Manual settlement waits for CLI approval after genuine producer consumption repairs an edge."""
+    _manual_promotion(staged_flood, tmp_path, consume=True)
+
+
+def test_promotion_entry_paths_keep_invalid_proposals_and_promote_supported(staged_flood, tmp_path):
+    """plan_ready still rechecks every entry, including promote_plan when PROMOTE already exists."""
     mod, _, _ = staged_flood
     repo = _make_repo(tmp_path)
     cfg = _make_config(tmp_path, repo, promotion="manual")
-    f = mod.Flood(json.loads(cfg.read_text()), cfg.parent)
-    pdir = _plan_tree(tmp_path, "ITEM")
-    write_slice(pdir, "ITEM-s01", deps=[], files=["src/a.ts"],
-                body="Implement ITEM-s01.\nDone when: test_ITEM_s01.py passes.\nDo not touch: none")
+    flood_py = Path(mod.__file__).resolve()
+    pdir = _plan_tree(tmp_path)
+    order_only = (
+        "ITEM-s02: depends_on ITEM-s01 orders the slice only; leave depends_on empty, "
+        "edit a file ITEM-s01 also edits, or name a file or output of ITEM-s01 "
+        "that this slice reads, imports, consumes or extends"
+    )
+
+    def cases():
+        _clear_proposed(pdir)
+        write_slice(pdir, "ITEM-s01", files=["src/a.ts"])
+        write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"])
+        yield order_only
+
+        _clear_proposed(pdir)
+        write_slice(pdir, "ITEM-s01", deps=["MISSING"], files=["src/a.ts"])
+        yield "ITEM-s01: depends on MISSING, which is not in this set"
+
+        _clear_proposed(pdir)
+        write_slice(pdir, "ITEM-s01", deps=["ITEM-s02"], files=["src/a.ts"])
+        write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"])
+        yield "dependency cycle through"
+
+        _clear_proposed(pdir)
+        write_slice(pdir, "ITEM-s01", files=["src/shared.ts"])
+        write_slice(pdir, "ITEM-s02", files=["src/shared.ts"])
+        yield "ITEM-s01 and ITEM-s02 both edit src/shared.ts but neither depends on the other"
+
+        _clear_proposed(pdir)
+        broken = write_slice(pdir, "ITEM-s01", files=["src/a.ts"])
+        broken.write_text(broken.read_text().replace("max_minutes: 30", "max_minutes: soon"))
+        yield "ITEM-s01.md: front matter does not parse"
+
+        _clear_proposed(pdir)
+        write_slice(pdir, "ITEM-s01", owner=True, body="Done when: the owner records the result.")
+        yield (
+            'ITEM-s01: owner slice has no "Owner runs:" section',
+            'ITEM-s01: owner slice has no "Evidence:" section',
+        )
+
+    for diagnostic in cases():
+        proposed = {path.name: path.read_bytes() for path in pdir.glob("*.md")}
+        _assert_promotion_refused(mod, cfg, flood_py, pdir, proposed, diagnostic)
+
+    _clear_proposed(pdir)
+    write_slice(pdir, "ITEM-s01", files=["src/a.ts"])
     write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/b.ts"],
-                body="Implement ITEM-s02.\nDone when: test_ITEM_s02.py passes.\nDo not touch: src/a.ts")
+                body="Import src/a.ts into src/b.ts.\nDone when: test_consumer.py passes.\nDo not touch: none")
+    proposed = {path.name: path.read_bytes() for path in pdir.glob("*.md")}
+    preexisting = cfg.parent / "tasks" / "ITEM-s01.md"
+    preexisting.write_text("---\nid: ITEM-s01\nkind: implement\n---\npreexisting\n")
+    preexisting_bytes = preexisting.read_bytes()
+    _persist_plan_ready(mod, cfg)
+    marker = pdir / "PROMOTE"
+    marker.unlink(missing_ok=True)
 
-    f.plan_passed({"id": "ITEM"})
-    assert f.state.task("ITEM")["status"] == "plan_ready"
+    valid = _flood_cli(flood_py, cfg, "check-plan")
+    assert valid.returncode == 0, (valid.stdout, valid.stderr)
+    assert valid.stdout.startswith("OK: 2 slices pass the plan gate")
+    approved = _flood_cli(flood_py, cfg, "promote")
+    assert approved.returncode == 0, (approved.stdout, approved.stderr)
+    assert marker.is_file()
+    assert {path.name: path.read_bytes() for path in pdir.glob("*.md")} == proposed
+    blocked = mod.Flood(json.loads(cfg.read_text()), cfg.parent)
+    assert blocked.state.task("ITEM")["status"] == "plan_ready"
+    blocked.promote_plan(blocked.tasks["ITEM"])
+    assert blocked.state.task("ITEM")["status"] == "plan_ready"
+    assert not blocked.state.task("ITEM").get("slices")
+    assert blocked.state.task("ITEM")["last_error"] == "promotion blocked: tasks/ already has ['ITEM-s01.md']"
+    assert preexisting.read_bytes() == preexisting_bytes
+    assert {path.name: path.read_bytes() for path in pdir.glob("*.md")} == proposed
+    assert not (blocked.tasks_dir / "ITEM-s02.md").exists()
+    assert marker.is_file()
 
-    f.promote_plan({"id": "ITEM"})
-    assert f.state.task("ITEM")["status"] == "plan_ready"
-    assert not (tmp_path / "tasks" / "ITEM-s01.md").exists()
+    preexisting.unlink()
+    marker.unlink()
+    _persist_plan_ready(mod, cfg)
+    approved = _flood_cli(flood_py, cfg, "promote")
+    assert approved.returncode == 0, (approved.stdout, approved.stderr)
+    assert marker.is_file()
+    assert {path.name: path.read_bytes() for path in pdir.glob("*.md")} == proposed
+    assert all(not (cfg.parent / "tasks" / name).exists() for name in proposed)
+    ready = mod.Flood(json.loads(cfg.read_text()), cfg.parent)
+    assert ready.state.task("ITEM")["status"] == "plan_ready"
+    ready.settle_plans()
+    _assert_promoted(mod, cfg, proposed)
 
-    (pdir / "ITEM-s02.md").unlink()
-    write_slice(pdir, "ITEM-s02", deps=[], files=["src/b.ts"],
-                body="Implement ITEM-s02.\nDone when: test_ITEM_s02.py passes.\nDo not touch: none")
-    f.tasks = mod.load_tasks(f.tasks_dir)
-    f.promote_plan({"id": "ITEM"})
-    assert f.state.task("ITEM")["status"] == "planned"
-    assert (tmp_path / "tasks" / "ITEM-s01.md").exists()
+
+@pytest.mark.parametrize("promotion", ["auto", "manual"])
+@pytest.mark.parametrize("source", ["outputs", "evidence", "both"])
+@pytest.mark.parametrize("invalid_edge", ["producer_exclusion", "consumer_exclusion", "unnamed_result"])
+def test_owner_result_promotion_refuses_invalid_evidence_then_promotes_repair(
+        staged_flood, tmp_path, promotion, source, invalid_edge):
+    """Every entry path preserves invalid owner proposals and promotes only a consumed, eligible result."""
+    mod, _, _ = staged_flood
+    repo = _make_repo(tmp_path)
+    cfg = _make_config(tmp_path, repo, promotion=promotion)
+    pdir = _plan_tree(tmp_path)
+    result = "artifacts/result.json"
+
+    def proposal(*, repaired: bool):
+        producer_exclusion = result if not repaired and invalid_edge == "producer_exclusion" else "none"
+        consumer_exclusion = result if not repaired and invalid_edge == "consumer_exclusion" else "none"
+        work = ("Implement independent widget." if not repaired and invalid_edge == "unnamed_result"
+                else f"Consume {result} to implement widget.")
+        evidence = result if source in {"evidence", "both"} else "check complete"
+        write_slice(pdir, "ITEM-s01", owner=True,
+                    outputs=[result] if source in {"outputs", "both"} else [],
+                    body=f"Owner runs: check\nEvidence: {evidence}\n"
+                         f"Done when: passes.\nDo not touch: {producer_exclusion}")
+        write_slice(pdir, "ITEM-s02", deps=["ITEM-s01"], files=["src/consumer.ts"],
+                    body=f"{work}\nDone when: test_consumer.py passes.\nDo not touch: {consumer_exclusion}")
+        return {p.name: p.read_bytes() for p in pdir.iterdir()}
+
+    def cli(command: str):
+        return subprocess.run(
+            [sys.executable, str(Path(mod.__file__).resolve()), command, "ITEM", "--config", str(cfg)],
+            capture_output=True, text=True,
+        )
+
+    proposed = proposal(repaired=False)
+    f = _reviewed_plan(mod, cfg)
+    expected = "ITEM-s02: depends_on ITEM-s01 lacks affirmative owner result evidence"
+    invalid = cli("check-plan")
+    assert invalid.returncode == 1, (invalid.stdout, invalid.stderr)
+    assert len(invalid.stdout.splitlines()) == 1, invalid.stdout
+    assert expected in invalid.stdout
+    _assert_proposed_unchanged(f, pdir, proposed)
+
+    f.plan_passed(f.tasks["ITEM"])
+    reloaded = mod.Flood(json.loads(cfg.read_text()), cfg.parent)
+    st = reloaded.state.task("ITEM")
+    assert st["status"] == "plan_ready", st
+    if promotion == "auto":
+        assert st["last_error"].startswith("plan gate failed:")
+        assert expected in st["last_error"]
+        assert st["last_error"] == f.state.task("ITEM")["last_error"]
+    else:
+        refused = cli("promote")
+        assert refused.returncode != 0, (refused.stdout, refused.stderr)
+        assert expected in refused.stdout
+    assert not (pdir / "PROMOTE").exists()
+    reloaded.settle_plans()
+    saved = mod.Flood(json.loads(cfg.read_text()), cfg.parent)
+    assert saved.state.task("ITEM")["status"] == "plan_ready"
+    assert all(sid not in saved.tasks for sid in ["ITEM-s01", "ITEM-s02"])
+    if promotion == "auto":
+        assert saved.state.task("ITEM")["last_error"] == st["last_error"]
+    _assert_proposed_unchanged(saved, pdir, proposed)
+
+    repaired = proposal(repaired=True)
+    valid = cli("check-plan")
+    assert valid.returncode == 0, (valid.stdout, valid.stderr)
+    assert valid.stdout.startswith("OK: 2 slices pass the plan gate")
+    _assert_proposed_unchanged(saved, pdir, repaired)
+    if promotion == "auto":
+        saved.state.task("ITEM").update(status="running", phase="plan-review", attempts=2)
+        saved.state.save()
+        saved.plan_passed(saved.tasks["ITEM"])
+    else:
+        saved.settle_plans()
+        _assert_proposed_unchanged(saved, pdir, repaired)
+        approved = cli("promote")
+        assert approved.returncode == 0, (approved.stdout, approved.stderr)
+        assert (pdir / "PROMOTE").is_file()
+        assert {p.name: p.read_bytes() for p in pdir.glob("*.md")} == repaired
+        saved = mod.Flood(json.loads(cfg.read_text()), cfg.parent)
+        assert saved.state.task("ITEM")["status"] == "plan_ready"
+        assert all(not (saved.tasks_dir / name).exists() for name in repaired)
+        saved.settle_plans()
+    _assert_promoted(mod, cfg, repaired)
 
 
 @pytest.mark.parametrize("label", ["Do not touch", "Assumptions", "Deferred"])

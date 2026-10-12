@@ -1,6 +1,7 @@
 """Intake commands expose wire revisions without changing storage history."""
 from __future__ import annotations
 
+from copy import deepcopy
 import hashlib
 import json
 import os
@@ -8,8 +9,12 @@ from uuid import uuid4
 
 import pytest
 
+from omp_work.contracts.nsi.v1 import models as nsi
+
 from omp_work.contracts.nsi.v1.validate import content_hash
 from omp_work.intake_repository import append_revision, lock_revision, read_revision, revision_hashes
+from omp_work.v1.api_models import RecordIntakeClaimResult
+from omp_work.v1.canonical import sha256
 from omp_work.v1.intake_commands import execute_intake, intake_actor, read_intake_view
 from omp_work.v1.models import CommandEnvelope
 from omp_work.v1.service import WorkService
@@ -114,15 +119,6 @@ def test_untrusted_actor_kind_is_forbidden(kind):
         intake_actor(kind, OWNER)
     assert exc.value.code == "forbidden"
 
-
-@pytest.mark.parametrize("kind", ["record_intake_claim"])
-def test_follow_on_stubs_report_unavailable(service, write_repository, kind):
-    workspace_id, _ = write_repository
-    with connection(service, workspace_id) as conn, conn.cursor() as cur:
-        with pytest.raises(WorkStoreError) as exc:
-            execute_intake(cur, envelope(workspace_id, kind=kind), OWNER, "owner")
-        assert exc.value.code == "unavailable"
-        assert conn.execute("SELECT count(*) FROM omp_work.intake_heads").fetchone() == (0,)
 
 
 def test_head_and_pinned_reads_preserve_history_bytes_and_evidence(service, write_repository):
@@ -589,3 +585,934 @@ def test_follow_on_journal_rejects_missing_head_instead_of_using_result_mission(
         assert conn.execute(
             "SELECT count(*) FROM omp_audit.domain_events WHERE workspace_id=%s", (workspace_id,),
         ).fetchone() == (0,)
+
+
+def claim_payload(
+    actor_id,
+    actor_kind,
+    *,
+    claim_id="claim-1",
+    expected_revision=2,
+    artifact_id="artifact-added",
+    relation="supports",
+    predicate_id="depends_on",
+    evidence=None,
+    evidence_links=None,
+    premise_ids=None,
+    subject=None,
+    asserted_by=None,
+    value=None,
+):
+    span = {"artifact_id": artifact_id, "start_byte": 0, "end_byte": 7, "quote": "aé🙂"}
+    if evidence is None:
+        evidence = [span]
+    if evidence_links is None:
+        evidence_links = [{"span": span, "relation": relation}]
+    actual_asserted_by = (
+        asserted_by if asserted_by is not None else {"id": str(actor_id), "kind": actor_kind}
+    )
+    origin = "owner_statement" if actual_asserted_by["kind"] == "owner" else "model_proposal"
+    return {
+        "run_id": "run-1",
+        "expected_revision": expected_revision,
+        "claim": {
+            "id": claim_id,
+            "category": "non_functional_qualities",
+            "subject": subject if subject is not None else ENTITY,
+            "predicate_id": predicate_id,
+            "value": value if value is not None else {"type": "number", "value": 99.9},
+            "origin": origin,
+            "state": "proposed",
+            "modality": "desired",
+            "polarity": "positive",
+            "truth": "unknown",
+            "asserted_by": actual_asserted_by,
+            "evidence": evidence,
+            "premise_ids": [] if premise_ids is None else premise_ids,
+        },
+        "evidence_links": evidence_links,
+    }
+
+
+def claim_command(actor_id, actor_kind, **kwargs):
+    return {"type": "record_intake_claim", "payload": claim_payload(actor_id, actor_kind, **kwargs)}
+
+
+def claim_envelope(workspace_id, actor_id, actor_kind, **kwargs):
+    return CommandEnvelope.model_validate(dict(
+        api_version="work.omp.dev/v1", workspace_id=workspace_id,
+        operation_id=uuid4(), request_id=uuid4(), correlation_id=uuid4(),
+        command=claim_command(actor_id, actor_kind, **kwargs),
+    ))
+
+
+def assert_claim_refused_without_write(service, workspace_id, command, *, revision, token="owner-token"):
+    with connection(service, workspace_id) as conn:
+        events = conn.execute(
+            "SELECT * FROM omp_audit.domain_events WHERE workspace_id=%s ORDER BY sequence",
+            (workspace_id,),
+        ).fetchall()
+    status, body = _command(service, workspace_id, command, token=token)
+    assert status == 403
+    assert body["error"]["code"] == "forbidden"
+    with connection(service, workspace_id) as conn:
+        assert conn.execute(
+            "SELECT current_revision FROM omp_work.intake_heads WHERE workspace_id=%s",
+            (workspace_id,),
+        ).fetchone() == (revision,)
+        assert conn.execute(
+            "SELECT revision FROM omp_work.intake_revisions WHERE workspace_id=%s ORDER BY revision",
+            (workspace_id,),
+        ).fetchall() == [(r,) for r in range(revision + 1)]
+        assert conn.execute(
+            "SELECT * FROM omp_audit.domain_events WHERE workspace_id=%s ORDER BY sequence",
+            (workspace_id,),
+        ).fetchall() == events
+
+
+def get_claim_snapshot(service, workspace_id):
+    response = service.client.get(
+        f"/v1/workspaces/{workspace_id}/intake/run-1", headers=_owner_headers(workspace_id),
+    )
+    assert response.status_code == 200
+    return response.json()["snapshot"]
+
+
+@pytest.mark.parametrize("failure", ["forged_asserted_by", "bad_quote", "split_utf8", "out_of_bounds"])
+def test_claim_authority_refusals_leave_revision_and_events_unchanged(service, http_intake, failure):
+    workspace_id, mission_id = http_intake
+    assert _command(service, workspace_id,
+                    envelope(workspace_id, mission_id).command.model_dump(mode="json"))[0] == 200
+    assert _command(service, workspace_id, evidence_command(OWNER, "owner"))[0] == 200
+    span = dict(artifact_id="artifact-added", start_byte=0, end_byte=7, quote="aé🙂")
+    if failure == "bad_quote":
+        span["quote"] = "forged"
+    elif failure == "split_utf8":
+        span.update(start_byte=2, end_byte=4)
+        span.pop("quote")
+    elif failure == "out_of_bounds":
+        span["end_byte"] = 8
+        span.pop("quote")
+    command = claim_command(OWNER, "owner", evidence=[span], evidence_links=[dict(span=span, relation="supports")])
+    if failure == "forged_asserted_by":
+        command["payload"]["claim"]["asserted_by"] = dict(id=str(OWNER), kind="model")
+        command["payload"]["claim"]["origin"] = "model_proposal"
+    assert_claim_refused_without_write(service, workspace_id, command, revision=1)
+    assert get_claim_snapshot(service, workspace_id)["claims"] == []
+
+
+@pytest.mark.parametrize("admitter_kind,transition", [("owner", False), ("owner", True), ("rule_engine", True)])
+def test_owner_statement_admission_get_preserves_admitter_kind(service, http_intake, admitter_kind, transition):
+    workspace_id, mission_id = http_intake
+    assert _command(service, workspace_id,
+                    envelope(workspace_id, mission_id).command.model_dump(mode="json"))[0] == 200
+    assert _command(service, workspace_id, evidence_command(OWNER, "owner"))[0] == 200
+    command = claim_command(OWNER, "owner")
+    if transition:
+        assert _command(service, workspace_id, command)[0] == 200
+        command["payload"]["expected_revision"] = 3
+    admitter_id, token = (OWNER, "owner-token") if admitter_kind == "owner" else intake_capability(
+        service, workspace_id, kind="rule_engine", scopes=("work.mutate", "work.approve"),
+    )
+    claim = command["payload"]["claim"]
+    claim.update(state="admitted", truth="true", admitted_by=dict(id=str(admitter_id), kind=admitter_kind))
+    assert _command(service, workspace_id, command, token=token)[0] == 200
+    stored_claim = get_claim_snapshot(service, workspace_id)["claims"][0]
+    assert stored_claim["state"] == "admitted"
+    assert stored_claim["truth"] == "true"
+    assert stored_claim["admitted_by"] == dict(id=str(admitter_id), kind=admitter_kind)
+    assert stored_claim["asserted_by"] == claim["asserted_by"]
+
+
+@pytest.mark.parametrize("kind", ["model", "agent", "task-agent", "tool"])
+def test_approve_scope_cannot_admit_model_or_tool_claims(service, http_intake, kind):
+    workspace_id, mission_id = http_intake
+    start = envelope(workspace_id, mission_id).command.model_dump(mode="json")
+    start["payload"]["ontology"]["predicates"][0]["authority"] = ["owner", "rule_engine", "model", "tool"]
+    assert _command(service, workspace_id, start)[0] == 200
+    tool_id, tool_token = intake_capability(service, workspace_id, kind="tool")
+    assert _command(service, workspace_id, evidence_command(tool_id, "tool"), token=tool_token)[0] == 200
+    actor_id, token = intake_capability(
+        service, workspace_id, kind=kind, scopes=("work.mutate", "work.approve", "work.read"),
+    )
+    mapped_kind = "tool" if kind == "tool" else "model"
+    command = claim_command(actor_id, mapped_kind)
+    if kind == "tool":
+        command["payload"]["claim"]["origin"] = "repository_observation"
+    proposed = deepcopy(command["payload"]["claim"])
+    assert _command(service, workspace_id, command, token=token)[0] == 200
+    command["payload"]["expected_revision"] = 3
+    command["payload"]["claim"].update(
+        state="admitted", truth="true", admitted_by=dict(id=str(OWNER), kind="owner"),
+    )
+    assert_claim_refused_without_write(service, workspace_id, command, revision=2, token=token)
+    command["payload"]["claim"]["id"] = "new-admission"
+    assert_claim_refused_without_write(service, workspace_id, command, revision=2, token=token)
+    stored = get_claim_snapshot(service, workspace_id)["claims"][0]
+    assert stored["truth"] == "unknown"
+    assert stored["state"] == "proposed"
+    assert stored["asserted_by"] == dict(id=str(actor_id), kind=mapped_kind)
+    assert stored["evidence"] == proposed["evidence"]
+    assert "admitted_by" not in stored
+
+
+def test_owner_evidence_grounds_statements_and_proposals_but_not_observations(service, http_intake):
+    workspace_id, mission_id = http_intake
+    assert _command(service, workspace_id,
+                    envelope(workspace_id, mission_id).command.model_dump(mode="json"))[0] == 200
+    assert _command(service, workspace_id, evidence_command(OWNER, "owner"))[0] == 200
+    assert _command(service, workspace_id, claim_command(OWNER, "owner"))[0] == 200
+    model_id, model_token = intake_capability(service, workspace_id, kind="model")
+    proposal = claim_command(
+        model_id, "model", claim_id="model-claim", expected_revision=3, value={"type": "null", "value": None},
+    )
+    assert _command(service, workspace_id, proposal, token=model_token)[0] == 200
+    # The caller is an owner, but the predicate excludes the model that asserted this claim.
+    admission = deepcopy(proposal)
+    admission["payload"]["expected_revision"] = 4
+    admission["payload"]["claim"].update(
+        state="admitted", truth="true", admitted_by=dict(id=str(OWNER), kind="owner"),
+    )
+    assert_claim_refused_without_write(service, workspace_id, admission, revision=3)
+    tool_id, tool_token = intake_capability(service, workspace_id, kind="tool")
+    observation = claim_command(tool_id, "tool", claim_id="observation", expected_revision=4)
+    observation["payload"]["claim"]["origin"] = "repository_observation"
+    assert_claim_refused_without_write(service, workspace_id, observation, revision=3, token=tool_token)
+    assert _command(service, workspace_id, evidence_command(
+        tool_id, "tool", expected_revision=4, artifact_id="tool-artifact", uri="https://example.test/tool",
+    ), token=tool_token)[0] == 200
+    observation["payload"]["expected_revision"] = 5
+    observation["payload"]["claim"]["evidence"][0]["artifact_id"] = "tool-artifact"
+    assert _command(service, workspace_id, observation, token=tool_token)[0] == 200
+    snapshot = get_claim_snapshot(service, workspace_id)
+    assert {(c["origin"], c["evidence"][0]["artifact_id"]) for c in snapshot["claims"]} == {
+        ("owner_statement", "artifact-added"), ("model_proposal", "artifact-added"),
+        ("repository_observation", "tool-artifact"),
+    }
+    assert {a["id"]: a["actor"]["kind"] for a in snapshot["artifacts"]} == {
+        "artifact-added": "owner", "tool-artifact": "tool",
+    }
+    assert next(c for c in snapshot["claims"] if c["id"] == "model-claim")["value"] == {
+        "type": "null", "value": None,
+    }
+
+
+def test_record_intake_claim_stale_invalid_forbidden_and_event(service, http_intake):
+    workspace_id, mission_id = http_intake
+
+    # no head and a mismatched current_revision are 409 stale_intake, rows unchanged
+    status, body = _command(service, workspace_id, claim_command(OWNER, "owner", expected_revision=1))
+    assert status == 409
+    assert body["error"]["code"] == "stale_intake"
+    with connection(service, workspace_id) as conn:
+        assert conn.execute("SELECT count(*) FROM omp_work.intake_heads").fetchone() == (0,)
+        assert conn.execute("SELECT count(*) FROM omp_work.intake_revisions").fetchone() == (0,)
+        assert conn.execute(
+            "SELECT count(*) FROM omp_audit.domain_events WHERE workspace_id=%s", (workspace_id,),
+        ).fetchone() == (0,)
+
+    assert _command(service, workspace_id,
+                    envelope(workspace_id, mission_id).command.model_dump(mode="json"))[0] == 200
+    assert _command(service, workspace_id,
+                    evidence_command(OWNER, "owner", expected_revision=1))[0] == 200
+
+    status, body = _command(service, workspace_id, claim_command(OWNER, "owner", expected_revision=1))
+    assert status == 409
+    assert body["error"]["code"] == "stale_intake"
+    with connection(service, workspace_id) as conn:
+        assert conn.execute("SELECT current_revision FROM omp_work.intake_heads").fetchone() == (1,)
+        assert conn.execute("SELECT count(*) FROM omp_work.intake_revisions").fetchone() == (2,)
+        assert conn.execute(
+            "SELECT count(*) FROM omp_audit.domain_events WHERE workspace_id=%s", (workspace_id,),
+        ).fetchone() == (2,)
+
+    # missing evidence, premise, or subject entity is 400, head unchanged
+    status, body = _command(
+        service, workspace_id,
+        claim_command(OWNER, "owner", expected_revision=2, evidence=[], evidence_links=[]),
+    )
+    assert status == 400
+    assert body["error"]["code"] == "invalid_request"
+    with connection(service, workspace_id) as conn:
+        assert conn.execute("SELECT current_revision FROM omp_work.intake_heads").fetchone() == (1,)
+
+    status, body = _command(
+        service, workspace_id,
+        claim_command(OWNER, "owner", expected_revision=2, premise_ids=["missing-claim"]),
+    )
+    assert status == 400
+    assert body["error"]["code"] == "invalid_request"
+    with connection(service, workspace_id) as conn:
+        assert conn.execute("SELECT current_revision FROM omp_work.intake_heads").fetchone() == (1,)
+
+    status, body = _command(
+        service, workspace_id,
+        claim_command(OWNER, "owner", expected_revision=2, subject={"id": "missing-entity", "type": "requirement"}),
+    )
+    assert status == 400
+    assert body["error"]["code"] == "invalid_request"
+    with connection(service, workspace_id) as conn:
+        assert conn.execute("SELECT current_revision FROM omp_work.intake_heads").fetchone() == (1,)
+
+    # wrong new asserted_by is 403
+    status, body = _command(
+        service, workspace_id,
+        claim_command(OWNER, "owner", expected_revision=2, asserted_by={"id": str(uuid4()), "kind": "owner"}),
+    )
+    assert status == 403
+    assert body["error"]["code"] == "forbidden"
+    with connection(service, workspace_id) as conn:
+        assert conn.execute("SELECT current_revision FROM omp_work.intake_heads").fetchone() == (1,)
+
+    # result equals the four keys; the event adds evidence_status only. Do not assert max(ordinal)==38.
+    status, body = _command(service, workspace_id, claim_command(OWNER, "owner", expected_revision=2))
+    assert status == 200
+    expected_result = {
+        "type": "record_intake_claim",
+        "run_id": "run-1",
+        "expected_revision": 2,
+        "revision": 3,
+    }
+    assert body["result"] == expected_result
+    assert set(body["result"]) == {"type", "run_id", "expected_revision", "revision"}
+    assert "evidence_status" not in body["result"]
+    assert "mission_id" not in body["result"]
+
+    with connection(service, workspace_id) as conn:
+        assert conn.execute("SELECT current_revision FROM omp_work.intake_heads").fetchone() == (2,)
+        events = conn.execute(
+            "SELECT event_type,payload FROM omp_audit.domain_events WHERE workspace_id=%s ORDER BY sequence",
+            (workspace_id,),
+        ).fetchall()
+        assert [event_type for event_type, _payload in events] == [
+            "start_intake", "register_intake_evidence", "record_intake_claim",
+        ]
+        claim_event = events[2][1]
+        assert claim_event == {**expected_result, "evidence_status": "supported"}
+        assert set(claim_event) == {"type", "run_id", "expected_revision", "revision", "evidence_status"}
+        assert "mission_id" not in claim_event
+
+        view = read_intake_view(conn.cursor(), workspace_id, "run-1")
+        assert view.revision == 3
+        assert len(view.snapshot.claims) == 1
+        assert view.snapshot.claims[0].id == "claim-1"
+        assert len(view.evidence_links) == 1
+        assert view.evidence_links[0].relation == "supports"
+
+
+def test_execute_intake_record_claim_returns_four_key_dict_subclass(service, write_repository):
+    workspace_id, mission_id = write_repository
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        execute_intake(cur, envelope(workspace_id, mission_id), OWNER, "owner")
+        execute_intake(cur, evidence_envelope(workspace_id, OWNER, "owner", expected_revision=1), OWNER, "owner")
+        result, event = execute_intake(
+            cur, claim_envelope(workspace_id, OWNER, "owner", expected_revision=2), OWNER, "owner",
+        )
+        expected_four_keys = {
+            "type": "record_intake_claim",
+            "run_id": "run-1",
+            "expected_revision": 2,
+            "revision": 3,
+        }
+        assert result == expected_four_keys
+        assert list(result.keys()) == ["type", "run_id", "expected_revision", "revision", "evidence_status"]
+        assert "evidence_status" not in result
+        assert result["evidence_status"] == "supported"
+        assert list(result) == ["type", "run_id", "expected_revision", "revision", "evidence_status"]
+        assert event == {**expected_four_keys, "evidence_status": "supported"}
+        assert set(event.keys()) == {"type", "run_id", "expected_revision", "revision", "evidence_status"}
+        assert "mission_id" not in result
+        assert "mission_id" not in event
+        assert json.loads(json.dumps(result)) == expected_four_keys
+        assert RecordIntakeClaimResult.model_validate(result).model_dump(mode="json") == expected_four_keys
+        assert sha256(result) == sha256(expected_four_keys)
+
+
+def test_http_record_intake_claim_ontology_and_entity_validation(service, http_intake):
+    workspace_id, mission_id = http_intake
+    start_cmd = envelope(workspace_id, mission_id).command.model_dump(mode="json")
+    entity_subject_mismatch = {"id": "entity-svc", "type": "service"}
+    entity_target_mismatch = {"id": "entity-other", "type": "other"}
+    start_cmd["payload"]["entities"] = [ENTITY, entity_subject_mismatch, entity_target_mismatch]
+    start_cmd["payload"]["ontology"] = dict(predicates=[PREDICATE], dimensions=[])
+
+    assert _command(service, workspace_id, start_cmd)[0] == 200
+    assert _command(service, workspace_id, evidence_command(OWNER, "owner", expected_revision=1))[0] == 200
+
+    with connection(service, workspace_id) as conn:
+        baseline_heads = conn.execute(
+            "SELECT workspace_id, run_id, current_revision, mission_id FROM omp_work.intake_heads WHERE workspace_id=%s",
+            (workspace_id,),
+        ).fetchall()
+        baseline_revisions = conn.execute(
+            "SELECT workspace_id, run_id, revision FROM omp_work.intake_revisions WHERE workspace_id=%s ORDER BY revision",
+            (workspace_id,),
+        ).fetchall()
+
+    cases = [
+        # unknown predicate
+        claim_command(
+            OWNER,
+            "owner",
+            claim_id="claim-unknown-predicate",
+            expected_revision=2,
+            predicate_id="unknown_predicate",
+            subject=ENTITY,
+        ),
+        # stored subject type outside subject_types with ref matching storage
+        claim_command(
+            OWNER,
+            "owner",
+            claim_id="claim-subject-type-outside",
+            expected_revision=2,
+            predicate_id="depends_on",
+            subject=entity_subject_mismatch,
+        ),
+        # entity value missing target ID
+        claim_command(
+            OWNER,
+            "owner",
+            claim_id="claim-target-missing",
+            expected_revision=2,
+            predicate_id="depends_on",
+            subject=ENTITY,
+            value={"type": "entity", "value": {"id": "missing-entity", "type": "service"}},
+        ),
+        # stored target type outside object_types with ref matching storage
+        claim_command(
+            OWNER,
+            "owner",
+            claim_id="claim-target-type-outside",
+            expected_revision=2,
+            predicate_id="depends_on",
+            subject=ENTITY,
+            value={"type": "entity", "value": entity_target_mismatch},
+        ),
+    ]
+
+    for command in cases:
+        status, body = _command(service, workspace_id, command)
+        assert status == 400
+        assert body["error"]["code"] == "invalid_request"
+        with connection(service, workspace_id) as conn:
+            assert conn.execute(
+                "SELECT workspace_id, run_id, current_revision, mission_id FROM omp_work.intake_heads WHERE workspace_id=%s",
+                (workspace_id,),
+            ).fetchall() == baseline_heads
+            assert conn.execute(
+                "SELECT workspace_id, run_id, revision FROM omp_work.intake_revisions WHERE workspace_id=%s ORDER BY revision",
+                (workspace_id,),
+            ).fetchall() == baseline_revisions
+
+
+@pytest.mark.parametrize("failure", [
+    "unknown-artifact", "missing-link", "extra-link", "artifact-id-mismatch",
+    "start-byte-mismatch", "end-byte-mismatch", "quote-mismatch",
+    "duplicate-claim-span", "duplicate-link-span",
+])
+def test_http_claim_rejects_non_bijective_evidence_without_changing_rows(service, http_intake, failure):
+    workspace_id, mission_id = http_intake
+    assert _command(service, workspace_id,
+                    envelope(workspace_id, mission_id).command.model_dump(mode="json"))[0] == 200
+    assert _command(service, workspace_id,
+                    evidence_command(OWNER, "owner", text="alpha beta"))[0] == 200
+    expected_revision = 2
+    if failure == "artifact-id-mismatch":
+        # Both IDs exist, so only span identity differs.
+        assert _command(service, workspace_id, evidence_command(
+            OWNER, "owner", text="alpha beta", artifact_id="artifact-other",
+            uri="https://example.test/other", expected_revision=2,
+        ))[0] == 200
+        expected_revision = 3
+
+    first = dict(artifact_id="artifact-added", start_byte=0, end_byte=5, quote="alpha")
+    second = dict(artifact_id="artifact-added", start_byte=6, end_byte=10, quote="beta")
+    evidence = [first]
+    links = [dict(span=first, relation="supports")]
+    if failure == "unknown-artifact":
+        unknown = {**first, "artifact_id": "artifact-unknown"}
+        evidence = [unknown]
+        links = [dict(span=unknown, relation="supports")]
+    elif failure == "missing-link":
+        evidence = [first, second]
+    elif failure == "extra-link":
+        links.append(dict(span=second, relation="supports"))
+    elif failure.endswith("-mismatch"):
+        field, value = {
+            "artifact-id-mismatch": ("artifact_id", "artifact-other"),
+            "start-byte-mismatch": ("start_byte", 1),
+            "end-byte-mismatch": ("end_byte", 4),
+            "quote-mismatch": ("quote", "ALPHA"),
+        }[failure]
+        links = [dict(span={**first, field: value}, relation="supports")]
+    elif failure == "duplicate-claim-span":
+        evidence = [first, dict(first)]
+    elif failure == "duplicate-link-span":
+        # Relation does not distinguish two links to the same span.
+        links.append(dict(span=dict(first), relation="contradicts"))
+
+    with connection(service, workspace_id) as conn:
+        baseline_heads = conn.execute(
+            "SELECT * FROM omp_work.intake_heads WHERE workspace_id=%s", (workspace_id,),
+        ).fetchall()
+        baseline_revisions = conn.execute(
+            "SELECT * FROM omp_work.intake_revisions WHERE workspace_id=%s ORDER BY revision", (workspace_id,),
+        ).fetchall()
+
+    command = claim_command(
+        OWNER, "owner", claim_id=f"claim-evidence-{failure}", expected_revision=expected_revision,
+        evidence=evidence, evidence_links=links,
+    )
+    # Validate shape separately: failures must come from evidence matching, not schemas.
+    CommandEnvelope.model_validate(dict(
+        api_version="work.omp.dev/v1", workspace_id=workspace_id,
+        operation_id=uuid4(), request_id=uuid4(), correlation_id=uuid4(), command=command,
+    ))
+    status, body = _command(service, workspace_id, command)
+    assert status == 400
+    assert body["error"]["code"] == "invalid_request"
+    with connection(service, workspace_id) as conn:
+        assert conn.execute(
+            "SELECT * FROM omp_work.intake_heads WHERE workspace_id=%s", (workspace_id,),
+        ).fetchall() == baseline_heads
+        assert conn.execute(
+            "SELECT * FROM omp_work.intake_revisions WHERE workspace_id=%s ORDER BY revision", (workspace_id,),
+        ).fetchall() == baseline_revisions
+
+
+def test_http_claim_accepts_reversed_distinct_evidence_links_and_persists_quotes(service, http_intake):
+    workspace_id, mission_id = http_intake
+    assert _command(service, workspace_id,
+                    envelope(workspace_id, mission_id).command.model_dump(mode="json"))[0] == 200
+    assert _command(service, workspace_id,
+                    evidence_command(OWNER, "owner", text="alpha beta"))[0] == 200
+    first = dict(artifact_id="artifact-added", start_byte=0, end_byte=5, quote="alpha")
+    second = dict(artifact_id="artifact-added", start_byte=6, end_byte=10, quote="beta")
+    links = [dict(span=second, relation="contradicts"), dict(span=first, relation="supports")]
+    claim_id = "claim-reversed-evidence"
+    status, body = _command(service, workspace_id, claim_command(
+        OWNER, "owner", claim_id=claim_id, evidence=[first, second], evidence_links=links,
+    ))
+    assert status == 200
+    assert body["result"]["revision"] == 3
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        assert conn.execute(
+            "SELECT current_revision FROM omp_work.intake_heads WHERE workspace_id=%s", (workspace_id,),
+        ).fetchone() == (2,)
+        stored = read_revision(cur, workspace_id=workspace_id, run_id="run-1", revision=2)
+        assert stored.snapshot.claims[0].id == claim_id
+        assert [span.model_dump() for span in stored.snapshot.claims[0].evidence] == [first, second]
+        assert {
+            (link.claim_id, link.artifact_id, link.start_byte, link.end_byte, link.quote, link.relation)
+            for link in stored.body.evidence_links
+        } == {
+            (claim_id, "artifact-added", 0, 5, "alpha", "supports"),
+            (claim_id, "artifact-added", 6, 10, "beta", "contradicts"),
+        }
+        assert len(stored.body.evidence_links) == 2
+
+
+def test_claim_storage_copy_preserves_records_quotes_and_clears_derived(service, write_repository):
+    workspace_id, mission_id = write_repository
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        seeded = revision_body(workspace_id, revision=0)
+        seeded["snapshot"]["state"] = "reasoning"
+        for artifact in seeded["snapshot"]["artifacts"]:
+            artifact["content_hash"] = hashlib.sha256(seeded["artifact_bytes"][artifact["id"]]).hexdigest()
+        seeded["binding"]["rule_bundle_hash"] = "1" * 64
+        seeded["binding"]["schema_hash"] = "2" * 64
+        seeded["binding"]["contract_hash"] = "3" * 64
+        prior_claim = seeded["snapshot"]["claims"][0]
+        seeded["evidence_links"] = [dict(
+            claim_id=prior_claim["id"], relation="supports", **prior_claim["evidence"][0],
+        )]
+        append_revision(cur, lock_revision(
+            cur, workspace_id=workspace_id, run_id="run-1", expected_revision=-1,
+            mission_id=mission_id, operation_id=uuid4(),
+        ), seeded, operation_id=uuid4())
+
+        baseline = read_revision(cur, workspace_id=workspace_id, run_id="run-1", revision=0)
+        assert baseline.body.decisions and baseline.body.assessments and baseline.body.derivations
+
+        new_claim_id = "claim-2"
+        artifact_id = baseline.snapshot.artifacts[0].id
+        new_span = dict(artifact_id=artifact_id, start_byte=0, end_byte=4, quote="hell")
+        envelope = claim_envelope(
+            workspace_id, OWNER, "owner",
+            claim_id=new_claim_id,
+            expected_revision=1,
+            artifact_id=artifact_id,
+            predicate_id=baseline.snapshot.ontology.predicates[0].id,
+            subject=baseline.snapshot.entities[0].model_dump(),
+            evidence=[new_span],
+            evidence_links=[dict(span=new_span, relation="contradicts")],
+        )
+        result, event = execute_intake(cur, envelope, OWNER, "owner")
+        assert result["type"] == "record_intake_claim"
+        assert result["expected_revision"] == 1
+        assert result["revision"] == 2
+        assert event["revision"] == 2
+
+        stored = read_revision(cur, workspace_id=workspace_id, run_id="run-1", revision=1)
+
+        assert stored.snapshot.entities == baseline.snapshot.entities
+        assert stored.snapshot.ontology == baseline.snapshot.ontology
+        assert stored.snapshot.artifacts == baseline.snapshot.artifacts
+        assert stored.artifact_bytes == baseline.artifact_bytes
+        assert stored.snapshot.state == baseline.snapshot.state == "reasoning"
+
+        assert stored.snapshot.claims[:-1] == baseline.snapshot.claims
+        assert stored.snapshot.claims[-1].id == new_claim_id
+        assert len(stored.snapshot.claims) == len(baseline.snapshot.claims) + 1
+
+        old_links = {
+            (link.claim_id, link.artifact_id, link.start_byte, link.end_byte, link.quote, link.relation)
+            for link in baseline.body.evidence_links
+        }
+        added_links = {
+            (new_claim_id, new_span["artifact_id"], new_span["start_byte"], new_span["end_byte"], new_span["quote"], "contradicts")
+        }
+        stored_links = {
+            (link.claim_id, link.artifact_id, link.start_byte, link.end_byte, link.quote, link.relation)
+            for link in stored.body.evidence_links
+        }
+        assert stored_links == old_links | added_links
+        assert len(stored.body.evidence_links) == len(baseline.body.evidence_links) + len(added_links)
+
+        assert stored.body.decisions == []
+        assert stored.body.assessments == []
+        assert stored.body.derivations == []
+
+        baseline_after = read_revision(cur, workspace_id=workspace_id, run_id="run-1", revision=0)
+        assert baseline_after.snapshot == baseline.snapshot
+        assert baseline_after.body.binding == baseline.body.binding
+        assert baseline_after.artifact_bytes == baseline.artifact_bytes
+        assert baseline_after.body.evidence_links == baseline.body.evidence_links
+        assert baseline_after.body.decisions == baseline.body.decisions
+        assert baseline_after.body.assessments == baseline.body.assessments
+        assert baseline_after.body.derivations == baseline.body.derivations
+
+        expected_claim_set_hash, expected_source_hash = revision_hashes(stored.snapshot, stored.artifact_bytes)
+        assert stored.body.binding.claim_set_hash == expected_claim_set_hash
+        assert stored.body.binding.source_hash == expected_source_hash
+        assert (
+            stored.body.binding.rule_bundle_hash,
+            stored.body.binding.schema_hash,
+            stored.body.binding.contract_hash,
+        ) == (
+            baseline.body.binding.rule_bundle_hash,
+            baseline.body.binding.schema_hash,
+            baseline.body.binding.contract_hash,
+        ) == ("1" * 64, "2" * 64, "3" * 64)
+        assert stored.snapshot.revision == 1
+        assert stored.body.binding.revision == 1
+
+        assert conn.execute(
+            "SELECT current_revision FROM omp_work.intake_heads WHERE workspace_id=%s AND run_id='run-1'",
+            (workspace_id,),
+        ).fetchone() == (1,)
+
+
+@pytest.mark.parametrize("relation,evidence_status", [
+    ("supports", "supported"),
+    ("contradicts", "contested"),
+    ("neither", "unsupported"),
+])
+def test_http_claim_relations_read_replay_and_collision(service, http_intake, relation, evidence_status):
+    workspace_id, mission_id = http_intake
+    assert _command(service, workspace_id,
+                    envelope(workspace_id, mission_id).command.model_dump(mode="json"))[0] == 200
+    text = "aé🙂"
+    assert _command(service, workspace_id,
+                    evidence_command(OWNER, "owner", text=text))[0] == 200
+    span = dict(artifact_id="artifact-added", start_byte=0,
+                end_byte=len(text.encode("utf-8")), quote=text)
+    command = claim_command(
+        OWNER, "owner", evidence=[span], evidence_links=[dict(span=span, relation=relation)],
+    )
+    operation_id = uuid4()
+    status, body = _command(service, workspace_id, command, operation_id=operation_id)
+    assert status == 200
+    result = {
+        "type": "record_intake_claim", "run_id": "run-1",
+        "expected_revision": 2, "revision": 3,
+    }
+    assert body["result"] == result
+    assert set(body["result"]) == {"type", "run_id", "expected_revision", "revision"}
+    assert "evidence_status" not in body["result"]
+    assert "mission_id" not in body["result"]
+
+    response = service.client.get(
+        f"/v1/workspaces/{workspace_id}/intake/run-1", headers=_owner_headers(workspace_id),
+    )
+    assert response.status_code == 200
+    view = response.json()
+    assert view["revision"] == 3
+    assert len(view["snapshot"]["claims"]) == 1
+    claim = view["snapshot"]["claims"][0]
+    assert claim["id"] == command["payload"]["claim"]["id"]
+    assert claim["truth"] == "unknown"
+    assert claim["state"] == "proposed"
+    assert claim["evidence"] == [span]
+    assert view["evidence_links"] == [{"span": span, "relation": relation}]
+
+    with connection(service, workspace_id) as conn:
+        heads = conn.execute(
+            "SELECT * FROM omp_work.intake_heads WHERE workspace_id=%s", (workspace_id,),
+        ).fetchall()
+        revisions = conn.execute(
+            "SELECT * FROM omp_work.intake_revisions WHERE workspace_id=%s ORDER BY revision", (workspace_id,),
+        ).fetchall()
+        events = conn.execute(
+            "SELECT * FROM omp_audit.domain_events WHERE workspace_id=%s ORDER BY sequence", (workspace_id,),
+        ).fetchall()
+
+    status, replay = _command(service, workspace_id, command, operation_id=operation_id)
+    assert status == 200
+    assert replay["receipt"]["state"] == "replayed"
+    assert replay["result"] == body["result"]
+    with connection(service, workspace_id) as conn:
+        assert conn.execute(
+            "SELECT * FROM omp_work.intake_heads WHERE workspace_id=%s", (workspace_id,),
+        ).fetchall() == heads
+        assert conn.execute(
+            "SELECT * FROM omp_work.intake_revisions WHERE workspace_id=%s ORDER BY revision", (workspace_id,),
+        ).fetchall() == revisions
+        assert conn.execute(
+            "SELECT * FROM omp_audit.domain_events WHERE workspace_id=%s ORDER BY sequence", (workspace_id,),
+        ).fetchall() == events
+
+    changed = {**command, "payload": {
+        **command["payload"], "claim": {
+            **command["payload"]["claim"], "value": {"type": "number", "value": 42.0},
+        },
+    }}
+    status, conflict = _command(service, workspace_id, changed, operation_id=operation_id)
+    assert status == 409
+    assert conflict["error"]["code"] == "idempotency_conflict"
+    with connection(service, workspace_id) as conn:
+        assert conn.execute(
+            "SELECT * FROM omp_work.intake_heads WHERE workspace_id=%s", (workspace_id,),
+        ).fetchall() == heads
+        assert conn.execute(
+            "SELECT * FROM omp_work.intake_revisions WHERE workspace_id=%s ORDER BY revision", (workspace_id,),
+        ).fetchall() == revisions
+        operation_events = conn.execute(
+            "SELECT event_type,aggregate_type,aggregate_id,payload FROM omp_audit.domain_events "
+            "WHERE workspace_id=%s AND operation_id=%s ORDER BY sequence", (workspace_id, operation_id),
+        ).fetchall()
+        assert operation_events == [
+            ("record_intake_claim", "mission", mission_id, {**result, "evidence_status": evidence_status}),
+            ("idempotency_conflict", "mission", mission_id, {"code": "idempotency_conflict"}),
+        ]
+        assert all("mission_id" not in payload for _, _, _, payload in operation_events)
+
+
+def test_claim_admission_preserves_storage_copies_and_rejects_mutations(service, http_intake):
+    workspace_id, mission_id = http_intake
+    rule_bundle_hash = "1" * 64
+    schema_hash = "2" * 64
+    contract_hash = "3" * 64
+
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        seeded = revision_body(workspace_id, revision=0)
+        seeded["snapshot"]["state"] = "reasoning"
+        for artifact in seeded["snapshot"]["artifacts"]:
+            artifact["content_hash"] = hashlib.sha256(seeded["artifact_bytes"][artifact["id"]]).hexdigest()
+        seeded["supersessions"] = {}
+        seeded["snapshot"]["ontology"]["predicates"][0]["authority"].append("model")
+        proposed_claim = seeded["snapshot"]["claims"][0]
+        span = proposed_claim["evidence"][0]
+        other_claim = seeded["snapshot"]["claims"][1]
+        other_claim["evidence"] = [span]
+        seeded["evidence_links"] = [
+            dict(claim_id=proposed_claim["id"], relation="supports", **span),
+            dict(claim_id=other_claim["id"], relation="neither", **span),
+        ]
+        seeded["binding"]["rule_bundle_hash"] = rule_bundle_hash
+        seeded["binding"]["schema_hash"] = schema_hash
+        seeded["binding"]["contract_hash"] = contract_hash
+        seeded_snapshot = nsi.IntakeSnapshot.model_validate(seeded["snapshot"])
+        c_hash, s_hash = revision_hashes(seeded_snapshot, seeded["artifact_bytes"])
+        seeded["binding"]["claim_set_hash"] = c_hash
+        seeded["binding"]["source_hash"] = s_hash
+
+        locked = lock_revision(
+            cur, workspace_id=workspace_id, run_id="run-1", expected_revision=-1,
+            mission_id=mission_id, operation_id=uuid4(),
+        )
+        append_revision(cur, locked, seeded, operation_id=uuid4())
+
+        baseline = read_revision(cur, workspace_id=workspace_id, run_id="run-1", revision=0)
+        assert baseline.body.decisions and baseline.body.derivations
+        assert len(baseline.snapshot.claims) > 1
+
+    W = 1
+    valid_admitted_by = {"id": str(OWNER), "kind": "owner"}
+    valid_claim = deepcopy(proposed_claim)
+    valid_claim.update(
+        state="admitted",
+        truth="true",
+        admitted_by=valid_admitted_by,
+    )
+    valid_links = [dict(span=span, relation="supports")]
+
+    mutations = [
+        # value
+        (
+            {**valid_claim, "value": {"type": "number", "value": 42.0}},
+            valid_links,
+        ),
+        # predicate
+        (
+            {**valid_claim, "predicate_id": "other_predicate"},
+            valid_links,
+        ),
+        # relation
+        (
+            valid_claim,
+            [dict(span=span, relation="contradicts")],
+        ),
+        # asserted_by
+        (
+            {**valid_claim, "asserted_by": {"id": "other-model", "kind": "model"}},
+            valid_links,
+        ),
+        # other state change: proposed
+        (
+            {**valid_claim, "state": "proposed"},
+            valid_links,
+        ),
+        # other state change: contested
+        (
+            {**valid_claim, "state": "contested"},
+            valid_links,
+        ),
+    ]
+
+    for bad_claim, bad_links in mutations:
+        bad_cmd = {
+            "type": "record_intake_claim",
+            "payload": {
+                "run_id": "run-1",
+                "expected_revision": W,
+                "claim": bad_claim,
+                "evidence_links": bad_links,
+            },
+        }
+        status, resp = _command(service, workspace_id, bad_cmd)
+        assert status == 400
+        assert resp["error"]["code"] == "invalid_request"
+        with connection(service, workspace_id) as conn:
+            assert conn.execute(
+                "SELECT current_revision FROM omp_work.intake_heads WHERE workspace_id=%s", (workspace_id,),
+            ).fetchone() == (0,)
+            assert conn.execute(
+                "SELECT count(*) FROM omp_work.intake_claim_supersessions WHERE workspace_id=%s", (workspace_id,),
+            ).fetchone() == (0,)
+
+    admit_cmd = {
+        "type": "record_intake_claim",
+        "payload": {
+            "run_id": "run-1",
+            "expected_revision": W,
+            "claim": valid_claim,
+            "evidence_links": valid_links,
+        },
+    }
+    status, body = _command(service, workspace_id, admit_cmd)
+    assert status == 200
+    result = body["result"]
+    assert result == {
+        "type": "record_intake_claim",
+        "run_id": "run-1",
+        "expected_revision": W,
+        "revision": W + 1,
+    }
+    assert set(result) == {"type", "run_id", "expected_revision", "revision"}
+    assert "evidence_status" not in result
+    assert "mission_id" not in result
+
+    with connection(service, workspace_id) as conn:
+        events = conn.execute(
+            "SELECT event_type, aggregate_type, aggregate_id, payload FROM omp_audit.domain_events "
+            "WHERE workspace_id=%s ORDER BY sequence", (workspace_id,),
+        ).fetchall()
+        assert len(events) == 1
+        event_type, agg_type, agg_id, event_payload = events[0]
+        assert event_type == "record_intake_claim"
+        assert agg_type == "mission"
+        assert agg_id == mission_id
+        assert event_payload == {**result, "evidence_status": "supported"}
+        assert set(event_payload) == {"type", "run_id", "expected_revision", "revision", "evidence_status"}
+        assert "mission_id" not in event_payload
+
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        assert conn.execute(
+            "SELECT current_revision FROM omp_work.intake_heads WHERE workspace_id=%s", (workspace_id,),
+        ).fetchone() == (W,)
+        assert conn.execute(
+            "SELECT count(*) FROM omp_work.intake_claim_supersessions WHERE workspace_id=%s", (workspace_id,),
+        ).fetchone() == (0,)
+
+        stored = read_revision(cur, workspace_id=workspace_id, run_id="run-1", revision=W)
+
+        # storage revision W has state admitted, that truth, that admitted_by, the same asserted_by
+        admitted = next(c for c in stored.snapshot.claims if c.id == proposed_claim["id"])
+        assert admitted.state == "admitted"
+        assert admitted.truth == "true"
+        assert admitted.admitted_by.model_dump() == valid_admitted_by
+        assert admitted.asserted_by.model_dump() == proposed_claim["asserted_by"]
+
+        # supersession count 0
+        assert stored.body.supersessions == {}
+
+        # copies: entities, ontology, artifacts, bytes, run state, and other claims
+        assert stored.snapshot.entities == baseline.snapshot.entities
+        assert stored.snapshot.ontology == baseline.snapshot.ontology
+        assert stored.snapshot.artifacts == baseline.snapshot.artifacts
+        assert stored.artifact_bytes == baseline.artifact_bytes
+        assert stored.snapshot.state == baseline.snapshot.state
+        other_claims_stored = [c for c in stored.snapshot.claims if c.id != proposed_claim["id"]]
+        other_claims_baseline = [c for c in baseline.snapshot.claims if c.id != proposed_claim["id"]]
+        assert other_claims_stored == other_claims_baseline
+        assert len(other_claims_stored) > 0
+
+        # empty lists: decisions, assessments, derivations
+        assert stored.body.decisions == []
+        assert stored.body.assessments == []
+        assert stored.body.derivations == []
+
+        # both hashes equal revision_hashes
+        expected_claim_set_hash, expected_source_hash = revision_hashes(stored.snapshot, stored.artifact_bytes)
+        assert stored.body.binding.claim_set_hash == expected_claim_set_hash
+        assert stored.body.binding.source_hash == expected_source_hash
+
+        # those three hashes
+        assert (
+            stored.body.binding.rule_bundle_hash,
+            stored.body.binding.schema_hash,
+            stored.body.binding.contract_hash,
+        ) == (rule_bundle_hash, schema_hash, contract_hash)
+
+    # Post-admit: any other state change on the admitted claim is 400, head unchanged, count 0
+    post_admit_cmd = {
+        "type": "record_intake_claim",
+        "payload": {
+            "run_id": "run-1",
+            "expected_revision": W + 1,
+            "claim": valid_claim,
+            "evidence_links": valid_links,
+        },
+    }
+    status, body = _command(service, workspace_id, post_admit_cmd)
+    assert status == 400
+    assert body["error"]["code"] == "invalid_request"
+    with connection(service, workspace_id) as conn:
+        assert conn.execute(
+            "SELECT current_revision FROM omp_work.intake_heads WHERE workspace_id=%s", (workspace_id,),
+        ).fetchone() == (W,)
+        assert conn.execute(
+            "SELECT count(*) FROM omp_work.intake_claim_supersessions WHERE workspace_id=%s", (workspace_id,),
+        ).fetchone() == (0,)
+

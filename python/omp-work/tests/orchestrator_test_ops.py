@@ -58,6 +58,11 @@ def run_stage(ctx: StageContext) -> Outcome:
             code=str(raw.get("code") or "refused"),
         )
     blocker = controls.get("blocker") if once else None
+    if ctx.stage == "audit" and not hold and int(controls.get("fails") or 0) <= 0:
+        key = ctx.config.verifier_key_path
+        if not key.exists() or key.stat().st_size == 0:
+            key.write_bytes(b"0123456789abcdef0123456789abcdef")
+            key.chmod(0o600)
     return Outcome(
         outcome="succeeded",
         data={"stage": ctx.stage, "visits": visits, "operation_id": operation_id},

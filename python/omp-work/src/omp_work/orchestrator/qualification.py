@@ -48,18 +48,27 @@ def qualified(
     """Whether every required check passed for ``release``, and which did not.
 
     The required set is ``UNATTENDED_CHECKS`` for an unattended run and
-    ``ATTENDED_CHECKS`` otherwise. Returns ``(True, ())`` when nothing is
-    missing, else ``(False, missing)`` where ``missing`` lists the required
-    check ids that are absent, failed, malformed, or recorded for another
-    release, in required order.
+    ``ATTENDED_CHECKS`` otherwise. An unattended run with no release identity
+    (``release == ""``) refuses outright, even when every check is recorded as
+    a passing entry: no release was named, so nothing can be qualified for it.
+    Returns ``(True, ())`` when nothing is missing, else ``(False, missing)``
+    where ``missing`` lists the required check ids that are absent, failed,
+    malformed, or recorded for another release, in required order.
     """
     required = UNATTENDED_CHECKS if unattended else ATTENDED_CHECKS
+    if unattended and release == "":
+        return (False, required)
     entries = record if record is not None else {}
     missing = tuple(check for check in required if not _entry_passed(entries.get(check), release))
     return (not missing, missing)
 
 
-def max_workers(configured: int, record: CheckRecord | None) -> int:
-    """``configured`` workers when the recorded rollout passed, else one."""
+def max_workers(configured: int, record: CheckRecord | None, release: str | None = None) -> int:
+    """``configured`` workers when the recorded rollout passed, else one.
+
+    ``release`` None accepts a passing rollout for any release, keeping the
+    legacy behavior for callers that have no identity to match. A string,
+    including ``""``, requires the rollout entry to carry that exact release.
+    """
     entry = None if record is None else record.get(ROLLOUT_CHECK)
-    return configured if _entry_passed(entry, None) else 1
+    return configured if _entry_passed(entry, release) else 1

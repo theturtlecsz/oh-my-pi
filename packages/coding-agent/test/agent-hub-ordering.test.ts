@@ -1001,6 +1001,9 @@ describe("Agent hub row ordering", () => {
 	});
 
 	it("renders parent lineage with bash-style tree connectors", () => {
+		vi.useFakeTimers();
+		// Equal activity timestamps keep sibling order independent of registration timing.
+		setSystemTime(1_000);
 		geometry = stubStdoutGeometry(120);
 		geometry.setRows(32);
 		const agents = new AgentRegistry();
@@ -1017,6 +1020,8 @@ describe("Agent hub row ordering", () => {
 			expect(Bun.stripANSI(renderedRosterHeaderLineRaw(hub, "Last", 120))).toContain("└── ⟳ Last");
 		} finally {
 			hub.dispose();
+			vi.useRealTimers();
+			setSystemTime();
 		}
 	});
 	it("keeps tree rails continuous across task and metrics rows", () => {
