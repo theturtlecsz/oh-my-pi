@@ -1327,11 +1327,12 @@ def test_settlement_failure_rolls_back_usage_receipt_and_cancellation(admission_
 
 
 def test_usage_after_spend_fault_proves_atomic_bound_replacement(admission_context, monkeypatch):
-    """SQL failure replaces measured spend while all eight admission locks survive rollback."""
+    """SQL failure replaces spend with bound under continuous DB and process-gate locks."""
     ctx = admission_context
     mission = _mission(ctx, "1000")
     root = _item(ctx, "SQL fault root", {**_GENEROUS_ITEM, "usd": "1"})
     task = _item(ctx, "SQL fault task", _GENEROUS_ITEM)
+    unrelated_item = _item(ctx, "SQL fault gate waiter", _GENEROUS_ITEM)
     assert root != task
     parent = _admitting_job(ctx, work_id=root)
     child = _admitting_job(ctx, work_id=task, parent_job_id=parent)
@@ -1347,7 +1348,11 @@ def test_usage_after_spend_fault_proves_atomic_bound_replacement(admission_conte
     function = sql.Identifier("omp_jobs", fault_name)
     kwargs = ctx.service.config.connection_kwargs("postgres")
     admission = None
+    pauses = None
     gap, release, bound_entered = (threading.Event() for _ in range(3))
+    allow_bound_write, bound_returned, allow_bound_return = (threading.Event() for _ in range(3))
+    gate_waiter = None
+    gate_outcomes = []
     settlement_thread = waiter_thread = None
     probe = monitor = waiter = None
     settlement_errors, waiter_errors, waiter_rows = [], [], []
@@ -1402,6 +1407,11 @@ def test_usage_after_spend_fault_proves_atomic_bound_replacement(admission_conte
         if owner is admission and json.loads(captured.payload)["measurement"] == "estimated":
             bound_entered.set()
             assert release.is_set(), "bound write entered before rollback-gap probes"
+            assert allow_bound_write.wait(5), "bound-write pause was not released"
+            result = persist(owner, cur, captured)
+            bound_returned.set()
+            assert allow_bound_return.wait(5), "bound-return pause was not released"
+            return result
         return persist(owner, cur, captured)
 
     def settle():
@@ -1454,6 +1464,7 @@ def test_usage_after_spend_fault_proves_atomic_bound_replacement(admission_conte
                 " FOR EACH ROW EXECUTE FUNCTION {function}()"
             ).format(trigger=trigger, function=function))
 
+        pauses = _arm_cleanup_pauses(monkeypatch, ctx.budget._jobs)
         admission = _admit(
             ctx, _prepared("1", 100, 50), mission_id=mission, work_id=task,
             job_id=child, worker_id="worker-1", fence=1,
@@ -1471,16 +1482,56 @@ def test_usage_after_spend_fault_proves_atomic_bound_replacement(admission_conte
         settlement_thread.start()
         assert gap.wait(5), "settlement never reached rollback gap"
         assert not bound_entered.is_set()
+
+        before = _admission_counts(ctx)
+        assert before == (0, 0, 0, 2)
+        committed_counts = (1, 1, 4, 4)
+
+        gate_waiter, gate_waiting, gate_finished, gate_outcomes = _start_gate_waiter(
+            ctx, unrelated_item, f"gate-waiter-{uuid4()}"
+        )
+        assert gate_waiting.wait(5), "gate waiter did not start"
+        assert not gate_finished.wait(0.2), "gate released at rollback gap"
+
         waiter_thread = threading.Thread(target=wait_on_project)
         waiter_thread.start()
         _wait_for_blocker(monitor, holder_pid)
         probe_locks(held=True)
         assert not bound_entered.is_set()
         release.set()
+
+        assert bound_entered.wait(5), "bound write was not entered"
+        assert not gate_finished.wait(0.2), "gate released before bound write"
+        allow_bound_write.set()
+
+        assert bound_returned.wait(5), "bound write did not return"
+        assert not gate_finished.wait(0.2), "gate released at bound return pause"
+        allow_bound_return.set()
+
+        assert pauses.cursor_closing.wait(5), "settlement never reached cursor close"
+        assert _admission_counts(ctx) == before
+        assert not gate_finished.wait(0.2), "gate released before cursor close"
+        pauses.allow_cursor.set()
+
+        assert pauses.committing.wait(5), "settlement never reached commit"
+        assert _admission_counts(ctx) == before
+        assert not gate_finished.wait(0.2), "gate released before commit"
+        pauses.allow_commit.set()
+
+        assert pauses.connection_closing.wait(5), "settlement never reached connection close"
+        assert _admission_counts(ctx) == committed_counts
+        assert not admission.settled
+        assert not gate_finished.wait(0.2), "gate released before connection cleanup"
+        pauses.allow_connection.set()
+
         settlement_thread.join(timeout=7)
+        gate_waiter.join(timeout=7)
         waiter_thread.join(timeout=22)
         assert not settlement_thread.is_alive()
+        assert not gate_waiter.is_alive()
         assert not waiter_thread.is_alive()
+        assert gate_outcomes == ["admitted"]
+        assert _admission_counts(ctx) == committed_counts
         assert waiter_errors == []
         assert waiter_rows == [(ctx.project_id,)]
         assert bound_entered.is_set()
@@ -1515,30 +1566,56 @@ def test_usage_after_spend_fault_proves_atomic_bound_replacement(admission_conte
             "cache_tokens": 0, "measurement": "estimated", "model": "test-model",
             "price_version": "p1",
         }
+
+        pauses.enabled["on"] = False
+        with _admit(
+            ctx, _prepared("1", 100, 50), mission_id=mission, work_id=task,
+            job_id=child, worker_id="worker-1", fence=1,
+            request_id=request_id, task_ceiling_usd=Decimal("1000"),
+        ) as replay:
+            assert replay.settled
+            replay.settle(**receipts[0]["settlement"])
+        assert _admission_counts(ctx) == committed_counts
     finally:
+        if pauses is not None:
+            pauses.enabled["on"] = False
+            pauses.release()
         release.set()
+        allow_bound_write.set()
+        allow_bound_return.set()
         try:
-            for thread in (settlement_thread, waiter_thread):
-                if thread is not None:
-                    thread.join(timeout=22)
+            if settlement_thread is not None:
+                settlement_thread.join(timeout=7)
+                assert not settlement_thread.is_alive(), "settlement thread did not stop"
         finally:
-            monkeypatch.setattr(psycopg.Cursor, "execute", execute)
-            monkeypatch.setattr(budget_module.ModelCallAdmission, "_persist", persist)
-            for connection in (probe, monitor, waiter):
-                if connection is not None:
-                    connection.close()
-            if admission is not None and not admission.closed:
-                admission.abort()
-        try:
-            with psycopg.connect(**kwargs) as conn:
-                conn.execute(sql.SQL(
-                    "DROP TRIGGER IF EXISTS {trigger} ON omp_jobs.usage_events"
-                ).format(trigger=trigger))
-                conn.execute(sql.SQL("DROP FUNCTION IF EXISTS {function}()"
-                                     ).format(function=function))
-        finally:
-            if admission is not None and admission.closed and not admission.settled:
-                admission._resolve()
+            try:
+                try:
+                    with psycopg.connect(**kwargs) as conn:
+                        conn.execute(sql.SQL(
+                            "DROP TRIGGER IF EXISTS {trigger} ON omp_jobs.usage_events"
+                        ).format(trigger=trigger))
+                        conn.execute(sql.SQL("DROP FUNCTION IF EXISTS {function}()"
+                                             ).format(function=function))
+                finally:
+                    monkeypatch.setattr(psycopg.Cursor, "execute", execute)
+                    monkeypatch.setattr(budget_module.ModelCallAdmission, "_persist", persist)
+            finally:
+                try:
+                    if admission is not None:
+                        if not admission.closed:
+                            admission.abort()
+                        elif not admission.settled:
+                            admission._resolve()
+                finally:
+                    try:
+                        for thread in (waiter_thread, gate_waiter):
+                            if thread is not None:
+                                thread.join(timeout=22)
+                                assert not thread.is_alive(), "waiter thread did not stop"
+                    finally:
+                        for connection in (probe, monitor, waiter):
+                            if connection is not None:
+                                connection.close()
         with psycopg.connect(**kwargs) as conn:
             assert conn.execute(
                 "SELECT 1 FROM pg_trigger WHERE tgname=%s", (fault_name,),
@@ -1547,10 +1624,6 @@ def test_usage_after_spend_fault_proves_atomic_bound_replacement(admission_conte
                 "SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace"
                 " WHERE n.nspname='omp_jobs' AND p.proname=%s", (fault_name,),
             ).fetchone() is None
-
-        for thread in (settlement_thread, waiter_thread):
-            if thread is not None:
-                assert not thread.is_alive(), "database proof thread did not stop"
 
 @pytest.mark.parametrize("fault", ["rollback-before-commit", "commit-then-raise"])
 def test_failed_settlement_reconciles_durable_accounting(admission_context, monkeypatch, fault):
