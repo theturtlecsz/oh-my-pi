@@ -47,6 +47,7 @@ from omp_work.orchestrator.stages import (
     decision_for,
 )
 from omp_work.orchestrator.step_log import append_step, list_steps, open_intent
+from omp_work.orchestrator.verifier import accept_candidate
 from omp_work.project_store import ProjectAuthorityRefused, ProjectNotFound
 from omp_work.routing.policy import RoutingPolicy, load_policy
 from omp_work.v1.agent_stop import read_stop_state
@@ -901,6 +902,46 @@ class StageContext:
 
 class OrchestratorHandler:
     """Job handler for ``omp.orchestrator``. ``observe`` settles a recorded step or re-runs it."""
+
+    def _audit_accepted(self, ctx: StageContext) -> bool:
+        """Accept workflow audit evidence, or an independently signed intent target."""
+        intake = ctx.prior.get("intake")
+        data = intake.get("data") if isinstance(intake, dict) else None
+        work_key = data.get("work_key") if isinstance(data, dict) else None
+        if isinstance(work_key, str) and work_key:
+            try:
+                view = ctx.service.read(ctx.principal, ctx.workspace_id, "workflow", work_key)
+            except Exception:
+                return False
+            item = view.get("item")
+            candidate = item.get("candidate") if isinstance(item, dict) else None
+            sha = candidate.get("candidate_sha256") if isinstance(candidate, dict) else None
+            if sha:
+                return any(
+                    isinstance(row, dict)
+                    and row.get("kind") == "audit"
+                    and row.get("independent") is True
+                    and row.get("verdict") == "PASS"
+                    and row.get("candidate_sha256") == sha
+                    for row in view.get("receipts") or ()
+                )
+        try:
+            step = ctx.intents.open(f"audit-accept:{ctx.mission_id}:{ctx.step_index}")
+            key = Path(ctx.config.verifier_key_path).read_bytes()
+        except Exception:
+            return False
+        if not key:
+            return False
+        target = step.get("target") if isinstance(step, dict) else None
+        if not isinstance(target, dict) or not all(
+            isinstance(target.get(field), str) for field in ("candidate_sha256", "attempt_id")
+        ):
+            return False
+        return accept_candidate(
+            key, target,
+            candidate_sha256=target["candidate_sha256"],
+            attempt_id=target["attempt_id"], producer_id="worker",
+        )
 
     def __init__(self, config: OrchestratorConfig) -> None:
         self.config = config

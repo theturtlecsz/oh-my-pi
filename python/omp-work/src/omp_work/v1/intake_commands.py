@@ -15,20 +15,13 @@ from ..intake_repository import (
     lock_revision, read_revision, revision_hashes,
 )
 from ..report_evidence import status_from_labels
-from .api_models import IntakeProvenance, IntakeRecordView, RegisterIntakeEvidenceResult
+from .api_models import IntakeProvenance, IntakeRecordView, IntakeTrace, RegisterIntakeEvidenceResult
+from .intake_decisions import execute_decision_operation, intake_actor, open_issues, settlement_records
 from .models import (
     CommandEnvelope, IntakeClaimEvidenceLink, RecordIntakeClaimCommand,
     RegisterIntakeEvidenceCommand, StartIntakeCommand,
 )
 from .store_shared import WorkStoreError
-
-
-def intake_actor(kind: str, actor_id: object) -> nsi.ActorRef:
-    if kind in ("agent", "task-agent"):
-        kind = "model"
-    if kind not in ("owner", "model", "tool", "rule_engine"):
-        raise WorkStoreError("forbidden")
-    return nsi.ActorRef(id=str(actor_id), kind=kind)
 
 
 def start_intake(
@@ -124,6 +117,12 @@ def register_intake_evidence(
         append_revision(cur, locked, IntakeRevisionBody(
             workspace_id=envelope.workspace_id, snapshot=snapshot, artifact_bytes=artifact_bytes,
             evidence_links=list(stored.body.evidence_links),
+            conflicts=stored.body.conflicts, gaps=stored.body.gaps, questions=stored.body.questions,
+            decisions=settlement_records(stored.body, wire),
+            instructions=[i for i in stored.body.instructions
+                          if i.decision_id in {d.decision.id for d in stored.body.history.decisions}],
+            criteria=stored.body.criteria,
+            supersessions=stored.body.supersessions, history=stored.body.history,
             binding=nsi.Binding(
                 run_id=payload.run_id, revision=wire,
                 claim_set_hash=claim_set_hash, source_hash=source_hash,
@@ -294,6 +293,12 @@ def record_intake_claim(
         append_revision(cur, locked, IntakeRevisionBody(
             workspace_id=envelope.workspace_id, snapshot=snapshot, artifact_bytes=artifact_bytes,
             evidence_links=new_links,
+            conflicts=stored.body.conflicts, gaps=stored.body.gaps, questions=stored.body.questions,
+            decisions=settlement_records(stored.body, wire),
+            instructions=[i for i in stored.body.instructions
+                          if i.decision_id in {d.decision.id for d in stored.body.history.decisions}],
+            criteria=stored.body.criteria,
+            supersessions=stored.body.supersessions, history=stored.body.history,
             binding=nsi.Binding(
                 run_id=payload.run_id, revision=wire,
                 claim_set_hash=claim_set_hash, source_hash=source_hash,
@@ -325,6 +330,8 @@ def execute_intake(
         "register_intake_evidence": register_intake_evidence,
         "record_intake_claim": record_intake_claim,
     }
+    handlers.update(dict.fromkeys(("record_intake_decision", "supersede_intake_claim",
+                                   "record_intake_issue", "link_intake_criterion"), execute_decision_operation))
     handler = handlers.get(envelope.command.type)
     if handler is None:
         raise WorkStoreError("invalid_request")
@@ -362,7 +369,12 @@ def read_intake_view(cur: Cursor, workspace_id: UUID, value: str) -> IntakeRecor
                                   end_byte=link.end_byte, quote=link.quote),
             relation=link.relation,
         ) for link in stored.body.evidence_links),
-        criterion_links=(), decisions=(), issues=(), traces=(), assessments=(),
+        criterion_links=tuple(stored.body.history.criteria),
+        decisions=tuple(stored.body.history.decisions), issues=open_issues(stored.body),
+        traces=tuple(IntakeTrace(
+            criterion_id=link.criterion.id, requirement_ids=tuple(link.criterion.requirement_ids),
+            claim_ids=tuple(dict.fromkeys(cid for r in link.requirements for cid in r.claim_ids)),
+        ) for link in stored.body.history.criteria), assessments=(),
         provenance=IntakeProvenance(
             run_id=run_id, revision=revision + 1, source_sha256=hashlib.sha256(source).hexdigest(),
         ),
