@@ -508,6 +508,9 @@ def staged_accounting(monkeypatch):
 
 @pytest.fixture
 def admission_context(service):
+    with budget_module._ProcessGate.transition:
+        budget_module._ProcessGate.unconfirmed = None
+        budget_module._ProcessGate.owner = None
     return _budget_ctx(service)
 
 
@@ -4056,9 +4059,9 @@ def test_resolve_failed_fallback_retains_owner_no_reauthorization(
 @pytest.mark.parametrize("fault", [
     "rollback-before-commit", "commit-then-raise", "closed-connection",
     "connection-loss", "connection-loss-cleanup", "savepoint-rollback", "bound-write", "bound-commit",
-    "bound-outer-commit", "blocked-write",
+    "bound-outer-commit", "blocked-write", "unmeasurable-bound-write", "unmeasurable-bound-commit",
 ])
-def test_original_settlement_fault_resolves_before_return(admission_context, monkeypatch, fault):
+def test_original_settlement_fault_resolves_before_return(admission_context, monkeypatch, call_race, fault):
     """One consumed send resolves actual or estimated accounting before gate release."""
     ctx = admission_context
     transaction = ctx.budget._jobs.transaction
@@ -4071,17 +4074,29 @@ def test_original_settlement_fault_resolves_before_return(admission_context, mon
     bound_written = False
     admission = None
     start = None
+    competing_outcomes = []
+    competing_transport = FakeTransport(
+        body=_gemini_response(50),
+        error=OSError("consumed request lost response") if fault.startswith("unmeasurable-") else None,
+    )
+    competing_upstream = ModelProxyUpstream(ctx.service.config, competing_transport)
+    fallback_entered = call_race.event()
+    allow_fallback = call_race.event()
 
     @contextmanager
     def observed_transaction(workspace_id, actor_id, **kwargs):
-        original = "deadline_control" in kwargs
-        if not original:
+        is_competing = len(connections) >= 3
+        original = "deadline_control" in kwargs and not is_competing
+        if not original and not is_competing:
             assert connections[0].closed, "resolution preceded original disposal"
             assert all(conn.closed for conn in connections), "fresh cleanup overlapped"
             deadlines.append(kwargs["deadline"])
         try:
             with transaction(workspace_id, actor_id, **kwargs) as cur:
                 connections.append(cur.connection)
+                if not original and not is_competing and len(connections) == 3:
+                    fallback_entered.set()
+                    assert allow_fallback.wait(5), "fallback release timed out"
                 yield cur
                 if original:
                     control = kwargs["deadline_control"]
@@ -4114,7 +4129,7 @@ def test_original_settlement_fault_resolves_before_return(admission_context, mon
                     # Real database write precedes failure; rollback must remove it.
                     persist(owner, cur, captured)
                     raise JobError("invalid_request", ("measured write rejected",))
-            elif fault == "bound-write":
+            elif fault in {"bound-write", "unmeasurable-bound-write"}:
                 persist(owner, cur, captured)
                 raise injected
         result = persist(owner, cur, captured)
@@ -4133,7 +4148,7 @@ def test_original_settlement_fault_resolves_before_return(admission_context, mon
     def faulty_command(conn, command, *args, **kwargs):
         command_bytes = command.as_bytes(conn) if isinstance(command, sql.Composable) else command
         if (
-            fault == "bound-commit" and connections and conn is connections[0]
+            fault in {"bound-commit", "unmeasurable-bound-commit"} and connections and conn is connections[0]
             and command_bytes.startswith(b"RELEASE ") and bound_written
         ):
             raise injected
@@ -4151,30 +4166,68 @@ def test_original_settlement_fault_resolves_before_return(admission_context, mon
     monkeypatch.setattr(psycopg.Cursor, "execute", faulty_execute)
     monkeypatch.setattr(psycopg.Connection, "_exec_command", faulty_command)
     monkeypatch.setattr(budget_module._LifecycleOwner, "release", observed_release)
-    sends = []
-    payload = dict(actual_usd="1", input_tokens=10, output_tokens=5, cache_tokens=0)
+    prepared = _custom_prepared("2", 100)
+    transport = FakeTransport(
+        body=_gemini_response(50),
+        error=OSError("consumed request lost response") if fault.startswith("unmeasurable-") else None,
+    )
+    upstream = ModelProxyUpstream(ctx.service.config, transport)
+    monkeypatch.setattr(type(ctx.service.config), "read_secret", lambda self, name: "synthetic-key")
+    admit = ctx.budget.admit
+    invoke = upstream.invoke
+    payload = dict(actual_usd=Decimal(1), input_tokens=50, output_tokens=0, cache_tokens=0,
+                   measurement="measured", model=prepared.route.model, price_version=prepared.route.price_version)
+
+    def captured_admit(*args, **kwargs):
+        nonlocal admission
+        admission = admit(*args, **kwargs)
+        return admission
+
+    def consumed_invoke(bounds):
+        nonlocal start
+        try:
+            return invoke(bounds)
+        finally:
+            if fault == "closed-connection":
+                admission.cursor.connection.close()
+            start = time.monotonic()
+
+    monkeypatch.setattr(ctx.budget, "admit", captured_admit)
+    monkeypatch.setattr(upstream, "invoke", consumed_invoke)
+
+    def run_first():
+        with pytest.raises(ModelProxyBudgetError) as error:
+            _proxy_call(ctx, prepared, upstream, request_id=f"immediate-{fault}", task_ceiling_usd="2")
+        assert error.value.code == "unmeasurable_failure"
+
+    def run_waiter():
+        try:
+            _proxy_call(ctx, _custom_prepared("1", 50), competing_upstream,
+                        request_id=f"competing-{fault}", task_ceiling_usd="2")
+            competing_outcomes.append("called")
+        except ModelProxyBudgetError as exc:
+            competing_outcomes.append(exc.code)
+
     try:
-        admission = _admit(ctx, _prepared("2"), request_id=f"immediate-{fault}")
-        sends.append("upstream")
-        if fault == "closed-connection":
-            admission.cursor.connection.close()
-        start = time.monotonic()
-        error_type = (
-            ModelProxyBudgetError if fault in {
-                "connection-loss-cleanup", "savepoint-rollback", "bound-write", "bound-commit", "bound-outer-commit"
-            } else psycopg.OperationalError if fault == "closed-connection"
-            else TransactionDeadlineExceeded if fault == "blocked-write" else RuntimeError
-        )
-        with pytest.raises(error_type) as error:
-            admission.settle(**payload)
-        if error_type is ModelProxyBudgetError:
-            assert error.value.code == "invalid_request"
-        elif error_type is RuntimeError:
-            assert error.value is injected
+        call_race.start("faulted-call", run_first)
+        if fault != "commit-then-raise":
+            assert fallback_entered.wait(4), "resolution never reached fallback"
+            # Restore admit capture so a waiter cannot replace first owner.
+            monkeypatch.setattr(ctx.budget, "admit", admit)
+            call_race.start("recovery-waiter", run_waiter)
+            assert call_race.waiting["recovery-waiter"][0].wait(2)
+            assert competing_outcomes == [] and competing_transport.calls == []
+            assert len(transport.calls) == 1, "recovery requires consumed upstream POST"
+            assert _accounting_snapshot(ctx)[0:2] == [[], []]
+            allow_fallback.set()
+        call_race.finish()
+        if fault != "commit-then-raise":
+            assert competing_outcomes == ["task_ceiling_exceeded"]
+            assert competing_transport.calls == []
         assert time.monotonic() - start < 5.1
         assert admission.closed and admission.settled
         assert all(conn.closed for conn in connections)
-        assert len(connections) == (2 if fault == "commit-then-raise" else 3)
+        assert len(connections) == (2 if fault == "commit-then-raise" else 4)
         assert 0 < deadlines[0] - start <= 2.05
         assert all(deadline <= start + 5.05 for deadline in deadlines)
         if len(deadlines) == 2:
@@ -4190,7 +4243,7 @@ def test_original_settlement_fault_resolves_before_return(admission_context, mon
         spend, usage, _, operations = durable
         actual = fault == "commit-then-raise"
         assert spend[0]["amount_usd"] == usage[0]["price_usd"] == Decimal(1 if actual else 2)
-        assert usage[0]["tokens"] == (15 if actual else 150)
+        assert usage[0]["tokens"] == (50 if actual else 100)
         receipt = next(row["result"] for row in operations if row["kind"] == "model_call_receipt")
         expected = payload if actual else admission._admitted_bound_payload()
         result = admission.settle(**expected)
@@ -4198,24 +4251,29 @@ def test_original_settlement_fault_resolves_before_return(admission_context, mon
         assert receipt["settlement"]["measurement"] == ("measured" if actual else "estimated")
         # Restore injection before replay; replay never sends or charges again.
         monkeypatch.setattr(ctx.budget._jobs, "transaction", transaction)
-        with _admit(ctx, _prepared("2"), request_id=f"immediate-{fault}") as replay:
-            if not replay.settled:
-                sends.append("replay")
+        with _admit(ctx, prepared, request_id=f"immediate-{fault}", task_ceiling_usd="2") as replay:
+            assert replay.settled
             assert replay.settle(**expected) == result
-        assert sends == ["upstream"] and _accounting_snapshot(ctx) == durable
+        assert len(transport.calls) == 1 and _accounting_snapshot(ctx) == durable
         admission.abort()
         assert len(releases) == 1, "stale owner released gate twice"
     finally:
-        monkeypatch.setattr(ctx.budget._jobs, "transaction", transaction)
-        monkeypatch.setattr(budget_module.ModelCallAdmission, "_persist", persist)
-        monkeypatch.setattr(psycopg.Cursor, "execute", execute)
-        monkeypatch.setattr(psycopg.Connection, "_exec_command", exec_command)
-        monkeypatch.setattr(budget_module._LifecycleOwner, "release", release)
-        if admission is not None:
-            if not admission.closed:
-                admission.abort()
-            elif not admission.settled:
-                admission._resolve()
+        allow_fallback.set()
+        try:
+            call_race.finish()
+        finally:
+            monkeypatch.setattr(ctx.budget._jobs, "transaction", transaction)
+            monkeypatch.setattr(budget_module.ModelCallAdmission, "_persist", persist)
+            monkeypatch.setattr(psycopg.Cursor, "execute", execute)
+            monkeypatch.setattr(psycopg.Connection, "_exec_command", exec_command)
+            monkeypatch.setattr(budget_module._LifecycleOwner, "release", release)
+            with budget_module._ProcessGate.transition:
+                budget_module._ProcessGate.unconfirmed = None
+            if admission is not None:
+                if not admission.closed:
+                    admission.abort()
+                elif not admission.settled:
+                    admission._resolve()
 
 
 def test_receipt_replay_commit_is_bounded_and_owner_reachable(admission_context, monkeypatch):
@@ -4735,9 +4793,9 @@ def test_persistent_accounting_failure_closes_process_before_waking_callers(
 
 def _proxy_call(ctx, prepared, upstream, **kw):
     return ctx.budget.call(
-        ctx.workspace_id, ctx.actor_id, ctx.project_id, None, ctx.work_id,
+        ctx.workspace_id, ctx.actor_id, kw.pop("project_id", ctx.project_id), kw.pop("mission_id", None), kw.pop("work_id", ctx.work_id),
         kw.pop("job_id", None), kw.pop("worker_id", None), kw.pop("fence", None),
-        kw.pop("request_id", "orchestrated"), None, prepared, upstream, **kw,
+        kw.pop("request_id", "orchestrated"), kw.pop("task_ceiling_usd", None), prepared, upstream, **kw,
     )
 
 
@@ -4906,3 +4964,295 @@ def test_call_server_priced_usage_above_usd_bound_charges_estimate(admission_con
     assert exc.value.code == "unmeasurable_failure"
     assert len(transport.calls) == 1
     _assert_proxy_bound(ctx, prepared)
+
+
+def _custom_prepared(max_usd="2", max_tokens=100) -> Prepared:
+    rate = (Decimal(max_usd) * Decimal(1_000_000)) / Decimal(max_tokens)
+    route = ModelRoute(
+        api=GEMINI,
+        model="test-model",
+        origin="https://generativelanguage.googleapis.com",
+        key_file="gemini-key",
+        context_tokens=200_000,
+        max_output_tokens=max_tokens,
+        input_usd=rate,
+        output_usd=Decimal("0"),
+        cache_usd=Decimal("0"),
+        price_version="p1",
+    )
+    return Prepared(
+        route=route,
+        url="https://example.test/v1:predict",
+        headers=(("Content-Type", "application/json"),),
+        body=b"{}",
+        max_input_tokens=max_tokens,
+        max_output_tokens=0,
+        max_usd=Decimal(max_usd),
+    )
+
+
+def _gemini_response(tokens=100) -> bytes:
+    return (
+        f'data: {{"candidates":[{{"finishReason":"STOP"}}],"usageMetadata":{{"promptTokenCount":{tokens},"candidatesTokenCount":0,"cachedContentTokenCount":0}}}}\n'.encode()
+    )
+
+
+@pytest.fixture
+def call_race(monkeypatch):
+    """Observe actual gate waits, bound DB waits, and join every owned thread."""
+    threads, errors, releases, connections = [], [], [], []
+    waiting, transaction_clocks, backend_pids = {}, {}, {}
+    condition = budget_module._ProcessGate.transition
+    wait = condition.wait
+    transaction = NativeJobStore.transaction
+
+    def observed_wait(timeout=None):
+        name = threading.current_thread().name
+        if name in waiting:
+            event, deadline = waiting[name]
+            event.set()  # Called with the condition locked, immediately before waiting.
+            if time.monotonic() >= deadline:
+                raise TimeoutError("process gate wait exceeded test deadline")
+            timeout = min(timeout or 0.1, 0.1)
+        return wait(timeout)
+
+    @contextmanager
+    def bounded_transaction(store, workspace_id, actor_id, **kwargs):
+        with transaction(store, workspace_id, actor_id, **kwargs) as cur:
+            connections.append(cur.connection)
+            cur.execute("SET LOCAL lock_timeout = '3s'")
+            cur.execute("SET LOCAL statement_timeout = '3s'")
+            row = cur.execute("SELECT now() AS clock, pg_backend_pid() AS pid").fetchone()
+            name = threading.current_thread().name
+            transaction_clocks.setdefault(name, row["clock"])
+            backend_pids[name] = row["pid"]
+            yield cur
+
+    def event():
+        result = threading.Event()
+        releases.append(result)
+        return result
+
+    def start(name, target):
+        waiting[name] = (threading.Event(), time.monotonic() + 10)
+
+        def run():
+            try:
+                target()
+            except BaseException as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(name=name, target=run)
+        threads.append(thread)
+        thread.start()
+        return thread
+
+    def finish():
+        for thread in threads:
+            thread.join(timeout=12)
+        assert not any(thread.is_alive() for thread in threads), "race thread did not finish"
+        assert not errors, errors
+
+    monkeypatch.setattr(condition, "wait", observed_wait)
+    monkeypatch.setattr(NativeJobStore, "transaction", bounded_transaction)
+    try:
+        yield SimpleNamespace(
+            start=start, event=event, finish=finish, waiting=waiting,
+            transaction_clocks=transaction_clocks, backend_pids=backend_pids,
+        )
+    finally:
+        for release in releases:
+            release.set()
+        finish()
+        assert all(conn.closed for conn in connections), "race left DB connection open"
+
+
+def _race_calls(ctx, monkeypatch, race, prepared, first_args, second_args):
+    """Hold first real POST until second has entered the process gate wait."""
+    monkeypatch.setattr(type(ctx.service.config), "read_secret", lambda self, name: "synthetic-key")
+    transports = [FakeTransport(body=_gemini_response(prepared.max_input_tokens)) for _ in range(2)]
+    entered, release = race.event(), race.event()
+    post = transports[0].post
+    outcomes = []
+
+    def held_post(*args, **kwargs):
+        entered.set()
+        assert release.wait(5), "first POST not released"
+        return post(*args, **kwargs)
+
+    monkeypatch.setattr(transports[0], "post", held_post)
+
+    def run(index, args):
+        upstream = ModelProxyUpstream(ctx.service.config, transports[index])
+        try:
+            result = _proxy_call(ctx, prepared, upstream, request_id=f"race-{index}", **args)
+            outcomes.append((index, result["status"]))
+        except ModelProxyBudgetError as exc:
+            outcomes.append((index, exc.code))
+
+    race.start("first-call", lambda: run(0, first_args))
+    assert entered.wait(3), "first call did not reach transport"
+    race.start("second-call", lambda: run(1, second_args))
+    assert race.waiting["second-call"][0].wait(3), "second did not wait at gate"
+    assert transports[1].calls == []
+    release.set()
+    race.finish()
+    assert len(transports[0].calls) == 1 and transports[1].calls == []
+    spend, usage, _, _ = _accounting_snapshot(ctx)
+    assert len(spend) == len(usage) == 1
+    assert spend[0]["amount_usd"] == usage[0]["price_usd"] == prepared.max_usd
+    assert usage[0]["tokens"] == prepared.max_tokens
+    return sorted(outcomes), spend, usage
+
+
+def test_call_race_shared_task_cap(admission_context, monkeypatch, call_race):
+    """After first charge, a waiting call refuses a bound above task remainder."""
+    ctx = admission_context
+    args = dict(task_ceiling_usd="3")
+    outcomes, spend, _ = _race_calls(ctx, monkeypatch, call_race, _custom_prepared(), args, args)
+    assert outcomes == [(0, "settled"), (1, "task_ceiling_exceeded")]
+    assert spend[0]["amount_usd"] <= Decimal(3)
+
+
+@pytest.mark.parametrize("scope", ["project", "mission"])
+def test_call_race_shared_project_cap(admission_context, monkeypatch, call_race, scope):
+    """Distinct tasks must re-read shared project or mission spend after waiting."""
+    ctx = admission_context
+    mission_id = None
+    if scope == "mission":
+        mission_id = uuid4()
+        ctx.projects.link_mission(ctx.workspace_id, ctx.actor_id, ctx.project_id, mission_id, "race", "running")
+    ctx.projects.set_spend_budget(
+        ctx.workspace_id, ctx.actor_id, ctx.project_id, mission_id,
+        SpendBudget(scope, Decimal(3), Decimal(3)), ChangeAuthority("owner", uuid4(), "owner"),
+    )
+    tasks = [_item(ctx, f"task {index}", _GENEROUS_ITEM) for index in range(2)]
+    args = [dict(work_id=task, mission_id=mission_id) for task in tasks]
+    outcomes, spend, usage = _race_calls(ctx, monkeypatch, call_race, _custom_prepared(), *args)
+    assert outcomes == [(0, "settled"), (1, "ceiling_exceeded")]
+    assert usage[0]["work_id"] == tasks[0]
+    assert spend[0]["mission_id"] == mission_id
+    assert spend[0]["amount_usd"] <= Decimal(3)
+
+
+@pytest.mark.parametrize("dimension", ["usd", "tokens"])
+@pytest.mark.parametrize("relationship", ["sibling", "descendant"])
+def test_call_race_shared_root_item_cap(admission_context, monkeypatch, call_race, dimension, relationship):
+    """Distinct descendant items consume their common root's USD/token remainder."""
+    ctx = admission_context
+    cap = {**_GENEROUS_ITEM, **({"usd": "3"} if dimension == "usd" else {"tokens": 150})}
+    root = _item(ctx, "capped root", cap)
+    tasks = [_item(ctx, f"child {index}", _GENEROUS_ITEM) for index in range(2)]
+    parent = _admitting_job(ctx, work_id=root)
+    job1 = _admitting_job(ctx, work_id=tasks[0], worker_id="w1", parent_job_id=parent)
+    job2 = _admitting_job(
+        ctx, work_id=tasks[1], worker_id="w2",
+        parent_job_id=parent if relationship == "sibling" else job1,
+    )
+    args = [dict(work_id=task, job_id=job, worker_id=worker, fence=1)
+            for task, job, worker in zip(tasks, [job1, job2], ["w1", "w2"])]
+    outcomes, spend, usage = _race_calls(ctx, monkeypatch, call_race, _custom_prepared(), *args)
+    assert outcomes == [(0, "settled"), (1, "item_budget_exceeded")]
+    assert usage[0]["work_id"] == tasks[0]
+    with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
+        assert root_work_id(cur, ctx.workspace_id, job2) == root
+        accumulated = item_spend(cur, ctx.workspace_id, root)
+    assert accumulated.usd == spend[0]["amount_usd"] == Decimal(2)
+    assert accumulated.tokens == usage[0]["tokens"] == 100
+    assert accumulated.usd <= Decimal(cap["usd"]) and accumulated.tokens <= cap["tokens"]
+
+
+def test_call_race_item_cap_cancellation_and_sibling_waiter(admission_context, monkeypatch, call_race):
+    """Reaching root cap cancels descendants while sibling waits, without deadlock."""
+    ctx = admission_context
+    root = _item(ctx, "cancel root", {**_GENEROUS_ITEM, "usd": "2"})
+    parent = _admitting_job(ctx, work_id=root)
+    tasks = [_item(ctx, f"cancel child {index}", _GENEROUS_ITEM) for index in range(2)]
+    jobs = [_admitting_job(ctx, work_id=task, worker_id=f"w{index}", parent_job_id=parent)
+            for index, task in enumerate(tasks)]
+    args = [dict(work_id=task, job_id=job, worker_id=f"w{index}", fence=1)
+            for index, (task, job) in enumerate(zip(tasks, jobs))]
+    outcomes, _, _ = _race_calls(ctx, monkeypatch, call_race, _custom_prepared(), *args)
+    assert outcomes == [(0, "settled"), (1, "job_fence_stale")]
+    with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
+        cur.execute(
+            "SELECT job_id, status, cancel_reason FROM omp_jobs.jobs"
+            " WHERE workspace_id=%s AND job_id = ANY(%s)",
+            (ctx.workspace_id, [parent, *jobs]),
+        )
+        rows = cur.fetchall()
+        assert len(rows) == 3
+        assert all(row["status"] == "cancelled" and row["cancel_reason"] == "budget_exceeded" for row in rows)
+        assert item_spend(cur, ctx.workspace_id, root).usd == Decimal(2)
+
+
+@pytest.mark.parametrize("block_mechanism", ["process_gate", "db_budget_lock"])
+@pytest.mark.parametrize("action", ["expire_lease", "engage_stop"])
+def test_call_waiter_blocked_refuses_using_fresh_clock(
+    admission_context, monkeypatch, call_race, block_mechanism, action
+):
+    """Lease valid at transaction start expires during confirmed wait; no send."""
+    ctx = admission_context
+    monkeypatch.setattr(type(ctx.service.config), "read_secret", lambda self, name: "synthetic-key")
+    work_id = _item(ctx, "waiter item", _GENEROUS_ITEM)
+    job_id = _admitting_job(ctx, work_id=work_id, worker_id="waiter-w")
+    transport = FakeTransport(body=_gemini_response(50))
+    upstream = ModelProxyUpstream(ctx.service.config, transport)
+    outcomes = []
+    before = _accounting_snapshot(ctx)
+
+    def run_waiter():
+        try:
+            _proxy_call(ctx, _custom_prepared("1", 50), upstream, work_id=work_id,
+                        job_id=job_id, worker_id="waiter-w", fence=1, request_id="waiter-call")
+            outcomes.append("settled")
+        except ModelProxyBudgetError as exc:
+            outcomes.append(exc.code)
+
+    with ExitStack() as blockers:
+        if block_mechanism == "process_gate":
+            blockers.enter_context(_admit(ctx, _prepared("1"), request_id="gate-holder"))
+        else:
+            cur = blockers.enter_context(ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id))
+            cur.execute(
+                "SELECT budget_id FROM omp_work.spend_budgets"
+                " WHERE workspace_id=%s AND project_id=%s AND mission_id IS NULL AND active FOR UPDATE",
+                (ctx.workspace_id, ctx.project_id),
+            )
+            assert cur.fetchone() is not None
+            holder_pid = cur.connection.info.backend_pid
+        pre_wait = datetime.now(UTC)
+        call_race.start("lease-waiter", run_waiter)
+        try:
+            if block_mechanism == "process_gate":
+                assert call_race.waiting["lease-waiter"][0].wait(3)
+            else:
+                deadline = time.monotonic() + 2
+                with psycopg.connect(**ctx.service.config.connection_kwargs("postgres"), autocommit=True) as conn:
+                    while time.monotonic() < deadline:
+                        pid = call_race.backend_pids.get("lease-waiter")
+                        row = conn.execute("SELECT pg_blocking_pids(%s)", (pid,)).fetchone()
+                        if row and holder_pid in (row[0] or []):
+                            break
+                        time.sleep(0.01)
+                    else:
+                        pytest.fail("waiter never blocked on DB lock")
+                pre_wait = call_race.transaction_clocks["lease-waiter"]
+            if action == "expire_lease":
+                with psycopg.connect(**ctx.service.config.connection_kwargs("postgres"), autocommit=True) as conn:
+                    expiry = conn.execute(
+                        "UPDATE omp_jobs.jobs SET lease_expires_at=clock_timestamp()+interval '200 milliseconds'"
+                        " WHERE workspace_id=%s AND job_id=%s RETURNING lease_expires_at",
+                        (ctx.workspace_id, job_id),
+                    ).fetchone()[0]
+                    assert expiry > pre_wait, "stale pre-wait clock must still consider lease valid"
+                    conn.execute("SELECT pg_sleep(0.25)")
+                    assert conn.execute("SELECT clock_timestamp() > %s", (expiry,)).fetchone()[0]
+            else:
+                _engage_stop(ctx)  # Own connection commits before blockers release.
+            assert transport.calls == [] and outcomes == []
+        finally:
+            blockers.close()
+    call_race.finish()
+    assert outcomes == ["job_fence_stale" if action == "expire_lease" else "agent_stop_engaged"]
+    assert transport.calls == [] and _accounting_snapshot(ctx) == before
