@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import os
 import subprocess  # nosec B404 - pytest argv is a list; the executable is this interpreter
 import sys
 import time
@@ -123,6 +124,7 @@ class OrchestratorConfig:
     control_repo: Path
     worktrees_dir: Path
     live_checkout: Path
+    release: str = ""
     repair_rounds: int = 3
     max_workers: int = 1
     lease_seconds: int = 60
@@ -283,6 +285,7 @@ def load_config(path: Path | None = None, ops: OperationsConfig | None = None) -
         control_repo=_path("control_repo"),
         worktrees_dir=_path("worktrees_dir"),
         live_checkout=_path("live_checkout"),
+        release=str(data.get("release") or os.environ.get("OMP_ORCHESTRATOR_RELEASE") or ""),
         repair_rounds=int(data.get("repair_rounds", 3)),
         max_workers=int(data.get("max_workers", 1)),
         lease_seconds=int(data.get("lease_seconds", 60)),
@@ -377,6 +380,17 @@ def qualification_record(path: Path) -> tuple[dict[str, dict[str, str]] | None, 
             if not release and entry.get("release"):
                 release = str(entry["release"])
     return (record or None), release
+
+
+def _expected_release(config: OrchestratorConfig, *, unattended: bool, proof_release: str) -> str:
+    return config.release or ("" if unattended else proof_release)
+
+
+def _release_qualified(config: OrchestratorConfig, *, unattended: bool) -> bool:
+    record, release = qualification_record(config.qualification_path)
+    expected = _expected_release(config, unattended=unattended, proof_release=release)
+    qualified, _missing = qualification.qualified(record, unattended=unattended, release=expected)
+    return release == expected and qualified
 
 
 def _require_jobs(config: OperationsConfig) -> None:
@@ -1754,10 +1768,7 @@ def submit(config: OrchestratorConfig, request: MissionRequest) -> dict[str, Any
         work_id = _existing_work_id(config, request.mission_id)
     else:
         work_id = UUID(str(created["items"][0]["work_id"]))
-    record, release = qualification_record(config.qualification_path)
-    qualified, _missing = qualification.qualified(
-        record, unattended=request.unattended, release=release
-    )
+    qualified = _release_qualified(config, unattended=request.unattended)
     if not qualified:
         facts = Facts(
             mission_id=str(request.mission_id),
@@ -1928,10 +1939,7 @@ def request_terminal(
 
 def dry_run(config: OrchestratorConfig, request: MissionRequest) -> dict[str, Any]:
     """Decide the next step and write nothing."""
-    record, release = qualification_record(config.qualification_path)
-    qualified, _missing = qualification.qualified(
-        record, unattended=request.unattended, release=release
-    )
+    qualified = _release_qualified(config, unattended=request.unattended)
     facts = Facts(
         mission_id=str(request.mission_id),
         project_id=request.project_id,
