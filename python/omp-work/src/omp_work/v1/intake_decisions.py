@@ -322,3 +322,24 @@ def open_issues(body: IntakeRevisionBody) -> tuple[IntakeIssueRecord, ...]:
         else gap_links.get(issue.id, ()),
     ) for issue in unresolved_findings(body)
         if isinstance(issue, (nsi.Conflict, nsi.ClarificationQuestion)))
+
+
+def compute_settlement_assessment(
+    body: IntakeRevisionBody, assessment: nsi.IntakeReadinessAssessment,
+) -> nsi.IntakeReadinessAssessment:
+    """Copy an assessment, replacing its gaps and conflicts from the shared resolver.
+
+    An open conflict yields CONFLICTED. A remaining gap or question yields NEEDS_SPEC.
+    With no blockers the supplied status is kept. Settlement does not certify READY.
+    Binding, issuer, timestamp, and receipt ids stay on the copy.
+    """
+    unresolved = unresolved_findings(body)
+    gaps = [item.model_copy(deep=True) for item in unresolved if isinstance(item, nsi.Gap)]
+    conflicts = [item.model_copy(deep=True) for item in unresolved if isinstance(item, nsi.Conflict)]
+    if conflicts:
+        status = "CONFLICTED"
+    elif gaps or any(isinstance(item, nsi.ClarificationQuestion) for item in unresolved):
+        status = "NEEDS_SPEC"
+    else:
+        status = assessment.status
+    return assessment.model_copy(deep=True, update={"gaps": gaps, "conflicts": conflicts, "status": status})

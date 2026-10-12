@@ -1,18 +1,26 @@
 """Stored settlements use current finding membership without rewriting provenance."""
 from copy import deepcopy
+import hashlib
+import os
 from uuid import uuid4
 
 import pytest
 
 from omp_work.contracts.nsi.v1 import models as nsi
-from omp_work.intake_repository import DecisionRecord, IntakeRevisionBody
-from omp_work.v1.api_models import IntakeDecisionRecord, IntakeIssueRecord
+from omp_work.intake_repository import (
+    DecisionRecord, IntakeRevisionBody, append_revision, read_revision, revision_hashes,
+)
+from omp_work.v1.api_models import IntakeDecisionRecord, IntakeIssueRecord, IntakeRecordView
+from omp_work.v1.intake_commands import read_intake_view
 from omp_work.v1.intake_decisions import (
-    _decision, _latest_findings, _settlement_membership, open_issues, unresolved_findings,
+    _decision, _latest_findings, _settlement_membership, compute_settlement_assessment, open_issues,
+    unresolved_findings,
 )
 from omp_work.v1.store_shared import WorkStoreError
-from test_nsi2_repository import revision_body
+from test_nsi2_repository import connection, locked, revision_body, write_repository  # noqa: F401
 from test_nsi2_decisions import INSTRUCTION, decision, envelope
+from test_nsi_schemas import ASSESSMENT
+from test_workflow_service import service  # noqa: F401
 
 
 @pytest.fixture
@@ -227,3 +235,189 @@ def test_superseded_dangling_decision_does_not_block_active_settlement(body):
         body, ["claim-1", "prior"], decision_id="active", superseded="decision-1",
     )]
     assert remaining(body) == set()
+
+
+def supplied_assessment(body, status="NEEDS_SPEC"):
+    return body.assessments[0].assessment.model_copy(update={
+        "status": status, "gaps": [], "conflicts": [],
+    })
+
+
+def preserved(computed, assessment):
+    for field in ("run_id", "revision", "contract_hash", "claim_set_hash", "rule_bundle_hash",
+                  "schema_hash", "source_hash", "derivation_receipt_ids", "created_at"):
+        assert getattr(computed, field) == getattr(assessment, field)
+    assert computed.assessed_by == assessment.assessed_by
+
+
+def assess_without_mutation(body, assessment):
+    """Return the computed assessment and prove the inputs were not rewritten."""
+    before = body.model_dump()
+    history = body.history.model_dump()
+    prior = assessment.model_dump()
+    computed = compute_settlement_assessment(body, assessment)
+    assert body.model_dump() == before
+    assert body.history.model_dump() == history
+    assert assessment.model_dump() == prior
+    preserved(computed, assessment)
+    unresolved = unresolved_findings(body)
+    assert [item.model_dump() for item in computed.gaps] == [
+        item.model_dump() for item in unresolved if isinstance(item, nsi.Gap)
+    ]
+    assert [item.model_dump() for item in computed.conflicts] == [
+        item.model_dump() for item in unresolved if isinstance(item, nsi.Conflict)
+    ]
+    return computed
+
+
+def test_renewed_third_claim_assessment_is_conflicted_with_gap_details(body):
+    record = stored_decision(body, ["claim-1", "prior"])
+    body.history.decisions = [record]
+    body.snapshot.claims.append(body.snapshot.claims[0].model_copy(update={"id": "third"}))
+    body.conflicts[0].claim_ids.append("third")
+    computed = assess_without_mutation(body, supplied_assessment(body, "READY_FOR_RATIFICATION"))
+    assert computed.status == "CONFLICTED"
+    assert {item.id for item in computed.conflicts} == {"conflict-1"}
+    assert {item.id for item in computed.gaps} == {"gap-1"}
+    assert "third" in computed.conflicts[0].claim_ids
+    assert computed.gaps[0].premise_id == body.gaps[0].premise_id
+    assert computed.gaps[0].reason == body.gaps[0].reason
+    assert {issue.issue.id for issue in open_issues(body)} == {"conflict-1", "question-1"}
+    computed.conflicts[0].claim_ids.append("mutated")
+    assert "mutated" not in body.conflicts[0].claim_ids
+
+
+def test_unlinked_question_assessment_needs_spec_and_keeps_gap(body):
+    body.history.decisions = [stored_decision(body, ["claim-1", "prior"])]
+    body.gaps.append(body.gaps[0].model_copy(update={"id": "unlinked-gap", "reason": "Still unspecified."}))
+    body.questions.append(body.questions[0].model_copy(update={
+        "id": "unlinked-question", "question": "Which unbound detail?",
+        "gap_ids": ["unlinked-gap"], "conflict_ids": [],
+    }))
+    computed = assess_without_mutation(body, supplied_assessment(body))
+    assert computed.status == "NEEDS_SPEC"
+    assert [item.id for item in computed.gaps] == ["unlinked-gap"]
+    assert computed.conflicts == []
+    assert computed.gaps[0].reason == "Still unspecified."
+    question = next(issue for issue in open_issues(body) if issue.issue.id == "unlinked-question")
+    assert question.issue.question == "Which unbound detail?"
+    assert question.gaps == ("unlinked-gap",)
+
+
+def test_complete_coverage_removes_findings_without_inventing_ready(body):
+    body.decisions[0].settled_claim_ids.append("prior")
+    assessment = supplied_assessment(body, "NEEDS_SPEC").model_copy(update={
+        "gaps": [body.gaps[0].model_copy(deep=True)],
+        "conflicts": [body.conflicts[0].model_copy(deep=True)],
+    })
+    computed = assess_without_mutation(body, assessment)
+    assert unresolved_findings(body) == ()
+    assert computed.gaps == []
+    assert computed.conflicts == []
+    assert computed.status == "NEEDS_SPEC"
+
+
+def test_superseded_coverage_reopens_assessment_findings(body):
+    body.history.decisions = [
+        stored_decision(body, ["claim-1", "prior"]),
+        stored_decision(body, ["claim-1"], decision_id="partial", superseded="decision-1"),
+    ]
+    computed = assess_without_mutation(body, supplied_assessment(body, "READY_FOR_RATIFICATION"))
+    assert computed.status == "CONFLICTED"
+    assert {item.id for item in computed.gaps} == {"gap-1"}
+    assert {item.id for item in computed.conflicts} == {"conflict-1"}
+    assert {issue.issue.id for issue in open_issues(body)} == {"conflict-1", "question-1"}
+
+
+def _with_hashes(raw):
+    parsed = IntakeRevisionBody.model_validate(raw)
+    claim_hash, source_hash = revision_hashes(parsed.snapshot, parsed.artifact_bytes)
+    raw["binding"].update(claim_set_hash=claim_hash, source_hash=source_hash)
+    return raw
+
+
+@pytest.mark.skipif(os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1",
+                     reason="set OMP_WORK_POSTGRES_INTEGRATION=1")
+def test_read_view_serializes_assessments_for_their_own_revisions(service, write_repository):
+    workspace_id, _ = write_repository
+    opening = _with_hashes(revision_body(workspace_id))
+    opening["assessments"] = [dict(
+        id="assessment-0",
+        assessment={**ASSESSMENT, "revision": 0, "status": "READY_FOR_RATIFICATION", "gaps": [], "conflicts": []},
+    )]
+    later = _with_hashes(revision_body(workspace_id, 1))
+    artifact_id = next(iter(later["artifact_bytes"]))
+    later["artifact_bytes"][artifact_id] += b"\x01"
+    later["snapshot"]["artifacts"][0]["uri"] += "/1"
+    later["questions"][0]["question"] = "changed on revision 1"
+    later = _with_hashes(later)
+    later["history"] = {"decisions": [stored_decision(
+        IntakeRevisionBody.model_validate(opening), ["claim-1", "prior"],
+    ).model_dump(mode="json")]}
+    later["assessments"] = [
+        dict(id="carried-forward", assessment={
+            **ASSESSMENT, "revision": 0, "status": "READY_FOR_RATIFICATION", "gaps": [], "conflicts": [],
+        }),
+        dict(id="assessment-1", assessment={
+            **ASSESSMENT, "revision": 1, "status": "NEEDS_SPEC", "gaps": [], "conflicts": [],
+        }),
+    ]
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        append_revision(cur, locked(cur, write_repository), opening, operation_id=uuid4())
+        append_revision(cur, locked(cur, write_repository, 0), later, operation_id=uuid4())
+        stored0 = read_revision(cur, workspace_id=workspace_id, run_id="run-1", revision=0)
+        stored1 = read_revision(cur, workspace_id=workspace_id, run_id="run-1", revision=1)
+        raw = read_intake_view(cur, workspace_id, "run-1")
+        parsed = IntakeRecordView.model_validate(raw.model_dump(mode="json"))
+        assert parsed == IntakeRecordView.model_validate_json(raw.model_dump_json())
+        assert read_revision(cur, workspace_id=workspace_id, run_id="run-1", revision=0).body.model_dump() == stored0.body.model_dump()
+        assert read_revision(cur, workspace_id=workspace_id, run_id="run-1", revision=1).body.model_dump() == stored1.body.model_dump()
+        pinned = IntakeRecordView.model_validate(
+            read_intake_view(cur, workspace_id, "run-1@1").model_dump(mode="json"),
+        )
+
+    by_id = {item.id: item for item in parsed.assessments}
+    older, current = by_id["carried-forward"], by_id["assessment-1"]
+    carried = next(item for item in stored1.body.assessments if item.id == "carried-forward")
+    current_record = next(item for item in stored1.body.assessments if item.id == "assessment-1")
+    assert older.assessment == compute_settlement_assessment(stored0.body, carried.assessment)
+    assert current.assessment == compute_settlement_assessment(stored1.body, current_record.assessment)
+    assert older.assessment.status == "CONFLICTED"
+    assert {item.id for item in older.assessment.gaps} == {"gap-1"}
+    assert {item.id for item in older.assessment.conflicts} == {"conflict-1"}
+    assert older.assessment.gaps[0].reason == stored0.body.gaps[0].reason
+    assert set(older.assessment.conflicts[0].claim_ids) == set(stored0.body.conflicts[0].claim_ids)
+    question = next(issue for issue in older.unresolved_issues if issue.issue.id == "question-1")
+    assert question.issue.question == stored0.body.questions[0].question
+    assert question.gaps == ("gap-1",)
+    unresolved_ids = {finding.id for finding in unresolved_findings(stored0.body)}
+    assert {issue.issue.id for issue in older.unresolved_issues} == {
+        finding_id for finding_id in unresolved_ids if finding_id != "gap-1"
+    }
+    assert {item.id for item in (*older.assessment.gaps, *older.assessment.conflicts)} | {
+        issue.issue.id for issue in older.unresolved_issues
+    } == unresolved_ids
+    assert older.binding == stored0.body.binding
+    assert older.assessment.revision == older.binding.revision == 0
+    assert older.receipts == tuple(stored0.body.derivations)
+    assert older.receipts[0].revision == 0
+    assert older.provenance.revision == 1
+    assert older.provenance.source_sha256 == hashlib.sha256(next(iter(stored0.artifact_bytes.values()))).hexdigest()
+    assert current.assessment.status == "NEEDS_SPEC"
+    assert current.assessment.gaps == current.assessment.conflicts == []
+    assert current.unresolved_issues == ()
+    assert current.binding == stored1.body.binding
+    assert current.assessment.revision == current.binding.revision == 1
+    assert current.receipts == tuple(stored1.body.derivations)
+    assert current.receipts[0].revision == 1
+    assert current.receipts != older.receipts
+    assert current.provenance.revision == parsed.revision == 2
+    assert current.provenance.source_sha256 == hashlib.sha256(next(iter(stored1.artifact_bytes.values()))).hexdigest()
+    assert current.provenance.source_sha256 != older.provenance.source_sha256
+    assert parsed.issues == ()
+    pinned_only = pinned.assessments
+    assert [item.id for item in pinned_only] == ["assessment-0"]
+    assert pinned_only[0].binding.revision == 0
+    assert pinned_only[0].assessment.status == "CONFLICTED"
+    assert pinned_only[0].receipts[0].revision == 0
+    assert pinned_only[0].unresolved_issues == open_issues(stored0.body)
