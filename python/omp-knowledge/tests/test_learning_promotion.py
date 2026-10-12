@@ -259,14 +259,27 @@ def test_journey_check_pass_and_failure_conditions() -> None:
     ws = "ws-jc"
     work_id = uuid4()
     work_key = "OMP-TEST-1"
+    campaign_id = "campaign-jc"
 
     # Insert active procedure linked to work_id
     proc_id = insert_procedure(store, title="Learned from research")
-    insert_proposal(store, procedure_id=proc_id, aggregate_id=str(work_id), workspace_id=ws)
+    proposal_id = insert_proposal(store, procedure_id=proc_id, aggregate_id=str(work_id), workspace_id=ws)
+    with store.transaction() as conn:
+        conn.execute(
+            "UPDATE proposals SET lesson_json = ? WHERE proposal_id = ?",
+            (
+                json.dumps({
+                    "title": "Learned from research",
+                    "steps": ["Apply research findings"],
+                    "research_campaign_ids": [campaign_id],
+                }),
+                proposal_id,
+            ),
+        )
 
     # 1. Failure: work item not DONE
     not_done_item = FakeWorkItem(work_id, state="IN_PROGRESS")
-    client_not_done = FakeWorkClient(item=not_done_item, campaigns=[{"state": "concluded"}])
+    client_not_done = FakeWorkClient(item=not_done_item, campaigns=[{"campaign_id": campaign_id, "state": "concluded"}])
 
     buf = io.StringIO()
     with redirect_stdout(buf):
@@ -282,7 +295,7 @@ def test_journey_check_pass_and_failure_conditions() -> None:
 
     # 2. Failure: campaign not concluded
     done_item = FakeWorkItem(work_id, state="DONE")
-    client_camp_running = FakeWorkClient(item=done_item, campaigns=[{"state": "running"}])
+    client_camp_running = FakeWorkClient(item=done_item, campaigns=[{"campaign_id": campaign_id, "state": "running"}])
 
     buf = io.StringIO()
     with redirect_stdout(buf):
@@ -299,7 +312,7 @@ def test_journey_check_pass_and_failure_conditions() -> None:
     # 2b. Failure: one concluded campaign does not cover a campaign still running
     client_mixed = FakeWorkClient(
         item=done_item,
-        campaigns=[{"state": "running"}, {"state": "concluded"}],
+        campaigns=[{"campaign_id": "campaign-running", "state": "running"}, {"campaign_id": campaign_id, "state": "concluded"}],
     )
 
     buf = io.StringIO()
@@ -317,7 +330,7 @@ def test_journey_check_pass_and_failure_conditions() -> None:
     # 3. Failure: work_id does not match active procedure
     different_work_id = uuid4()
     diff_item = FakeWorkItem(different_work_id, state="DONE")
-    client_diff = FakeWorkClient(item=diff_item, campaigns=[{"state": "concluded"}])
+    client_diff = FakeWorkClient(item=diff_item, campaigns=[{"campaign_id": campaign_id, "state": "concluded"}])
 
     buf = io.StringIO()
     with redirect_stdout(buf):
@@ -331,7 +344,7 @@ def test_journey_check_pass_and_failure_conditions() -> None:
     assert out == {"capability": "research_to_learning", "passed": False}
 
     # 4. Pass: work item DONE, campaign concluded, and active procedure matches aggregate_id
-    client_pass = FakeWorkClient(item=done_item, campaigns=[{"state": "concluded"}])
+    client_pass = FakeWorkClient(item=done_item, campaigns=[{"campaign_id": campaign_id, "state": "concluded"}])
 
     buf = io.StringIO()
     with redirect_stdout(buf):
