@@ -510,7 +510,7 @@ def staged_accounting(monkeypatch):
 def admission_context(service):
     with budget_module._ProcessGate.transition:
         budget_module._ProcessGate.unconfirmed = None
-        budget_module._ProcessGate.owner = None
+        budget_module._ProcessGate.owners.clear()
     return _budget_ctx(service)
 
 
@@ -2367,7 +2367,7 @@ def test_stale_owner_cleanup_cannot_release_another_gate(admission_context, monk
         assert started.wait(2) and queued.wait(2), outcomes
         assert not entered.wait(0.2) and not finished.wait(0.2), outcomes
         cleanup_first()
-        assert budget_module._ProcessGate.owner is second._owner.token
+        assert budget_module._ProcessGate.owners.get(str(second.workspace_id)) is second._owner.token
         assert releases.count(first._owner.token) == 1
         assert not entered.wait(0.2) and not finished.wait(0.2), (
             "stale cleanup released the second owner's gate"
@@ -4747,7 +4747,7 @@ def test_persistent_accounting_failure_closes_process_before_waking_callers(
             assert deadlines[0] <= start + 1.05 and deadlines[1] <= start + 5.05
             assert all(conn.closed for conn in connections)
             assert admission.closed and not admission.settled
-            assert budget_module._ProcessGate.owner is None
+            assert not budget_module._ProcessGate.owners
             retained = budget_module._ProcessGate.unconfirmed
             assert retained is admission
             assert (retained._identity, retained._receipt_request, retained.bounds) == (identity, intent, bounds)
@@ -4787,7 +4787,7 @@ def test_persistent_accounting_failure_closes_process_before_waking_callers(
             # Test-only reset after bounded joins. Disposable database owns rows.
             with budget_module._ProcessGate.transition:
                 budget_module._ProcessGate.unconfirmed = None
-                if budget_module._ProcessGate.owner is admission._owner.token:
+                if budget_module._ProcessGate.owners.get(str(admission.workspace_id)) is admission._owner.token:
                     admission._owner.release()
 
 
@@ -4836,7 +4836,7 @@ def test_call_measured_receipt_replays_without_send(admission_context, monkeypat
     post = transport.post
 
     def locked_post(*args, **kwargs):
-        assert budget_module._ProcessGate.owner is not None
+        assert budget_module._ProcessGate.owners
         with psycopg.connect(**ctx.service.config.connection_kwargs("postgres")) as conn:
             with pytest.raises(LockNotAvailable):
                 conn.execute(
