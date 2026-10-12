@@ -59,17 +59,11 @@ def _authenticate_bound_task_capability(
     now: datetime,
     job_store: NativeJobStore | None,
 ) -> Principal | None:
-    lease_dict = data.get("lease")
-    if lease_dict is not None:
-        if not isinstance(lease_dict, dict):
-            return None
-        job_id = lease_dict.get("job_id")
-        worker_id = lease_dict.get("worker_id")
-        fence = lease_dict.get("fence")
-    else:
-        job_id = data.get("job_id")
-        worker_id = data.get("worker_id")
-        fence = data.get("fence")
+    if "lease" in data:
+        return None
+    job_id = data.get("job_id")
+    worker_id = data.get("worker_id")
+    fence = data.get("fence")
 
     if (
         not isinstance(job_id, str)
@@ -87,6 +81,8 @@ def _authenticate_bound_task_capability(
 
     scopes = data.get("scopes")
     if not isinstance(scopes, (list, tuple, set, frozenset)):
+        return None
+    if not all(isinstance(scope, str) for scope in scopes):
         return None
     if frozenset(scopes) != frozenset({"work.candidate.read"}):
         return None

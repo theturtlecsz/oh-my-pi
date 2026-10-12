@@ -638,6 +638,18 @@ def test_malformed_and_partial_binding_refuses(native_jobs: Any) -> None:
         },  # multiple workspaces
         {"job_id": "job-1", "worker_id": "w1", "fence": 0, "candidate_ids": []},  # empty candidates
         {"job_id": "job-1", "worker_id": "w1", "fence": 0, "expires_at": None},  # missing expires_at
+        {"job_id": "job-1", "worker_id": "w1", "fence": 0, "scopes": [{}]},  # non-string scope
+        {"job_id": "job-1", "worker_id": "w1", "fence": 0, "scopes": [["work.candidate.read"]]},
+        {  # complete nested lease must not mask partial top-level identity
+            "job_id": "job-1",
+            "lease": {"job_id": "job-1", "worker_id": "w1", "fence": 0},
+        },
+        {  # nested lease must not override top-level identity
+            "job_id": "job-1",
+            "worker_id": "w1",
+            "fence": 0,
+            "lease": {"job_id": "job-1", "worker_id": "w1", "fence": 1},
+        },
     ]
 
     for idx, extra in enumerate(malformed_cases):
