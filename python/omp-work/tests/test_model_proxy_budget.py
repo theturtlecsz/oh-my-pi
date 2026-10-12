@@ -40,6 +40,7 @@ from omp_work.spend_budget import SpendBudget
 from omp_work.standing_change import ChangeAuthority
 from omp_work.standing_policy import StandingPolicy
 from omp_work.v1.store import PostgresWorkStore
+from psycopg import sql
 from psycopg.errors import CheckViolation, LockNotAvailable
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
@@ -1323,6 +1324,121 @@ def test_settlement_failure_rolls_back_usage_receipt_and_cancellation(admission_
         monkeypatch.setattr(budget_module, "record_usage", record_usage)
         if not admission.settled:
             admission._resolve()
+
+
+def test_usage_after_spend_fault_proves_atomic_bound_replacement(admission_context):
+    """A real SQL usage failure discards measured spend before committing the bound."""
+    ctx = admission_context
+    mission = _mission(ctx, "1000")
+    root = _item(ctx, "SQL fault root", {**_GENEROUS_ITEM, "usd": "1"})
+    task = _item(ctx, "SQL fault task", _GENEROUS_ITEM)
+    assert root != task
+    parent = _admitting_job(ctx, work_id=root)
+    child = _admitting_job(ctx, work_id=task, parent_job_id=parent)
+    request_id = f"usage-after-spend-{uuid4()}"
+    identity = budget_module.sha256({
+        "workspace_id": str(ctx.workspace_id), "work_id": str(task),
+        "job_id": child, "request_id": request_id,
+    })
+    record_id = UUID(bytes=bytes.fromhex(identity[:32]))
+    usage_request = f"model_call:request:{identity}"
+    fault_name = f"usage_after_spend_{uuid4().hex}"
+    trigger = sql.Identifier(fault_name)
+    function = sql.Identifier("omp_jobs", fault_name)
+    kwargs = ctx.service.config.connection_kwargs("postgres")
+    admission = None
+    try:
+        with psycopg.connect(**kwargs) as conn:
+            conn.execute(sql.SQL("""
+                CREATE FUNCTION {function}() RETURNS trigger LANGUAGE plpgsql AS $$
+                DECLARE captured omp_work.spend_records%ROWTYPE;
+                BEGIN
+                    IF NEW.workspace_id = {workspace}
+                       AND NEW.request_id = {request}
+                       AND NEW.measurement = 'measured' THEN
+                        SELECT * INTO captured FROM omp_work.spend_records
+                        WHERE workspace_id = {workspace} AND record_id = {record};
+                        IF NOT FOUND OR captured.amount_usd <> 0.25 THEN
+                            RAISE EXCEPTION 'measured spend absent before usage'
+                                USING ERRCODE = 'P0001';
+                        END IF;
+                        RAISE EXCEPTION 'measured usage rejected after spend'
+                            USING ERRCODE = '23514',
+                                  DETAIL = format('record_id=%s amount_usd=%s',
+                                                  captured.record_id, captured.amount_usd);
+                    END IF;
+                    RETURN NEW;
+                END;
+                $$
+            """).format(
+                function=function, workspace=sql.Literal(ctx.workspace_id),
+                request=sql.Literal(usage_request), record=sql.Literal(record_id),
+            ))
+            conn.execute(sql.SQL(
+                "CREATE TRIGGER {trigger} BEFORE INSERT ON omp_jobs.usage_events"
+                " FOR EACH ROW EXECUTE FUNCTION {function}()"
+            ).format(trigger=trigger, function=function))
+
+        admission = _admit(
+            ctx, _prepared("1", 100, 50), mission_id=mission, work_id=task,
+            job_id=child, worker_id="worker-1", fence=1,
+            request_id=request_id, task_ceiling_usd=Decimal("1000"),
+        )
+        assert admission.root_work_id == root
+        assert admission._spend_record_id() == record_id
+        with pytest.raises(CheckViolation) as raised:
+            admission.settle(
+                actual_usd="0.25", input_tokens=7, output_tokens=3,
+                cache_tokens=2, measurement="measured", price_version="p1",
+            )
+        assert raised.value.sqlstate == "23514"
+        assert raised.value.diag.message_primary == "measured usage rejected after spend"
+        detail = dict(part.split("=", 1) for part in raised.value.diag.message_detail.split())
+        assert UUID(detail["record_id"]) == record_id
+        assert Decimal(detail["amount_usd"]) == Decimal("0.25")
+        assert fault_name in raised.value.diag.context
+        assert admission.closed and admission.settled
+
+        # Independent connection sees the committed bound, never the partial .25 write.
+        spend, usage, _, operations = _accounting_snapshot(ctx)
+        assert len(spend) == len(usage) == 1
+        assert spend[0]["record_id"] == record_id
+        assert spend[0]["amount_usd"] == Decimal(1)
+        assert spend[0]["mission_id"] == mission
+        assert usage[0]["request_id"] == usage_request
+        assert usage[0]["work_id"] == task and usage[0]["job_id_derived"] == child
+        assert usage[0]["price_usd"] == Decimal(1)
+        assert usage[0]["measurement"] == "estimated"
+        assert (usage[0]["input_tokens"], usage[0]["output_tokens"],
+                usage[0]["cache_tokens"]) == (100, 50, 0)
+        receipts = [row["result"] for row in operations if row["kind"] == "model_call_receipt"]
+        assert len(receipts) == 1
+        assert receipts[0]["settlement"] == {
+            "actual_usd": "1", "input_tokens": 100, "output_tokens": 50,
+            "cache_tokens": 0, "measurement": "estimated", "model": "test-model",
+            "price_version": "p1",
+        }
+    finally:
+        if admission is not None and not admission.closed:
+            admission.abort()
+        try:
+            with psycopg.connect(**kwargs) as conn:
+                conn.execute(sql.SQL(
+                    "DROP TRIGGER IF EXISTS {trigger} ON omp_jobs.usage_events"
+                ).format(trigger=trigger))
+                conn.execute(sql.SQL("DROP FUNCTION IF EXISTS {function}()"
+                                     ).format(function=function))
+        finally:
+            if admission is not None and admission.closed and not admission.settled:
+                admission._resolve()
+        with psycopg.connect(**kwargs) as conn:
+            assert conn.execute(
+                "SELECT 1 FROM pg_trigger WHERE tgname=%s", (fault_name,),
+            ).fetchone() is None
+            assert conn.execute(
+                "SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace"
+                " WHERE n.nspname='omp_jobs' AND p.proname=%s", (fault_name,),
+            ).fetchone() is None
 
 
 @pytest.mark.parametrize("fault", ["rollback-before-commit", "commit-then-raise"])
