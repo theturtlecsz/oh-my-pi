@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping, Sequence
 from importlib.resources import files
 from typing import Any, Protocol
 from urllib.parse import urlsplit
@@ -10,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from omp_work.v1.canonical import canonical_json, text_sha256
 
 from ..errors import KnowledgeError
-from .models import Lesson, StrictModel
+from .models import Lesson, Precondition, StrictModel
 
 MAX_LESSONS = 8
 MAX_RESPONSE_BYTES = 64 * 1024
@@ -117,6 +119,88 @@ def load_generation_prompt() -> str:
     return (files("omp_knowledge.learning") / _GENERATION_PROMPT_RESOURCE).read_text(encoding="utf-8")
 
 
+def _nonblank_repository(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
+def _at(value: object, *keys: str) -> object:
+    current = value
+    for key in keys:
+        if not isinstance(current, Mapping):
+            return None
+        current = current.get(key)
+    return current
+
+
+def _rows(value: object) -> list[Mapping[Any, Any]]:
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        return []
+    return [item for item in value if isinstance(item, Mapping)]
+
+
+def extract_trace_repository(trace: Mapping[str, Any]) -> str | None:
+    """Repository a captured trace names, or None when it names none.
+
+    The first non-blank value wins, and the returned text is stripped:
+    ``payload.evidence.delivery.repository``, then each
+    ``work_record.close_attempts[*].repository`` in list order, then each
+    ``work_record.receipts[*]`` whose ``payload_truncated`` is false and whose
+    ``payload_text`` parses as a JSON object with a non-empty
+    ``delivery.repository``.
+    """
+    if not isinstance(trace, Mapping):
+        return None
+
+    named = _nonblank_repository(_at(trace.get("payload"), "evidence", "delivery", "repository"))
+    if named is not None:
+        return named
+
+    work_record = trace.get("work_record")
+    if not isinstance(work_record, Mapping):
+        return None
+
+    for attempt in _rows(work_record.get("close_attempts")):
+        named = _nonblank_repository(attempt.get("repository"))
+        if named is not None:
+            return named
+
+    for receipt in _rows(work_record.get("receipts")):
+        if receipt.get("payload_truncated") is not False:
+            continue
+        payload_text = receipt.get("payload_text")
+        if not isinstance(payload_text, str):
+            continue
+        try:
+            parsed = json.loads(payload_text)
+        except ValueError:
+            continue
+        named = _nonblank_repository(_at(parsed, "delivery", "repository"))
+        if named is not None:
+            return named
+    return None
+
+
+def ensure_repository_precondition(lesson: Lesson, repository: str) -> Lesson:
+    """Return a copy whose repository axis is exactly ``eq`` ``repository``.
+
+    Model-authored repository preconditions, ``eq`` and ``ne``, are dropped.
+    Every other precondition, including ``project_id``, stays in its original
+    order.
+    """
+    kept = tuple(precondition for precondition in lesson.preconditions if precondition.key != "repository")
+    return lesson.model_copy(
+        update={
+            "preconditions": (
+                *kept,
+                Precondition(key="repository", op="eq", value=repository),
+            )
+        }
+    )
+
+
 class LocalChatGenerator:
     """OpenAI-compatible local chat client for lesson generation.
 
@@ -177,12 +261,18 @@ class LocalChatGenerator:
 
         try:
             payload = _GeneratorPayload.model_validate_json(content)
+            repository = extract_trace_repository(trace)
+            lessons = payload.lessons
+            if repository is not None:
+                lessons = tuple(
+                    ensure_repository_precondition(lesson, repository) for lesson in payload.lessons
+                )
             return GenerationResult(
                 model=self._model,
                 profile=self._profile,
                 request_sha256=request_sha256,
                 response_sha256=response_sha256,
-                lessons=payload.lessons,
+                lessons=lessons,
                 no_lesson_reason=payload.no_lesson_reason,
             )
         except ValidationError as exc:
@@ -229,5 +319,7 @@ __all__ = [
     "MAX_LESSONS",
     "MAX_RESPONSE_BYTES",
     "MalformedGeneratorOutput",
+    "ensure_repository_precondition",
+    "extract_trace_repository",
     "load_generation_prompt",
 ]
