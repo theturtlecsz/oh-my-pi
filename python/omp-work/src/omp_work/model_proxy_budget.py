@@ -756,45 +756,46 @@ class ModelCallAdmission:
             lookup_duration = min(1.0, max(0.0, remaining - 3.0))
             if lookup_duration > 0:
                 lookup_deadline = now + lookup_duration
-                lookup_stack = _OneShotExitStack()
                 try:
-                    cur = lookup_stack.enter_context(
-                        self.budget._jobs.transaction(
-                            self.workspace_id, self.actor_id, deadline=lookup_deadline
+                    with _OneShotExitStack() as lookup_stack:
+                        cur = lookup_stack.enter_context(
+                            self.budget._jobs.transaction(
+                                self.workspace_id, self.actor_id, deadline=lookup_deadline
+                            )
                         )
-                    )
-                    # Lock stable receipt identity
-                    cur.execute(
-                        "SELECT pg_advisory_xact_lock(hashtextextended('omp_jobs.operation:' || %s, 0))",
-                        (receipt_id,),
-                    )
-                    cur.execute(
-                        "SELECT 1 FROM omp_jobs.operations WHERE operation_id=%s",
-                        (receipt_id,),
-                    )
-                    if cur.fetchone() is not None:
-                        def no_effect() -> dict[str, object]:
-                            raise AssertionError("existing receipt disappeared under operation lock")
+                        # Lock stable receipt identity
+                        cur.execute(
+                            "SELECT pg_advisory_xact_lock(hashtextextended('omp_jobs.operation:' || %s, 0))",
+                            (receipt_id,),
+                        )
+                        cur.execute(
+                            "SELECT 1 FROM omp_jobs.operations WHERE operation_id=%s",
+                            (receipt_id,),
+                        )
+                        if cur.fetchone() is not None:
+                            def no_effect() -> dict[str, object]:
+                                raise AssertionError("existing receipt disappeared under operation lock")
 
-                        outcome = self.budget._jobs.run_operation(
-                            cur,
-                            receipt_id,
-                            self.workspace_id,
-                            "model_call_receipt",
-                            receipt_request_obj,
-                            no_effect,
-                        )
-                        cand = outcome.result
-                        if (
-                            cand.get("root_work_id") == str(self.root_work_id)
-                            and cand.get("fingerprint") == fingerprint
-                            and isinstance(cand.get("settlement"), dict)
-                        ):
-                            matching_receipt = cand
-                            lookup_matched = True
-                    lookup_stack.close()
-                except BaseException as error:
-                    lookup_stack.__exit__(type(error), error, error.__traceback__)
+                            outcome = self.budget._jobs.run_operation(
+                                cur,
+                                receipt_id,
+                                self.workspace_id,
+                                "model_call_receipt",
+                                receipt_request_obj,
+                                no_effect,
+                            )
+                            cand = outcome.result
+                            if (
+                                cand.get("root_work_id") == str(self.root_work_id)
+                                and cand.get("fingerprint") == fingerprint
+                                and isinstance(cand.get("settlement"), dict)
+                            ):
+                                matching_receipt = cand
+                                lookup_matched = True
+                except BaseException:
+                    # Lookup is advisory: even rollback failure must reach
+                    # the single fresh fallback after transaction disposal.
+                    pass
                 else:
                     if lookup_matched and matching_receipt is not None:
                         return self._finish_settlement(matching_receipt)

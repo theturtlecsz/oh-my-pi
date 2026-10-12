@@ -3516,6 +3516,103 @@ def test_resolve_lookup_failure_reaches_fresh_fallback(admission_context, monkey
             admission._resolve()
 
 
+@pytest.mark.parametrize("durable_receipt", [False, True])
+@pytest.mark.parametrize("lookup_fails", [False, True])
+def test_resolve_lookup_cleanup_failure_still_uses_one_fresh_fallback(
+    admission_context, monkeypatch, durable_receipt, lookup_fails
+):
+    """Lookup/rollback faults cannot skip fallback or duplicate durable actual accounting."""
+    ctx = admission_context
+    prepared = _prepared("2")
+    payload = dict(actual_usd="1", input_tokens=10, output_tokens=5, cache_tokens=0)
+    request_id = f"resolve-cleanup-{uuid4()}"
+    before = _admission_counts(ctx)
+    admission = _admit_and_fail_settle(
+        ctx, prepared, payload, commit_then_raise=durable_receipt, request_id=request_id
+    )
+    bound = admission._admitted_bound_payload()
+    original_transaction = ctx.budget._jobs.transaction
+    original_execute = psycopg.Cursor.execute
+    connections = []
+    deadlines = []
+    lookup_errors = []
+    cleanup_errors = []
+
+    @contextmanager
+    def failing_lookup_cleanup(workspace_id, actor_id, *, deadline):
+        deadlines.append(deadline)
+        lookup = len(deadlines) == 1
+        if not lookup:
+            assert connections[0].closed, "fallback reused an undisposed lookup"
+        try:
+            with original_transaction(workspace_id, actor_id, deadline=deadline) as cur:
+                connections.append(cur.connection)
+                yield cur
+        finally:
+            if lookup:
+                assert connections[0].closed
+                cleanup_errors.append("rollback acknowledgement lost")
+                raise psycopg.OperationalError(cleanup_errors[-1])
+
+    def failing_lookup_execute(cur, query, *args, **kwargs):
+        if (
+            lookup_fails and connections and cur.connection is connections[0]
+            and query == "SELECT 1 FROM omp_jobs.operations WHERE operation_id=%s"
+        ):
+            lookup_errors.append("lookup failed")
+            raise psycopg.OperationalError(lookup_errors[-1])
+        return original_execute(cur, query, *args, **kwargs)
+
+    monkeypatch.setattr(ctx.budget._jobs, "transaction", failing_lookup_cleanup)
+    monkeypatch.setattr(psycopg.Cursor, "execute", failing_lookup_execute)
+    try:
+        start = time.monotonic()
+        result = admission._resolve()
+        assert admission.closed and admission.settled
+        assert len(deadlines) == 2, "resolve must use exactly one fresh fallback"
+        assert 0 < deadlines[0] - start <= 1.05
+        assert deadlines[1] - deadlines[0] >= 3
+        assert deadlines[1] - start <= 5.05
+        assert all(connection.closed for connection in connections)
+        assert lookup_errors == (["lookup failed"] if lookup_fails else [])
+        assert cleanup_errors == ["rollback acknowledgement lost"]
+
+        monkeypatch.setattr(ctx.budget._jobs, "transaction", original_transaction)
+        monkeypatch.setattr(psycopg.Cursor, "execute", original_execute)
+        expected_usd = Decimal(1) if durable_receipt else Decimal(2)
+        expected_tokens = 15 if durable_receipt else 150
+        assert result["actual_usd"] == expected_usd
+        assert _admission_counts(ctx) == tuple(n + d for n, d in zip(before, (1, 1, 1, 2)))
+        with ctx.jobs.transaction(ctx.workspace_id, ctx.actor_id) as cur:
+            cur.execute(
+                "SELECT price_usd, tokens FROM omp_jobs.usage_events WHERE workspace_id=%s",
+                (ctx.workspace_id,),
+            )
+            assert cur.fetchone() == dict(price_usd=expected_usd, tokens=expected_tokens)
+            cur.execute(
+                "SELECT amount_usd FROM omp_work.spend_records WHERE workspace_id=%s",
+                (ctx.workspace_id,),
+            )
+            assert cur.fetchone()["amount_usd"] == expected_usd
+            cur.execute(
+                "SELECT result FROM omp_jobs.operations WHERE operation_id=%s",
+                (f"model_call:receipt:{admission._identity}",),
+            )
+            receipt = cur.fetchone()["result"]
+            assert Decimal(receipt["settlement"]["actual_usd"]) == expected_usd
+            assert receipt["settlement"]["measurement"] == (
+                "measured" if durable_receipt else "estimated"
+            )
+        with _admit(ctx, prepared, request_id=request_id) as replay:
+            assert replay.settle(**(payload if durable_receipt else bound)) == result
+        assert _admission_counts(ctx) == tuple(n + d for n, d in zip(before, (1, 1, 1, 2)))
+    finally:
+        monkeypatch.setattr(ctx.budget._jobs, "transaction", original_transaction)
+        monkeypatch.setattr(psycopg.Cursor, "execute", original_execute)
+        if not admission.settled:
+            admission._resolve()
+
+
 @pytest.mark.parametrize("deadline", [float("nan"), float("inf"), -float("inf")])
 def test_resolve_rejects_nonfinite_deadline(admission_context, deadline):
     """_resolve rejects nonfinite deadline values without modifying unresolved state."""
