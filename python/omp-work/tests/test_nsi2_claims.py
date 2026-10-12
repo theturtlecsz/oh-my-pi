@@ -851,3 +851,108 @@ def test_http_record_intake_claim_ontology_and_entity_validation(service, http_i
             ).fetchall() == baseline_revisions
 
 
+@pytest.mark.parametrize("failure", [
+    "unknown-artifact", "missing-link", "extra-link", "artifact-id-mismatch",
+    "start-byte-mismatch", "end-byte-mismatch", "quote-mismatch",
+    "duplicate-claim-span", "duplicate-link-span",
+])
+def test_http_claim_rejects_non_bijective_evidence_without_changing_rows(service, http_intake, failure):
+    workspace_id, mission_id = http_intake
+    assert _command(service, workspace_id,
+                    envelope(workspace_id, mission_id).command.model_dump(mode="json"))[0] == 200
+    assert _command(service, workspace_id,
+                    evidence_command(OWNER, "owner", text="alpha beta"))[0] == 200
+    expected_revision = 2
+    if failure == "artifact-id-mismatch":
+        # Both IDs exist, so only span identity differs.
+        assert _command(service, workspace_id, evidence_command(
+            OWNER, "owner", text="alpha beta", artifact_id="artifact-other",
+            uri="https://example.test/other", expected_revision=2,
+        ))[0] == 200
+        expected_revision = 3
+
+    first = dict(artifact_id="artifact-added", start_byte=0, end_byte=5, quote="alpha")
+    second = dict(artifact_id="artifact-added", start_byte=6, end_byte=10, quote="beta")
+    evidence = [first]
+    links = [dict(span=first, relation="supports")]
+    if failure == "unknown-artifact":
+        unknown = {**first, "artifact_id": "artifact-unknown"}
+        evidence = [unknown]
+        links = [dict(span=unknown, relation="supports")]
+    elif failure == "missing-link":
+        evidence = [first, second]
+    elif failure == "extra-link":
+        links.append(dict(span=second, relation="supports"))
+    elif failure.endswith("-mismatch"):
+        field, value = {
+            "artifact-id-mismatch": ("artifact_id", "artifact-other"),
+            "start-byte-mismatch": ("start_byte", 1),
+            "end-byte-mismatch": ("end_byte", 4),
+            "quote-mismatch": ("quote", "ALPHA"),
+        }[failure]
+        links = [dict(span={**first, field: value}, relation="supports")]
+    elif failure == "duplicate-claim-span":
+        evidence = [first, dict(first)]
+    elif failure == "duplicate-link-span":
+        # Relation does not distinguish two links to the same span.
+        links.append(dict(span=dict(first), relation="contradicts"))
+
+    with connection(service, workspace_id) as conn:
+        baseline_heads = conn.execute(
+            "SELECT * FROM omp_work.intake_heads WHERE workspace_id=%s", (workspace_id,),
+        ).fetchall()
+        baseline_revisions = conn.execute(
+            "SELECT * FROM omp_work.intake_revisions WHERE workspace_id=%s ORDER BY revision", (workspace_id,),
+        ).fetchall()
+
+    command = claim_command(
+        OWNER, "owner", claim_id=f"claim-evidence-{failure}", expected_revision=expected_revision,
+        evidence=evidence, evidence_links=links,
+    )
+    # Validate shape separately: failures must come from evidence matching, not schemas.
+    CommandEnvelope.model_validate(dict(
+        api_version="work.omp.dev/v1", workspace_id=workspace_id,
+        operation_id=uuid4(), request_id=uuid4(), correlation_id=uuid4(), command=command,
+    ))
+    status, body = _command(service, workspace_id, command)
+    assert status == 400
+    assert body["error"]["code"] == "invalid_request"
+    with connection(service, workspace_id) as conn:
+        assert conn.execute(
+            "SELECT * FROM omp_work.intake_heads WHERE workspace_id=%s", (workspace_id,),
+        ).fetchall() == baseline_heads
+        assert conn.execute(
+            "SELECT * FROM omp_work.intake_revisions WHERE workspace_id=%s ORDER BY revision", (workspace_id,),
+        ).fetchall() == baseline_revisions
+
+
+def test_http_claim_accepts_reversed_distinct_evidence_links_and_persists_quotes(service, http_intake):
+    workspace_id, mission_id = http_intake
+    assert _command(service, workspace_id,
+                    envelope(workspace_id, mission_id).command.model_dump(mode="json"))[0] == 200
+    assert _command(service, workspace_id,
+                    evidence_command(OWNER, "owner", text="alpha beta"))[0] == 200
+    first = dict(artifact_id="artifact-added", start_byte=0, end_byte=5, quote="alpha")
+    second = dict(artifact_id="artifact-added", start_byte=6, end_byte=10, quote="beta")
+    links = [dict(span=second, relation="contradicts"), dict(span=first, relation="supports")]
+    claim_id = "claim-reversed-evidence"
+    status, body = _command(service, workspace_id, claim_command(
+        OWNER, "owner", claim_id=claim_id, evidence=[first, second], evidence_links=links,
+    ))
+    assert status == 200
+    assert body["result"]["revision"] == 3
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        assert conn.execute(
+            "SELECT current_revision FROM omp_work.intake_heads WHERE workspace_id=%s", (workspace_id,),
+        ).fetchone() == (2,)
+        stored = read_revision(cur, workspace_id=workspace_id, run_id="run-1", revision=2)
+        assert stored.snapshot.claims[0].id == claim_id
+        assert [span.model_dump() for span in stored.snapshot.claims[0].evidence] == [first, second]
+        assert {
+            (link.claim_id, link.artifact_id, link.start_byte, link.end_byte, link.quote, link.relation)
+            for link in stored.body.evidence_links
+        } == {
+            (claim_id, "artifact-added", 0, 5, "alpha", "supports"),
+            (claim_id, "artifact-added", 6, 10, "beta", "contradicts"),
+        }
+        assert len(stored.body.evidence_links) == 2
