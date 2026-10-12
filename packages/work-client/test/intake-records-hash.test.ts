@@ -234,7 +234,10 @@ test("intake result and command hashes match Python sha256 and command_sha256", 
 		result: fixture.commands.record_intake_claim.result,
 	});
 
-	// 8. received_at variants (.1, .1234567, .000000, Z, +00:00, +05:30)
+	// 8. received_at variants, including prior valid-datetime parity failures:
+	// lowercase t/z, comma fractions, omitted seconds, date-only, and
+	// timezone-free timestamps, plus comma/long fraction with lowercase UTC,
+	// omitted seconds with +05:30, and timezone-free .1234567.
 	const RECEIVED_AT_SAMPLES = [
 		"2026-10-11T00:00:00.1Z",
 		"2026-10-11T00:00:00.1234567Z",
@@ -242,6 +245,15 @@ test("intake result and command hashes match Python sha256 and command_sha256", 
 		"2026-10-11T00:00:00Z",
 		"2026-10-11T00:00:00+00:00",
 		"2026-10-11T00:00:00+05:30",
+		"2026-10-11t00:00:00.1z",
+		"2026-10-11T00:00:00.1",
+		"2026-10-11T00:00:00.000000",
+		"2026-10-11T00:00:00,1Z",
+		"2026-10-11T00:00Z",
+		"2026-10-11",
+		"2026-10-11t00:00:00,1234567z",
+		"2026-10-11T00:00+05:30",
+		"2026-10-11T00:00:00.1234567",
 	];
 	for (const sample of RECEIVED_AT_SAMPLES) {
 		const copyEnv = structuredClone(fixture.commands.record_intake_decision.envelope);
@@ -257,7 +269,8 @@ test("intake result and command hashes match Python sha256 and command_sha256", 
 		});
 	}
 
-	// 9. changed created_at affects hash
+	// 9. changed created_at affects hash. A received_at-shaped spelling stays
+	// verbatim on created_at, so that text is still hash-significant.
 	const changedCreatedEnv = structuredClone(fixture.commands.record_intake_decision.envelope);
 	const createdPl = (changedCreatedEnv.command as Record<string, unknown>).payload as Record<string, unknown>;
 	(createdPl.decision as Record<string, unknown>).created_at = "2026-10-10T00:00:01Z";
@@ -265,6 +278,16 @@ test("intake result and command hashes match Python sha256 and command_sha256", 
 		command: "record_intake_decision",
 		kind: "changed-created-at",
 		envelope: changedCreatedEnv,
+		result: fixture.commands.record_intake_decision.result,
+	});
+
+	const verbatimCreatedEnv = structuredClone(fixture.commands.record_intake_decision.envelope);
+	const verbatimCreatedPl = (verbatimCreatedEnv.command as Record<string, unknown>).payload as Record<string, unknown>;
+	(verbatimCreatedPl.decision as Record<string, unknown>).created_at = "2026-10-10t00:00z";
+	cases.push({
+		command: "record_intake_decision",
+		kind: "created-at-verbatim",
+		envelope: verbatimCreatedEnv,
 		result: fixture.commands.record_intake_decision.result,
 	});
 
@@ -350,8 +373,10 @@ test("intake result and command hashes match Python sha256 and command_sha256", 
 	expect(intakeCommandSha256(explicitNullAdmittedEnv)).toBe(intakeCommandSha256(omittedAdmittedEnv));
 	expect(intakeCommandSha256(omittedAdmittedEnv)).not.toBe(fixtureCommandHash.get("record_intake_claim") ?? "");
 
-	// Changed created_at affects hash
+	// Changed created_at affects hash, including a spelling received_at would rewrite.
 	expect(intakeCommandSha256(changedCreatedEnv)).not.toBe(fixtureCommandHash.get("record_intake_decision") ?? "");
+	expect(intakeCommandSha256(verbatimCreatedEnv)).not.toBe(fixtureCommandHash.get("record_intake_decision") ?? "");
+	expect(intakeCommandSha256(verbatimCreatedEnv)).not.toBe(intakeCommandSha256(changedCreatedEnv));
 
 	// Fixture JSON remains unmodified
 	expect(JSON.stringify(fixture)).toBe(fingerprint);

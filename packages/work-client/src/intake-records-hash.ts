@@ -31,15 +31,27 @@ function canonicalNumber(value: number): string {
 	return text;
 }
 
-/** Normalize received_at as text without Date:
- *  UTC +00:00/Z -> Z; preserve other offsets (e.g. +05:30);
- *  drop zero or missing fraction; else pad/truncate to 6 digits, no rounding. */
+/** Normalize received_at as text without Date. One grammar: a miss returns the
+ *  original text instead of falling through to a looser pattern.
+ *  Case-insensitive t/z become T/Z; a comma fraction separator becomes a dot;
+ *  omitted seconds become :00; date-only becomes T00:00:00 with no zone;
+ *  timezone-free timestamps stay timezone-free. UTC Z/+00:00/-00:00 becomes Z
+ *  and other offsets stay (for example +05:30). A zero or missing fraction is
+ *  omitted; any other fraction is padded or truncated to 6 digits, no rounding.
+ *  The fraction is only legal after seconds, so HH:MM,1 does not match. */
 function normalizeReceivedAt(text: string): string {
-	const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?([+-]\d{2}:\d{2}|Z)$/.exec(text);
+	const match = /^(\d{4}-\d{2}-\d{2})(?:[Tt](\d{2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?([Zz]|[+-]\d{2}:\d{2})?)?$/.exec(
+		text,
+	);
 	if (!match) return text;
-	const prefix = match[1];
-	const rawFraction = match[2];
-	const zone = match[3];
+	const date = match[1];
+	const hour = match[2];
+	if (date === undefined) return text;
+	if (hour === undefined) return `${date}T00:00:00`;
+	const minute = match[3] ?? "";
+	const second = match[4] ?? "00";
+	const rawFraction = match[5];
+	const zone = match[6];
 
 	let fractionPart = "";
 	if (rawFraction !== undefined) {
@@ -49,8 +61,11 @@ function normalizeReceivedAt(text: string): string {
 		}
 	}
 
-	const normZone = zone === "+00:00" || zone === "-00:00" || zone === "Z" ? "Z" : zone;
-	return `${prefix}${fractionPart}${normZone}`;
+	let normZone = "";
+	if (zone !== undefined) {
+		normZone = zone === "+00:00" || zone === "-00:00" || zone.toUpperCase() === "Z" ? "Z" : zone;
+	}
+	return `${date}T${hour}:${minute}:${second}${fractionPart}${normZone}`;
 }
 
 /** sha256(canonical JSON of result) — UTF-8 bytes, lowercase hex. */
