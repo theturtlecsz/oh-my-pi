@@ -5,15 +5,14 @@ from uuid import uuid4
 import pytest
 
 from omp_work.contracts.nsi.v1 import models as nsi
-from omp_work.intake_repository import IntakeRevisionBody
-from omp_work.v1.api_models import IntakeIssueRecord
+from omp_work.intake_repository import DecisionRecord, IntakeRevisionBody
+from omp_work.v1.api_models import IntakeDecisionRecord, IntakeIssueRecord
 from omp_work.v1.intake_decisions import (
-    _decision, _latest_findings, _settlement_membership, open_issues,
+    _decision, _latest_findings, _settlement_membership, open_issues, unresolved_findings,
 )
-from omp_work.v1.models import CommandEnvelope
 from omp_work.v1.store_shared import WorkStoreError
 from test_nsi2_repository import revision_body
-from test_nsi_schemas import DECISION
+from test_nsi2_decisions import INSTRUCTION, decision, envelope
 
 
 @pytest.fixture
@@ -72,27 +71,26 @@ def test_history_only_findings_accept_settlement_and_preserve_instruction(body):
     assert membership(body) == (
         {"question-1", "conflict-1", "gap-1"}, {"claim-1", "prior"},
     )
-    text = "  Keep café ≥ 99.9%.\r\nDo NOT trim.\t🙂  "
-    envelope = CommandEnvelope.model_validate(dict(
-        api_version="work.omp.dev/v1", workspace_id=body.workspace_id,
-        operation_id=uuid4(), request_id=uuid4(), correlation_id=uuid4(),
-        command=dict(type="record_intake_decision", payload=dict(
-            run_id="run-1", expected_revision=1,
-            decision={**DECISION, "id": "history-settlement", "revision": 1}, claim_ids=["claim-1", "prior"],
-            instruction=dict(text=text, provenance=dict(channel="owner-chat", message_ref="msg:exact",
-                                                       received_at="2026-10-11T00:00:00Z")),
-        )),
-    ))
+    body.decisions = []
+    command = decision()
+    command["payload"]["decision"]["id"] = "history-settlement"
+    request = envelope(body.workspace_id, command)
+    actor = nsi.ActorRef.model_validate(command["payload"]["decision"]["actor"])
     history = deepcopy(body.history.issues)
-    incomplete = envelope.model_dump(mode="json")
-    incomplete["command"]["payload"]["claim_ids"] = ["claim-1"]
-    incomplete = CommandEnvelope.model_validate(incomplete)
+    incomplete = deepcopy(command)
+    incomplete["payload"]["claim_ids"] = ["claim-1"]
+    before = body.model_dump()
     with pytest.raises(WorkStoreError, match="^invalid_request$"):
-        _decision(None, incomplete, nsi.ActorRef(id="owner-1", kind="owner"), uuid4(), body)
-    assert body.history.decisions == []
-    _decision(None, envelope, nsi.ActorRef(id="owner-1", kind="owner"), uuid4(), body)
-    assert body.history.decisions[0].instruction.text == text
-    assert body.artifact_bytes["instruction:history-settlement"] == text.encode("utf-8")
+        _decision(None, envelope(body.workspace_id, incomplete), actor, uuid4(), body)
+    assert body.model_dump() == before
+    _decision(None, request, actor, uuid4(), body)
+    record = body.history.decisions[0]
+    assert record.instruction.model_dump(mode="json") == INSTRUCTION
+    assert record.decision.answer == request.command.payload.decision.answer
+    assert record.decision.reason == request.command.payload.decision.reason
+    assert body.artifact_bytes["instruction:history-settlement"] == INSTRUCTION["text"].encode("utf-8")
+    assert body.questions == [question]
+    assert body.conflicts == [conflict]
     assert body.history.issues == history
     assert open_issues(body) == ()
 
@@ -123,3 +121,109 @@ def test_invalid_settlement_targets_raise_invalid_request(body, target):
         body.gaps[0].premise_id = "absent"
     with pytest.raises(WorkStoreError, match="^invalid_request$"):
         membership(body, question)
+
+
+def stored_decision(body, claim_ids, *, decision_id="decision-1", superseded=None):
+    command = decision(claim_ids=claim_ids, superseded_decision_id=superseded)
+    command["payload"]["decision"]["id"] = decision_id
+    payload = envelope(body.workspace_id, command).command.payload
+    return IntakeDecisionRecord(
+        decision=payload.decision, claim_ids=payload.claim_ids, instruction=payload.instruction,
+        superseded_decision_id=payload.superseded_decision_id,
+    )
+
+
+def remaining(body):
+    return {finding.id for finding in unresolved_findings(body)}
+
+
+def test_renewal_reopens_all_findings_until_owner_covers_third_claim(body):
+    record = stored_decision(body, ["claim-1", "prior"])
+    body.history.decisions = [record]
+    assert remaining(body) == set()
+    body.snapshot.claims.append(body.snapshot.claims[0].model_copy(update={"id": "third"}))
+    body.conflicts[0].claim_ids.append("third")
+    # A broader revision copy cannot override immutable history coverage.
+    body.decisions = [DecisionRecord(decision=record.decision,
+                                    settled_claim_ids=["claim-1", "prior", "third"])]
+    before = body.model_dump()
+    assert remaining(body) == {"gap-1", "conflict-1", "question-1"}
+    assert {i.issue.id for i in open_issues(body)} == {"conflict-1", "question-1"}
+    assert body.model_dump() == before
+    command = decision(claim_ids=["claim-1", "prior", "third"], superseded_decision_id="decision-1")
+    command["payload"]["decision"]["id"] = "complete"
+    request = envelope(body.workspace_id, command)
+    actor = nsi.ActorRef.model_validate(command["payload"]["decision"]["actor"])
+    partial = deepcopy(command)
+    partial["payload"]["claim_ids"] = ["claim-1", "prior"]
+    with pytest.raises(WorkStoreError, match="^invalid_request$"):
+        _decision(None, envelope(body.workspace_id, partial), actor, uuid4(), body)
+    assert body.model_dump() == before
+    _decision(None, request, actor, uuid4(), body)
+    assert remaining(body) == set()
+    assert body.history.decisions[0] == record
+    assert body.history.decisions[1].instruction.model_dump(mode="json") == INSTRUCTION
+
+
+def test_superseded_full_coverage_cannot_rescue_partial_successor(body):
+    body.history.decisions = [
+        stored_decision(body, ["claim-1", "prior"]),
+        stored_decision(body, ["claim-1"], decision_id="partial", superseded="decision-1"),
+    ]
+    assert remaining(body) == {"gap-1", "conflict-1", "question-1"}
+
+
+def test_snapshot_only_settlement_requires_full_coverage(body):
+    assert remaining(body) == {"gap-1", "conflict-1", "question-1"}
+    body.decisions[0].settled_claim_ids.append("prior")
+    assert remaining(body) == set()
+
+
+def test_unlinked_findings_stay_open_and_obsolete_gap_links_do_not_settle(body):
+    body.questions[0].gap_ids = []
+    body.gaps.append(body.gaps[0].model_copy(update={"id": "unlinked-gap"}))
+    body.conflicts.append(body.conflicts[0].model_copy(update={"id": "unlinked-conflict"}))
+    body.questions.append(body.questions[0].model_copy(update={"id": "unlinked-question"}))
+    body.history.issues = [
+        IntakeIssueRecord(issue=body.conflicts[0], gaps=("gap-1",)),
+        IntakeIssueRecord(issue=body.conflicts[0], gaps=()),
+    ]
+    body.history.decisions = [stored_decision(body, ["claim-1", "prior"])]
+    assert remaining(body) == {"gap-1", "unlinked-gap", "unlinked-conflict", "unlinked-question"}
+    assert {i.issue.id for i in open_issues(body)} == {"unlinked-conflict", "unlinked-question"}
+
+
+@pytest.mark.parametrize("target", ["question", "decision-claim", "conflict-claim", "gap-claim"])
+def test_dangling_active_references_refuse_reader_and_writer_without_mutation(body, target):
+    record = stored_decision(body, ["claim-1", "prior"])
+    body.history.decisions = [record]
+    if target == "question":
+        body.questions = []
+    elif target == "decision-claim":
+        record = record.model_copy(update={"claim_ids": (*record.claim_ids, "absent")})
+        body.history.decisions = [record]
+    elif target == "conflict-claim":
+        body.conflicts[0].claim_ids.append("absent")
+    else:
+        body.gaps[0].premise_id = "absent"
+    before = body.model_dump()
+    for reader in (unresolved_findings, open_issues):
+        with pytest.raises(WorkStoreError, match="^invalid_request$"):
+            reader(body)
+        assert body.model_dump() == before
+    command = decision(superseded_decision_id="decision-1", claim_ids=list(record.claim_ids))
+    command["payload"]["decision"]["id"] = "replacement"
+    request = envelope(body.workspace_id, command)
+    actor = nsi.ActorRef.model_validate(command["payload"]["decision"]["actor"])
+    with pytest.raises(WorkStoreError, match="^invalid_request$"):
+        _decision(None, request, actor, uuid4(), body)
+    assert body.model_dump() == before
+
+
+def test_superseded_dangling_decision_does_not_block_active_settlement(body):
+    old = stored_decision(body, ["absent"])
+    old = old.model_copy(update={"decision": old.decision.model_copy(update={"question_id": "absent"})})
+    body.history.decisions = [old, stored_decision(
+        body, ["claim-1", "prior"], decision_id="active", superseded="decision-1",
+    )]
+    assert remaining(body) == set()

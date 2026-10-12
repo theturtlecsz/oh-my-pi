@@ -120,7 +120,7 @@ def _decision(cur: Cursor, envelope: CommandEnvelope, actor: nsi.ActorRef,
     findings, gap_links = _latest_findings(body)
     question = findings.get(decision.question_id)
     _require(isinstance(question, nsi.ClarificationQuestion))
-    _, required = _settlement_membership(body, question, findings, gap_links)
+    linked, required = _settlement_membership(body, question, findings, gap_links)
     _require(required <= set(payload.claim_ids))
     history = body.history
     _require(all(d.decision.id != decision.id for d in history.decisions))
@@ -138,14 +138,23 @@ def _decision(cur: Cursor, envelope: CommandEnvelope, actor: nsi.ActorRef,
         decision=decision, claim_ids=payload.claim_ids, instruction=payload.instruction,
         superseded_decision_id=prior_id, verified_relay_operation_id=payload.verified_relay_operation_id,
     )
+    artifact_id = f"instruction:{decision.id}"
+    _require(all(a.id != artifact_id for a in body.snapshot.artifacts))
+    # Revision rows need these foreign-key targets even when only history retained them.
+    present = {i.id for i in [*body.questions, *body.conflicts]}
+    for finding in findings.values():
+        if finding.id not in linked or finding.id in present:
+            continue
+        if isinstance(finding, nsi.ClarificationQuestion):
+            body.questions.append(finding.model_copy(deep=True))
+        elif isinstance(finding, nsi.Conflict):
+            body.conflicts.append(finding.model_copy(deep=True))
     history.decisions.append(record)
     raw = payload.instruction.text.encode("utf-8")
     digest = hashlib.sha256(raw).hexdigest()
     history.instruction_hashes[decision.id] = digest
     if relay is not None:
         history.relays[decision.id] = relay
-    artifact_id = f"instruction:{decision.id}"
-    _require(all(a.id != artifact_id for a in body.snapshot.artifacts))
     body.snapshot.artifacts.append(nsi.EvidenceArtifact(
         id=artifact_id, uri=f"intake:{payload.run_id}/instruction/{decision.id}",
         revision=str(payload.expected_revision), content_hash=digest, media_type="text/plain", actor=actor,
@@ -281,19 +290,35 @@ def execute_decision_operation(cur: Cursor, envelope: CommandEnvelope, actor_id:
     return dict(type=command.type, run_id=payload.run_id, expected_revision=wire, revision=wire + 1)
 
 
-def open_issues(body: IntakeRevisionBody) -> tuple[IntakeIssueRecord, ...]:
-    """Only an owner settlement closes a question and its linked findings."""
-    superseded = {d.superseded_decision_id for d in body.history.decisions}
-    resolved = {d.decision.question_id for d in body.history.decisions if d.decision.id not in superseded}
+def unresolved_findings(body: IntakeRevisionBody) -> tuple[
+    nsi.Gap | nsi.Conflict | nsi.ClarificationQuestion, ...,
+]:
+    """Only active owner coverage of current membership settles linked findings."""
     findings, gap_links = _latest_findings(body)
-    for question_id in tuple(resolved):
-        question = findings.get(question_id)
+    superseded = {d.superseded_decision_id for d in body.history.decisions}
+    decisions = {d.decision.id: (d.decision, d.settled_claim_ids) for d in body.decisions}
+    # Original history owns coverage; revision copies may have stale or broader links.
+    decisions.update({d.decision.id: (d.decision, d.claim_ids) for d in body.history.decisions})
+    resolved: set[str] = set()
+    claim_ids = {c.id for c in body.snapshot.claims}
+    for decision_id, (decision, settled) in decisions.items():
+        if decision_id in superseded:
+            continue
+        question = findings.get(decision.question_id)
         _require(isinstance(question, nsi.ClarificationQuestion))
-        linked, _ = _settlement_membership(body, question, findings, gap_links)
-        resolved.update(linked)
+        _require(set(settled) <= claim_ids)
+        linked, required = _settlement_membership(body, question, findings, gap_links)
+        if decision.actor.kind == "owner" and required <= set(settled):
+            resolved.update(linked)
+    return tuple(finding for finding in findings.values() if finding.id not in resolved)
+
+
+def open_issues(body: IntakeRevisionBody) -> tuple[IntakeIssueRecord, ...]:
+    """Project remaining conflicts/questions with the latest conflict gap links."""
+    _, gap_links = _latest_findings(body)
     return tuple(IntakeIssueRecord(
         issue=issue,
         gaps=tuple(issue.gap_ids) if isinstance(issue, nsi.ClarificationQuestion)
         else gap_links.get(issue.id, ()),
-    ) for issue in findings.values()
-        if isinstance(issue, (nsi.Conflict, nsi.ClarificationQuestion)) and issue.id not in resolved)
+    ) for issue in unresolved_findings(body)
+        if isinstance(issue, (nsi.Conflict, nsi.ClarificationQuestion)))
