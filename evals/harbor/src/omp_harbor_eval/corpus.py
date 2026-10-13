@@ -5,11 +5,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
+
+from omp_work.frozen_corpus import tree_sha256
 
 from .evidence import canonical_json
 from .fixtures import load_fixture
@@ -103,30 +104,8 @@ def _resolve_fixture_dir(fixture_str: str, task_id: str, base_path: Path | None 
 
 
 def task_sha256(directory: str | Path) -> str:
-    """sha256 over files in directory in sorted relpath order.
-
-    Each file contributes: sorted relpath, NUL, 8-byte BE length, bytes.
-    """
-    dir_path = Path(directory)
-    if not dir_path.is_dir():
-        raise ValueError(f"not a directory: {directory}")
-    files: list[tuple[str, Path]] = []
-    for dirpath, _, filenames in os.walk(dir_path, followlinks=False):
-        current = Path(dirpath)
-        for filename in filenames:
-            path = current / filename
-            if path.is_file():
-                relpath = path.relative_to(dir_path).as_posix()
-                files.append((relpath, path))
-    files.sort(key=lambda item: item[0])
-    hasher = hashlib.sha256()
-    for relpath, path in files:
-        data = path.read_bytes()
-        hasher.update(relpath.encode("utf-8"))
-        hasher.update(b"\0")
-        hasher.update(len(data).to_bytes(8, "big"))
-        hasher.update(data)
-    return hasher.hexdigest()
+    """Harbor's public, byte-compatible wrapper for the shared tree digest."""
+    return tree_sha256(directory)
 
 
 def load_batch(path: str | Path) -> Batch:
