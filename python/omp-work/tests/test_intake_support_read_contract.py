@@ -119,9 +119,23 @@ def test_malformed_judgment_rejected_by_model_and_schema(bad: dict[str, Any]) ->
     assert not _schema_validator().is_valid(payload)
 
 
-@pytest.mark.parametrize("verdict", ["supports", "contradicts", "neither", "abstain", "timeout", "evidence-unavailable"])
-def test_six_verdicts_preserve_judge_state_and_disagreement(verdict: str) -> None:
-    judgment = _judgment(verdict=verdict, disagreement=verdict != "supports")
+@pytest.mark.parametrize(
+    ("caller_relation", "verdict"),
+    [
+        ("supports", "supports"),
+        ("supports", "contradicts"),
+        ("supports", "neither"),
+        ("supports", "abstain"),
+        ("supports", "timeout"),
+        ("supports", "evidence-unavailable"),
+        ("contradicts", "contradicts"),
+        ("neither", "neither"),
+        ("contradicts", "neither"),
+        ("neither", "contradicts"),
+    ],
+)
+def test_six_verdicts_preserve_judge_state_and_disagreement(caller_relation: str, verdict: str) -> None:
+    judgment = _judgment(caller_relation=caller_relation, verdict=verdict, disagreement=verdict != caller_relation)
     view = IntakeRecordView.model_validate({**_record(), "support_judgments": [judgment]})
     wire = json.loads(view.model_dump_json())
 
