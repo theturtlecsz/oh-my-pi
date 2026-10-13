@@ -21,9 +21,9 @@ const PROVIDER = "omp-proxy";
 const GRANTED_APIS = ["google-generative-ai", "ollama-chat"] as const;
 /**
  * `setTimeout` and `AbortSignal.timeout` store the delay in a signed 32-bit
- * integer. A later lease (the usual case) overflows and fires immediately,
+ * integer. A later deadline (the usual case) overflows and fires immediately,
  * which would abort a still-valid turn. Past that span the pre-model gate
- * compares the real lease; a single turn cannot outlive the timer limit.
+ * compares the real deadline; a single turn cannot outlive the timer limit.
  */
 const MAX_ABORT_TIMER_MS = 2_147_483_647;
 
@@ -41,6 +41,7 @@ interface WorkerManifest {
 	allowed_paths: string[];
 	candidate_id: string;
 	lease_expires_at: string;
+	task_deadline?: string;
 	model: {
 		api: GrantedApi;
 		id: string;
@@ -129,8 +130,11 @@ function loadManifest(): { ok: true; loaded: LoadedManifest } | { ok: false; mes
 	if (!stringList(allowedPaths)) return invalid("allowed_paths must be a non-empty string array");
 	if (!nonEmptyString(candidateId)) return invalid("candidate_id must be a non-empty string");
 	if (!nonEmptyString(leaseExpiresAt)) return invalid("lease_expires_at must be a timestamp");
-	const deadline = Date.parse(leaseExpiresAt);
-	if (Number.isNaN(deadline)) return invalid("lease_expires_at is not a timestamp");
+	const deadlineField = Object.hasOwn(parsed, "task_deadline") ? "task_deadline" : "lease_expires_at";
+	const deadlineValue = parsed[deadlineField];
+	if (!nonEmptyString(deadlineValue)) return invalid(`${deadlineField} must be a timestamp`);
+	const deadline = Date.parse(deadlineValue);
+	if (Number.isNaN(deadline)) return invalid(`${deadlineField} is not a timestamp`);
 	if (!isRecord(parsed.model)) return invalid("model must be an object");
 	const model = parsed.model;
 	const api = model.api;
@@ -160,6 +164,7 @@ function loadManifest(): { ok: true; loaded: LoadedManifest } | { ok: false; mes
 		allowed_paths: allowedPaths,
 		candidate_id: candidateId,
 		lease_expires_at: leaseExpiresAt,
+		...(deadlineField === "task_deadline" ? { task_deadline: deadlineValue } : {}),
 		model: {
 			api,
 			id: model.id,
@@ -202,7 +207,7 @@ function endpointAllowed(url: string, pinnedBase: string): boolean {
 	return url === pinnedBase || url.startsWith(`${pinnedBase}/`);
 }
 
-/** Agent deadline, or none when the lease is farther out than the abort timer can count. */
+/** Agent deadline, or none when it is farther out than the abort timer can count. */
 function boundedAgentDeadline(deadline: number): number | undefined {
 	const remaining = deadline - Date.now();
 	if (remaining <= 0 || remaining > MAX_ABORT_TIMER_MS) return undefined;
@@ -222,7 +227,7 @@ function writeLine(line: unknown): void {
 
 /**
  * Run the single granted turn. Returns 0 only when it completed with no HTTP,
- * model, or tool refusal and the lease was still in the future. A later model
+ * model, or tool refusal and the selected deadline was still in the future. A later model
  * call cannot clear a refusal: the flag stays set and the pre-model gate stops
  * the loop.
  */

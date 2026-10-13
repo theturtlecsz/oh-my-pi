@@ -25,7 +25,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.concurrency import run_in_threadpool
 
-from omp_work.jobs.budget import item_budget, item_spend, root_work_id
+from omp_work.jobs.budget import item_budget, item_spend, root_work_id, task_deadline
 from omp_work.jobs.lease import current_authority
 from omp_work.jobs.store import NativeJobStore
 from omp_work.model_proxy_budget import ModelProxyBudget, ModelProxyBudgetError
@@ -34,6 +34,7 @@ from omp_work.model_proxy_upstream import (
     prepare, validate_route, UpstreamResult, Prepared,
 )
 from omp_work.operations.config import OperationsConfig
+from omp_work.orchestrator.step_log import list_steps
 from omp_work.routing.policy import load_policy, RoutingRefused
 from omp_work.routing.router import route_stage
 from omp_work.v1.agent_stop import read_stop_state
@@ -197,8 +198,13 @@ def create_app(config: ProxyConfig, *, transport: Transport | None = None) -> Fa
         try:
             with jobs.transaction(task.workspace_id, actor) as cur:
                 authority(task, cur)
-                lease = current_authority(jobs, task.workspace_id, task.job_id, task.worker_id, task.fence, cur=cur)
-                if task.expires_at > lease.expires_at:
+                controls = None
+                if task.mission_id is not None:
+                    submitted = next((step for step in list_steps(cur, task.workspace_id, str(task.mission_id)) if step.get("kind") == "submitted"), None)
+                    if submitted is not None:
+                        controls = submitted["request"].get("controls")
+                deadline = task_deadline(cur, task.workspace_id, task.job_id, controls)
+                if deadline is None or task.expires_at > deadline:
                     raise ModelProxyBudgetError("expiry_refused")
                 if task.mission_id is not None:
                     cur.execute("SELECT project_id FROM omp_work.project_missions WHERE workspace_id=%s AND mission_id=%s", (task.workspace_id, task.mission_id))

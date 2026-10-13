@@ -179,10 +179,18 @@ def test_refusal_poison_prevents_any_upstream(proxy, failure):
 
 def test_registration_authority_and_budget(proxy):
     ctx = proxy
-    for override in ({"fence": 2}, {"worker_id": "other"}, {"work_id": str(uuid4())}, {"workspace_id": str(uuid4())}, {"project_id": str(uuid4())}, {"mission_id": str(uuid4())}, {"ceiling_usd": "999"}, {"expires_at": datetime.now(UTC).isoformat()}, {"expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat()}, {"provider": "ollama_cloud"}):
+    for override in ({"fence": 2}, {"worker_id": "other"}, {"work_id": str(uuid4())}, {"workspace_id": str(uuid4())}, {"project_id": str(uuid4())}, {"mission_id": str(uuid4())}, {"ceiling_usd": "999"}, {"expires_at": datetime.now(UTC).isoformat()}, {"expires_at": (datetime.now(UTC) + timedelta(hours=48)).isoformat()}, {"provider": "ollama_cloud"}):
         response = ctx.client.post("/tasks", json=task(ctx, **override), headers={"Authorization": "Bearer control-secret"})
         assert response.status_code in (400, 403)
+        if "expires_at" in override:
+            assert response.status_code == 403
+            assert response.json()["detail"] == "expiry_refused"
     assert ctx.calls == []
+
+
+def test_registration_admits_expiry_beyond_lease_within_deadline(proxy):
+    response = proxy.client.post("/tasks", json=task(proxy, expires_at=(datetime.now(UTC) + timedelta(seconds=600)).isoformat()), headers={"Authorization": "Bearer control-secret"})
+    assert response.status_code == 200, response.text
 
 
 def test_mid_call_stop_records_spend_but_refuses(proxy):
