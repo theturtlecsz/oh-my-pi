@@ -1,0 +1,1672 @@
+{
+  "version": 1,
+  "verified": true,
+  "receipt": "Actual disposable service and fresh workflow-host current->typed->current rehearsals; not owner approval",
+  "owner_approval": false,
+  "synthetic_review": true,
+  "original_receipts": {
+    "bytes_hex": "7b0a2020227665726966696564223a20747275652c0a20202272656365697074223a202263757272656e742d3e74797065642d3e63757272656e742072656865617273616c3b20726f6c6c6261636b20726573746f7265642063757272656e74220a7d0a7b227665726966696564223a747275652c2272656365697074223a227b5c226b696e645c223a5c226e7369362d726f7574652d73746174655c222c5c2276657273696f6e5c223a312c5c226d6f64655c223a5c2263757272656e745c222c5c227072696f725f62696e64696e675c223a7b5c226d6f64655c223a5c2274797065645c227d2c5c2273746174655f7368613235365c223a5c22303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030305c227d227d0a",
+    "sha256": "b3d4b2694feea5b23ff003000d5cd144f8b2334f82ec0c98bfd37c52b9785a3f",
+    "records": [
+      {
+        "verified": true,
+        "receipt": "current->typed->current rehearsal; rollback restored current"
+      },
+      {
+        "verified": true,
+        "receipt": "{\"kind\":\"nsi6-route-state\",\"version\":1,\"mode\":\"current\",\"prior_binding\":{\"mode\":\"typed\"},\"state_sha256\":\"0000000000000000000000000000000000000000000000000000000000000000\"}"
+      }
+    ]
+  },
+  "artifacts": {
+    "service": {
+      "sha256": "12a1accb041d4eb455f625ee87ca906b62953d0b3977e04817a9ebdf7decd30f",
+      "raw": {
+        "verified": true,
+        "synthetic_review": true,
+        "owner_approval": false,
+        "scope": "disposable PostgreSQL and temporary config; fresh TestClient per transition and publication replay",
+        "transitions": [
+          {
+            "kind": "nsi6-route-state",
+            "version": 1,
+            "mode": "typed",
+            "report": {
+              "path": "/tmp/pytest-of-ompbot/pytest-438/test_capture_real_service_rehe0/report.json",
+              "sha256": "19c16a3eedc7c9f236ede0ffba0d12ffc569197fcc07892f487426d46153fd38"
+            },
+            "review": {
+              "path": "/tmp/pytest-of-ompbot/pytest-438/test_capture_real_service_rehe0/review.json",
+              "sha256": "7d8f95273ac187ae396e33c0d0727e159dd15fcdb0edcfb8424d7c8d5f4848f8"
+            },
+            "implementation": {
+              "packages/work-client/src/index.ts": "78bc187419b5f24eba152ade1cebe7ab39b194a8b7b88e6f7f67b83a9d748fbb",
+              "packages/work-client/src/intake-evaluation.ts": "5b4cb37e154aee125d7449c5f7ce2f1baf1d0a031d17e128f7e0e35c1ba6ca92",
+              "packages/work-client/src/intake-nsi.ts": "4b6515e13bfedc140c4d17898c5b33fa7679c42264868e224257b92925e73e17",
+              "packages/work-client/src/intake-records-hash.ts": "68c79671dd5a755e8dd3cca258077d10fe26a544ff52d76a1353ef2d9681ab96",
+              "packages/work-client/src/intake-records.ts": "7602393e0814d2c8da138af3d0113257f756087bf2a718b510ae700680ea5ff6",
+              "python/omp-work/src/omp_work/contracts/nsi/v1/__init__.py": "6e29cd0b8cfca8df4afc0c816fa47e33b2b5fdebfbfc36f49be8656362ef1b45",
+              "python/omp-work/src/omp_work/contracts/nsi/v1/authority.py": "7c862b6d2576e523cf2f2442dc9e956d6e7031fc9591c42517c65456ab3e4f56",
+              "python/omp-work/src/omp_work/contracts/nsi/v1/authority.schema.json": "abbf2c4f6b3d8c80926bd317dcc24cd8fd083952820c2864a9a7d638e0547087",
+              "python/omp-work/src/omp_work/contracts/nsi/v1/claim.schema.json": "c575dc1692c2a64c811848ecb2f17fe8779428a1d5b0c9e6f7b416479a53dcc5",
+              "python/omp-work/src/omp_work/contracts/nsi/v1/compat.py": "1e21bb1eab95cc06ff690bd14460c933d592c7588766aaba33ad7fb34c2429f6",
+              "python/omp-work/src/omp_work/contracts/nsi/v1/contract.schema.json": "15c830c6e8a7a2e2db9f1198e0c85b8b6034aafa272eaaed9b03223bd42de896",
+              "python/omp-work/src/omp_work/contracts/nsi/v1/models.py": "0e14d66d0e235fb679608a2ee78dacc469491a16c2e43851390a7293bdb2197b",
+              "python/omp-work/src/omp_work/contracts/nsi/v1/status.schema.json": "2374f887a3bd18c22a84376cd2399e4215eb259591b14786a3bf1362136805d4",
+              "python/omp-work/src/omp_work/contracts/nsi/v1/taxonomy.schema.json": "4ce01cb3e5998442863fbdff034f320183cb88226d76a6db6af935bcab6e5227",
+              "python/omp-work/src/omp_work/contracts/nsi/v1/validate.py": "a4fed8cdf6b6c2e0b02952150fadaec2d9007e5081c2de18df639e6cf605fec6",
+              "python/omp-work/src/omp_work/frozen_corpus.py": "3779c4f3e625c54809351a72d821da15dce6ae78992aff92c1ecf3d403a8a2b4",
+              "python/omp-work/src/omp_work/intake_repository.py": "5de7206ed94b357e9b6f12914270c9799de3c5163ba2c12ef474835985ef0c7e",
+              "python/omp-work/src/omp_work/mission_intake_rules.py": "1a6196750a0ebd31524cf871641461cf0915a2d0df250e5563ad8db390353aba",
+              "python/omp-work/src/omp_work/nsi6_corpus.py": "370aef9a208666d1d7157aed5734d7d6a9d771c84d0c06854aac8959f452b2d6",
+              "python/omp-work/src/omp_work/nsi_eval.py": "982d6866c84319c42115169b288a442ba1240b1ac87581606c95011c5479fa34",
+              "python/omp-work/src/omp_work/nsi_eval_postgres.py": "75701e0aec0f9a0a43cffff3e74be6cce44181674da58a652ab7ae4c2226beae",
+              "python/omp-work/src/omp_work/nsi_rollout.py": "61403993942545e87218eeca5e7ccfe569c97417d0b080a943feddf99745e702",
+              "python/omp-work/src/omp_work/nsi_route.py": "a15a978b5072dc1f31f98986a1e3614a59bf0b605fd86c9ce3e5c5b820792e83",
+              "python/omp-work/src/omp_work/operations/config.py": "de3c170fcde050950f2b3ac6760d684eba88203a0207e1ad9aac1a1112e95546",
+              "python/omp-work/src/omp_work/operations/database.py": "4a240100a5aadec5a4b980f29b34c93026dca5e858649bd8683e1d7256a2dde6",
+              "python/omp-work/src/omp_work/v1/__init__.py": "6dd51c5a7ea2031734842daefd14e0980c5ab4c4f19696428502586ea3176f58",
+              "python/omp-work/src/omp_work/v1/agent_stop.py": "185906e79af305858dfd43b90b18fe937d283a7521d4b728031fe4e45db90221",
+              "python/omp-work/src/omp_work/v1/api_models.py": "b109ba3a80a48a0e87e46dfe9a22dd42dc8bbac077af77d790f31a4ace676697",
+              "python/omp-work/src/omp_work/v1/audit_result.py": "353ac879c66e5797004d8c9549534d1f8dffad32533bbececabbb52c948ee64d",
+              "python/omp-work/src/omp_work/v1/canonical.py": "15512e58dd4444fc7f880fe2cd39275892a454817060a2b75f7bbb7c54477d63",
+              "python/omp-work/src/omp_work/v1/client.py": "ce061751f15015772ec902a160cd51c984d8579fe968d71bdd8b47251e59d084",
+              "python/omp-work/src/omp_work/v1/client_api.py": "fd7b243e879d162ee7a601d3d41abc7a512d644be3dac9f60513a312309c03b5",
+              "python/omp-work/src/omp_work/v1/client_response.py": "0dad1e92fde43599b70a407a7f0b6b8cd106506e0716144f910778b948da15ab",
+              "python/omp-work/src/omp_work/v1/decision_records.py": "d34ee924e1c48ef7990d62aef115171efcb58f0d82583aae264b0a1b26bedfd3",
+              "python/omp-work/src/omp_work/v1/intake_commands.py": "935f0b8424d52b10811a857603fa1428d226574ea6b576ac727b5c3e24de5e98",
+              "python/omp-work/src/omp_work/v1/intake_decisions.py": "accf39c4787acbca8fb6494de79dc154d12d5b8b74984c7cd9add69f86e0dcbe",
+              "python/omp-work/src/omp_work/v1/intake_hold.py": "1f36853f957f1be578474c858be369b5e8bf62b9937980746fe7cff3c5e904fb",
+              "python/omp-work/src/omp_work/v1/intake_provenance.py": "c4913315aa10d29bc10d3ab08788b9fb6b7e2cceeb23c70cc687f8274bd69284",
+              "python/omp-work/src/omp_work/v1/intake_provenance_closure.py": "104b5e956b2e3863f96909690b8c641f8fafee87291f56c93c5d6b0f787af0a5",
+              "python/omp-work/src/omp_work/v1/mission_event_store.py": "efcbfb96ca7890387987040e44f93ab7d53a62e2a157fd92380167d73892d269",
+              "python/omp-work/src/omp_work/v1/mission_intake.py": "eb23e6e80d56ae2ac4f2e11cbd83105408a4c1430190543a659831ca62699d0b",
+              "python/omp-work/src/omp_work/v1/mission_standing.py": "f1cd1106a7ae94f4b3506a38429ad9c0f1bde9a05538b0e9d5a0ac4e9b5a13bc",
+              "python/omp-work/src/omp_work/v1/missions.py": "ded306bc8c812b714201e4128bccbd46700da8e1200925068042e896d72072fc",
+              "python/omp-work/src/omp_work/v1/models.py": "3c973ed518aed634ef54a9220acbbe982fbafaa381204f46d72474a7ee6ff870",
+              "python/omp-work/src/omp_work/v1/owner_controller.py": "acd03b58c9aa7dd0deb9abf0c5bc98bc87989cb7740988e2693b4a793351b5f1",
+              "python/omp-work/src/omp_work/v1/owner_relay.py": "b6a2822280dafdad5c425979a3667cc10430afa94a6212b3396a4048f571119d",
+              "python/omp-work/src/omp_work/v1/owner_signature.py": "4c0365a652dd21df6e2142e3a39d7965bd774bb52397012f0e93a112cbea39e5",
+              "python/omp-work/src/omp_work/v1/semantics.py": "cf01ee5730806c23bec6bb4f855bf08e97d915c6072903770db6311b5bde8078",
+              "python/omp-work/src/omp_work/v1/server.py": "41d3d916e0bc7faafd4169a16c89a989d86e59a5cc1b767d8f8cc66048c9d633",
+              "python/omp-work/src/omp_work/v1/service.py": "b07f86b7a4464dca2badede8695330db3c8ee97d58e1d74e4d17bcbd85bf4a0f",
+              "python/omp-work/src/omp_work/v1/store.py": "7c850f35ad2d665b0fa79301a6750003af0b84ba77a79767b5452d01a520ec14",
+              "python/omp-work/src/omp_work/v1/store_shared.py": "83598ac0c6a7b02955d6ddacfeb2d9fa77383a07f69347db60a01f93fa856440",
+              "session-system/extensions/workflow/backend.ts": "a7bb413d887dab423f413c6c28997206801e47af36df248841da60e976daeb9d",
+              "session-system/extensions/workflow/host.ts": "eddf3833f67c71a974dd8c0a8e823cfd0c1efd17048d93daa66a305237d604de",
+              "session-system/extensions/workflow/work.ts": "3d8681fa3f25b37a697b72740f5b88bae8fe5f9680d6325cd04ad9ca964f456d"
+            },
+            "corpus": {
+              "inputs/bounded_intake_golden.json": "5aa80fa4def268b8736bb4331dc240d12d229a9b07985ffa597ddf9d5e00a875",
+              "inputs/cases.json": "10df770a5aeaa9fece38e42d68eb8abea6bfb21717db4f1bba17c29e4d3b7385",
+              "nsi6-manifest.json": "2e70ec23d71ac94b31d756bc86a2e64322e1e98bd3631fdfae224cbd9242cabc"
+            },
+            "prior_binding": {
+              "kind": "nsi6-route-state",
+              "version": 1,
+              "mode": "current",
+              "report": null,
+              "review": null,
+              "implementation": {},
+              "corpus": {},
+              "prior_binding": null,
+              "state_sha256": "04c0a87d02a07970141d6217285573567254c2659f79a5044563cc0b212371c1"
+            },
+            "state_sha256": "0980d465e6434da9e046dbe3e0114983416ecf17c26868c8120c1e9e30591714"
+          },
+          {
+            "kind": "nsi6-route-state",
+            "version": 1,
+            "mode": "current",
+            "report": null,
+            "review": null,
+            "implementation": {},
+            "corpus": {},
+            "prior_binding": {
+              "kind": "nsi6-route-state",
+              "version": 1,
+              "mode": "typed",
+              "report": {
+                "path": "/tmp/pytest-of-ompbot/pytest-438/test_capture_real_service_rehe0/report.json",
+                "sha256": "19c16a3eedc7c9f236ede0ffba0d12ffc569197fcc07892f487426d46153fd38"
+              },
+              "review": {
+                "path": "/tmp/pytest-of-ompbot/pytest-438/test_capture_real_service_rehe0/review.json",
+                "sha256": "7d8f95273ac187ae396e33c0d0727e159dd15fcdb0edcfb8424d7c8d5f4848f8"
+              },
+              "implementation": {
+                "packages/work-client/src/index.ts": "78bc187419b5f24eba152ade1cebe7ab39b194a8b7b88e6f7f67b83a9d748fbb",
+                "packages/work-client/src/intake-evaluation.ts": "5b4cb37e154aee125d7449c5f7ce2f1baf1d0a031d17e128f7e0e35c1ba6ca92",
+                "packages/work-client/src/intake-nsi.ts": "4b6515e13bfedc140c4d17898c5b33fa7679c42264868e224257b92925e73e17",
+                "packages/work-client/src/intake-records-hash.ts": "68c79671dd5a755e8dd3cca258077d10fe26a544ff52d76a1353ef2d9681ab96",
+                "packages/work-client/src/intake-records.ts": "7602393e0814d2c8da138af3d0113257f756087bf2a718b510ae700680ea5ff6",
+                "python/omp-work/src/omp_work/contracts/nsi/v1/__init__.py": "6e29cd0b8cfca8df4afc0c816fa47e33b2b5fdebfbfc36f49be8656362ef1b45",
+                "python/omp-work/src/omp_work/contracts/nsi/v1/authority.py": "7c862b6d2576e523cf2f2442dc9e956d6e7031fc9591c42517c65456ab3e4f56",
+                "python/omp-work/src/omp_work/contracts/nsi/v1/authority.schema.json": "abbf2c4f6b3d8c80926bd317dcc24cd8fd083952820c2864a9a7d638e0547087",
+                "python/omp-work/src/omp_work/contracts/nsi/v1/claim.schema.json": "c575dc1692c2a64c811848ecb2f17fe8779428a1d5b0c9e6f7b416479a53dcc5",
+                "python/omp-work/src/omp_work/contracts/nsi/v1/compat.py": "1e21bb1eab95cc06ff690bd14460c933d592c7588766aaba33ad7fb34c2429f6",
+                "python/omp-work/src/omp_work/contracts/nsi/v1/contract.schema.json": "15c830c6e8a7a2e2db9f1198e0c85b8b6034aafa272eaaed9b03223bd42de896",
+                "python/omp-work/src/omp_work/contracts/nsi/v1/models.py": "0e14d66d0e235fb679608a2ee78dacc469491a16c2e43851390a7293bdb2197b",
+                "python/omp-work/src/omp_work/contracts/nsi/v1/status.schema.json": "2374f887a3bd18c22a84376cd2399e4215eb259591b14786a3bf1362136805d4",
+                "python/omp-work/src/omp_work/contracts/nsi/v1/taxonomy.schema.json": "4ce01cb3e5998442863fbdff034f320183cb88226d76a6db6af935bcab6e5227",
+                "python/omp-work/src/omp_work/contracts/nsi/v1/validate.py": "a4fed8cdf6b6c2e0b02952150fadaec2d9007e5081c2de18df639e6cf605fec6",
+                "python/omp-work/src/omp_work/frozen_corpus.py": "3779c4f3e625c54809351a72d821da15dce6ae78992aff92c1ecf3d403a8a2b4",
+                "python/omp-work/src/omp_work/intake_repository.py": "5de7206ed94b357e9b6f12914270c9799de3c5163ba2c12ef474835985ef0c7e",
+                "python/omp-work/src/omp_work/mission_intake_rules.py": "1a6196750a0ebd31524cf871641461cf0915a2d0df250e5563ad8db390353aba",
+                "python/omp-work/src/omp_work/nsi6_corpus.py": "370aef9a208666d1d7157aed5734d7d6a9d771c84d0c06854aac8959f452b2d6",
+                "python/omp-work/src/omp_work/nsi_eval.py": "982d6866c84319c42115169b288a442ba1240b1ac87581606c95011c5479fa34",
+                "python/omp-work/src/omp_work/nsi_eval_postgres.py": "75701e0aec0f9a0a43cffff3e74be6cce44181674da58a652ab7ae4c2226beae",
+                "python/omp-work/src/omp_work/nsi_rollout.py": "61403993942545e87218eeca5e7ccfe569c97417d0b080a943feddf99745e702",
+                "python/omp-work/src/omp_work/nsi_route.py": "a15a978b5072dc1f31f98986a1e3614a59bf0b605fd86c9ce3e5c5b820792e83",
+                "python/omp-work/src/omp_work/operations/config.py": "de3c170fcde050950f2b3ac6760d684eba88203a0207e1ad9aac1a1112e95546",
+                "python/omp-work/src/omp_work/operations/database.py": "4a240100a5aadec5a4b980f29b34c93026dca5e858649bd8683e1d7256a2dde6",
+                "python/omp-work/src/omp_work/v1/__init__.py": "6dd51c5a7ea2031734842daefd14e0980c5ab4c4f19696428502586ea3176f58",
+                "python/omp-work/src/omp_work/v1/agent_stop.py": "185906e79af305858dfd43b90b18fe937d283a7521d4b728031fe4e45db90221",
+                "python/omp-work/src/omp_work/v1/api_models.py": "b109ba3a80a48a0e87e46dfe9a22dd42dc8bbac077af77d790f31a4ace676697",
+                "python/omp-work/src/omp_work/v1/audit_result.py": "353ac879c66e5797004d8c9549534d1f8dffad32533bbececabbb52c948ee64d",
+                "python/omp-work/src/omp_work/v1/canonical.py": "15512e58dd4444fc7f880fe2cd39275892a454817060a2b75f7bbb7c54477d63",
+                "python/omp-work/src/omp_work/v1/client.py": "ce061751f15015772ec902a160cd51c984d8579fe968d71bdd8b47251e59d084",
+                "python/omp-work/src/omp_work/v1/client_api.py": "fd7b243e879d162ee7a601d3d41abc7a512d644be3dac9f60513a312309c03b5",
+                "python/omp-work/src/omp_work/v1/client_response.py": "0dad1e92fde43599b70a407a7f0b6b8cd106506e0716144f910778b948da15ab",
+                "python/omp-work/src/omp_work/v1/decision_records.py": "d34ee924e1c48ef7990d62aef115171efcb58f0d82583aae264b0a1b26bedfd3",
+                "python/omp-work/src/omp_work/v1/intake_commands.py": "935f0b8424d52b10811a857603fa1428d226574ea6b576ac727b5c3e24de5e98",
+                "python/omp-work/src/omp_work/v1/intake_decisions.py": "accf39c4787acbca8fb6494de79dc154d12d5b8b74984c7cd9add69f86e0dcbe",
+                "python/omp-work/src/omp_work/v1/intake_hold.py": "1f36853f957f1be578474c858be369b5e8bf62b9937980746fe7cff3c5e904fb",
+                "python/omp-work/src/omp_work/v1/intake_provenance.py": "c4913315aa10d29bc10d3ab08788b9fb6b7e2cceeb23c70cc687f8274bd69284",
+                "python/omp-work/src/omp_work/v1/intake_provenance_closure.py": "104b5e956b2e3863f96909690b8c641f8fafee87291f56c93c5d6b0f787af0a5",
+                "python/omp-work/src/omp_work/v1/mission_event_store.py": "efcbfb96ca7890387987040e44f93ab7d53a62e2a157fd92380167d73892d269",
+                "python/omp-work/src/omp_work/v1/mission_intake.py": "eb23e6e80d56ae2ac4f2e11cbd83105408a4c1430190543a659831ca62699d0b",
+                "python/omp-work/src/omp_work/v1/mission_standing.py": "f1cd1106a7ae94f4b3506a38429ad9c0f1bde9a05538b0e9d5a0ac4e9b5a13bc",
+                "python/omp-work/src/omp_work/v1/missions.py": "ded306bc8c812b714201e4128bccbd46700da8e1200925068042e896d72072fc",
+                "python/omp-work/src/omp_work/v1/models.py": "3c973ed518aed634ef54a9220acbbe982fbafaa381204f46d72474a7ee6ff870",
+                "python/omp-work/src/omp_work/v1/owner_controller.py": "acd03b58c9aa7dd0deb9abf0c5bc98bc87989cb7740988e2693b4a793351b5f1",
+                "python/omp-work/src/omp_work/v1/owner_relay.py": "b6a2822280dafdad5c425979a3667cc10430afa94a6212b3396a4048f571119d",
+                "python/omp-work/src/omp_work/v1/owner_signature.py": "4c0365a652dd21df6e2142e3a39d7965bd774bb52397012f0e93a112cbea39e5",
+                "python/omp-work/src/omp_work/v1/semantics.py": "cf01ee5730806c23bec6bb4f855bf08e97d915c6072903770db6311b5bde8078",
+                "python/omp-work/src/omp_work/v1/server.py": "41d3d916e0bc7faafd4169a16c89a989d86e59a5cc1b767d8f8cc66048c9d633",
+                "python/omp-work/src/omp_work/v1/service.py": "b07f86b7a4464dca2badede8695330db3c8ee97d58e1d74e4d17bcbd85bf4a0f",
+                "python/omp-work/src/omp_work/v1/store.py": "7c850f35ad2d665b0fa79301a6750003af0b84ba77a79767b5452d01a520ec14",
+                "python/omp-work/src/omp_work/v1/store_shared.py": "83598ac0c6a7b02955d6ddacfeb2d9fa77383a07f69347db60a01f93fa856440",
+                "session-system/extensions/workflow/backend.ts": "a7bb413d887dab423f413c6c28997206801e47af36df248841da60e976daeb9d",
+                "session-system/extensions/workflow/host.ts": "eddf3833f67c71a974dd8c0a8e823cfd0c1efd17048d93daa66a305237d604de",
+                "session-system/extensions/workflow/work.ts": "3d8681fa3f25b37a697b72740f5b88bae8fe5f9680d6325cd04ad9ca964f456d"
+              },
+              "corpus": {
+                "inputs/bounded_intake_golden.json": "5aa80fa4def268b8736bb4331dc240d12d229a9b07985ffa597ddf9d5e00a875",
+                "inputs/cases.json": "10df770a5aeaa9fece38e42d68eb8abea6bfb21717db4f1bba17c29e4d3b7385",
+                "nsi6-manifest.json": "2e70ec23d71ac94b31d756bc86a2e64322e1e98bd3631fdfae224cbd9242cabc"
+              },
+              "prior_binding": {
+                "kind": "nsi6-route-state",
+                "version": 1,
+                "mode": "current",
+                "report": null,
+                "review": null,
+                "implementation": {},
+                "corpus": {},
+                "prior_binding": null,
+                "state_sha256": "04c0a87d02a07970141d6217285573567254c2659f79a5044563cc0b212371c1"
+              },
+              "state_sha256": "0980d465e6434da9e046dbe3e0114983416ecf17c26868c8120c1e9e30591714"
+            },
+            "state_sha256": "c36430456c153e4b228ad69c0ed650bc10d140f1aa5cce39d26ec0d1eaa234e2"
+          }
+        ],
+        "requests": [
+          {
+            "mode": "current",
+            "command": "assess_bounded_intake",
+            "http_status": 200,
+            "body": {
+              "receipt": {
+                "operation_id": "9f186ff0-d403-48e1-b440-6893229771b0",
+                "request_id": "25936502-fe6a-40cf-8c62-cb5909c78ea0",
+                "state": "applied",
+                "request_sha256": "5d123251ac938ab98a330490f5a18183b8ba323d2cfd5060c8c0750cb9229498",
+                "result_sha256": "657512a72c41e397fdac6b96f3775c3a9192d36003b8a4419ef53015fc2caafb",
+                "diagnostics": []
+              },
+              "result": {
+                "type": "assess_bounded_intake",
+                "semantic_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
+                "rule_bundle_sha256": "92d55ccb8c95c7bd77c166540218a7ebd72792b1f44c07b95152ae49c228102e",
+                "ready_for_ratification": true,
+                "issue_count": 0,
+                "questions": []
+              }
+            }
+          },
+          {
+            "mode": "current",
+            "command": "attest_intake_admission",
+            "http_status": 200,
+            "body": {
+              "receipt": {
+                "operation_id": "97685e48-c07f-4ff4-95aa-f9c669f1bdda",
+                "request_id": "4c025508-8ad6-4871-a380-99b63075d035",
+                "state": "applied",
+                "request_sha256": "15e1a4bed060260f0d399a666d97da558c453f2c9224bc9e72ae746cc4d266ed",
+                "result_sha256": "8e47828fc8f544070abf7a17bf3a94538453c976425a7be20acf38f00346ce57",
+                "diagnostics": []
+              },
+              "result": {
+                "type": "attest_intake_admission",
+                "receipt": {
+                  "receipt_id": "e38cc5ef-1309-4bc6-bf77-9e103b936480",
+                  "work_id": "a7e37135-644d-4a9e-8f7c-098284782930",
+                  "revision_id": "fe7857e4-8430-4607-a0a7-4e2c06f9c9c4",
+                  "candidate_id": "7c9ec342-b379-42c4-b6f2-1a72ac1491bd",
+                  "kind": "intake_admission",
+                  "payload": {
+                    "work_id": "a7e37135-644d-4a9e-8f7c-098284782930",
+                    "revision_id": "fe7857e4-8430-4607-a0a7-4e2c06f9c9c4",
+                    "plan_receipt_id": "494969e5-844c-4616-b36a-abc5188a8205",
+                    "fable_advice_receipt_id": "193a8357-eb74-4ff6-9a9b-92106da534b9",
+                    "native_acceptance_receipt_id": "1fe805fd-668b-4a34-b216-776348ac8de2",
+                    "qualified": true,
+                    "natively_accepted": true,
+                    "deterministic_floor_passed": true,
+                    "rule_bundle_sha256": "92d55ccb8c95c7bd77c166540218a7ebd72792b1f44c07b95152ae49c228102e",
+                    "operator_actor_id": "00000000-0000-7000-8000-0000000000a1"
+                  },
+                  "payload_sha256": "2e65754f8cf72a24315e0e0d938e0b340b829970a4324e2d0de3fe217861d8e4",
+                  "artifact_sha256": null,
+                  "issuer": "work-service/intake-admission",
+                  "issued_at": "2026-10-13T03:34:47.978046Z",
+                  "candidate_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                  "candidate_commit": "cccccccccccccccccccccccccccccccccccccccc",
+                  "verdict": null,
+                  "independent": false,
+                  "remote_ref": null,
+                  "remote_commit": null
+                },
+                "operator_actor_id": "00000000-0000-7000-8000-0000000000a1"
+              }
+            }
+          },
+          {
+            "mode": "current",
+            "command": "assess_bounded_intake",
+            "http_status": 200,
+            "body": {
+              "receipt": {
+                "operation_id": "274b700e-3448-4c8d-9ef1-8394901b714f",
+                "request_id": "3dfc83d4-9b4d-45bf-8a0e-b5032d8ed9b0",
+                "state": "applied",
+                "request_sha256": "0a3582df588a73a0f213149f180eaa7c0ecc68b319639cbc614515bc09d8ae31",
+                "result_sha256": "657512a72c41e397fdac6b96f3775c3a9192d36003b8a4419ef53015fc2caafb",
+                "diagnostics": []
+              },
+              "result": {
+                "type": "assess_bounded_intake",
+                "semantic_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
+                "rule_bundle_sha256": "92d55ccb8c95c7bd77c166540218a7ebd72792b1f44c07b95152ae49c228102e",
+                "ready_for_ratification": true,
+                "issue_count": 0,
+                "questions": []
+              }
+            }
+          },
+          {
+            "mode": "current",
+            "command": "attest_intake_admission",
+            "http_status": 200,
+            "body": {
+              "receipt": {
+                "operation_id": "59f5df53-6759-4fad-9d65-ea0f696af25f",
+                "request_id": "758d2571-81ec-43a5-a970-2cef4c16a671",
+                "state": "applied",
+                "request_sha256": "576eb647c516301f2ae9c101cf3e896768ba420412dd4b610fc04bf9ec76d020",
+                "result_sha256": "60eaa2cf9ad6e4c1137671904126e84762087182e950577f8586d780e0d745f6",
+                "diagnostics": []
+              },
+              "result": {
+                "type": "attest_intake_admission",
+                "receipt": {
+                  "receipt_id": "fc26d9d4-6008-489e-a461-95641feaaa6c",
+                  "work_id": "6d12ecbe-653a-4876-92bf-52179be12b19",
+                  "revision_id": "49e7d04d-393c-49a7-973a-ae90d7168c48",
+                  "candidate_id": "42dc9bbc-b6a7-44f1-8fa8-1c0eb30bcc57",
+                  "kind": "intake_admission",
+                  "payload": {
+                    "work_id": "6d12ecbe-653a-4876-92bf-52179be12b19",
+                    "revision_id": "49e7d04d-393c-49a7-973a-ae90d7168c48",
+                    "plan_receipt_id": "9c0143c6-9ef0-4b4d-ab4c-b239087ad193",
+                    "fable_advice_receipt_id": "fdacd919-89f6-49dd-a182-785a0836ff0a",
+                    "native_acceptance_receipt_id": "58b23dd1-b526-4492-905a-9cd46c57131d",
+                    "qualified": true,
+                    "natively_accepted": true,
+                    "deterministic_floor_passed": true,
+                    "rule_bundle_sha256": "92d55ccb8c95c7bd77c166540218a7ebd72792b1f44c07b95152ae49c228102e",
+                    "operator_actor_id": "00000000-0000-7000-8000-0000000000a1"
+                  },
+                  "payload_sha256": "6775b2ab22b315136fdb05ec1617371a729f0cc17221fe39ac7675bde163fc96",
+                  "artifact_sha256": null,
+                  "issuer": "work-service/intake-admission",
+                  "issued_at": "2026-10-13T03:34:48.056427Z",
+                  "candidate_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                  "candidate_commit": "cccccccccccccccccccccccccccccccccccccccc",
+                  "verdict": null,
+                  "independent": false,
+                  "remote_ref": null,
+                  "remote_commit": null
+                },
+                "operator_actor_id": "00000000-0000-7000-8000-0000000000a1"
+              }
+            }
+          },
+          {
+            "mode": "current",
+            "command": "assess_bounded_intake",
+            "http_status": 200,
+            "body": {
+              "receipt": {
+                "operation_id": "8d65a14c-eeb0-4627-83ba-f52875bb1e62",
+                "request_id": "19c801ae-b006-4914-8888-61c32c146e18",
+                "state": "applied",
+                "request_sha256": "c536b3a03704ad933786516dd5c8df8a4aa0b7454977e622bbc43b490ff087f7",
+                "result_sha256": "657512a72c41e397fdac6b96f3775c3a9192d36003b8a4419ef53015fc2caafb",
+                "diagnostics": []
+              },
+              "result": {
+                "type": "assess_bounded_intake",
+                "semantic_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
+                "rule_bundle_sha256": "92d55ccb8c95c7bd77c166540218a7ebd72792b1f44c07b95152ae49c228102e",
+                "ready_for_ratification": true,
+                "issue_count": 0,
+                "questions": []
+              }
+            }
+          },
+          {
+            "mode": "current",
+            "command": "attest_intake_admission",
+            "http_status": 200,
+            "body": {
+              "receipt": {
+                "operation_id": "187d17f6-e602-466b-921b-e602ea3dd006",
+                "request_id": "b0eb926d-be4f-47c2-84f0-8b2cefb1b5da",
+                "state": "applied",
+                "request_sha256": "d0d6b2c8f710f93497702475bc68973547192ef44efddd0b854ebfe389c99551",
+                "result_sha256": "c2025b03bb2ace2de1e10e741b74d56c926c316ec63efa385d57c42b9320502c",
+                "diagnostics": []
+              },
+              "result": {
+                "type": "attest_intake_admission",
+                "receipt": {
+                  "receipt_id": "930c808d-c4be-4d59-8c9b-ddad84f25b26",
+                  "work_id": "76d0d1ca-33ed-44c2-8577-bf44e320debe",
+                  "revision_id": "2c51a6e7-89fd-4ffd-a660-735162402840",
+                  "candidate_id": "c02c5272-e661-472a-a802-aea8a5192f55",
+                  "kind": "intake_admission",
+                  "payload": {
+                    "work_id": "76d0d1ca-33ed-44c2-8577-bf44e320debe",
+                    "revision_id": "2c51a6e7-89fd-4ffd-a660-735162402840",
+                    "plan_receipt_id": "6fa7d8c1-a2dc-4473-a397-4bf2d7ec283e",
+                    "fable_advice_receipt_id": "d1a1700e-e3d5-42b6-9dd5-c263a3e2f14d",
+                    "native_acceptance_receipt_id": "6cb3112c-48da-4d71-8383-c49898775726",
+                    "qualified": true,
+                    "natively_accepted": true,
+                    "deterministic_floor_passed": true,
+                    "rule_bundle_sha256": "92d55ccb8c95c7bd77c166540218a7ebd72792b1f44c07b95152ae49c228102e",
+                    "operator_actor_id": "00000000-0000-7000-8000-0000000000a1"
+                  },
+                  "payload_sha256": "d8a8f69b62ecbcce326117a32a4367215115733a1362f90541de6190de889dd6",
+                  "artifact_sha256": null,
+                  "issuer": "work-service/intake-admission",
+                  "issued_at": "2026-10-13T03:34:48.134842Z",
+                  "candidate_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                  "candidate_commit": "cccccccccccccccccccccccccccccccccccccccc",
+                  "verdict": null,
+                  "independent": false,
+                  "remote_ref": null,
+                  "remote_commit": null
+                },
+                "operator_actor_id": "00000000-0000-7000-8000-0000000000a1"
+              }
+            }
+          },
+          {
+            "mode": "current",
+            "command": "assess_bounded_intake",
+            "http_status": 200,
+            "body": {
+              "receipt": {
+                "operation_id": "9f186ff0-d403-48e1-b440-6893229771b0",
+                "request_id": "c39df819-0812-4226-a150-28a721252b17",
+                "state": "replayed",
+                "request_sha256": "5d123251ac938ab98a330490f5a18183b8ba323d2cfd5060c8c0750cb9229498",
+                "result_sha256": "657512a72c41e397fdac6b96f3775c3a9192d36003b8a4419ef53015fc2caafb",
+                "diagnostics": []
+              },
+              "result": {
+                "type": "assess_bounded_intake",
+                "semantic_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
+                "rule_bundle_sha256": "92d55ccb8c95c7bd77c166540218a7ebd72792b1f44c07b95152ae49c228102e",
+                "ready_for_ratification": true,
+                "issue_count": 0,
+                "questions": []
+              }
+            }
+          },
+          {
+            "mode": "current",
+            "command": "assess_bounded_intake",
+            "http_status": 200,
+            "body": {
+              "receipt": {
+                "operation_id": "d01a8242-cd69-4ab5-90b1-8b589b0e71f6",
+                "request_id": "1bd67230-9547-4992-b7ed-4d57c9cd1ab9",
+                "state": "applied",
+                "request_sha256": "a6d6ed3697a082f48fc3baadb489a76d8f61b13e36833c18e727bb88d19f7f38",
+                "result_sha256": "e62e1f56271447842906f2a308b6041b74f6f2f2e29f770aa80aa40f0cd53802",
+                "diagnostics": []
+              },
+              "result": {
+                "type": "assess_bounded_intake",
+                "semantic_sha256": "64243d1fc775ffdb3ce5902d7e17b5ff0d2ba2b29b8555970bb431ac684d6b05",
+                "rule_bundle_sha256": "92d55ccb8c95c7bd77c166540218a7ebd72792b1f44c07b95152ae49c228102e",
+                "ready_for_ratification": false,
+                "issue_count": 4,
+                "questions": [
+                  {
+                    "rule_class": "missing_verification_oracle",
+                    "deduplication_key": "oracle:ac-export",
+                    "statement": "missing_verification_oracle:oracle:ac-export",
+                    "priority": 1,
+                    "claim_ids": [
+                      "ac-export"
+                    ]
+                  },
+                  {
+                    "rule_class": "missing_verification_oracle",
+                    "deduplication_key": "oracle:ac-failure",
+                    "statement": "missing_verification_oracle:oracle:ac-failure",
+                    "priority": 1,
+                    "claim_ids": [
+                      "ac-failure"
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "mode": "current",
+            "command": "draft_mission_intake",
+            "http_status": 200,
+            "body": {
+              "receipt": {
+                "operation_id": "032f2e38-6811-435e-aea8-8e46e6f7d783",
+                "request_id": "6227f562-2d01-445c-a22d-75debeaa032a",
+                "state": "applied",
+                "request_sha256": "00a934c13b193fdeb17699259d2a261a657198c518f8d21b21f093c58fd36bf1",
+                "result_sha256": "ed625b93244626ccba7aa572e7efda37dfc91150e1c9b2faf5f78c9eaa93922e",
+                "diagnostics": []
+              },
+              "result": {
+                "type": "draft_mission_intake",
+                "mission_id": "8a3002d4-0eac-4b8f-801f-c8e47c5ae371",
+                "outcome": "clarify",
+                "questions": [
+                  {
+                    "rule_class": "missing_verification_oracle",
+                    "deduplication_key": "oracle:ac-export",
+                    "statement": "missing_verification_oracle:oracle:ac-export",
+                    "priority": 1,
+                    "claim_ids": [
+                      "ac-export"
+                    ]
+                  },
+                  {
+                    "rule_class": "missing_verification_oracle",
+                    "deduplication_key": "oracle:ac-failure",
+                    "statement": "missing_verification_oracle:oracle:ac-failure",
+                    "priority": 1,
+                    "claim_ids": [
+                      "ac-failure"
+                    ]
+                  }
+                ],
+                "mission": null,
+                "decision_id": null,
+                "basis": null
+              }
+            }
+          },
+          {
+            "mode": "current",
+            "command": "publish_bounded_intake",
+            "http_status": 409,
+            "body": {
+              "error": {
+                "code": "intake_not_ready",
+                "request_id": "61eb22cd-73fe-48c0-a8cf-26e74b99db59",
+                "correlation_id": "c16db373-4748-423b-b846-ae9a70640499",
+                "diagnostics": [
+                  "missing_verification_oracle:oracle:ac-export",
+                  "missing_verification_oracle:oracle:ac-failure"
+                ]
+              }
+            }
+          },
+          {
+            "mode": "current",
+            "command": "publish_bounded_intake",
+            "http_status": 409,
+            "body": {
+              "error": {
+                "code": "stale_intake",
+                "request_id": "7db8f555-7de2-44a4-9237-3e2cc8e00377",
+                "correlation_id": "09c0e7f3-251a-4912-b2c5-df5300159e28",
+                "diagnostics": [
+                  "current positive intake assessment is required"
+                ]
+              }
+            }
+          },
+          {
+            "mode": "current",
+            "command": "publish_bounded_intake",
+            "http_status": 409,
+            "body": {
+              "error": {
+                "code": "stale_intake",
+                "request_id": "1ce0f452-623e-4df8-80fa-830f2ec59d87",
+                "correlation_id": "45ba81b7-d2aa-4568-b03e-943a5fb78440",
+                "diagnostics": [
+                  "owner ratification does not match current typed semantics"
+                ]
+              }
+            }
+          },
+          {
+            "mode": "current",
+            "command": "publish_bounded_intake",
+            "http_status": 409,
+            "body": {
+              "error": {
+                "code": "intake_admission_blocked",
+                "request_id": "a3e327c0-4b0e-440f-8b64-2f748f73b132",
+                "correlation_id": "a3f7530f-34d9-462b-a52b-e5f4c0e24ae2",
+                "diagnostics": [
+                  "admission receipt is not on the lineage"
+                ]
+              }
+            }
+          },
+          {
+            "mode": "current",
+            "command": "publish_bounded_intake",
+            "http_status": 200,
+            "body": {
+              "receipt": {
+                "operation_id": "61db79d6-184c-4594-8e50-73deecc36231",
+                "request_id": "8ef0eaa5-5cc3-4e85-8fc4-ded2fe8ee51c",
+                "state": "applied",
+                "request_sha256": "be977e8afcd09e2ed1cd7f02bd11ec96fc19836b6912d0aa7709cea8c8220b63",
+                "result_sha256": "13ee90a5cdffe939f784fd4a1dec443d4cebf23de9cb38fb07d7710e37787a6e",
+                "diagnostics": []
+              },
+              "result": {
+                "type": "publish_bounded_intake",
+                "item": {
+                  "client_ref": "bounded-intake",
+                  "work_id": "3b5232b6-c364-4652-9137-a5d556865d18",
+                  "revision_id": "eb2ed526-11cd-47fb-b9b6-5918820aeb18",
+                  "key": "OMP-1",
+                  "state": "BACKLOG",
+                  "row_version": 1
+                },
+                "receipt": {
+                  "receipt_id": "71e73f43-e578-4d96-bd4a-84df2ae96815",
+                  "work_id": "3b5232b6-c364-4652-9137-a5d556865d18",
+                  "revision_id": "eb2ed526-11cd-47fb-b9b6-5918820aeb18",
+                  "candidate_id": "fa876f8b-4d41-4406-9957-8e81ddf7d41e",
+                  "kind": "intake_publication",
+                  "payload": {
+                    "draft": {
+                      "archetype": "small_code_change",
+                      "source": {
+                        "text": "Change the cache flag to false. Keep the value valid. Verify with an automated regression test.",
+                        "sha256": "5dbcbfab8ea810b30ae63e5c600dbf878a629f813d5f110b1ee091a1e0ae6dd9",
+                        "spans": [
+                          {
+                            "id": "all",
+                            "start": 0,
+                            "end": 95,
+                            "exact_text_sha256": "5dbcbfab8ea810b30ae63e5c600dbf878a629f813d5f110b1ee091a1e0ae6dd9"
+                          }
+                        ]
+                      },
+                      "goal": {
+                        "id": "goal",
+                        "statement": "Change the cache flag",
+                        "source_span_ids": [
+                          "all"
+                        ]
+                      },
+                      "constraints": [],
+                      "unknowns": [],
+                      "acceptance_criteria": [
+                        {
+                          "id": "test",
+                          "statement": "Automated regression test passes",
+                          "source_span_ids": [
+                            "all"
+                          ],
+                          "observable_outcome": "the automated regression test exits zero",
+                          "oracle": "automated_test"
+                        }
+                      ],
+                      "budget": {
+                        "usd": "50.00",
+                        "tokens": 500000,
+                        "wall_clock_seconds": 3600,
+                        "max_subagents": 2
+                      }
+                    },
+                    "semantic_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
+                    "rule_bundle_sha256": "92d55ccb8c95c7bd77c166540218a7ebd72792b1f44c07b95152ae49c228102e",
+                    "ratified_by": "00000000-0000-7000-8000-0000000000a1",
+                    "assessment_operation_id": "9f186ff0-d403-48e1-b440-6893229771b0",
+                    "admission_receipt_id": "e38cc5ef-1309-4bc6-bf77-9e103b936480"
+                  },
+                  "payload_sha256": "e876225faacbc585e56b21bf29d996164624aaf400aac90c7990c2a228dca2c9",
+                  "artifact_sha256": "5dbcbfab8ea810b30ae63e5c600dbf878a629f813d5f110b1ee091a1e0ae6dd9",
+                  "issuer": "work-service/bounded-intake",
+                  "issued_at": "2026-10-13T03:34:48.344709Z",
+                  "candidate_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
+                  "candidate_commit": null,
+                  "verdict": null,
+                  "independent": false,
+                  "remote_ref": null,
+                  "remote_commit": null
+                }
+              }
+            }
+          },
+          {
+            "mode": "current",
+            "command": "publish_bounded_intake",
+            "http_status": 200,
+            "body": {
+              "receipt": {
+                "operation_id": "61db79d6-184c-4594-8e50-73deecc36231",
+                "request_id": "fd081b62-6354-4670-bd47-44fb3a372bb8",
+                "state": "replayed",
+                "request_sha256": "be977e8afcd09e2ed1cd7f02bd11ec96fc19836b6912d0aa7709cea8c8220b63",
+                "result_sha256": "13ee90a5cdffe939f784fd4a1dec443d4cebf23de9cb38fb07d7710e37787a6e",
+                "diagnostics": []
+              },
+              "result": {
+                "type": "publish_bounded_intake",
+                "item": {
+                  "client_ref": "bounded-intake",
+                  "work_id": "3b5232b6-c364-4652-9137-a5d556865d18",
+                  "revision_id": "eb2ed526-11cd-47fb-b9b6-5918820aeb18",
+                  "key": "OMP-1",
+                  "state": "BACKLOG",
+                  "row_version": 1
+                },
+                "receipt": {
+                  "receipt_id": "71e73f43-e578-4d96-bd4a-84df2ae96815",
+                  "work_id": "3b5232b6-c364-4652-9137-a5d556865d18",
+                  "revision_id": "eb2ed526-11cd-47fb-b9b6-5918820aeb18",
+                  "candidate_id": "fa876f8b-4d41-4406-9957-8e81ddf7d41e",
+                  "kind": "intake_publication",
+                  "payload": {
+                    "draft": {
+                      "goal": {
+                        "id": "goal",
+                        "statement": "Change the cache flag",
+                        "source_span_ids": [
+                          "all"
+                        ]
+                      },
+                      "budget": {
+                        "usd": "50.00",
+                        "tokens": 500000,
+                        "max_subagents": 2,
+                        "wall_clock_seconds": 3600
+                      },
+                      "source": {
+                        "text": "Change the cache flag to false. Keep the value valid. Verify with an automated regression test.",
+                        "spans": [
+                          {
+                            "id": "all",
+                            "end": 95,
+                            "start": 0,
+                            "exact_text_sha256": "5dbcbfab8ea810b30ae63e5c600dbf878a629f813d5f110b1ee091a1e0ae6dd9"
+                          }
+                        ],
+                        "sha256": "5dbcbfab8ea810b30ae63e5c600dbf878a629f813d5f110b1ee091a1e0ae6dd9"
+                      },
+                      "unknowns": [],
+                      "archetype": "small_code_change",
+                      "constraints": [],
+                      "acceptance_criteria": [
+                        {
+                          "id": "test",
+                          "oracle": "automated_test",
+                          "statement": "Automated regression test passes",
+                          "source_span_ids": [
+                            "all"
+                          ],
+                          "observable_outcome": "the automated regression test exits zero"
+                        }
+                      ]
+                    },
+                    "ratified_by": "00000000-0000-7000-8000-0000000000a1",
+                    "semantic_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
+                    "rule_bundle_sha256": "92d55ccb8c95c7bd77c166540218a7ebd72792b1f44c07b95152ae49c228102e",
+                    "admission_receipt_id": "e38cc5ef-1309-4bc6-bf77-9e103b936480",
+                    "assessment_operation_id": "9f186ff0-d403-48e1-b440-6893229771b0"
+                  },
+                  "payload_sha256": "e876225faacbc585e56b21bf29d996164624aaf400aac90c7990c2a228dca2c9",
+                  "artifact_sha256": "5dbcbfab8ea810b30ae63e5c600dbf878a629f813d5f110b1ee091a1e0ae6dd9",
+                  "issuer": "work-service/bounded-intake",
+                  "issued_at": "2026-10-13T03:34:48.344709Z",
+                  "candidate_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
+                  "candidate_commit": null,
+                  "verdict": null,
+                  "independent": false,
+                  "remote_ref": null,
+                  "remote_commit": null
+                }
+              }
+            }
+          },
+          {
+            "mode": "typed",
+            "command": "assess_bounded_intake",
+            "http_status": 200,
+            "body": {
+              "receipt": {
+                "operation_id": "274b700e-3448-4c8d-9ef1-8394901b714f",
+                "request_id": "d6520181-7132-44cb-adb6-e1666bee6e89",
+                "state": "replayed",
+                "request_sha256": "0a3582df588a73a0f213149f180eaa7c0ecc68b319639cbc614515bc09d8ae31",
+                "result_sha256": "657512a72c41e397fdac6b96f3775c3a9192d36003b8a4419ef53015fc2caafb",
+                "diagnostics": []
+              },
+              "result": {
+                "type": "assess_bounded_intake",
+                "semantic_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
+                "rule_bundle_sha256": "92d55ccb8c95c7bd77c166540218a7ebd72792b1f44c07b95152ae49c228102e",
+                "ready_for_ratification": true,
+                "issue_count": 0,
+                "questions": []
+              }
+            }
+          },
+          {
+            "mode": "typed",
+            "command": "assess_bounded_intake",
+            "http_status": 200,
+            "body": {
+              "receipt": {
+                "operation_id": "742f7f59-64ba-40b6-9ea7-b2dd342f35d1",
+                "request_id": "86a65f92-4ccc-4854-aa79-9e54c8adbe16",
+                "state": "applied",
+                "request_sha256": "6af68e905944c239da3ade8842df71468dbf3ee72f8dbbbcf009d77835714d63",
+                "result_sha256": "e62e1f56271447842906f2a308b6041b74f6f2f2e29f770aa80aa40f0cd53802",
+                "diagnostics": []
+              },
+              "result": {
+                "type": "assess_bounded_intake",
+                "semantic_sha256": "64243d1fc775ffdb3ce5902d7e17b5ff0d2ba2b29b8555970bb431ac684d6b05",
+                "rule_bundle_sha256": "92d55ccb8c95c7bd77c166540218a7ebd72792b1f44c07b95152ae49c228102e",
+                "ready_for_ratification": false,
+                "issue_count": 4,
+                "questions": [
+                  {
+                    "rule_class": "missing_verification_oracle",
+                    "deduplication_key": "oracle:ac-export",
+                    "statement": "missing_verification_oracle:oracle:ac-export",
+                    "priority": 1,
+                    "claim_ids": [
+                      "ac-export"
+                    ]
+                  },
+                  {
+                    "rule_class": "missing_verification_oracle",
+                    "deduplication_key": "oracle:ac-failure",
+                    "statement": "missing_verification_oracle:oracle:ac-failure",
+                    "priority": 1,
+                    "claim_ids": [
+                      "ac-failure"
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "mode": "typed",
+            "command": "draft_mission_intake",
+            "http_status": 200,
+            "body": {
+              "receipt": {
+                "operation_id": "1d1be48d-0ccf-4150-aeb5-46bcb82fec51",
+                "request_id": "8db65314-f0ec-48c6-8a55-9ce9285dc589",
+                "state": "applied",
+                "request_sha256": "06f392c010868265d32cf363c02bd6117a76ca4099134b7c76b87d927aa69cbe",
+                "result_sha256": "0fd93e490afcc32bef98421e3dec7dd31ab8384a51e8bbc726710768c8ebcbab",
+                "diagnostics": []
+              },
+              "result": {
+                "type": "draft_mission_intake",
+                "mission_id": "e9a59ae6-5742-4ffe-88e9-10060605853d",
+                "outcome": "clarify",
+                "questions": [
+                  {
+                    "rule_class": "missing_verification_oracle",
+                    "deduplication_key": "oracle:ac-export",
+                    "statement": "missing_verification_oracle:oracle:ac-export",
+                    "priority": 1,
+                    "claim_ids": [
+                      "ac-export"
+                    ]
+                  },
+                  {
+                    "rule_class": "missing_verification_oracle",
+                    "deduplication_key": "oracle:ac-failure",
+                    "statement": "missing_verification_oracle:oracle:ac-failure",
+                    "priority": 1,
+                    "claim_ids": [
+                      "ac-failure"
+                    ]
+                  }
+                ],
+                "mission": null,
+                "decision_id": null,
+                "basis": null
+              }
+            }
+          },
+          {
+            "mode": "typed",
+            "command": "publish_bounded_intake",
+            "http_status": 409,
+            "body": {
+              "error": {
+                "code": "intake_not_ready",
+                "request_id": "fb657b75-040e-4c14-b0b5-82235d743d9f",
+                "correlation_id": "4edec094-0de1-4554-987c-f9c57d13ca76",
+                "diagnostics": [
+                  "missing_verification_oracle:oracle:ac-export",
+                  "missing_verification_oracle:oracle:ac-failure"
+                ]
+              }
+            }
+          },
+          {
+            "mode": "typed",
+            "command": "publish_bounded_intake",
+            "http_status": 409,
+            "body": {
+              "error": {
+                "code": "stale_intake",
+                "request_id": "96ca2fc8-c469-4e88-9bc1-3d1af3cc2dc1",
+                "correlation_id": "5cb43f17-3bff-483d-aa40-41a403e936ad",
+                "diagnostics": [
+                  "current positive intake assessment is required"
+                ]
+              }
+            }
+          },
+          {
+            "mode": "typed",
+            "command": "publish_bounded_intake",
+            "http_status": 409,
+            "body": {
+              "error": {
+                "code": "stale_intake",
+                "request_id": "fc3b05e5-4433-410c-b740-6c9b57ad1ff2",
+                "correlation_id": "68f96688-ebe2-4eb2-b8c5-c3c29f15db4f",
+                "diagnostics": [
+                  "owner ratification does not match current typed semantics"
+                ]
+              }
+            }
+          },
+          {
+            "mode": "typed",
+            "command": "publish_bounded_intake",
+            "http_status": 409,
+            "body": {
+              "error": {
+                "code": "intake_admission_blocked",
+                "request_id": "656f902e-9ef0-4497-9cec-6aaebad66627",
+                "correlation_id": "ebe00102-2a84-4692-8c10-49aed19f8284",
+                "diagnostics": [
+                  "admission receipt is not on the lineage"
+                ]
+              }
+            }
+          },
+          {
+            "mode": "typed",
+            "command": "publish_bounded_intake",
+            "http_status": 200,
+            "body": {
+              "receipt": {
+                "operation_id": "92a5a6de-9c24-4a78-990d-ad331434cf50",
+                "request_id": "98bcccd1-6abb-46f1-807f-3da89832f3f8",
+                "state": "applied",
+                "request_sha256": "9616d4dfd3157a80c6cc9b26e41a5dde36fc7b709626591a13daca8abf1b0716",
+                "result_sha256": "4e1b40efa5192f017854c4b75fb64241776625182e4a3b83a96154a208d82406",
+                "diagnostics": []
+              },
+              "result": {
+                "type": "publish_bounded_intake",
+                "item": {
+                  "client_ref": "bounded-intake",
+                  "work_id": "1762fe70-fd58-4096-bc89-082dd0440d6e",
+                  "revision_id": "1e5e9967-54d6-415e-8d8f-8b11aed59beb",
+                  "key": "OMP-1",
+                  "state": "BACKLOG",
+                  "row_version": 1
+                },
+                "receipt": {
+                  "receipt_id": "259ab872-5801-4cc6-9ce1-2d80a6acdfbe",
+                  "work_id": "1762fe70-fd58-4096-bc89-082dd0440d6e",
+                  "revision_id": "1e5e9967-54d6-415e-8d8f-8b11aed59beb",
+                  "candidate_id": "84a3c178-dac0-449c-9006-037b02e6562a",
+                  "kind": "intake_publication",
+                  "payload": {
+                    "draft": {
+                      "archetype": "small_code_change",
+                      "source": {
+                        "text": "Change the cache flag to false. Keep the value valid. Verify with an automated regression test.",
+                        "sha256": "5dbcbfab8ea810b30ae63e5c600dbf878a629f813d5f110b1ee091a1e0ae6dd9",
+                        "spans": [
+                          {
+                            "id": "all",
+                            "start": 0,
+                            "end": 95,
+                            "exact_text_sha256": "5dbcbfab8ea810b30ae63e5c600dbf878a629f813d5f110b1ee091a1e0ae6dd9"
+                          }
+                        ]
+                      },
+                      "goal": {
+                        "id": "goal",
+                        "statement": "Change the cache flag",
+                        "source_span_ids": [
+                          "all"
+                        ]
+                      },
+                      "constraints": [],
+                      "unknowns": [],
+                      "acceptance_criteria": [
+                        {
+                          "id": "test",
+                          "statement": "Automated regression test passes",
+                          "source_span_ids": [
+                            "all"
+                          ],
+                          "observable_outcome": "the automated regression test exits zero",
+                          "oracle": "automated_test"
+                        }
+                      ],
+                      "budget": {
+                        "usd": "50.00",
+                        "tokens": 500000,
+                        "wall_clock_seconds": 3600,
+                        "max_subagents": 2
+                      }
+                    },
+                    "semantic_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
+                    "rule_bundle_sha256": "92d55ccb8c95c7bd77c166540218a7ebd72792b1f44c07b95152ae49c228102e",
+                    "ratified_by": "00000000-0000-7000-8000-0000000000a1",
+                    "assessment_operation_id": "274b700e-3448-4c8d-9ef1-8394901b714f",
+                    "admission_receipt_id": "fc26d9d4-6008-489e-a461-95641feaaa6c"
+                  },
+                  "payload_sha256": "07a586158b6fb9240096ec41addc9ed74cfb7ebc6b5e87d0b55b84d2cde9dedd",
+                  "artifact_sha256": "5dbcbfab8ea810b30ae63e5c600dbf878a629f813d5f110b1ee091a1e0ae6dd9",
+                  "issuer": "work-service/bounded-intake",
+                  "issued_at": "2026-10-13T03:34:50.540270Z",
+                  "candidate_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
+                  "candidate_commit": null,
+                  "verdict": null,
+                  "independent": false,
+                  "remote_ref": null,
+                  "remote_commit": null
+                }
+              }
+            }
+          },
+          {
+            "mode": "typed",
+            "command": "publish_bounded_intake",
+            "http_status": 200,
+            "body": {
+              "receipt": {
+                "operation_id": "92a5a6de-9c24-4a78-990d-ad331434cf50",
+                "request_id": "c61079db-cd4c-4aa6-9d8c-c86845c83f55",
+                "state": "replayed",
+                "request_sha256": "9616d4dfd3157a80c6cc9b26e41a5dde36fc7b709626591a13daca8abf1b0716",
+                "result_sha256": "4e1b40efa5192f017854c4b75fb64241776625182e4a3b83a96154a208d82406",
+                "diagnostics": []
+              },
+              "result": {
+                "type": "publish_bounded_intake",
+                "item": {
+                  "client_ref": "bounded-intake",
+                  "work_id": "1762fe70-fd58-4096-bc89-082dd0440d6e",
+                  "revision_id": "1e5e9967-54d6-415e-8d8f-8b11aed59beb",
+                  "key": "OMP-1",
+                  "state": "BACKLOG",
+                  "row_version": 1
+                },
+                "receipt": {
+                  "receipt_id": "259ab872-5801-4cc6-9ce1-2d80a6acdfbe",
+                  "work_id": "1762fe70-fd58-4096-bc89-082dd0440d6e",
+                  "revision_id": "1e5e9967-54d6-415e-8d8f-8b11aed59beb",
+                  "candidate_id": "84a3c178-dac0-449c-9006-037b02e6562a",
+                  "kind": "intake_publication",
+                  "payload": {
+                    "draft": {
+                      "goal": {
+                        "id": "goal",
+                        "statement": "Change the cache flag",
+                        "source_span_ids": [
+                          "all"
+                        ]
+                      },
+                      "budget": {
+                        "usd": "50.00",
+                        "tokens": 500000,
+                        "max_subagents": 2,
+                        "wall_clock_seconds": 3600
+                      },
+                      "source": {
+                        "text": "Change the cache flag to false. Keep the value valid. Verify with an automated regression test.",
+                        "spans": [
+                          {
+                            "id": "all",
+                            "end": 95,
+                            "start": 0,
+                            "exact_text_sha256": "5dbcbfab8ea810b30ae63e5c600dbf878a629f813d5f110b1ee091a1e0ae6dd9"
+                          }
+                        ],
+                        "sha256": "5dbcbfab8ea810b30ae63e5c600dbf878a629f813d5f110b1ee091a1e0ae6dd9"
+                      },
+                      "unknowns": [],
+                      "archetype": "small_code_change",
+                      "constraints": [],
+                      "acceptance_criteria": [
+                        {
+                          "id": "test",
+                          "oracle": "automated_test",
+                          "statement": "Automated regression test passes",
+                          "source_span_ids": [
+                            "all"
+                          ],
+                          "observable_outcome": "the automated regression test exits zero"
+                        }
+                      ]
+                    },
+                    "ratified_by": "00000000-0000-7000-8000-0000000000a1",
+                    "semantic_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
+                    "rule_bundle_sha256": "92d55ccb8c95c7bd77c166540218a7ebd72792b1f44c07b95152ae49c228102e",
+                    "admission_receipt_id": "fc26d9d4-6008-489e-a461-95641feaaa6c",
+                    "assessment_operation_id": "274b700e-3448-4c8d-9ef1-8394901b714f"
+                  },
+                  "payload_sha256": "07a586158b6fb9240096ec41addc9ed74cfb7ebc6b5e87d0b55b84d2cde9dedd",
+                  "artifact_sha256": "5dbcbfab8ea810b30ae63e5c600dbf878a629f813d5f110b1ee091a1e0ae6dd9",
+                  "issuer": "work-service/bounded-intake",
+                  "issued_at": "2026-10-13T03:34:50.540270Z",
+                  "candidate_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
+                  "candidate_commit": null,
+                  "verdict": null,
+                  "independent": false,
+                  "remote_ref": null,
+                  "remote_commit": null
+                }
+              }
+            }
+          },
+          {
+            "mode": "current",
+            "command": "assess_bounded_intake",
+            "http_status": 200,
+            "body": {
+              "receipt": {
+                "operation_id": "8d65a14c-eeb0-4627-83ba-f52875bb1e62",
+                "request_id": "aeda2f73-6f59-4019-90cb-14862d6e007a",
+                "state": "replayed",
+                "request_sha256": "c536b3a03704ad933786516dd5c8df8a4aa0b7454977e622bbc43b490ff087f7",
+                "result_sha256": "657512a72c41e397fdac6b96f3775c3a9192d36003b8a4419ef53015fc2caafb",
+                "diagnostics": []
+              },
+              "result": {
+                "type": "assess_bounded_intake",
+                "semantic_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
+                "rule_bundle_sha256": "92d55ccb8c95c7bd77c166540218a7ebd72792b1f44c07b95152ae49c228102e",
+                "ready_for_ratification": true,
+                "issue_count": 0,
+                "questions": []
+              }
+            }
+          },
+          {
+            "mode": "current",
+            "command": "assess_bounded_intake",
+            "http_status": 200,
+            "body": {
+              "receipt": {
+                "operation_id": "6891dbd5-0da6-4cab-9854-35185db65507",
+                "request_id": "4b93979c-9d24-48dc-a0df-85fdd4ba56d1",
+                "state": "applied",
+                "request_sha256": "17d5821c54c37e8d9b6824c074f86b738cbdf0239c478c3b1d7c97bec2d55667",
+                "result_sha256": "e62e1f56271447842906f2a308b6041b74f6f2f2e29f770aa80aa40f0cd53802",
+                "diagnostics": []
+              },
+              "result": {
+                "type": "assess_bounded_intake",
+                "semantic_sha256": "64243d1fc775ffdb3ce5902d7e17b5ff0d2ba2b29b8555970bb431ac684d6b05",
+                "rule_bundle_sha256": "92d55ccb8c95c7bd77c166540218a7ebd72792b1f44c07b95152ae49c228102e",
+                "ready_for_ratification": false,
+                "issue_count": 4,
+                "questions": [
+                  {
+                    "rule_class": "missing_verification_oracle",
+                    "deduplication_key": "oracle:ac-export",
+                    "statement": "missing_verification_oracle:oracle:ac-export",
+                    "priority": 1,
+                    "claim_ids": [
+                      "ac-export"
+                    ]
+                  },
+                  {
+                    "rule_class": "missing_verification_oracle",
+                    "deduplication_key": "oracle:ac-failure",
+                    "statement": "missing_verification_oracle:oracle:ac-failure",
+                    "priority": 1,
+                    "claim_ids": [
+                      "ac-failure"
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "mode": "current",
+            "command": "draft_mission_intake",
+            "http_status": 200,
+            "body": {
+              "receipt": {
+                "operation_id": "a198594a-9f75-4262-85a5-c0332eed4beb",
+                "request_id": "4d3b2623-3176-45db-9b5c-10c0c96ad444",
+                "state": "applied",
+                "request_sha256": "ecb636ea1b5c232a238a7a7baa237a786481c09d406aa58bd28efe30f923697d",
+                "result_sha256": "932944e4b84e6a06cd68a6819b25adffc21a643f2596fd7f1659e89553ec7ade",
+                "diagnostics": []
+              },
+              "result": {
+                "type": "draft_mission_intake",
+                "mission_id": "73989948-01eb-4423-ac0b-e6cf065af61a",
+                "outcome": "clarify",
+                "questions": [
+                  {
+                    "rule_class": "missing_verification_oracle",
+                    "deduplication_key": "oracle:ac-export",
+                    "statement": "missing_verification_oracle:oracle:ac-export",
+                    "priority": 1,
+                    "claim_ids": [
+                      "ac-export"
+                    ]
+                  },
+                  {
+                    "rule_class": "missing_verification_oracle",
+                    "deduplication_key": "oracle:ac-failure",
+                    "statement": "missing_verification_oracle:oracle:ac-failure",
+                    "priority": 1,
+                    "claim_ids": [
+                      "ac-failure"
+                    ]
+                  }
+                ],
+                "mission": null,
+                "decision_id": null,
+                "basis": null
+              }
+            }
+          },
+          {
+            "mode": "current",
+            "command": "publish_bounded_intake",
+            "http_status": 409,
+            "body": {
+              "error": {
+                "code": "intake_not_ready",
+                "request_id": "a1c916c9-ce0a-4cbd-af53-b8c77ea8b2ae",
+                "correlation_id": "883d97a9-4f67-4d2f-8aa4-48968bc9f7dd",
+                "diagnostics": [
+                  "missing_verification_oracle:oracle:ac-export",
+                  "missing_verification_oracle:oracle:ac-failure"
+                ]
+              }
+            }
+          },
+          {
+            "mode": "current",
+            "command": "publish_bounded_intake",
+            "http_status": 409,
+            "body": {
+              "error": {
+                "code": "stale_intake",
+                "request_id": "10f40592-ad6c-4a16-bbfc-8dec1cbcd5a3",
+                "correlation_id": "7c731867-ffad-4468-b04a-9841abe2f081",
+                "diagnostics": [
+                  "current positive intake assessment is required"
+                ]
+              }
+            }
+          },
+          {
+            "mode": "current",
+            "command": "publish_bounded_intake",
+            "http_status": 409,
+            "body": {
+              "error": {
+                "code": "stale_intake",
+                "request_id": "f17462bd-9413-4547-a91b-106e0d196618",
+                "correlation_id": "18a4df28-b597-4d30-ae32-38edaac6f20a",
+                "diagnostics": [
+                  "owner ratification does not match current typed semantics"
+                ]
+              }
+            }
+          },
+          {
+            "mode": "current",
+            "command": "publish_bounded_intake",
+            "http_status": 409,
+            "body": {
+              "error": {
+                "code": "intake_admission_blocked",
+                "request_id": "530f14f0-6abe-4fc2-a795-3e57050b729b",
+                "correlation_id": "bfe622e0-1cf5-4c1b-84cc-119371b74b12",
+                "diagnostics": [
+                  "admission receipt is not on the lineage"
+                ]
+              }
+            }
+          },
+          {
+            "mode": "current",
+            "command": "publish_bounded_intake",
+            "http_status": 200,
+            "body": {
+              "receipt": {
+                "operation_id": "7b5b3b89-0c05-4d77-ac75-aaa880d48ec8",
+                "request_id": "2fcd7f31-485b-40e7-8f2a-008e4e0b0bac",
+                "state": "applied",
+                "request_sha256": "4af472fa4ec7f165e9e012bec952d4efbdc4fd8b93004584c4c7744b02a11404",
+                "result_sha256": "450c09e832470be48e085a2b84c6335365f1c2800f7fca8afa20968ea9473921",
+                "diagnostics": []
+              },
+              "result": {
+                "type": "publish_bounded_intake",
+                "item": {
+                  "client_ref": "bounded-intake",
+                  "work_id": "16012e71-8044-48b6-b77b-1a6fba7d0d98",
+                  "revision_id": "baf64bff-e46a-44b6-84c3-cceeaa184de5",
+                  "key": "OMP-1",
+                  "state": "BACKLOG",
+                  "row_version": 1
+                },
+                "receipt": {
+                  "receipt_id": "be6056f0-51ed-4175-b1f8-afe8ecf84e4c",
+                  "work_id": "16012e71-8044-48b6-b77b-1a6fba7d0d98",
+                  "revision_id": "baf64bff-e46a-44b6-84c3-cceeaa184de5",
+                  "candidate_id": "d70e2927-6587-46c3-8b7e-95a9857a629d",
+                  "kind": "intake_publication",
+                  "payload": {
+                    "draft": {
+                      "archetype": "small_code_change",
+                      "source": {
+                        "text": "Change the cache flag to false. Keep the value valid. Verify with an automated regression test.",
+                        "sha256": "5dbcbfab8ea810b30ae63e5c600dbf878a629f813d5f110b1ee091a1e0ae6dd9",
+                        "spans": [
+                          {
+                            "id": "all",
+                            "start": 0,
+                            "end": 95,
+                            "exact_text_sha256": "5dbcbfab8ea810b30ae63e5c600dbf878a629f813d5f110b1ee091a1e0ae6dd9"
+                          }
+                        ]
+                      },
+                      "goal": {
+                        "id": "goal",
+                        "statement": "Change the cache flag",
+                        "source_span_ids": [
+                          "all"
+                        ]
+                      },
+                      "constraints": [],
+                      "unknowns": [],
+                      "acceptance_criteria": [
+                        {
+                          "id": "test",
+                          "statement": "Automated regression test passes",
+                          "source_span_ids": [
+                            "all"
+                          ],
+                          "observable_outcome": "the automated regression test exits zero",
+                          "oracle": "automated_test"
+                        }
+                      ],
+                      "budget": {
+                        "usd": "50.00",
+                        "tokens": 500000,
+                        "wall_clock_seconds": 3600,
+                        "max_subagents": 2
+                      }
+                    },
+                    "semantic_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
+                    "rule_bundle_sha256": "92d55ccb8c95c7bd77c166540218a7ebd72792b1f44c07b95152ae49c228102e",
+                    "ratified_by": "00000000-0000-7000-8000-0000000000a1",
+                    "assessment_operation_id": "8d65a14c-eeb0-4627-83ba-f52875bb1e62",
+                    "admission_receipt_id": "930c808d-c4be-4d59-8c9b-ddad84f25b26"
+                  },
+                  "payload_sha256": "33f9a72eea94fda9822f27f86fd9a4eefb7382b47f548b86ee6acf3f58371ea6",
+                  "artifact_sha256": "5dbcbfab8ea810b30ae63e5c600dbf878a629f813d5f110b1ee091a1e0ae6dd9",
+                  "issuer": "work-service/bounded-intake",
+                  "issued_at": "2026-10-13T03:34:50.806916Z",
+                  "candidate_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
+                  "candidate_commit": null,
+                  "verdict": null,
+                  "independent": false,
+                  "remote_ref": null,
+                  "remote_commit": null
+                }
+              }
+            }
+          },
+          {
+            "mode": "current",
+            "command": "publish_bounded_intake",
+            "http_status": 200,
+            "body": {
+              "receipt": {
+                "operation_id": "7b5b3b89-0c05-4d77-ac75-aaa880d48ec8",
+                "request_id": "58290f4a-f0bb-45f7-9c24-03911fe59821",
+                "state": "replayed",
+                "request_sha256": "4af472fa4ec7f165e9e012bec952d4efbdc4fd8b93004584c4c7744b02a11404",
+                "result_sha256": "450c09e832470be48e085a2b84c6335365f1c2800f7fca8afa20968ea9473921",
+                "diagnostics": []
+              },
+              "result": {
+                "type": "publish_bounded_intake",
+                "item": {
+                  "client_ref": "bounded-intake",
+                  "work_id": "16012e71-8044-48b6-b77b-1a6fba7d0d98",
+                  "revision_id": "baf64bff-e46a-44b6-84c3-cceeaa184de5",
+                  "key": "OMP-1",
+                  "state": "BACKLOG",
+                  "row_version": 1
+                },
+                "receipt": {
+                  "receipt_id": "be6056f0-51ed-4175-b1f8-afe8ecf84e4c",
+                  "work_id": "16012e71-8044-48b6-b77b-1a6fba7d0d98",
+                  "revision_id": "baf64bff-e46a-44b6-84c3-cceeaa184de5",
+                  "candidate_id": "d70e2927-6587-46c3-8b7e-95a9857a629d",
+                  "kind": "intake_publication",
+                  "payload": {
+                    "draft": {
+                      "goal": {
+                        "id": "goal",
+                        "statement": "Change the cache flag",
+                        "source_span_ids": [
+                          "all"
+                        ]
+                      },
+                      "budget": {
+                        "usd": "50.00",
+                        "tokens": 500000,
+                        "max_subagents": 2,
+                        "wall_clock_seconds": 3600
+                      },
+                      "source": {
+                        "text": "Change the cache flag to false. Keep the value valid. Verify with an automated regression test.",
+                        "spans": [
+                          {
+                            "id": "all",
+                            "end": 95,
+                            "start": 0,
+                            "exact_text_sha256": "5dbcbfab8ea810b30ae63e5c600dbf878a629f813d5f110b1ee091a1e0ae6dd9"
+                          }
+                        ],
+                        "sha256": "5dbcbfab8ea810b30ae63e5c600dbf878a629f813d5f110b1ee091a1e0ae6dd9"
+                      },
+                      "unknowns": [],
+                      "archetype": "small_code_change",
+                      "constraints": [],
+                      "acceptance_criteria": [
+                        {
+                          "id": "test",
+                          "oracle": "automated_test",
+                          "statement": "Automated regression test passes",
+                          "source_span_ids": [
+                            "all"
+                          ],
+                          "observable_outcome": "the automated regression test exits zero"
+                        }
+                      ]
+                    },
+                    "ratified_by": "00000000-0000-7000-8000-0000000000a1",
+                    "semantic_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
+                    "rule_bundle_sha256": "92d55ccb8c95c7bd77c166540218a7ebd72792b1f44c07b95152ae49c228102e",
+                    "admission_receipt_id": "930c808d-c4be-4d59-8c9b-ddad84f25b26",
+                    "assessment_operation_id": "8d65a14c-eeb0-4627-83ba-f52875bb1e62"
+                  },
+                  "payload_sha256": "33f9a72eea94fda9822f27f86fd9a4eefb7382b47f548b86ee6acf3f58371ea6",
+                  "artifact_sha256": "5dbcbfab8ea810b30ae63e5c600dbf878a629f813d5f110b1ee091a1e0ae6dd9",
+                  "issuer": "work-service/bounded-intake",
+                  "issued_at": "2026-10-13T03:34:50.806916Z",
+                  "candidate_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
+                  "candidate_commit": null,
+                  "verdict": null,
+                  "independent": false,
+                  "remote_ref": null,
+                  "remote_commit": null
+                }
+              }
+            }
+          }
+        ],
+        "row_counts": [
+          {
+            "mode": "current",
+            "counts": {
+              "items": 1,
+              "relations": 0,
+              "candidates": 1,
+              "publications": 0
+            }
+          },
+          {
+            "mode": "current",
+            "counts": {
+              "items": 1,
+              "relations": 0,
+              "candidates": 1,
+              "publications": 0
+            }
+          },
+          {
+            "mode": "current",
+            "counts": {
+              "items": 2,
+              "relations": 1,
+              "candidates": 2,
+              "publications": 1
+            }
+          },
+          {
+            "mode": "typed",
+            "counts": {
+              "items": 1,
+              "relations": 0,
+              "candidates": 1,
+              "publications": 0
+            }
+          },
+          {
+            "mode": "typed",
+            "counts": {
+              "items": 1,
+              "relations": 0,
+              "candidates": 1,
+              "publications": 0
+            }
+          },
+          {
+            "mode": "typed",
+            "counts": {
+              "items": 2,
+              "relations": 1,
+              "candidates": 2,
+              "publications": 1
+            }
+          },
+          {
+            "mode": "current",
+            "counts": {
+              "items": 1,
+              "relations": 0,
+              "candidates": 1,
+              "publications": 0
+            }
+          },
+          {
+            "mode": "current",
+            "counts": {
+              "items": 1,
+              "relations": 0,
+              "candidates": 1,
+              "publications": 0
+            }
+          },
+          {
+            "mode": "current",
+            "counts": {
+              "items": 2,
+              "relations": 1,
+              "candidates": 2,
+              "publications": 1
+            }
+          }
+        ],
+        "write_deltas": [
+          {
+            "items": 1,
+            "relations": 1,
+            "candidates": 1,
+            "publications": 1
+          },
+          {
+            "items": 1,
+            "relations": 1,
+            "candidates": 1,
+            "publications": 1
+          },
+          {
+            "items": 1,
+            "relations": 1,
+            "candidates": 1,
+            "publications": 1
+          }
+        ]
+      }
+    },
+    "host": {
+      "sha256": "e254132dd1ffef21b849a23f6f356267b439edf713ea8c53b300908ff0430914",
+      "raw": {
+        "verified": true,
+        "owner_approval": false,
+        "scope": "fresh real workflow hosts; mocked backend assessment and writes; copied temporary service states",
+        "observations": [
+          {
+            "mode": "current",
+            "proseResult": "CONFIRM REQUIRED \u2014 nothing written.\n\nModel wants to file a work item\n\"Ship gate\"\n\u2192 project TestProject\n\u2192 becomes NOW\n\n# Ship gate\n\n## Acceptance criteria\n- check passes\n\n\nconfirmation_id: cf-3bcae4b48c65\n\nShow this to Chris verbatim. If he says yes, call again with the same arguments plus confirm:true and this confirmation_id.",
+            "preview": "CONFIRM REQUIRED \u2014 nothing written.\n\nModel wants to file a work item\n\"Ship gate\"\n\u2192 project TestProject\n\u2192 becomes NOW\n\n# Ship gate\n\n## Acceptance criteria\n- check passes\n\n\nconfirmation_id: cf-3bcae4b48c65\n\nShow this to Chris verbatim. If he says yes, call again with the same arguments plus confirm:true and this confirmation_id.",
+            "confirmed": "created HOME-10 + NOW",
+            "before": {
+              "issues": 0,
+              "now": 0
+            },
+            "after": {
+              "issues": 1,
+              "now": 1
+            },
+            "preview_write_delta": 0,
+            "confirmed_write_delta": {
+              "issues": 1,
+              "now": 1
+            }
+          },
+          {
+            "mode": "typed",
+            "proseResult": "intake_typed_required: typed intake requires matching structured intake draft (intake)",
+            "preview": "CONFIRM REQUIRED \u2014 nothing written.\n\nModel wants to file a work item\n\"Ship gate\"\n\u2192 project TestProject\n\u2192 becomes NOW\n\n# Ship gate\n\n## Acceptance criteria\n- check passes\n\n\nconfirmation_id: cf-ace97cdcaa80\n\nShow this to Chris verbatim. If he says yes, call again with the same arguments plus confirm:true and this confirmation_id.",
+            "confirmed": "created HOME-10 + NOW",
+            "before": {
+              "issues": 1,
+              "now": 1
+            },
+            "after": {
+              "issues": 2,
+              "now": 2
+            },
+            "preview_write_delta": 0,
+            "confirmed_write_delta": {
+              "issues": 1,
+              "now": 1
+            }
+          },
+          {
+            "mode": "current",
+            "proseResult": "CONFIRM REQUIRED \u2014 nothing written.\n\nModel wants to file a work item\n\"Ship gate\"\n\u2192 project TestProject\n\u2192 becomes NOW\n\n# Ship gate\n\n## Acceptance criteria\n- check passes\n\n\nconfirmation_id: cf-91983db59b39\n\nShow this to Chris verbatim. If he says yes, call again with the same arguments plus confirm:true and this confirmation_id.",
+            "preview": "CONFIRM REQUIRED \u2014 nothing written.\n\nModel wants to file a work item\n\"Ship gate\"\n\u2192 project TestProject\n\u2192 becomes NOW\n\n# Ship gate\n\n## Acceptance criteria\n- check passes\n\n\nconfirmation_id: cf-91983db59b39\n\nShow this to Chris verbatim. If he says yes, call again with the same arguments plus confirm:true and this confirmation_id.",
+            "confirmed": "created HOME-10 + NOW",
+            "before": {
+              "issues": 2,
+              "now": 2
+            },
+            "after": {
+              "issues": 3,
+              "now": 3
+            },
+            "preview_write_delta": 0,
+            "confirmed_write_delta": {
+              "issues": 1,
+              "now": 1
+            }
+          }
+        ]
+      }
+    }
+  },
+  "source_sha256": {
+    "docs/nsi6/seal.py": "22cbf8e0a25d541c48c713fe7cee7a669ab99b046d36b16f1c9be4680437e2c7",
+    "python/omp-work/tests/test_nsi6_evidence.py": "4483660a24feffc29785fe0cc05c2b52faece93490278e9c92845544b4a7aa89",
+    "python/omp-work/tests/test_nsi6_service_route.py": "be5efc94ab85d6407c8581c3596d99af0ad6a17765305fc5e6347b3406cb2d52",
+    "python/omp-work/tests/test_nsi6_rollout.py": "e53fe29c86a85d8d4e6d492c6c5c21ec1d826f704481f3b0cf74d39b69ebe658",
+    "python/omp-work/tests/test_bounded_intake_publish.py": "e655d6d97b7c9fb88cf9405ca81d1a5065068c4a462d17f8319bdddf8e93a682",
+    "python/omp-work/tests/test_mission_intake_e2e.py": "277e99e84eed48035f79f4f2ccc55035354361dd30c1a44d3260714cd57c689d",
+    "session-system/tests/nsi6-intake-host.test.ts": "712358edd8ad894250c7f82a9e7432ce87a9f93134031e1bb2801b1874e34130",
+    "session-system/tests/nsi6-evidence-host.test.ts": "9836df6e5ac9b5661d6f272c591951c14449ca00dd4aac899a61b7afc2879e3d"
+  },
+  "limits": [
+    "Synthetic test-only typed qualification and Chris input stand-in, not Chris review",
+    "Host copies sealed temporary service states but validates only kind/version/mode, not evidence binding",
+    "Host backend assessment/writes mocked; service handlers use disposable real PostgreSQL",
+    "Re-created applications/hosts, not installed process restart or deployment"
+  ]
+}

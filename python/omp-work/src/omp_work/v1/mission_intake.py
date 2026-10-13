@@ -15,7 +15,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 import psycopg
 
-from omp_work.nsi_route import evaluate_intake
+from omp_work.nsi_route import route_mode
 from omp_work.operations.config import OperationsConfig
 from omp_work.mission_intake_rules import (
     clarifying_questions,
@@ -72,7 +72,8 @@ def draft_mission_intake(
     payload = envelope.command.payload
     mission_id = payload.mission_id
 
-    questions = clarifying_questions(payload.intake) if config is None else evaluate_intake(config, payload.intake)[0]
+    selection = "current" if config is None else route_mode(config)
+    questions = clarifying_questions(payload.intake, selection)
     prior = latest_mission(cur, envelope.workspace_id, mission_id)
     if questions:
         result = _result(mission_id, "clarify", questions, prior)
