@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 import site
+import threading
 from collections.abc import Sequence
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -196,8 +197,12 @@ def run_worker(
     model_proxy: tuple[str, int] | None = None,
     model_token: str | None = None,
     manifest_path: str | Path | None = None,
+    cancel: threading.Event | None = None,
 ) -> int:
     """Run ``argv`` in the worker jail. Returns the process exit status.
+
+    ``cancel``, when set, SIGKILLs the jail session and returns -9
+    (see :func:`run_sandboxed`).
 
     Refuses, before any sandbox process, a worktree that is the live checkout
     or that lies outside ``OMP_WORKTREES_DIR``. ``token`` is ``OMP_TASK_TOKEN``.
@@ -274,6 +279,7 @@ def run_worker(
         ro_binds=binds,
         worktree=linked,
         model_proxy=model_proxy,
+        cancel=cancel,
         **(
             {
                 "worktree_readonly": True,

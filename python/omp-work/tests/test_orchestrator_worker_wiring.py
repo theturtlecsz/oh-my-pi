@@ -38,7 +38,7 @@ def wiring(service, tmp_path, monkeypatch):
         service, tmp_path, monkeypatch, verifier_mode="pass", worker_mode="ok",
         extra_capability=None, operations=("omp_work.orchestrator.operations:register",),
     )
-    executable = tmp_path / "orchestrator-worker"
+    executable = tmp_path / "omp"
     executable.write_text("stand-in")
     executable.chmod(0o700)
     world.request = dataclasses.replace(
@@ -178,6 +178,7 @@ def test_worker_grant_manifest_and_cleanup(wiring, exit_code, revoke_error):
     ("proxy", "failed", "invalid_request"),
     ("room", "failed", "ceiling_refused"),
     ("relative", "failed", "invalid_request"),
+    ("relative_omp", "failed", "invalid_request"),
 ])
 def test_nonworker_and_refusals_never_register(wiring, case, expected, code):
     if case == "missing":
@@ -186,6 +187,8 @@ def test_nonworker_and_refusals_never_register(wiring, case, expected, code):
         wiring.request_patch = {"worker_argv": ["/usr/bin/true"]}
     elif case == "relative":
         wiring.request_patch = {"worker_argv": ["orchestrator-worker"]}
+    elif case == "relative_omp":
+        wiring.request_patch = {"worker_argv": ["omp", "orchestrator-worker"]}
     elif case == "proxy":
         wiring.worker.handlers["*"].config = dataclasses.replace(wiring.world.config, model_proxy_url=None)
     else:

@@ -12,6 +12,7 @@ import { randomUUID } from "node:crypto";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import {
+	type AssessBoundedIntakeResult,
 	type BoundedIntakeDraft,
 	type Candidate,
 	type ClientResponse,
@@ -1550,21 +1551,22 @@ export function createWorkBackend(
 			return { id: created.work_id, key: created.key, title: input.title, ...(input.project ? { project: input.project } : {}) };
 		},
 
-		async draftMission(input: { title: string; blueprint: string; project?: string }): Promise<DraftMissionResult> {
+		async draftMission(input: { title: string; blueprint: string; project?: string; draft?: BoundedIntakeDraft }): Promise<DraftMissionResult> {
 			if (!input.project) throw new Error("draftMission requires a project");
 			const projectId = await projectIdFor(input.project);
-			const criteria = acceptanceFromDescription(input.blueprint);
-			// The claim owns mission_id and request_id: a retry resends those bytes.
-			const intake: BoundedIntakeDraft = {
-				archetype: "small_code_change",
-				source: { text: input.blueprint, sha256: sha256Hex(input.blueprint), spans: [] },
-				goal: { id: "goal", statement: input.title },
-				acceptance_criteria: criteria.map((statement, index) => ({
-					id: `ac-${index + 1}`,
-					statement,
-					observable_outcome: statement,
-				})),
-			};
+			const intake: BoundedIntakeDraft = input.draft ?? (() => {
+				const criteria = acceptanceFromDescription(input.blueprint);
+				return {
+					archetype: "small_code_change",
+					source: { text: input.blueprint, sha256: sha256Hex(input.blueprint), spans: [] },
+					goal: { id: "goal", statement: input.title },
+					acceptance_criteria: criteria.map((statement, index) => ({
+						id: `ac-${index + 1}`,
+						statement,
+						observable_outcome: statement,
+					})),
+				};
+			})();
 			const scope: MissionIntakeScope = {
 				project_id: projectId,
 				risk_policy: "default",
@@ -1576,6 +1578,7 @@ export function createWorkBackend(
 				title: input.title,
 				blueprint: input.blueprint,
 				project: input.project,
+				...(input.draft ? { draft: input.draft } : {}),
 			});
 			const claim = await claimPendingOp(pendingDir, intent, () => ({
 				request_id: randomUUID(),
@@ -1605,6 +1608,10 @@ export function createWorkBackend(
 				}
 				throw error;
 			}
+		},
+
+		async assessBoundedIntake(draft: BoundedIntakeDraft): Promise<AssessBoundedIntakeResult> {
+			return client.assessBoundedIntake(draft);
 		},
 
 		async createSameSessionChild(input: { parentKey: string; ownerSessionId: string; title: string; description?: string; finding: string; verification: string }): Promise<NowRef> {

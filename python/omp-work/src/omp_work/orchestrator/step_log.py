@@ -20,6 +20,7 @@ from collections.abc import Mapping, Sequence
 
 import psycopg
 
+from omp_work.jobs.lease import require_live_holder
 from omp_work.jobs.store import JobError, NativeJobStore
 from omp_work.v1.canonical import sha256
 
@@ -122,8 +123,14 @@ def append_step(
     workspace_id: object,
     job_id: str,
     step: Mapping[str, object],
+    holder: tuple[str, int] | None = None,
 ) -> dict[str, object]:
     """Append one step event, or replay an identical one.
+
+    ``holder`` is ``(worker_id, fence)``. When given, the job row is locked and
+    must hold that live fence inside this transaction before anything is read
+    or written; a lost lease raises ``JobError('job_fence_stale')``, a frozen
+    one ``JobError('agent_stop_engaged')``, and nothing is appended.
 
     Same ``(mission_id, step_index, kind, idempotency_key)`` and equal fields
     returns the stored step and writes nothing; differing fields raise
@@ -135,6 +142,8 @@ def append_step(
         "SELECT pg_advisory_xact_lock(hashtextextended('orch:' || %s, 0))",
         (mission_id,),
     )
+    if holder is not None:
+        require_live_holder(cur, workspace_id, job_id, holder[0], holder[1])
     replay = _replay(cur, workspace_id, step)
     if replay is not None:
         fields = {key: value for key, value in replay.items() if key not in _HASH_FIELDS}

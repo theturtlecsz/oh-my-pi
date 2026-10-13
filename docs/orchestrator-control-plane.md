@@ -17,6 +17,10 @@ Each authority is decided only by the modules named in its row.
 | budgets | `python/omp-work/src/omp_work/jobs/budget.py`, `python/omp-work/src/omp_work/project_store.py` |
 | progress events | `python/omp-work/src/omp_work/orchestrator/step_log.py`, `python/omp-work/src/omp_work/jobs/store.py` |
 
+## Worker launch contract
+
+Production orchestrator workers run headless in an isolated sandbox jail via exact argv `["/opt/omp/bin/omp", "orchestrator-worker"]`. See [docs/orchestrator-worker.md](orchestrator-worker.md) for the complete launch contract, token/manifest injection, scoped tools, evaluate stage, and loopback model proxy configuration.
+
 ## Verifier launch contract
 
 Production audit launches the verifier through `run_worker` with exact argv `["/usr/bin/python3","-P","-m","omp_work.orchestrator.verify_main"]`, not the test launcher. Its cwd is `/work`; the candidate checkout is read-only, while `/work/.omp` is the writable audit directory. Linked git metadata and trusted `PYTHONPATH` runtime roots are mounted read-only, with `PYTHONSAFEPATH=1` so the candidate cannot shadow the verifier runtime.

@@ -66,10 +66,12 @@ import type {
 	SupersedeIntakeClaimPayload,
 	SupersedeIntakeClaimResult,
 } from "./intake-records";
+import type { AssessBoundedIntakeCommand, AssessBoundedIntakeResult } from "./intake-evaluation";
 
 export { WORK_CONTRACT_SHA256 } from "./contract";
 export * from "./intake-nsi";
 export * from "./intake-records";
+export * from "./intake-evaluation";
 export * from "./oversight";
 export * from "./research-views";
 export * from "./research-review";
@@ -894,7 +896,8 @@ export type Command =
 	| { type: "conclude_research_campaign"; payload: ConcludeResearchCampaignPayload }
 	| { type: "engage_stop"; payload: EngageStopPayload }
 	| { type: "release_stop"; payload: ReleaseStopPayload }
-	| IntakeCommand;
+	| IntakeCommand
+	| AssessBoundedIntakeCommand;
 
 // ---- command results ----
 
@@ -1012,7 +1015,8 @@ export type CommandResult =
 	| ConcludeResearchCampaignResult
 	| { type: "engage_stop"; stopped: boolean; reason: string }
 	| { type: "release_stop"; stopped: boolean; reason: string }
-	| IntakeCommandResult;
+	| IntakeCommandResult
+	| AssessBoundedIntakeResult;
 
 export type ExecutionGrantView = {
 	grant_id: UUID;
@@ -1550,6 +1554,24 @@ export class WorkClient {
 		payload: AssessIntakePayload,
 	): Promise<{ receipt: OperationReceipt; result: AssessIntakeResult }> {
 		return this.#intakeWrite<AssessIntakeResult>(operationId, { type: "assess_intake", payload });
+	}
+
+	async assessBoundedIntake(
+		draft: BoundedIntakeDraft,
+		operationId: UUID = crypto.randomUUID(),
+	): Promise<AssessBoundedIntakeResult> {
+		const response = await this.execute({
+			api_version: "work.omp.dev/v1",
+			workspace_id: this.workspaceId,
+			operation_id: operationId,
+			request_id: crypto.randomUUID(),
+			correlation_id: crypto.randomUUID(),
+			command: {
+				type: "assess_bounded_intake",
+				payload: { draft },
+			},
+		});
+		return response.result as AssessBoundedIntakeResult;
 	}
 
 	/** GET /v1/workspaces/{workspace_id}/intake/{run_id} — optional historical revision. */

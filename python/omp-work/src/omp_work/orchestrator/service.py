@@ -15,6 +15,7 @@ import os
 import re
 import subprocess  # nosec B404 - pytest argv is a list; the executable is this interpreter
 import sys
+import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -31,7 +32,7 @@ from omp_work.control_actions import HoldDecision, perform
 from omp_work.control_plane.gate import LeaseClaim
 from omp_work.jobs.admission import enqueue_job
 from omp_work.jobs.budget import check_item_budget
-from omp_work.jobs.store import NativeJobStore
+from omp_work.jobs.store import JobError, NativeJobStore
 from omp_work.jobs.worker import Frozen, Settlement
 from omp_work.operations.capabilities import DEFAULT_BASE_URL
 from omp_work.operations.config import OperationsConfig
@@ -66,6 +67,7 @@ from omp_work.v1.store import PostgresWorkStore
 from omp_work.v1.store_shared import WorkStoreError
 
 __all__ = [
+    "LeaseLost",
     "ActResult",
     "MissionRequest",
     "OrchestratorConfig",
@@ -550,6 +552,29 @@ class StepIntentLog:
         return None if found is None else dict(found)
 
 
+class LeaseLost(Exception):
+    """This worker no longer holds the job's live fence; nothing may be written for it."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+class StopOrCancel(threading.Event):
+    """Set while the worker's cancel or freeze event is set; read live, never copied.
+
+    ``run_sandboxed`` only polls ``is_set``, so one object kills the child on
+    lease loss and on stop while the two worker events stay separate.
+    """
+
+    def __init__(self, worker: Any) -> None:
+        super().__init__()
+        self._worker = worker
+
+    def is_set(self) -> bool:
+        return bool(self._worker.cancel_requested.is_set() or self._worker.frozen_requested.is_set())
+
+
 class StageContext:
     """One running stage step. ``command`` and ``act`` both stop before they write."""
 
@@ -565,8 +590,11 @@ class StageContext:
         prior: dict[str, Any],
         lease: LeaseClaim,
         work_id: UUID,
+        worker: Any | None = None,
     ) -> None:
         self._handler = handler
+        self.worker = worker
+        self.cancel: threading.Event | None = None if worker is None else StopOrCancel(worker)
         self.mission_id = handler.mission_id
         self.workspace_id = handler.config.workspace_id
         self.project_id = handler.project_id
@@ -608,6 +636,7 @@ class StageContext:
             stopped = bool(read_stop_state(cur, self.workspace_id)["stopped"])
         if stopped:
             raise Frozen
+        self._handler.check_lease(self.lease)
 
     def lease_expires_at(self) -> datetime | None:
         """This worker's lease expiry, or None when the row is dead or reassigned."""
@@ -975,14 +1004,71 @@ class OrchestratorHandler:
         self.project_id: UUID | None = None
         self._request: dict[str, Any] | None = None
         self._job_id: str | None = None
+        self._worker: Any | None = None
+        self._lease: LeaseClaim | None = None
         _load_operations(config.operations)
 
+    def _begin(self, ctx: Any, job: dict[str, Any]) -> None:
+        """Carry the ``JobWorker`` and this claim's fence into every stage context and write."""
+        worker = ctx if hasattr(ctx, "current_authority") else None
+        self._worker = worker
+        self._lease = (
+            None
+            if worker is None
+            else LeaseClaim(
+                job_id=str(job["job_id"]),
+                worker_id=str(job.get("worker_id") or worker.worker_id),
+                fence=int(job["fence"]),
+            )
+        )
+
+    def check_lease(self, lease: LeaseClaim | None = None) -> None:
+        """Delegate to the worker's lease read. Frozen on stop, ``LeaseLost`` on loss.
+
+        A loss also sets the worker's cancel event and reason so ``tick`` neither
+        settles nor reports success; a stop sets the freeze event and nothing else.
+        """
+        worker = self._worker
+        claim = lease or self._lease
+        if worker is None or claim is None:
+            return
+        if worker.frozen_requested.is_set():
+            raise Frozen
+        if worker.cancel_requested.is_set():
+            raise LeaseLost(worker.cancel_reason or "lease_lost")
+        authority = worker.current_authority(claim.job_id, claim.fence)
+        if authority.is_live:
+            return
+        if authority.is_frozen:
+            worker.frozen_reason = worker.stop_reason = authority.reason
+            worker.frozen_requested.set()
+            raise Frozen
+        worker.cancel_reason = authority.reason or "lease_lost"
+        worker.cancel_requested.set()
+        raise LeaseLost(worker.cancel_reason)
+
+    def _lost(self, error: LeaseLost) -> Settlement:
+        """A lost lease ends the handler quietly. ``tick`` sees the cancel event and settles nothing."""
+        if self._worker is not None:
+            self._worker.cancel_reason = self._worker.cancel_reason or error.reason
+            self._worker.cancel_requested.set()
+        return Settlement(outcome="failed", receipts=[])
+
     def run(self, ctx: Any, job: dict[str, Any]) -> Settlement:
-        del ctx
-        return self._dispatch(job, recovering=False)
+        self._begin(ctx, job)
+        try:
+            return self._dispatch(job, recovering=False)
+        except LeaseLost as error:
+            return self._lost(error)
 
     def observe(self, ctx: Any, job: dict[str, Any]) -> Settlement | None:
-        del ctx
+        self._begin(ctx, job)
+        try:
+            return self._observe(job)
+        except LeaseLost as error:
+            return self._lost(error)
+
+    def _observe(self, job: dict[str, Any]) -> Settlement | None:
         parsed = _parse_job(str(job["job_id"]))
         if parsed is None:
             return None
@@ -1039,14 +1125,23 @@ class OrchestratorHandler:
         for key, value in body.items():
             if key not in step:
                 step[key] = value
-        with self.store.transaction(self.config.workspace_id, self.principal.actor_id) as cur:
-            stored = append_step(
-                self.store,
-                cur,
-                workspace_id=self.config.workspace_id,
-                job_id=self._job_id,
-                step=step,
-            )
+        claim = self._lease
+        holder = None if claim is None or claim.job_id != self._job_id else (claim.worker_id, claim.fence)
+        try:
+            with self.store.transaction(self.config.workspace_id, self.principal.actor_id) as cur:
+                stored = append_step(
+                    self.store,
+                    cur,
+                    workspace_id=self.config.workspace_id,
+                    job_id=self._job_id,
+                    step=step,
+                    holder=holder,
+                )
+        except JobError as error:
+            if holder is None or error.code not in {"job_fence_stale", "agent_stop_engaged"}:
+                raise
+            self.check_lease()
+            raise LeaseLost(error.code) from error
         return stored
 
     def answered_decision(self, rule_id: str) -> str | None:
@@ -1188,6 +1283,7 @@ class OrchestratorHandler:
                 fence=int(job["fence"]),
             ),
             work_id=work_id,
+            worker=self._worker,
         )
         produced = run(ctx)
         if stage == "audit" and produced.verdict == "pass" and produced.outcome == "succeeded":
@@ -1450,6 +1546,7 @@ class OrchestratorHandler:
                 fence=int(job.get("fence") or 0),
             ),
             work_id=UUID(str(job["work_id"])),
+            worker=self._worker,
         )
         ctx.act(
             operation,
@@ -1499,6 +1596,7 @@ class OrchestratorHandler:
         )
 
     def _command(self, command_type: str, payload: Mapping[str, Any], operation_id: str) -> None:
+        self.check_lease()
         try:
             operation = UUID(operation_id)
         except ValueError:
@@ -1506,6 +1604,7 @@ class OrchestratorHandler:
         _run_command(self.config, self.principal, command_type, payload, operation)
 
     def _enqueue(self, job_id: str, work_id: UUID) -> None:
+        self.check_lease()
         enqueue_job(
             self.store,
             operation_id=str(uuid5(NAMESPACE_URL, f"omp-417:enqueue:{job_id}")),
