@@ -8,7 +8,7 @@ implement operation again. No SQL statements are defined in this module.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 import hashlib
 import json
@@ -709,6 +709,9 @@ def _worktree_name(ctx: StageContext) -> str:
     return Path(raw).name
 
 
+_DEFAULT_TASK_SECONDS = 3600
+
+
 def _sandbox(
     ctx: StageContext,
     argv: Sequence[str],
@@ -719,20 +722,21 @@ def _sandbox(
     model_proxy: tuple[str, int] | None = None,
     model_token: str | None = None,
     manifest_path: Path | None = None,
+    deadline: datetime | None = None,
 ) -> int | None:
-    """Run ``argv`` in the worker jail until the stage lease expires.
+    """Run ``argv`` in the worker jail until the task deadline or the lease is lost.
 
-    ``None`` means the lease is already dead or the process timed out, so the
-    caller records ``crashed``. ``WorkerSandboxRefused`` propagates.
+    The deadline is the durable wall-clock ceiling, not the lease expiry:
+    renewal never moves it. Losing the lease or a stop kills the jail through
+    ``ctx.cancel``. ``None`` means the lease is already dead, the ceiling is
+    spent, or the process timed out, so the caller records ``crashed``.
+    ``WorkerSandboxRefused`` propagates.
     """
-    exp = ctx.lease_expires_at()
-    if exp is None:
+    if deadline is None:
+        deadline = _task_deadline(ctx)
+    if deadline is None:
         return None
-    if exp.tzinfo is None:
-        exp = exp.replace(tzinfo=UTC)
-    else:
-        exp = exp.astimezone(UTC)
-    remaining = (exp - datetime.now(UTC)).total_seconds()
+    remaining = (deadline - datetime.now(UTC)).total_seconds()
     if remaining <= 0:
         return None
     planned = service._ids(ctx.mission_id, "plan-candidate")
@@ -740,8 +744,11 @@ def _sandbox(
         ctx.config.ops,
         workspace_id=ctx.workspace_id,
         candidate_ids=(planned,),
-        expires_at=exp,
+        expires_at=deadline,
         name=f"task-{ctx.mission_id}-{ctx.step_index}-{ctx.stage}",
+        job_id=str(ctx.lease.job_id),
+        worker_id=ctx.lease.worker_id,
+        fence=ctx.lease.fence,
     )
     token = str(json.loads(capability.read_text(encoding="utf-8"))["token"])
     try:
@@ -756,9 +763,39 @@ def _sandbox(
             model_token=model_token,
             manifest_path=manifest_path,
             timeout=remaining,
+            cancel=ctx.cancel,
         )
     except subprocess.TimeoutExpired:
         return None
+
+
+def _task_deadline(ctx: StageContext) -> datetime | None:
+    """The hard task deadline: remaining request wall-clock ceiling, or None when none is left.
+
+    The ceiling is measured from the item tree's oldest job, so a renewed
+    lease cannot reset it. It is the smaller of the request's
+    ``controls.wall_clock_seconds`` and the published item budget's
+    ``wall_clock_seconds`` less ``item_spend``; with neither,
+    ``_DEFAULT_TASK_SECONDS`` from now. A dead lease has no deadline.
+    """
+    if ctx.lease_expires_at() is None:
+        return None
+    jobs = NativeJobStore(ctx.config.ops)
+    with jobs.transaction(ctx.workspace_id, ctx.principal.actor_id) as cur:
+        root = root_work_id(cur, ctx.workspace_id, str(ctx.lease.job_id))
+        budget = item_budget(cur, ctx.workspace_id, root)
+        spent = item_spend(cur, ctx.workspace_id, root).wall_clock_seconds
+    limits: list[int] = []
+    if budget is not None:
+        limits.append(int(budget.wall_clock_seconds))
+    controls = ctx.request.get("controls") if isinstance(ctx.request, dict) else None
+    raw = controls.get("wall_clock_seconds") if isinstance(controls, dict) else None
+    if isinstance(raw, int) and not isinstance(raw, bool) and raw > 0:
+        limits.append(raw)
+    remaining = min(limits) - spent if limits else _DEFAULT_TASK_SECONDS
+    if remaining <= 0:
+        return None
+    return datetime.now(UTC) + timedelta(seconds=remaining)
 
 
 def _worker_ceiling(ctx: StageContext) -> Decimal:
@@ -854,11 +891,16 @@ def _run_model_worker(ctx: StageContext, argv: Sequence[str], worktree: Path) ->
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             json.dump(manifest, stream)
         endpoint = urlsplit(base_url)
-        return _sandbox(
+        code = _sandbox(
             ctx, argv, worktree, ro_binds=(Path(argv[0]), manifest_path),
             model_proxy=(endpoint.hostname, endpoint.port or (443 if endpoint.scheme == "https" else 80)),
             model_token=grant["model_token"], manifest_path=manifest_path,
         )
+        # The grant ends with the lease this launch saw. A failure after that
+        # moment is the model being cut off, not a worker verdict: lease_dead.
+        if code not in (0, None) and datetime.now(UTC) >= expires_at:
+            return None
+        return code
     finally:
         if manifest_path is not None:
             manifest_path.unlink(missing_ok=True)

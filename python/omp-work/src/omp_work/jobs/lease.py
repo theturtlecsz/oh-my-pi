@@ -294,6 +294,29 @@ def _query_authority(
 
 
 
+def require_live_holder(
+    cur: Any,
+    workspace_id: UUID,
+    job_id: str,
+    worker_id: str,
+    fence: int,
+) -> LeaseAuthority:
+    """Lock the job row and require this worker's live fence inside the caller's transaction.
+
+    Returns the live authority. A stop that froze the lease raises
+    ``agent_stop_engaged``; any other loss raises ``job_fence_stale``. The row
+    lock holds until the caller's transaction ends, so a reclaim or cancel
+    cannot interleave with the write that follows.
+    """
+    _lock_job(cur, workspace_id, job_id)
+    authority = _query_authority(cur, workspace_id, job_id, worker_id, fence)
+    if authority.is_live:
+        return authority
+    if authority.is_frozen:
+        raise JobError("agent_stop_engaged", (authority.reason or "agent_stop_engaged",))
+    raise JobError("job_fence_stale", (authority.reason or "job_fence_stale",))
+
+
 def renew_lease(
     store: NativeJobStore,
     *,
