@@ -108,7 +108,24 @@ import {
 import { registerSessionLedger } from "./session-ledger";
 import { prepareNativeAuditRunner, resolveAuditModel, type NativeAuditRunner, type NativeAuditRunResult } from "./auditor-runner";
 import { computeAuditTcb, type SourceResolver } from "./audit-tcb";
-import { canonicalJson, sha256Hex, WORK_CONTRACT_SHA256, WorkError, type Candidate, type CloseAttempt, type Command, type CommandResult, type ExecutionGrantItemClaim, type ExecutionProvenanceEnvelope, type ExecutionJudgeManifest, type HealthView, type WorkItemView, type WorkflowView } from "@oh-my-pi/pi-work-client";
+import {
+	type AssessBoundedIntakeResult,
+	type BoundedIntakeDraft,
+	canonicalJson,
+	sha256Hex,
+	WORK_CONTRACT_SHA256,
+	WorkError,
+	type Candidate,
+	type CloseAttempt,
+	type Command,
+	type CommandResult,
+	type ExecutionGrantItemClaim,
+	type ExecutionProvenanceEnvelope,
+	type ExecutionJudgeManifest,
+	type HealthView,
+	type WorkItemView,
+	type WorkflowView,
+} from "@oh-my-pi/pi-work-client";
 
 /** Attempt identity as either the close-attempt record or a workflow view row (whose columns may be null). */
 type ReviewAttemptIdentity = {
@@ -597,12 +614,97 @@ interface WorkflowToolParams {
 	kind?: EvidenceKind;
 	queue?: boolean;
 	question?: string;
-	batch?: { title: string; description?: string; blocks?: number[] }[];
+	intake?: BoundedIntakeDraft;
+	batch?: { title: string; description?: string; blocks?: number[]; intake?: BoundedIntakeDraft }[];
 	confirm?: boolean;
 	confirmation_id?: string;
 	criteria?: string[];
 	plan_file?: string;
 	paths?: string[];
+}
+
+export type NsiRouteMode = "current" | "typed";
+
+export function nsiRouteStatePath(): string {
+	const configHome = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+	return join(configHome, "omp", "work-ledger", "nsi-route.json");
+}
+
+export function readNsiRouteMode(statePath = nsiRouteStatePath()): NsiRouteMode {
+	let raw: string;
+	try {
+		raw = readFileSync(statePath, "utf8");
+	} catch (err: unknown) {
+		const isEnoent = Boolean(err && typeof err === "object" && "code" in err && (err as { code: string }).code === "ENOENT");
+		if (isEnoent) {
+			return "current";
+		}
+		throw new Error(`NSI-6 route state unreadable: ${err instanceof Error ? err.message : String(err)}`);
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch (err) {
+		throw new Error(`NSI-6 route state invalid JSON: ${err instanceof Error ? err.message : String(err)}`);
+	}
+	if (!parsed || typeof parsed !== "object") {
+		throw new Error("NSI-6 route state invalid: expected object");
+	}
+	const state = parsed as Record<string, unknown>;
+	if (state.kind !== "nsi6-route-state" || state.version !== 1) {
+		throw new Error("NSI-6 route state invalid: unsupported kind or version");
+	}
+	if (state.mode !== "current" && state.mode !== "typed") {
+		throw new Error(`NSI-6 route state invalid: unknown mode ${String(state.mode)}`);
+	}
+	return state.mode;
+}
+
+function validateIntakeDraftMatching(
+	draft: BoundedIntakeDraft | undefined,
+	title: string,
+	expectedText: string,
+): string | null {
+	if (!draft) {
+		return "intake_typed_required: typed intake requires matching structured intake draft (intake)";
+	}
+	if (typeof draft !== "object" || draft.archetype !== "small_code_change") {
+		return "intake_draft_mismatch: draft archetype must be small_code_change";
+	}
+	if (!draft.goal || typeof draft.goal.statement !== "string" || draft.goal.statement.trim() !== title.trim()) {
+		return `intake_draft_mismatch: draft goal "${draft.goal?.statement ?? ""}" does not match title "${title}"`;
+	}
+	if (!draft.source || typeof draft.source.text !== "string" || draft.source.text !== expectedText) {
+		return "intake_draft_mismatch: draft source text does not match blueprint description";
+	}
+	const computedSha = sha256Hex(draft.source.text);
+	if (draft.source.sha256 !== computedSha) {
+		return `intake_draft_mismatch: draft source sha256 ${draft.source.sha256} does not match computed ${computedSha}`;
+	}
+	return null;
+}
+
+async function assessStructuredDraft(
+	backend: WorkflowBackend,
+	draft: BoundedIntakeDraft,
+): Promise<{ ok: true; assessment: AssessBoundedIntakeResult } | { ok: false; refusal: string }> {
+	if (!backend.assessBoundedIntake) {
+		return { ok: false, refusal: "intake_backend_unsupported: typed intake mode requires backend assessment support" };
+	}
+	let assessment: AssessBoundedIntakeResult;
+	try {
+		assessment = await backend.assessBoundedIntake(draft);
+	} catch (error) {
+		return { ok: false, refusal: `intake_assessment_error: ${error instanceof Error ? error.message : String(error)}` };
+	}
+	if (!assessment || !assessment.ready_for_ratification || assessment.issue_count > 0) {
+		const questions = assessment?.questions?.map(q => q.statement).join("; ");
+		return {
+			ok: false,
+			refusal: `intake_assessment_refused: typed intake assessment failed (${assessment?.issue_count ?? 0} issue(s)): ${questions || "not ready for ratification"}`,
+		};
+	}
+	return { ok: true, assessment };
 }
 
 async function preflightWorkServiceUnit(): Promise<void> {
@@ -3722,12 +3824,14 @@ export function createWorkflowHost(cfg: HostConfig) {
 				kind: kindEnum.optional().describe(KIND_DESCRIPTION),
 				queue: z.boolean().optional().describe(`create_work: also mark ${backend.queueNoun} so the work lands in the owner decision queue`),
 				question: z.string().optional().describe("Owner decision question (max 240 chars, single line) — required when creating a TRIAGE issue (queue:true) or queueing an issue (queue_work)"),
+				intake: z.unknown().optional().describe("Structured intake draft (BoundedIntakeDraft) for typed intake mode"),
 				batch: z
 					.array(
 						z.object({
 							title: z.string(),
 							description: z.string().optional(),
 							blocks: z.array(z.number().int().nonnegative()).optional().describe("zero-based indexes of sibling batch entries THIS entry blocks"),
+							intake: z.unknown().optional().describe("Structured intake draft for this child issue"),
 						}),
 					)
 					.optional()
@@ -4103,7 +4207,13 @@ export function createWorkflowHost(cfg: HostConfig) {
 								}
 							}
 							if (!params.title) return deny("title required");
+							let routeMode: NsiRouteMode = "current";
 							if (intakeActive) {
+								try {
+									routeMode = readNsiRouteMode();
+								} catch (error) {
+									return deny(error instanceof Error ? error.message : String(error));
+								}
 								const blueprint = await readLatestIntakeBlueprint(ctx, params.description);
 								if (!blueprint) {
 									return deny("intake_blueprint_missing: save and lint local://intake-{slug}.md before publishing");
@@ -4154,6 +4264,23 @@ export function createWorkflowHost(cfg: HostConfig) {
 										}
 										if (outgoing + incoming === 0) {
 											return deny(`intake_decomposition_required: batch entry [${k}] "${entries[k]!.title}" has no blocking relations; publish as a separate single-issue blueprint`);
+										}
+									}
+									if (routeMode === "typed") {
+										if (!backend.assessBoundedIntake) {
+											return deny("intake_backend_unsupported: typed intake mode requires backend assessment support");
+										}
+										const parentMismatch = validateIntakeDraftMatching(params.intake, params.title, params.description ?? "");
+										if (parentMismatch) return deny(parentMismatch);
+										const parentAssess = await assessStructuredDraft(backend, params.intake!);
+										if (!parentAssess.ok) return deny(parentAssess.refusal);
+
+										for (let k = 0; k < n; k++) {
+											const entry = entries[k]!;
+											const childMismatch = validateIntakeDraftMatching(entry.intake, entry.title, entry.description ?? "");
+											if (childMismatch) return deny(`batch entry [${k}] "${entry.title}": ${childMismatch}`);
+											const childAssess = await assessStructuredDraft(backend, entry.intake!);
+											if (!childAssess.ok) return deny(`batch entry [${k}] "${entry.title}": ${childAssess.refusal}`);
 										}
 									}
 								}
@@ -4208,6 +4335,15 @@ export function createWorkflowHost(cfg: HostConfig) {
 							const target = fileTarget(params.project);
 							const singleRefusal = unscopedRefusal(target);
 							if (singleRefusal) return deny(singleRefusal);
+							if (intakeActive && routeMode === "typed") {
+								if (!backend.assessBoundedIntake) {
+									return deny("intake_backend_unsupported: typed intake mode requires backend assessment support");
+								}
+								const mismatch = validateIntakeDraftMatching(params.intake, params.title, params.description ?? "");
+								if (mismatch) return deny(mismatch);
+								const assessed = await assessStructuredDraft(backend, params.intake!);
+								if (!assessed.ok) return deny(assessed.refusal);
+							}
 							const queueText = params.queue ? `\n→ + ${backend.queueNoun} (lands in your decision queue)\n\nOwner question:\n${params.question?.trim()}` : "";
 							const detail = `"${params.title}"\n→ ${target ? `project ${target}` : cfg.teamNoun}${queueText}${selectsNow ? "\n→ becomes NOW" : ""}\n\n${params.description ?? ""}`;
 							const gate = confirmWrite(
@@ -4237,8 +4373,14 @@ export function createWorkflowHost(cfg: HostConfig) {
 								);
 							}
 							if (!params.title) return deny("title required");
+							let routeMode: NsiRouteMode = "current";
 							let blueprint = params.description ?? "";
 							if (intakeActive) {
+								try {
+									routeMode = readNsiRouteMode();
+								} catch (error) {
+									return deny(error instanceof Error ? error.message : String(error));
+								}
 								const saved = await readLatestIntakeBlueprint(ctx, params.description);
 								if (!saved) {
 									return deny("intake_blueprint_missing: save and lint local://intake-{slug}.md before publishing");
@@ -4257,10 +4399,24 @@ export function createWorkflowHost(cfg: HostConfig) {
 							const singleRefusal = unscopedRefusal(target);
 							if (singleRefusal) return deny(singleRefusal);
 							if (!target) return deny("project required");
+							if (intakeActive && routeMode === "typed") {
+								if (!backend.assessBoundedIntake) {
+									return deny("intake_backend_unsupported: typed intake mode requires backend assessment support");
+								}
+								const mismatch = validateIntakeDraftMatching(params.intake, params.title, blueprint);
+								if (mismatch) return deny(mismatch);
+								const assessed = await assessStructuredDraft(backend, params.intake!);
+								if (!assessed.ok) return deny(assessed.refusal);
+							}
 							const detail = `"${params.title}"\n→ project ${target}\n\n${blueprint}`;
 							const gate = confirmWrite("draft_mission", "Model wants to draft a mission", detail, params);
 							if (!gate.approved) return deny(gate.preview);
-							const drafted = await backend.draftMission({ title: params.title, blueprint, project: target });
+							const drafted = await backend.draftMission({
+								title: params.title,
+								blueprint,
+								project: target,
+								...(params.intake ? { draft: params.intake } : {}),
+							});
 							return okText(missionIntakeReply(drafted), { outcome: drafted.outcome });
 						}
 						case "queue_work": {

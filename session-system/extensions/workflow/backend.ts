@@ -5,6 +5,8 @@
  * supplies storage I/O only.
  */
 import type {
+	AssessBoundedIntakeResult,
+	BoundedIntakeDraft,
 	Candidate,
 	Command,
 	CommandResult,
@@ -421,6 +423,7 @@ export interface BatchEntry {
 	title: string;
 	description?: string;
 	blocks?: number[];
+	intake?: BoundedIntakeDraft;
 }
 
 export interface CreateBatchInput {
@@ -555,7 +558,9 @@ export interface WorkflowBackend {
 	appendEvidence(issue: NowRef, kind: EvidenceKind, body: string, meta: EvidenceMeta, authorizationRef?: string): Promise<CloseAttemptOutcome | EvidenceReceipt | void>;
 	createIssue(input: { title: string; description?: string; project?: string; queue?: boolean; question?: string }): Promise<NowRef>;
 	/** Publish one bounded intake as a mission. A retry resends the claim's mission_id and request_id. */
-	draftMission(input: { title: string; blueprint: string; project?: string }): Promise<DraftMissionResult>;
+	draftMission(input: { title: string; blueprint: string; project?: string; draft?: BoundedIntakeDraft }): Promise<DraftMissionResult>;
+	/** Optional assessment method for typed bounded intake; old backends omit. */
+	assessBoundedIntake?(draft: BoundedIntakeDraft): Promise<AssessBoundedIntakeResult>;
 	createBatch(input: CreateBatchInput): Promise<BatchOutcome>;
 	/** OMP-139: one atomic same-session found-and-fixed filing — the BACKLOG
 	 *  child (inheriting the parent's project), its child→parent edge, and the

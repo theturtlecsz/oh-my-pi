@@ -120,6 +120,7 @@ Host refuses missing/stale artifacts, byte drift, multi-deliverable single issue
 
 - **Single issue** (default): `create_work`, description byte-exact from the artifact; preview shown verbatim (item becomes NOW); `confirm:true` only after owner yes.
 - **Conditional split** — ONE complaint, ≥2 independently verifiable slices with blocking relations (never bundled independents): parent = blueprint byte-exact; children carry NATIVE `blocks` links (text never substitutes), every child ≥1 edge; ONE batch preview, one owner yes.
+- **Typed route mode**: when the active work-ledger route is `"typed"`, publication requests the structured proposal with original source bytes and spans (`intake: BoundedIntakeDraft` on `create_work`, on each batch child, and on `draft_mission`); markdown descriptions remain display-only, and preview/confirmation fail closed if the structured proposal is missing, mismatched, or unratified by the assessment service.
 - No `success:true` → not landed.
 
 Zero interview questions do not waive lint, the exact publication preview, or owner confirmation. Publication is ready only for scope whose consequential questions are settled or explicitly excluded/blocked by an approved deferral.
