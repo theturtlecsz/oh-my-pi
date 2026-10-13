@@ -236,9 +236,9 @@
       "id": "p022",
       "claim_text": "The drug reduced mortality by 30 percent.",
       "passage": "The drug reduced mortality by 30 percent.",
-      "context": "A press release asserted that 'the drug reduced mortality by 30 percent'. Peer review found the result did not replicate.",
+      "context": "A correction quotes the withdrawn press-release claim: 'The drug reduced mortality by 30 percent.' The corrected analysis of the original trial found that the drug did not reduce mortality at all.",
       "gold": "contradicts",
-      "rationale": "Quote is a rejected press claim.",
+      "rationale": "The correction withdraws the quoted claim and explicitly states no mortality reduction, contradicting a 30 percent reduction.",
       "near_miss": "quote_out_of_context",
       "split": "train",
       "group": "t11"
@@ -588,9 +588,9 @@
       "id": "p054",
       "claim_text": "The bridge is safe for heavy vehicles.",
       "passage": "The bridge is safe for heavy vehicles.",
-      "context": "Quoted from an advertising brochure: 'The bridge is safe for heavy vehicles.' The inspection report that follows assesses only pedestrian loads.",
+      "context": "A bridge-inspection training exercise presents this sentence as a hypothetical example of a safety conclusion, not a finding about the bridge. The exercise provides no determination of whether the bridge is safe for heavy vehicles.",
       "gold": "neither",
-      "rationale": "Brochure quote is not evidence; inspection says nothing on heavy vehicles.",
+      "rationale": "Context marks the quote as hypothetical and supplies no actual heavy-vehicle safety finding, establishing neither the claim nor its opposite.",
       "near_miss": "quote_out_of_context",
       "split": "heldout",
       "group": "h12"
