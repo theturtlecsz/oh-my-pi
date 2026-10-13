@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from typing import Any
 
@@ -12,7 +13,9 @@ __all__ = [
     "beam",
     "best_of_n",
     "cost_aware",
+    "fixed",
     "greedy",
+    "next_step",
     "prune",
     "random",
     "replicate",
@@ -117,7 +120,17 @@ def random(steps: Steps, opened: set[str], *, seed: int = 0, width: int = 1) -> 
     return pick, (seed * 1103515245 + 12345) % 2**31
 
 
+def fixed(steps: Steps, opened: set[str], *, seed: int = 0, width: int = 1) -> tuple[str | None, int]:
+    """Open the first unopened legal node in mapping insertion order; seed unchanged."""
+    for step_id, node in steps.items():
+        parent = node.get("parent_id")
+        if step_id not in opened and (parent is None or parent in opened):
+            return step_id, seed
+    return None, seed
+
+
 _POLICIES: dict[str, PolicyFn] = {
+    "fixed": fixed,
     "best_of_n": best_of_n,
     "greedy": greedy,
     "beam": beam,
@@ -126,31 +139,40 @@ _POLICIES: dict[str, PolicyFn] = {
 }
 
 
-def run_policy(policy: str | PolicyFn, steps: Steps, *, budget: float, seed: int = 0, width: int = 1) -> list[str]:
-    """Open nodes one at a time until the policy stops or the next node's cost exceeds the budget."""
+def next_step(
+    policy: str | PolicyFn, steps: Steps, opened: set[str], *, seed: int = 0, width: int = 1
+) -> tuple[str | None, int]:
+    """Resolve policy and return its next legal choice (or None) with the advanced seed."""
     if isinstance(policy, str):
         if policy not in _POLICIES:
             raise ValueError(f"unknown policy {policy!r}; expected one of {sorted(_POLICIES)}")
         fn = _POLICIES[policy]
     else:
         fn = policy
+    step_id, seed = fn(steps, opened, seed=seed, width=width)
+    if step_id is None:
+        return None, seed
+    parent = steps[step_id].get("parent_id")
+    if step_id in opened or (parent is not None and parent not in opened):
+        return None, seed
+    return step_id, seed
+
+
+def run_policy(policy: str | PolicyFn, steps: Steps, *, budget: float, seed: int = 0, width: int = 1) -> list[str]:
+    """Open nodes one at a time until the policy stops or the next node's cost would exceed the budget."""
     opened: list[str] = []
     opened_set: set[str] = set()
-    spent = 0.0
+    costs: list[float] = []
     while True:
-        step_id, seed = fn(steps, opened_set, seed=seed, width=width)
+        step_id, seed = next_step(policy, steps, opened_set, seed=seed, width=width)
         if step_id is None:
             break
-        node = steps[step_id]
-        parent = node.get("parent_id")
-        if step_id in opened_set or (parent is not None and parent not in opened_set):
-            break
-        cost = node["cost"]
-        if cost > budget - spent:
+        cost = steps[step_id]["cost"]
+        if math.fsum([*costs, cost]) > budget:
             break
         opened.append(step_id)
         opened_set.add(step_id)
-        spent += cost
+        costs.append(cost)
     return opened
 
 
