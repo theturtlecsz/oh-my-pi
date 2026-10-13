@@ -102,7 +102,9 @@ from .semantics import (
     would_create_cycle,
 )
 
-_RECEIPT_FIELDS = "receipt_id,work_id,revision_id,candidate_id,kind,payload,payload_sha256,artifact_sha256,issuer,issued_at,candidate_sha256,candidate_commit,verdict,independent,remote_ref,remote_commit"
+# Receipts without an independence claim (including publication receipts)
+# expose the EvidenceReceipt default false, even when the SQL column is NULL.
+_RECEIPT_FIELDS = "receipt_id,work_id,revision_id,candidate_id,kind,payload,payload_sha256,artifact_sha256,issuer,issued_at,candidate_sha256,candidate_commit,verdict,COALESCE(independent,false) AS independent,remote_ref,remote_commit"
 _ATTEMPT_FIELDS = "attempt_id,work_id,revision_id,candidate_id,plan_receipt_id,candidate_sha256,candidate_commit,owner_session_id,owner_session_started_at,owner_session_start_commit,repository,diff_sha256,starting_dirty_paths,authorization_kind,authorization_ref,launch_count,cancelled_launch_count,accepted_report_count,in_flight_launch_id,state,terminal_reason,requested_at,closeout_requested_at,completed_at,completion_authorization_ref,riders,execution_grant_id,candidate_tree_sha,original_request_sha256,criteria_sha256,plan_stamp_sha256,judge_sha256"
 _GRANT_FIELDS = "grant_id,workspace_id,owner_id,repository,remote_ref,state,mode,grant_version,max_continuations,max_close_attempts,max_no_progress,continuations_scheduled,terminal_reason,authorization_hash,judge_sha256,created_at,expires_at,completed_at,paused_at,stopped_at,canceled_at"
 _GRANT_ITEM_FIELDS = "item_id,workspace_id,grant_id,work_id,position,phase,claimed_revision_id,project_id,active_blocker_ids,initial_git_baseline,current_git_baseline,criteria_revision_id,original_request,original_request_sha256,criteria_sha256,plan_stamp_sha256,plan_stamp,close_attempts_started,consecutive_no_progress,last_reviewed_tree_sha,last_findings_hash,push_receipt_id,closeout_receipt_id,activated_at,completed_at,abandoned_at,skipped_at,terminal_reason"

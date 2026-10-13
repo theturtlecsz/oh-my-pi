@@ -148,6 +148,22 @@ class OrchestratorConfig:
     operations: tuple[str, ...] = ()
     ops: OperationsConfig = field(default_factory=OperationsConfig.defaults)
     model_proxy_url: str | None = None
+    context_command: tuple[str, ...] = ()
+    context_settings_path: Path | None = None
+    learning_state_dir: Path | None = None
+    learning_command: tuple[str, ...] = ()
+    learning_bearer_file: Path | None = None
+
+    def __post_init__(self) -> None:
+        if bool(self.context_command) != (self.context_settings_path is not None):
+            raise OrchestratorError("invalid_request")
+        learning = (
+            bool(self.learning_command),
+            self.learning_state_dir is not None,
+            self.learning_bearer_file is not None,
+        )
+        if any(learning) and (not all(learning) or not self.context_command):
+            raise OrchestratorError("invalid_request")
 
     @staticmethod
     def path(ops: OperationsConfig | None = None) -> Path:
@@ -300,6 +316,20 @@ def load_config(path: Path | None = None, ops: OperationsConfig | None = None) -
             host = "127.0.0.1"
         return f"http://{host}:{port}"
 
+    def _command(key: str) -> tuple[str, ...]:
+        raw = data.get(key, [])
+        if not isinstance(raw, list) or any(not isinstance(item, str) or not item for item in raw):
+            raise OrchestratorError("invalid_request")
+        return tuple(raw)
+
+    def _optional_path(key: str) -> Path | None:
+        raw = data.get(key)
+        if raw is None:
+            return None
+        if not isinstance(raw, str) or not raw:
+            raise OrchestratorError("invalid_request")
+        return Path(raw)
+
     return OrchestratorConfig(
         workspace_id=UUID(str(data["workspace_id"])),
         automation_capability_path=_path("automation_capability_path"),
@@ -329,6 +359,11 @@ def load_config(path: Path | None = None, ops: OperationsConfig | None = None) -
         operations=tuple(str(item) for item in operations),
         ops=base,
         model_proxy_url=_model_proxy_url(),
+        context_command=_command("context_command"),
+        context_settings_path=_optional_path("context_settings_path"),
+        learning_state_dir=_optional_path("learning_state_dir"),
+        learning_command=_command("learning_command"),
+        learning_bearer_file=_optional_path("learning_bearer_file"),
     )
 
 
