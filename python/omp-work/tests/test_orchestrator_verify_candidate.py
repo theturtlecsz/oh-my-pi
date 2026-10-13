@@ -380,14 +380,16 @@ def test_prepare_rejects_export_attribute_transform(tmp_path: Path) -> None:
     assert "outside_allowed:doc.md" in exc.value.violations
 
 
-def test_prepare_cleans_snapshot_on_every_exit(tmp_path: Path) -> None:
+def test_prepare_cleans_snapshot_on_every_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     bare, base, cand, wt = _world(tmp_path)
-    temp_root = Path(tempfile.gettempdir())
+    private = tmp_path / "private"
+    private.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(private))
 
     def leftovers() -> set[Path]:
-        return set(temp_root.glob("omp-verify-snapshot-*"))
-
-    before = leftovers()
+        return set(private.glob("omp-verify-snapshot-*"))
 
     # Exception raised inside the body still removes the snapshot.
     holder: dict[str, Path] = {}
@@ -395,13 +397,15 @@ def test_prepare_cleans_snapshot_on_every_exit(tmp_path: Path) -> None:
         with prepare_candidate(_task(bare, base, cand), wt) as snapshot:
             holder["snapshot"] = snapshot
             raise RuntimeError("boom")
+    assert holder["snapshot"].parent == private
     assert not holder["snapshot"].exists()
+    assert leftovers() == set()
 
     # A validation failure creates no snapshot at all.
     with pytest.raises(CandidateGitError):
         with prepare_candidate(_task(bare, base, cand, digest="0" * 64), wt):
             pass
-    assert leftovers() == before
+    assert leftovers() == set()
 
 
 _VALID = {
