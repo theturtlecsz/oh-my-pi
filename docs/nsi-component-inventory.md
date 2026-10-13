@@ -29,5 +29,9 @@ qualification, runtime admission, native acceptance or an activation claim.
   tests can be inventoried; its relationship to the NSI-1..6 chain needs an owner
   disposition before it can be placed.
 - The runtime entry gates the plan names (H0/OMP-203, NSI-1..6, NSI-4/5/6, the
-  shared bounded-model-job substrate) have no qualified owner or proof recorded in
+  shared bounded-model-job substrate) have no qualified runtime proof recorded in
   this repository, so no E1–E4 runtime admission can be evidenced from this tree.
+
+NSI-DISPOSITION: NSI-4=pending NSI-5=pending
+
+Naming an owner or recording a deferral is not qualified runtime proof and does not admit E2 or E3.
