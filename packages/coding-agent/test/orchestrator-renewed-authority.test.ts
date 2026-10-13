@@ -22,6 +22,7 @@ interface RunOptions {
 	deadline?: unknown;
 	legacy?: boolean;
 	endpointMismatch?: boolean;
+	clock?: { now: number };
 	respond?: (index: number, request: CapturedRequest, child: Subprocess) => Response | Promise<Response>;
 }
 function sse(parts: unknown[]): Response {
@@ -45,7 +46,9 @@ async function runWorker(options: RunOptions = {}) {
 			const captured = { url: request.url, headers: request.headers, body: await request.text() };
 			requests.push(captured);
 			if (!child) throw new Error("worker not started");
-			return options.respond?.(requests.length - 1, captured, child) ?? sse([{ text: "done" }]);
+			const response = await (options.respond?.(requests.length - 1, captured, child) ?? sse([{ text: "done" }]));
+			if (options.clock) await Bun.write(path.join(root, "work/clock.txt"), String(options.clock.now));
+			return response;
 		},
 	});
 	const proxyUrl = `http://127.0.0.1:${server.port}/pinned`;
@@ -57,6 +60,14 @@ async function runWorker(options: RunOptions = {}) {
 		}
 		populateHostSystemLayout(root);
 		await Bun.write(path.join(root, "work/src/allowed.txt"), "old\n");
+		if (options.clock) {
+			await Bun.write(path.join(root, "work/clock.txt"), String(options.clock.now));
+			// Only the isolated child sees this clock; other tests keep their real clock.
+			await Bun.write(
+				path.join(root, "work/clock-preload.ts"),
+				'import * as fs from "node:fs";\nDate.now = () => Number(fs.readFileSync("/work/clock.txt", "utf8"));\n',
+			);
+		}
 		await Bun.write(
 			path.join(root, "work/manifest.json"),
 			JSON.stringify({
@@ -97,7 +108,14 @@ async function runWorker(options: RunOptions = {}) {
 				"--mount",
 				"bash",
 				"-c",
-				pivotScript(root, undefined, undefined, true),
+				pivotScript(
+					root,
+					undefined,
+					options.clock
+						? "exec /run/bun --no-env-file --preload /work/clock-preload.ts /run/checkout/packages/coding-agent/src/cli.ts orchestrator-worker"
+						: undefined,
+					true,
+				),
 			],
 			{ cwd: root, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
 		);
@@ -205,16 +223,20 @@ process.stdout.write(JSON.stringify({ checkout, hostRoot: fs.existsSync("/old/us
 		assertPinned(result.requests, result.proxyUrl);
 	}, 20_000);
 	it("accepts a delayed response spanning the obsolete lease", async () => {
-		const oldLease = Date.now() + 2000;
+		// Advance the child's clock only once its request is in flight, so startup
+		// scheduling cannot consume the lease before the scenario begins.
+		const oldLease = Date.parse("2030-01-01T00:00:00.000Z");
+		const clock = { now: oldLease - 60_000 };
 		let started = 0;
 		let finished = 0;
 		const result = await runWorker({
+			clock,
 			lease: new Date(oldLease).toISOString(),
 			deadline: new Date(oldLease + 10_000).toISOString(),
-			respond: async () => {
-				started = Date.now();
-				await Bun.sleep(Math.max(0, oldLease + 150 - Date.now()));
-				finished = Date.now();
+			respond: () => {
+				started = clock.now;
+				clock.now = oldLease + 150;
+				finished = clock.now;
 				return sse([{ text: "done" }]);
 			},
 		});
@@ -222,6 +244,23 @@ process.stdout.write(JSON.stringify({ checkout, hostRoot: fs.existsSync("/old/us
 		expect(finished).toBeGreaterThan(oldLease);
 		expect(result.exitCode, result.stderr).toBe(0);
 		expect(result.requests).toHaveLength(1);
+	}, 20_000);
+	it("rejects a response that crosses the hard deadline with a future lease", async () => {
+		const deadline = Date.parse("2030-01-01T00:00:00.000Z");
+		const clock = { now: deadline - 60_000 };
+		const result = await runWorker({
+			clock,
+			lease: new Date(deadline + 10_000).toISOString(),
+			deadline: new Date(deadline).toISOString(),
+			respond: () => {
+				clock.now = deadline + 150;
+				return sse([{ text: "too late" }]);
+			},
+		});
+		expect(result.requests).toHaveLength(1);
+		expect(result.exitCode, result.stderr).not.toBe(0);
+		expect(result.stderr).toContain("deadline exceeded");
+		expect(result.stdout).toContain('"result":"failed"');
 	}, 20_000);
 	it("hard deadline interrupts an in-flight HTTP response", async () => {
 		const pending = Promise.withResolvers<Response>();

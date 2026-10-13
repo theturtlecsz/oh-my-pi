@@ -1,0 +1,24 @@
+--- a/flood.py
++++ b/flood.py
+@@ -41,2 +41,6 @@
+ CODE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
++
++PLANNER_RULES_BYTES = Path(__file__).with_name("omp584-planner-rules.md").read_bytes()
++PLANNER_INDEPENDENCE = PLANNER_RULES_BYTES.decode("utf-8")
++PLANNER_RULES_SHA256 = hashlib.sha256(PLANNER_RULES_BYTES).hexdigest()
+ 
+@@ -1828,2 +1832,3 @@
+             "depends on every other slice) touches a changelog.",
++            PLANNER_INDEPENDENCE,
+             "Slices without a dependency run at the same time, and each dependency waits for the other slice's",
+@@ -1900,2 +1905,3 @@
+             "(2) is each slice independently implementable and verifiable from its own text alone?",
++            PLANNER_INDEPENDENCE,
+             "End your response with exactly one line: 'VERDICT: PASS' or 'VERDICT: FAIL'.",
+@@ -3777,2 +3783,6 @@
+     def run(self, once: bool = False, forever: bool = False) -> int:
++        log("loaded " + json.dumps({"event": "loaded", "at": now(), "pid": os.getpid(),
++                                  "code_sha256": CODE_SHA256, "rules_sha256": PLANNER_RULES_SHA256,
++                                  "external_head": git(Path(__file__).resolve().parent,
++                                                       "rev-parse", "HEAD").stdout.strip()}, sort_keys=True))
+         log(f"flood: {len(self.tasks)} tasks, {self.slots} slots, repo={self.repo}")
