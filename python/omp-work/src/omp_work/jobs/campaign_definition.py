@@ -12,8 +12,9 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, TypeGuard
 
@@ -23,15 +24,18 @@ __all__ = [
     "CampaignDefinition",
     "Criterion",
     "PreparedTrial",
+    "SearchConfig",
     "load_definition",
     "score_campaign",
     "score_metrics",
 ]
 
 _DEFINITION_KEYS = frozenset(
-    {"objective", "domain", "trials", "criteria", "timeout_seconds"}
+    {"objective", "domain", "trials", "criteria", "timeout_seconds", "search"}
 )
-_TRIAL_KEYS = frozenset({"harness"})
+_TRIAL_KEYS = frozenset({"harness", "id", "parent", "cost"})
+_SEARCH_KEYS = frozenset({"policy", "budget", "width", "seed", "metric"})
+_TRIAL_ID = re.compile(r"[A-Za-z0-9._-]{1,64}")
 _CRITERION_KEYS = frozenset({"metric", "op", "threshold"})
 _DEFAULT_TIMEOUT_SECONDS = 60
 _MAX_METRIC_LENGTH = 128
@@ -68,6 +72,20 @@ class PreparedTrial:
     harness: Path
     harness_bytes: bytes
     candidate_digest: str
+    id: str | None = None
+    parent: str | None = None
+    cost: int | float = 1
+
+
+@dataclass(frozen=True, slots=True)
+class SearchConfig:
+    """Resolved search options; greedy maximizes the declared metric."""
+
+    policy: Literal["fixed", "greedy"]
+    budget: int | float
+    width: int
+    seed: int
+    metric: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +97,7 @@ class CampaignDefinition:
     timeout_seconds: int
     criteria: tuple[Criterion, ...]
     trials: tuple[PreparedTrial, ...]
+    search: SearchConfig | None = None
 
 
 def _reject_constant(token: str) -> None:
@@ -157,6 +176,23 @@ def _positive_int(value: object, label: str) -> int:
     return value
 
 
+def _positive_number(value: object, label: str) -> int | float:
+    number = _finite_number(value, label)
+    try:
+        finite = math.isfinite(number)
+    except OverflowError:
+        finite = False
+    if not finite or number <= 0:
+        raise ValueError(f"{label} must be a finite positive number")
+    return number
+
+
+def _trial_id(value: object, label: str) -> str:
+    if not isinstance(value, str) or _TRIAL_ID.fullmatch(value) is None:
+        raise ValueError(f"{label} must match [A-Za-z0-9._-]{{1,64}}")
+    return value
+
+
 def _nonempty_list(value: object, label: str) -> list[Any]:
     if not isinstance(value, list) or len(value) == 0:
         raise ValueError(f"{label} must be a nonempty list")
@@ -198,11 +234,52 @@ def _read_harness(definition_path: Path, raw: object) -> PreparedTrial:
     )
 
 
-def _parse_trial(definition_path: Path, value: object, index: int) -> PreparedTrial:
+def _parse_trial(
+    definition_path: Path, value: object, index: int, earlier_ids: set[str]
+) -> PreparedTrial:
     where = f"trials[{index}]"
     trial = _object(value, where)
     _check_keys(trial, _TRIAL_KEYS, where)
-    return _read_harness(definition_path, _require(trial, "harness", where))
+    trial_id = _trial_id(trial.get("id", f"t{index:03d}"), f"{where}.id")
+    if trial_id in earlier_ids:
+        raise ValueError(f"{where} duplicate id {trial_id}")
+    parent = trial.get("parent")
+    if parent is not None:
+        parent = _trial_id(parent, f"{where}.parent")
+        if parent not in earlier_ids:
+            raise ValueError(f"{where}.parent must name an earlier trial id")
+    cost = _positive_number(trial.get("cost", 1), f"{where}.cost")
+    prepared = _read_harness(definition_path, _require(trial, "harness", where))
+    earlier_ids.add(trial_id)
+    return replace(prepared, id=trial_id, parent=parent, cost=cost)
+
+
+def _parse_search(
+    value: object, trials: Sequence[PreparedTrial], criteria: Sequence[Criterion]
+) -> SearchConfig:
+    search = _object(value, "search")
+    _check_keys(search, _SEARCH_KEYS, "search")
+    policy = search.get("policy", "fixed")
+    if policy not in ("fixed", "greedy"):
+        raise ValueError("search.policy must be fixed or greedy")
+    width = _positive_int(search.get("width", 1), "search.width")
+    seed = search.get("seed", 0)
+    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+        raise ValueError("search.seed must be a nonnegative integer")
+    metric = _nonempty_str(search.get("metric", criteria[0].metric), "search.metric")
+    if metric not in {criterion.metric for criterion in criteria}:
+        raise ValueError("search.metric must name a declared criterion")
+    if "budget" in search:
+        budget = _positive_number(search["budget"], "search.budget")
+    else:
+        try:
+            total = math.fsum(trial.cost for trial in trials)
+        except OverflowError as exc:
+            raise ValueError("search.budget total must be finite") from exc
+        budget = _positive_number(total, "search.budget")
+    return SearchConfig(
+        policy=policy, budget=budget, width=width, seed=seed, metric=metric
+    )
 
 
 def _parse_criterion(value: object, index: int) -> Criterion:
@@ -224,7 +301,9 @@ def load_definition(path: Path) -> CampaignDefinition:
 
     ``timeout_seconds`` defaults to 60 when the key is absent. Unknown keys,
     duplicate keys, booleans used as numbers, and non-finite numbers are
-    refused. The returned trials keep the bytes read during this call.
+    refused. Trial ids default to t000, t001, etc.; parents must name earlier
+    trials. An explicit ``search`` object resolves policy, metric, and budget
+    defaults once. The returned trials keep the bytes read during this call.
     """
     definition_path = Path(path)
     document = _object(_read_json(definition_path), "definition")
@@ -237,8 +316,9 @@ def load_definition(path: Path) -> CampaignDefinition:
         timeout_seconds = _positive_int(document["timeout_seconds"], "timeout_seconds")
     else:
         timeout_seconds = _DEFAULT_TIMEOUT_SECONDS
+    earlier_ids: set[str] = set()
     trials = tuple(
-        _parse_trial(definition_path, trial, index)
+        _parse_trial(definition_path, trial, index, earlier_ids)
         for index, trial in enumerate(
             _nonempty_list(_require(document, "trials", "definition"), "trials")
         )
@@ -249,12 +329,18 @@ def load_definition(path: Path) -> CampaignDefinition:
             _nonempty_list(_require(document, "criteria", "definition"), "criteria")
         )
     )
+    search = (
+        _parse_search(document["search"], trials, criteria)
+        if "search" in document
+        else None
+    )
     return CampaignDefinition(
         objective=objective,
         domain=domain,
         timeout_seconds=timeout_seconds,
         criteria=criteria,
         trials=trials,
+        search=search,
     )
 
 
