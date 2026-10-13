@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from omp_work.contracts.nsi.v1.compat import bounded_to_nsi, intake_contract, nsi_bounded_evaluation
 from omp_work.frozen_corpus import verify
 from omp_work.nsi6_corpus import evaluator_input, load_corpus
+from omp_work.nsi_route import implementation_binding
 from omp_work.nsi_eval_postgres import disposable_provenance, implementation_hashes
 from omp_work.v1.canonical import sha256
 from omp_work.v1.intake_provenance import helper_sources, referenced_schemas
@@ -206,6 +207,18 @@ def replay(document: dict, provenance: Callable[[dict], dict]) -> dict:
             "paraphrase_agreement": agreements}
 
 
+def report_pins() -> dict:
+    sources = helper_sources()
+    return {
+        "helper_sources": sha256(sources), "referenced_schemas": sha256(referenced_schemas()),
+        "implementation_sources": {**implementation_hashes(),
+            **{name: hashlib.sha256(bytes.fromhex(source)).hexdigest() for name, source in sources.items()},
+            "omp_work.nsi_eval": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "omp_work.nsi6_corpus": hashlib.sha256(Path(sys.modules[load_corpus.__module__].__file__).read_bytes()).hexdigest()},
+        "route_sources": implementation_binding(),
+    }
+
+
 def run(manifest: Path, out: Path, rollback_proof: Path | None = None) -> dict:
     legacy = ROOT / "python/omp-work/tests/fixtures/nsi6-manifest.json"
     if not manifest.exists() and manifest.resolve() == legacy:
@@ -230,21 +243,16 @@ def run(manifest: Path, out: Path, rollback_proof: Path | None = None) -> dict:
                 return {"status": "crashed", "diagnostics": [diagnostic]}
             provenance = unavailable
         report = replay(document, provenance)
-    sources = helper_sources()
     report.update({
         "version": 1, "execution": "labeled replay", "model_tokens": 0,
         "wall_seconds": time.monotonic() - start, "corpus": corpus.model_dump(mode="json"),
-        "pins": {"helper_sources": sha256(sources), "referenced_schemas": sha256(referenced_schemas()),
-                 "implementation_sources": {**implementation_hashes(),
-                    **{name: hashlib.sha256(bytes.fromhex(source)).hexdigest() for name, source in sources.items()},
-                    "omp_work.nsi_eval": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-                    "omp_work.nsi6_corpus": hashlib.sha256(Path(sys.modules[load_corpus.__module__].__file__).read_bytes()).hexdigest()}},
+        "pins": report_pins(),
         "definitions": {"zero_denominator": "value=null; numerator and denominator retained",
                         "failed_cases": "remain in all expected denominators; crash/skip is not safety evidence",
                         "semantic_edits": semantic_edits.__doc__ + " Failed arms use raw draft; no repair is invented.",
                         "critical_detection": "Required behavior ID present as criterion (ID or ac-ID), or targeted by complete finding. Refusals/crashes claim no coverage.",
                         "paraphrase": "Both successful; equal readiness, criterion IDs, complete finding targets and capped question target counts. Failed pairs stay in denominator."},
-        "rollback_proof": None if rollback_bytes is None else {"sha256": hashlib.sha256(rollback_bytes).hexdigest(), "raw": rollback},
+        "rollback_proof": None if rollback_bytes is None else {"sha256": hashlib.sha256(rollback_bytes).hexdigest(), "bytes_hex": rollback_bytes.hex(), "raw": rollback},
         "sealed": rollback_bytes is not None,
     })
     if report["sealed"]:

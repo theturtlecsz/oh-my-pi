@@ -14,6 +14,7 @@ from psycopg.rows import dict_row, tuple_row
 from omp_work import CONTRACT_VERSION, contract_sha256
 from omp_work.integration.importer import TRANSFORMATION_VERSION
 from omp_work.operations.config import OperationsConfig
+from omp_work.nsi_route import evaluate_intake, route_mode
 from omp_work.operations.database import migration_set_sha256
 from omp_work.operations.fingerprints import (
     code_fingerprint,
@@ -95,7 +96,6 @@ from .semantics import (
     BOUNDED_INTAKE_RULE_BUNDLE_SHA256,
     bounded_intake_semantic_sha256,
     completion_blockers,
-    evaluate_bounded_intake,
     normalize_auditor_report,
     validate_completion_evidence,
     validate_cutover_manifest,
@@ -840,6 +840,8 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
                     "record_intake_decision", "supersede_intake_claim",
                     "record_intake_issue", "link_intake_criterion", "assess_intake",
                 }:
+                    if command.type == "assess_intake":
+                        route_mode(self._config)
                     with cur.connection.cursor(row_factory=tuple_row) as intake_cur:
                         result, event = execute_intake(
                             intake_cur, envelope, actor_id, actor_kind
@@ -852,7 +854,7 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
                     budget, _ = self._load_budget(cur, ws, project_id, None)
                     ceiling = None if budget is None else budget.ceiling_usd
                     result, event = draft_mission_intake(
-                        cur, envelope, actor_id, actor_kind, mandate, ceiling
+                        cur, envelope, actor_id, actor_kind, mandate, ceiling, config=self._config
                     )
                 elif command.type == "answer_mission_draft":
                     result, event = answer_mission_draft(
@@ -5975,7 +5977,7 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
 
     def _assess_bounded_intake(self, envelope: CommandEnvelope) -> dict[str, object]:
         draft = envelope.command.payload.draft
-        questions, issue_count = evaluate_bounded_intake(draft)
+        questions, issue_count = evaluate_intake(self._config, draft)
         semantic_sha = bounded_intake_semantic_sha256(draft)
         return {
             "type": "assess_bounded_intake",
@@ -6260,7 +6262,7 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
                 ("owner ratification does not match current typed semantics",),
             )
 
-        questions, issue_count = evaluate_bounded_intake(payload.draft)
+        questions, issue_count = evaluate_intake(self._config, payload.draft)
         if issue_count:
             raise WorkStoreError(
                 "intake_not_ready",

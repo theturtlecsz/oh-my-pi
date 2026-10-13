@@ -15,6 +15,8 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 import psycopg
 
+from omp_work.nsi_route import evaluate_intake
+from omp_work.operations.config import OperationsConfig
 from omp_work.mission_intake_rules import (
     clarifying_questions,
     confirmation_route,
@@ -64,13 +66,14 @@ def draft_mission_intake(
     actor_kind: str,
     mandate: StandingMandate | None,
     standing_ceiling_usd: Decimal | None,
+    *, config: OperationsConfig | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Draft one mission intake and route it to proceed, hold, or owner decision."""
     payload = envelope.command.payload
     mission_id = payload.mission_id
 
+    questions = clarifying_questions(payload.intake) if config is None else evaluate_intake(config, payload.intake)[0]
     prior = latest_mission(cur, envelope.workspace_id, mission_id)
-    questions = clarifying_questions(payload.intake)
     if questions:
         result = _result(mission_id, "clarify", questions, prior)
         return result, _event(result, None, payload.instruction)

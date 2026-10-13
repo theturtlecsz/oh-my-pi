@@ -16,6 +16,7 @@ from typing import Literal, NamedTuple
 from omp_work.v1.models import (
     BoundedIntakeDraft,
     IntakeAcceptanceCriterion,
+    IntakeBlockingQuestion,
     IntakeConstraint,
     IntakeGoal,
     IntakeSource,
@@ -892,6 +893,12 @@ def intake_contract(snapshot: IntakeSnapshot) -> IntakeContract:
         formalizations=[],
         waivers=[],
     )
+
+
+def evaluate_typed_bounded_intake(draft: BoundedIntakeDraft) -> tuple[tuple[IntakeBlockingQuestion, ...], int]:
+    """Expose typed claim findings through the existing bounded wire shape."""
+    issues = _issues_from_claims(list(bounded_to_nsi(draft).claims))
+    return tuple(IntakeBlockingQuestion.model_validate(issue._asdict()) for issue in issues[:2]), len(issues)
 
 
 def nsi_bounded_evaluation(snapshot: IntakeSnapshot) -> NsiBoundedEvaluation:
