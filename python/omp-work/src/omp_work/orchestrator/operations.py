@@ -8,7 +8,7 @@ implement operation again. No SQL statements are defined in this module.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 import hashlib
 import json
@@ -30,7 +30,7 @@ from pydantic import ValidationError
 import omp_work
 from omp_work import control_actions, event_push
 from omp_work.action_classify import ResolvedTarget, classify, parse_submission
-from omp_work.jobs.budget import item_budget, item_spend, root_work_id
+from omp_work.jobs.budget import item_budget, item_spend, root_work_id, task_deadline
 from omp_work.jobs.store import NativeJobStore
 from omp_work.mission_intake_rules import scope_draft
 from omp_work.operations import database, fingerprints
@@ -709,9 +709,6 @@ def _worktree_name(ctx: StageContext) -> str:
     return Path(raw).name
 
 
-_DEFAULT_TASK_SECONDS = 3600
-
-
 def _sandbox(
     ctx: StageContext,
     argv: Sequence[str],
@@ -772,30 +769,16 @@ def _sandbox(
 def _task_deadline(ctx: StageContext) -> datetime | None:
     """The hard task deadline: remaining request wall-clock ceiling, or None when none is left.
 
-    The ceiling is measured from the item tree's oldest job, so a renewed
-    lease cannot reset it. It is the smaller of the request's
-    ``controls.wall_clock_seconds`` and the published item budget's
-    ``wall_clock_seconds`` less ``item_spend``; with neither,
-    ``_DEFAULT_TASK_SECONDS`` from now. A dead lease has no deadline.
+    Delegates to ``jobs.budget.task_deadline``: the item tree's exact oldest
+    creation plus the smaller explicit limit, so a renewed lease cannot reset
+    it. A dead lease has no deadline.
     """
     if ctx.lease_expires_at() is None:
         return None
     jobs = NativeJobStore(ctx.config.ops)
-    with jobs.transaction(ctx.workspace_id, ctx.principal.actor_id) as cur:
-        root = root_work_id(cur, ctx.workspace_id, str(ctx.lease.job_id))
-        budget = item_budget(cur, ctx.workspace_id, root)
-        spent = item_spend(cur, ctx.workspace_id, root).wall_clock_seconds
-    limits: list[int] = []
-    if budget is not None:
-        limits.append(int(budget.wall_clock_seconds))
     controls = ctx.request.get("controls") if isinstance(ctx.request, dict) else None
-    raw = controls.get("wall_clock_seconds") if isinstance(controls, dict) else None
-    if isinstance(raw, int) and not isinstance(raw, bool) and raw > 0:
-        limits.append(raw)
-    remaining = min(limits) - spent if limits else _DEFAULT_TASK_SECONDS
-    if remaining <= 0:
-        return None
-    return datetime.now(UTC) + timedelta(seconds=remaining)
+    with jobs.transaction(ctx.workspace_id, ctx.principal.actor_id) as cur:
+        return task_deadline(cur, ctx.workspace_id, str(ctx.lease.job_id), controls)
 
 
 def _worker_ceiling(ctx: StageContext) -> Decimal:

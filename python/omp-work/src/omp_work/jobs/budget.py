@@ -14,7 +14,9 @@ every new usage row never writes the same alert twice.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -36,7 +38,10 @@ __all__ = [
     "item_spend",
     "root_work_id",
     "sweep_item_budgets",
+    "task_deadline",
 ]
+
+DEFAULT_TASK_SECONDS = 3600
 
 _THRESHOLD_PERCENTS = (50, 80)
 _EXCEEDED_PERCENT = 100
@@ -122,6 +127,54 @@ def root_work_id(
         top_work_id = parent["work_id"]
         current = parent["parent_job_id"]
     return None if top_work_id is None else UUID(str(top_work_id))
+
+
+def task_deadline(
+    cur: psycopg.Cursor[dict[str, Any]],
+    workspace_id: UUID,
+    job_id: str,
+    controls: Mapping[str, Any] | None,
+) -> datetime | None:
+    """Durable wall-clock deadline of ``job_id``'s item tree, or None when none is left.
+
+    With an explicit limit — the published item budget's ``wall_clock_seconds``
+    and/or a positive integer ``controls["wall_clock_seconds"]`` — the deadline
+    is the tree's exact oldest ``created_at`` plus the smaller limit, so
+    repeated calls and lease renewals yield the same instant. An elapsed limit
+    returns None. Only when neither limit exists is the launch fallback
+    ``DEFAULT_TASK_SECONDS`` from now.
+    """
+    root = root_work_id(cur, workspace_id, job_id)
+    limits: list[int] = []
+    if root is not None:
+        budget = item_budget(cur, workspace_id, root)
+        if budget is not None:
+            limits.append(int(budget.wall_clock_seconds))
+    raw = controls.get("wall_clock_seconds") if isinstance(controls, Mapping) else None
+    if isinstance(raw, int) and not isinstance(raw, bool) and raw > 0:
+        limits.append(raw)
+    now = datetime.now(UTC)
+    if not limits:
+        return now + timedelta(seconds=DEFAULT_TASK_SECONDS)
+    oldest = None
+    if root is not None:
+        cur.execute(
+            """
+            WITH RECURSIVE tree(job_id, created_at) AS (
+                SELECT job_id, created_at FROM omp_jobs.jobs
+                WHERE workspace_id=%s AND work_id=%s
+                UNION
+                SELECT j.job_id, j.created_at FROM omp_jobs.jobs j
+                JOIN tree t ON j.parent_job_id = t.job_id
+                WHERE j.workspace_id=%s
+            )
+            SELECT MIN(created_at) AS oldest FROM tree
+            """,
+            (workspace_id, root, workspace_id),
+        )
+        oldest = cur.fetchone()["oldest"]
+    deadline = (oldest if oldest is not None else now) + timedelta(seconds=min(limits))
+    return deadline if deadline > now else None
 
 
 def item_spend(
