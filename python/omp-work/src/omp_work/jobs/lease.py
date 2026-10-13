@@ -28,6 +28,7 @@ __all__ = [
     "current_authority",
     "reconcile_jobs",
     "renew_lease",
+    "require_live_holder",
     "settle_job",
 ]
 
