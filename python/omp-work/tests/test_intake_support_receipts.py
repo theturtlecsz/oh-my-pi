@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+import hashlib
 import json
 
 import pytest
 from pydantic import ValidationError
 
-from omp_work.intake_support import SupportReceipt, claim_supported
+from omp_work.intake_support import (
+    ClaimProjection,
+    SupportReceipt,
+    claim_supported,
+    render_claim_text,
+    status_from_receipts,
+    verify_receipt,
+)
+from omp_work.report_evidence import ClaimStatus, Label
+from omp_work.v1.canonical import text_sha256
 
 H = "a" * 64
 
@@ -126,3 +136,131 @@ def test_binding_fields_required_nonempty(field: str) -> None:
 def test_bad_source_span_rejected(span: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
         _parse(source_span=span)
+
+
+def _claim() -> ClaimProjection:
+    return {
+        "subject_id": "café",
+        "predicate_id": "p1",
+        "predicate_title": "位置 🧭",
+        "value": {"type": "null", "value": None},
+        "modality": "observed",
+        "polarity": "positive",
+    }
+
+
+@pytest.mark.parametrize(
+    "value, rendered_value",
+    [
+        ({"type": "null", "value": None}, '{"type":"null","value":null}'),
+        (
+            {"value": {"type": "place", "id": "東京"}, "type": "entity"},
+            '{"type":"entity","value":{"id":"東京","type":"place"}}',
+        ),
+    ],
+)
+def test_claim_rendering_is_canonical_and_hashes_unicode_bytes(
+    value: dict[str, object], rendered_value: str,
+) -> None:
+    claim = {**_claim(), "value": value, "incidental_metadata": "ignored"}
+    expected = (
+        '{"modality":"observed","polarity":"positive","predicate_id":"p1",'
+        '"predicate_title":"位置 🧭","subject_id":"café","value":' + rendered_value + '}'
+    )
+    rendered = render_claim_text(claim)
+    assert rendered == expected
+    # Reversing all mapping keys must leave the judge's text/hash unchanged.
+    claim["value"] = dict(reversed(list(value.items())))
+    assert render_claim_text(dict(reversed(list(claim.items())))) == expected
+    assert text_sha256(rendered) == hashlib.sha256(expected.encode("utf-8")).hexdigest()
+    receipt = _parse(
+        claim_text_sha256=text_sha256(rendered),
+        passage_sha256=text_sha256("証拠 café 🧭"),
+    )
+    assert verify_receipt(receipt, rendered, "証拠 café 🧭", "judge-1")
+
+
+@pytest.mark.parametrize(
+    "field, changed",
+    [
+        ("subject_id", "subject-2"),
+        ("predicate_id", "predicate-2"),
+        ("predicate_title", "different title"),
+        ("value", {"type": "entity", "value": {"id": "東京", "type": "place"}}),
+        ("modality", "required"),
+        ("polarity", "negative"),
+    ],
+)
+def test_each_claim_semantic_change_invalidates_receipt(field: str, changed: object) -> None:
+    claim = _claim()
+    text = render_claim_text(claim)
+    receipt = _parse(claim_text_sha256=text_sha256(text), passage_sha256=text_sha256("quote"))
+    changed_claim = {**claim, field: changed}
+    assert not verify_receipt(receipt, render_claim_text(changed_claim), "quote", "judge-1")
+
+
+def test_render_requires_caller_predicate_title() -> None:
+    claim = dict(_claim())
+    del claim["predicate_title"]
+    with pytest.raises(KeyError, match="predicate_title"):
+        render_claim_text(claim)
+
+
+@pytest.mark.parametrize("field", ["claim_text_sha256", "passage_sha256", "model_id"])
+def test_tampered_receipt_binding_fails_verification(field: str) -> None:
+    bindings = {
+        "claim_text_sha256": text_sha256("claim café"),
+        "passage_sha256": text_sha256("quote 東京"),
+        "model_id": "judge-1",
+    }
+    bindings[field] = "judge-2" if field == "model_id" else H
+    assert not verify_receipt(_parse(**bindings), "claim café", "quote 東京", "judge-1")
+
+
+@pytest.mark.parametrize(
+    "claim_text, quote, model_id",
+    [
+        ("claim cafe\u0301", "quote 東京", "judge-1"),
+        ("claim café", "quote 東京\n", "judge-1"),
+        ("claim café", "quote 東京", "Judge-1"),
+    ],
+)
+def test_changed_expected_binding_fails_verification(
+    claim_text: str, quote: str, model_id: str,
+) -> None:
+    receipt = _parse(
+        claim_text_sha256=text_sha256("claim café"), passage_sha256=text_sha256("quote 東京"),
+    )
+    assert not verify_receipt(receipt, claim_text, quote, model_id)
+
+
+@pytest.mark.parametrize(
+    "pairs, expected",
+    [
+        ([], "unsupported"),
+        ([("supports", None), ("contradicts", None)], "unsupported"),
+        ([("supports", "supports")], "supported"),
+        ([("neither", "supports")], "unsupported"),
+        ([("supports", "neither")], "unsupported"),
+        ([("supports", "supports"), ("contradicts", "contradicts")], "contested"),
+        ([("neither", "supports"), ("supports", "contradicts")], "contested"),
+        ([(None, "supports")], "supported"),
+        ([("supports", "supports"), ("supports", None)], "unsupported"),
+        ([("contradicts", "contradicts"), ("supports", None)], "contested"),
+    ],
+)
+def test_status_derivation(
+    pairs: list[tuple[Label | None, str | None]], expected: ClaimStatus,
+) -> None:
+    receipts = [(relation, _parse(verdict=verdict) if verdict is not None else None) for relation, verdict in pairs]
+    assert status_from_receipts(receipts) == expected
+
+
+@pytest.mark.parametrize("verdict", ["abstain", "timeout", "evidence-unavailable"])
+def test_pending_receipt_blocks_support_but_preserves_contradiction(verdict: str) -> None:
+    pending = _parse(verdict=verdict, measurement="unknown", input_tokens=None, output_tokens=None)
+    assert status_from_receipts([(None, pending)]) == "unsupported"
+    assert status_from_receipts([("supports", _parse()), (None, pending)]) == "unsupported"
+    assert status_from_receipts([
+        ("supports", _parse()), (None, pending), ("contradicts", _parse(verdict="contradicts")),
+    ]) == "contested"

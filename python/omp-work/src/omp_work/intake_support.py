@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Literal
+from typing import Literal, TypedDict
 
-from pydantic import Field, StrictInt, model_validator
+from pydantic import Field, JsonValue, StrictInt, model_validator
 
+from omp_work.contracts.nsi.v1.models import ClaimModality, Polarity
+from omp_work.report_evidence import ClaimStatus, Label, status_from_labels
+from omp_work.v1.canonical import canonical_json, text_sha256
 from omp_work.v1.models import StrictModel, hex64
 
 Verdict = Literal["supports", "contradicts", "neither", "abstain", "timeout", "evidence-unavailable"]
@@ -15,6 +18,27 @@ PENDING_VERDICTS: frozenset[str] = frozenset({"abstain", "timeout", "evidence-un
 Measurement = Literal["measured", "unknown"]
 
 TokenCount = StrictInt | None
+
+
+class ClaimProjection(TypedDict):
+    subject_id: str
+    predicate_id: str
+    predicate_title: str
+    value: dict[str, JsonValue]
+    modality: ClaimModality
+    polarity: Polarity
+
+
+def render_claim_text(claim: ClaimProjection) -> str:
+    """Render only claim semantics, with the caller's predicate title and full value JSON."""
+    return canonical_json({
+        "subject_id": claim["subject_id"],
+        "predicate_id": claim["predicate_id"],
+        "predicate_title": claim["predicate_title"],
+        "value": claim["value"],
+        "modality": claim["modality"],
+        "polarity": claim["polarity"],
+    })
 
 
 class SourceSpan(StrictModel):
@@ -54,6 +78,36 @@ class SupportReceipt(StrictModel):
         elif any(c is not None for c in counts):
             raise ValueError("unknown usage requires null input_tokens and output_tokens")
         return self
+
+
+def verify_receipt(receipt: SupportReceipt, claim_text: str, quote: str, model_id: str) -> bool:
+    """Verify exact supplied text/model bindings; other bindings remain shape-validated."""
+    return (
+        receipt.claim_text_sha256 == text_sha256(claim_text)
+        and receipt.passage_sha256 == text_sha256(quote)
+        and receipt.model_id == model_id
+    )
+
+
+def status_from_receipts(
+    receipts: Sequence[tuple[Label | None, SupportReceipt | None]],
+) -> ClaimStatus:
+    """Derive status without allowing disagreement or pending judgements to confer support."""
+    labels: list[Label] = []
+    blocked = False
+    for relation, receipt in receipts:
+        if receipt is None:
+            blocked = True
+            continue
+        verdict = receipt.verdict
+        if verdict in ("supports", "contradicts", "neither"):
+            labels.append(verdict)
+        else:
+            blocked = True
+        if relation is not None and relation != verdict:
+            blocked = True
+    status = status_from_labels(labels)
+    return "unsupported" if status == "supported" and blocked else status
 
 
 def claim_supported(receipts: Sequence[SupportReceipt]) -> bool:
