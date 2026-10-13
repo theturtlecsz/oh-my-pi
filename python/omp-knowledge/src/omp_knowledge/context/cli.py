@@ -93,6 +93,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     stage_parser = subcommands.add_parser("stage")
     stage_parser.add_argument("--settings")
+    stage_parser.add_argument("--learning-state-dir")
 
     reproduce_parser = subcommands.add_parser("reproduce")
     reproduce_parser.add_argument("--state-dir", required=True)
@@ -579,6 +580,7 @@ def _stage(
         default_settings_path,
         load_settings,
     )
+    from omp_knowledge.learning.store import LearningStore
 
     settings_path = args.settings
     if settings_path is None:
@@ -587,16 +589,26 @@ def _stage(
     settings = load_settings(settings_path)
     body = _read_stage_stdin(stdin)
 
-    return compile_stage(
-        settings,
-        view=body.workflow,
-        stage=body.stage,
-        attempt_id=body.attempt_id,
-        cwd=body.cwd,
-        project=body.project,
-        engine=engine,
-        reranker=reranker,
+    learning_store = (
+        LearningStore(args.learning_state_dir)
+        if args.learning_state_dir is not None
+        else None
     )
+    try:
+        return compile_stage(
+            settings,
+            view=body.workflow,
+            stage=body.stage,
+            attempt_id=body.attempt_id,
+            cwd=body.cwd,
+            project=body.project,
+            engine=engine,
+            reranker=reranker,
+            learning_store=learning_store,
+        )
+    finally:
+        if learning_store is not None:
+            learning_store.close()
 
 
 def _reproduce(args: argparse.Namespace) -> dict[str, Any]:
