@@ -64,6 +64,7 @@ from omp_work.v1.service import Principal, WorkService
 from omp_work.v1.store import PostgresWorkStore
 from test_research_contract import _register_component
 from test_workflow_service import OWNER, _grant, _seed_project
+from typed_intake_support import seed_typed_intake
 
 __all__ = [
     "CANDIDATE_SHA256",
@@ -1166,6 +1167,11 @@ def open_e2e_world(
         control_repo, worktrees_dir, f"{mission_id.hex[:12]}-verify", base_commit
     )
     draft = draft_from_intake(request.intake, request.scope.model_dump())
+
+    seed_typed_intake(
+        store, workspace_id=workspace_id, actor_id=OWNER, mission_id=mission_id,
+        run_id=f"orchestrator:{mission_id}", draft=request.intake,
+    )
 
     return E2EWorld(
         service=service,
