@@ -51,6 +51,11 @@ def _judgment(**overrides: Any) -> dict[str, Any]:
         "claim_id": "claim-1",
         "artifact_id": "artifact-1",
         "model_id": "judge-1",
+        "source_revision": "revision-1",
+        "model_version": "model-v1",
+        "prompt_version": "prompt-v1",
+        "rule_version": "rule-v1",
+        "context_sha256": "c" * 64,
         "start_byte": 0,
         "end_byte": 12,
         "caller_relation": "supports",
@@ -77,6 +82,12 @@ BAD_JUDGMENTS = {
     "string_offset": _judgment(end_byte="12"),
     "string_disagreement": _judgment(disagreement="true"),
     "empty_model": _judgment(model_id=""),
+    "empty_source_revision": _judgment(source_revision=""),
+    "empty_model_version": _judgment(model_version=""),
+    "empty_prompt_version": _judgment(prompt_version=""),
+    "empty_rule_version": _judgment(rule_version=""),
+    "bad_context_hash": _judgment(context_sha256="abc"),
+    "pending_caller_label": _judgment(caller_relation="abstain"),
 }
 
 
@@ -106,3 +117,33 @@ def test_malformed_judgment_rejected_by_model_and_schema(bad: dict[str, Any]) ->
     with pytest.raises(ValidationError):
         IntakeRecordView.model_validate(payload)
     assert not _schema_validator().is_valid(payload)
+
+
+@pytest.mark.parametrize("verdict", ["supports", "contradicts", "neither", "abstain", "timeout", "evidence-unavailable"])
+def test_six_verdicts_preserve_judge_state_and_disagreement(verdict: str) -> None:
+    judgment = _judgment(verdict=verdict, disagreement=verdict != "supports")
+    view = IntakeRecordView.model_validate({**_record(), "support_judgments": [judgment]})
+    wire = json.loads(view.model_dump_json())
+
+    assert wire["support_judgments"][0] == judgment
+    _schema_validator().validate(wire)
+    assert (view.support_judgments[0].verdict == "supports") == (verdict == "supports")
+    with pytest.raises(ValidationError, match="disagreement"):
+        IntakeRecordView.model_validate({
+            **_record(), "support_judgments": [{**judgment, "disagreement": not judgment["disagreement"]}]
+        })
+
+
+@pytest.mark.parametrize("binding", ["source_revision", "model_version", "prompt_version", "rule_version", "context_sha256"])
+def test_missing_receipt_binding_refused(binding: str) -> None:
+    judgment = _judgment()
+    del judgment[binding]
+    payload = {**_record(), "support_judgments": [judgment]}
+    with pytest.raises(ValidationError):
+        IntakeRecordView.model_validate(payload)
+    assert not _schema_validator().is_valid(payload)
+
+
+def test_reversed_source_span_refused() -> None:
+    with pytest.raises(ValidationError, match="source span end precedes start"):
+        IntakeRecordView.model_validate({**_record(), "support_judgments": [_judgment(start_byte=13)]})

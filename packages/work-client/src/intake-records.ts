@@ -185,15 +185,22 @@ export type IntakeIssueRecord = { issue: Conflict | ClarificationQuestion; gaps:
 export type IntakeCriterionLink = { criterion: AcceptanceCriterion; requirements: RequirementClause[] };
 export type IntakeTrace = { criterion_id: string; requirement_ids: string[]; claim_ids: string[] };
 
-export type IntakeSupportVerdict = "supports" | "contradicts" | "neither";
+export type IntakeCallerRelation = "supports" | "contradicts" | "neither";
+// Mirrors omp_work.intake_support.Verdict; pending judge states remain distinct.
+export type IntakeSupportVerdict = IntakeCallerRelation | "abstain" | "timeout" | "evidence-unavailable";
 export type IntakeSupportJudgment = {
 	claim_id: string;
 	artifact_id: string;
 	model_id: string;
 	start_byte: number;
 	end_byte: number;
-	caller_relation: IntakeSupportVerdict;
+	caller_relation: IntakeCallerRelation;
 	verdict: IntakeSupportVerdict;
+	source_revision: string;
+	model_version: string;
+	prompt_version: string;
+	rule_version: string;
+	context_sha256: string;
 	passage_sha256: string;
 	claim_text_sha256: string;
 	disagreement: boolean;
