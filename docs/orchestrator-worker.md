@@ -90,13 +90,17 @@ The worker validates that `OMP_MODEL_PROXY_URL` matches `manifest.model.proxy.ba
 
 Workers are equipped with exactly two tools rooted at `/work`:
 
-- `read`: Reads file contents up to 1 MB.
-- `write`: Writes complete file content within the worktree.
+- `read`: Reads file contents up to 1 MB. Reads permit accessing any file inside the `/work` worktree.
+- `write`: Writes complete file content within the worktree, restricted to paths matching `allowed_paths`.
 
-Both tools enforce `candidate_git.path_allowed` glob rules against `allowed_paths`:
-- Patterns match repository-relative paths segment by segment.
-- Wildcards (`*`, `?`, `[...]`) cannot cross directory boundaries. Only `**` spans multiple directories.
-- Any attempt to read outside `/work`, escape via symlinks, or write to an unlisted path raises `ScopedToolRefusal`, marks the worker state as failed, and triggers an immediate agent abort.
+Path boundary rules:
+- `write` enforces `candidate_git.path_allowed` glob rules against `allowed_paths`:
+  - Patterns match repository-relative paths segment by segment.
+  - Wildcards (`*`, `?`, `[...]`) cannot cross directory boundaries. Only `**` spans multiple directories.
+  - Any attempt to write outside `allowed_paths` raises `ScopedToolRefusal`, marks the worker state as failed, and triggers an immediate agent abort.
+- Both `read` and `write` enforce worktree boundaries:
+  - Paths must be relative and cannot escape `/work` (e.g. `..` segments or absolute paths are refused).
+  - Traversal through `.git` metadata directories or symlinks pointing outside `/work` raises `ScopedToolRefusal` and aborts the agent run.
 
 ## Evaluate Stage
 
@@ -223,7 +227,7 @@ To verify the model proxy against a fake upstream HTTPS provider without externa
 ### 1. Generate Local Test Certificates
 
 ```bash
-mkdir -p /tmp/fake-provider
+mkdir -p /tmp/fake-provider/credentials
 openssl req -x509 -newkey rsa:2048 -nodes \
   -keyout /tmp/fake-provider/key.pem \
   -out /tmp/fake-provider/cert.pem \
@@ -231,7 +235,74 @@ openssl req -x509 -newkey rsa:2048 -nodes \
 chmod 0600 /tmp/fake-provider/*.pem
 ```
 
-### 2. Start Fake Upstream Provider
+### 2. Create Isolated Credentials and Control Capability
+
+```bash
+echo "dummy-gemini-key" > /tmp/fake-provider/credentials/gemini-key
+echo "dummy-ollama-key" > /tmp/fake-provider/credentials/ollama-key
+chmod 0600 /tmp/fake-provider/credentials/*
+
+cat <<'EOF' > /tmp/fake-provider/automation.json
+{
+  "token": "test-control-token-secret",
+  "actor_kind": "automation",
+  "scopes": ["work.execute"],
+  "actor_id": "00000000-0000-0000-0000-000000000001",
+  "workspaces": ["00000000-0000-0000-0000-000000000002"]
+}
+EOF
+chmod 0600 /tmp/fake-provider/automation.json
+```
+
+### 3. Create Isolated Test Configuration
+
+Write `/tmp/fake-provider/model-proxy.json` configuring loopback endpoints and routing upstream requests to the local fake provider on port 8443:
+
+```bash
+cat <<'EOF' > /tmp/fake-provider/model-proxy.json
+{
+  "operations": {
+    "config_dir": "/etc/omp",
+    "state_dir": "/var/lib/omp/state",
+    "data_dir": "/var/lib/omp/data",
+    "credentials_dir": "/tmp/fake-provider/credentials"
+  },
+  "control_capability": "/tmp/fake-provider/automation.json",
+  "host": "127.0.0.1",
+  "port": 8091,
+  "transports": {
+    "gemini_flash": {
+      "transport": "google-generative-ai",
+      "model": "gemini-3.8-flash-high",
+      "upstream_base_url": "https://127.0.0.1:8443",
+      "key_file": "gemini-key",
+      "max_context_tokens": 1000000,
+      "max_output_tokens": 8192,
+      "pricing": {
+        "version": 1,
+        "input_per_million": "0.15",
+        "output_per_million": "0.60"
+      }
+    },
+    "ollama_cloud": {
+      "transport": "ollama-chat",
+      "model": "deepseek-v4.1-flash:cloud",
+      "upstream_base_url": "https://127.0.0.1:8443",
+      "key_file": "ollama-key",
+      "max_context_tokens": 128000,
+      "max_output_tokens": 8192,
+      "pricing": {
+        "version": 1,
+        "input_per_million": "0.14",
+        "output_per_million": "0.28"
+      }
+    }
+  }
+}
+EOF
+```
+
+### 4. Start Fake Upstream Provider
 
 Run a local Python HTTPS server mimicking Gemini SSE output on port 8443:
 
@@ -257,25 +328,36 @@ server = http.server.HTTPServer(("127.0.0.1", 8443), Handler)
 ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
 ctx.load_cert_chain("/tmp/fake-provider/cert.pem", "/tmp/fake-provider/key.pem")
 server.socket = ctx.wrap_socket(server.socket, server_side=True)
-print("Fake provider listening on https://localhost:8443")
+print("Fake provider listening on https://127.0.0.1:8443")
 server.serve_forever()
 ' &
 FAKE_PID=$!
 ```
 
-### 3. Verify Launch and Registration
+### 5. Launch Model Proxy with Certificate Trust
+
+Launch the model proxy trusting the fake provider certificate via `SSL_CERT_FILE`:
+
+```bash
+SSL_CERT_FILE=/tmp/fake-provider/cert.pem \
+  /opt/omp-work/bin/python -m omp_work.model_proxy \
+  --config /tmp/fake-provider/model-proxy.json &
+PROXY_PID=$!
+```
+
+### 6. Verify Launch and Registration
 
 Register a task grant using the control token:
 
 ```bash
 curl -s -X POST http://127.0.0.1:8091/tasks \
-  -H "Authorization: Bearer <CONTROL_TOKEN>" \
+  -H "Authorization: Bearer test-control-token-secret" \
   -H "Content-Type: application/json" \
   -d '{
-    "workspace_id": "<WORKSPACE_UUID>",
-    "project_id": "<PROJECT_UUID>",
-    "work_id": "<WORK_UUID>",
-    "job_id": "<JOB_ID>",
+    "workspace_id": "00000000-0000-0000-0000-000000000002",
+    "project_id": "00000000-0000-0000-0000-000000000003",
+    "work_id": "00000000-0000-0000-0000-000000000004",
+    "job_id": "00000000-0000-0000-0000-000000000005",
     "worker_id": "worker-1",
     "fence": 1,
     "stage": "implement",
@@ -298,7 +380,7 @@ Output:
 }
 ```
 
-### 4. Verify Model Invocation
+### 7. Verify Model Invocation
 
 Issue a model call using the returned task `model_token`:
 
@@ -314,7 +396,7 @@ Output:
 data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Verification success"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5}}
 ```
 
-### 5. Verify Authority Separation
+### 8. Verify Authority Separation
 
 Ensure task tokens cannot register or revoke tasks:
 
@@ -323,16 +405,16 @@ Ensure task tokens cannot register or revoke tasks:
 curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:8091/tasks \
   -H "Authorization: Bearer <MODEL_TOKEN>" \
   -H "Content-Type: application/json" \
-  -d '{"workspace_id":"<WORKSPACE_UUID>"}'
+  -d '{"workspace_id":"00000000-0000-0000-0000-000000000002"}'
 
 # Must return HTTP 401
 curl -s -o /dev/null -w "%{http_code}\n" -X DELETE "http://127.0.0.1:8091/tasks/<GRANT_ID>" \
   -H "Authorization: Bearer <MODEL_TOKEN>"
 ```
 
-### 6. Cleanup Verification Server
+### 9. Cleanup Verification Server and Proxy
 
 ```bash
-kill $FAKE_PID
+kill $PROXY_PID $FAKE_PID
 rm -rf /tmp/fake-provider
 ```

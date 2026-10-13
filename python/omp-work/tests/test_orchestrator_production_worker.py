@@ -54,7 +54,7 @@ CONTENT = "production worker edit\n"
 def binary():
     with TemporaryDirectory(prefix="omp-production-worker-") as directory:
         repo = Path(__file__).resolve().parents[3]
-        outfile = Path(directory) / "orchestrator-worker"
+        outfile = Path(directory) / "omp"
         script = f"""
     import {{ compileCodingAgent }} from {json.dumps(str(repo / "packages/coding-agent/scripts/compile-binary.ts"))};
     import {{ loadNative, nativeAddonStatus }} from {json.dumps(str(repo / "packages/natives/native/loader-state.js"))};

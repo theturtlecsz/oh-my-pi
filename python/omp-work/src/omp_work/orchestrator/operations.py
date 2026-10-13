@@ -891,7 +891,10 @@ def run_implement(ctx: StageContext) -> Outcome:
         "identity": "worker",
         "repair_round": ctx.repair_round,
     }
-    model_worker = Path(argv[0]).name == "orchestrator-worker"
+    model_worker = (
+        Path(argv[0]).name == "orchestrator-worker"
+        or (len(argv) > 1 and argv[1] == "orchestrator-worker")
+    )
     try:
         code = (
             _run_model_worker(ctx, argv, worktree)
