@@ -723,6 +723,8 @@ jobs:
            with:
               targets: linux-x64-baseline linux-x64-modern
               stash: ${{ needs.native_addons.outputs.stash }}
+         - name: Install bubblewrap for sandboxed worker tests
+           run: command -v bwrap >/dev/null || sudo apt-get install -y bubblewrap
          - name: Test coding-agent native/unit bucket
            env:
               OMP_TEST_CONCURRENCY: "4"
