@@ -5,8 +5,8 @@
   "observations": [
     {
       "mode": "current",
-      "proseResult": "CONFIRM REQUIRED — nothing written.\n\nModel wants to file a work item\n\"Ship gate\"\n→ project TestProject\n→ becomes NOW\n\n# Ship gate\n\n## Acceptance criteria\n- check passes\n\n\nconfirmation_id: cf-3bcae4b48c65\n\nShow this to Chris verbatim. If he says yes, call again with the same arguments plus confirm:true and this confirmation_id.",
-      "preview": "CONFIRM REQUIRED — nothing written.\n\nModel wants to file a work item\n\"Ship gate\"\n→ project TestProject\n→ becomes NOW\n\n# Ship gate\n\n## Acceptance criteria\n- check passes\n\n\nconfirmation_id: cf-3bcae4b48c65\n\nShow this to Chris verbatim. If he says yes, call again with the same arguments plus confirm:true and this confirmation_id.",
+      "proseResult": "CONFIRM REQUIRED — nothing written.\n\nModel wants to file a work item\n\"Ship gate\"\n→ project TestProject\n→ becomes NOW\n\n# Ship gate\n\n## Acceptance criteria\n- check passes\n\n\nconfirmation_id: cf-2f66ecd9b3ba\n\nShow this to Chris verbatim. If he says yes, call again with the same arguments plus confirm:true and this confirmation_id.",
+      "preview": "CONFIRM REQUIRED — nothing written.\n\nModel wants to file a work item\n\"Ship gate\"\n→ project TestProject\n→ becomes NOW\n\n# Ship gate\n\n## Acceptance criteria\n- check passes\n\n\nconfirmation_id: cf-2f66ecd9b3ba\n\nShow this to Chris verbatim. If he says yes, call again with the same arguments plus confirm:true and this confirmation_id.",
       "confirmed": "created HOME-10 + NOW",
       "before": {
         "issues": 0,
@@ -25,7 +25,7 @@
     {
       "mode": "typed",
       "proseResult": "intake_typed_required: typed intake requires matching structured intake draft (intake)",
-      "preview": "CONFIRM REQUIRED — nothing written.\n\nModel wants to file a work item\n\"Ship gate\"\n→ project TestProject\n→ becomes NOW\n\n# Ship gate\n\n## Acceptance criteria\n- check passes\n\n\nconfirmation_id: cf-ace97cdcaa80\n\nShow this to Chris verbatim. If he says yes, call again with the same arguments plus confirm:true and this confirmation_id.",
+      "preview": "CONFIRM REQUIRED — nothing written.\n\nModel wants to file a work item\n\"Ship gate\"\n→ project TestProject\n→ becomes NOW\n\n# Ship gate\n\n## Acceptance criteria\n- check passes\n\n\nconfirmation_id: cf-1e7768968b3c\n\nShow this to Chris verbatim. If he says yes, call again with the same arguments plus confirm:true and this confirmation_id.",
       "confirmed": "created HOME-10 + NOW",
       "before": {
         "issues": 1,
@@ -43,8 +43,8 @@
     },
     {
       "mode": "current",
-      "proseResult": "CONFIRM REQUIRED — nothing written.\n\nModel wants to file a work item\n\"Ship gate\"\n→ project TestProject\n→ becomes NOW\n\n# Ship gate\n\n## Acceptance criteria\n- check passes\n\n\nconfirmation_id: cf-91983db59b39\n\nShow this to Chris verbatim. If he says yes, call again with the same arguments plus confirm:true and this confirmation_id.",
-      "preview": "CONFIRM REQUIRED — nothing written.\n\nModel wants to file a work item\n\"Ship gate\"\n→ project TestProject\n→ becomes NOW\n\n# Ship gate\n\n## Acceptance criteria\n- check passes\n\n\nconfirmation_id: cf-91983db59b39\n\nShow this to Chris verbatim. If he says yes, call again with the same arguments plus confirm:true and this confirmation_id.",
+      "proseResult": "CONFIRM REQUIRED — nothing written.\n\nModel wants to file a work item\n\"Ship gate\"\n→ project TestProject\n→ becomes NOW\n\n# Ship gate\n\n## Acceptance criteria\n- check passes\n\n\nconfirmation_id: cf-dfb3455be15b\n\nShow this to Chris verbatim. If he says yes, call again with the same arguments plus confirm:true and this confirmation_id.",
+      "preview": "CONFIRM REQUIRED — nothing written.\n\nModel wants to file a work item\n\"Ship gate\"\n→ project TestProject\n→ becomes NOW\n\n# Ship gate\n\n## Acceptance criteria\n- check passes\n\n\nconfirmation_id: cf-dfb3455be15b\n\nShow this to Chris verbatim. If he says yes, call again with the same arguments plus confirm:true and this confirmation_id.",
       "confirmed": "created HOME-10 + NOW",
       "before": {
         "issues": 2,

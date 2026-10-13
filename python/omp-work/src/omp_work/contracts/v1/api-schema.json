@@ -23243,6 +23243,82 @@
           "title": "IntakeSupersessionProvenance",
           "type": "object"
         },
+        "IntakeSupportJudgment": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_id": {
+              "minLength": 1,
+              "title": "Artifact Id",
+              "type": "string"
+            },
+            "caller_relation": {
+              "enum": [
+                "supports",
+                "contradicts",
+                "neither"
+              ],
+              "title": "Caller Relation",
+              "type": "string"
+            },
+            "claim_id": {
+              "minLength": 1,
+              "title": "Claim Id",
+              "type": "string"
+            },
+            "claim_text_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Claim Text Sha256",
+              "type": "string"
+            },
+            "disagreement": {
+              "title": "Disagreement",
+              "type": "boolean"
+            },
+            "end_byte": {
+              "minimum": 0,
+              "title": "End Byte",
+              "type": "integer"
+            },
+            "model_id": {
+              "minLength": 1,
+              "title": "Model Id",
+              "type": "string"
+            },
+            "passage_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Passage Sha256",
+              "type": "string"
+            },
+            "start_byte": {
+              "minimum": 0,
+              "title": "Start Byte",
+              "type": "integer"
+            },
+            "verdict": {
+              "enum": [
+                "supports",
+                "contradicts",
+                "neither"
+              ],
+              "title": "Verdict",
+              "type": "string"
+            }
+          },
+          "required": [
+            "claim_id",
+            "artifact_id",
+            "model_id",
+            "start_byte",
+            "end_byte",
+            "caller_relation",
+            "verdict",
+            "passage_sha256",
+            "claim_text_sha256",
+            "disagreement"
+          ],
+          "title": "IntakeSupportJudgment",
+          "type": "object"
+        },
         "IntakeTrace": {
           "additionalProperties": false,
           "properties": {
@@ -23836,6 +23912,14 @@
         "snapshot": {
           "$ref": "#/$defs/IntakeSnapshot"
         },
+        "support_judgments": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IntakeSupportJudgment"
+          },
+          "title": "Support Judgments",
+          "type": "array"
+        },
         "traces": {
           "items": {
             "$ref": "#/$defs/IntakeTrace"
@@ -24266,6 +24350,82 @@
         "operation"
       ],
       "title": "IntakeSupersessionProvenance",
+      "type": "object"
+    },
+    "IntakeSupportJudgment": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "minLength": 1,
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "caller_relation": {
+          "enum": [
+            "supports",
+            "contradicts",
+            "neither"
+          ],
+          "title": "Caller Relation",
+          "type": "string"
+        },
+        "claim_id": {
+          "minLength": 1,
+          "title": "Claim Id",
+          "type": "string"
+        },
+        "claim_text_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Claim Text Sha256",
+          "type": "string"
+        },
+        "disagreement": {
+          "title": "Disagreement",
+          "type": "boolean"
+        },
+        "end_byte": {
+          "minimum": 0,
+          "title": "End Byte",
+          "type": "integer"
+        },
+        "model_id": {
+          "minLength": 1,
+          "title": "Model Id",
+          "type": "string"
+        },
+        "passage_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Passage Sha256",
+          "type": "string"
+        },
+        "start_byte": {
+          "minimum": 0,
+          "title": "Start Byte",
+          "type": "integer"
+        },
+        "verdict": {
+          "enum": [
+            "supports",
+            "contradicts",
+            "neither"
+          ],
+          "title": "Verdict",
+          "type": "string"
+        }
+      },
+      "required": [
+        "claim_id",
+        "artifact_id",
+        "model_id",
+        "start_byte",
+        "end_byte",
+        "caller_relation",
+        "verdict",
+        "passage_sha256",
+        "claim_text_sha256",
+        "disagreement"
+      ],
+      "title": "IntakeSupportJudgment",
       "type": "object"
     },
     "IntakeTrace": {
