@@ -99,6 +99,8 @@ def test_compiled_context_and_supply_survive_worker_outcomes(context, tmp_path, 
     state.exit_code = exit_code
     outcome = run(state)
     assert outcome.outcome == ("succeeded" if exit_code == 0 else "crashed"), [outcome.data, state.compiles[0][2].stderr]
+    if exit_code is None:
+        assert outcome.data["code"] == "lease_dead"
     ctx = state.contexts[0]
     manifest = state.runs[0][3]
     _, invocation, _ = state.compiles[0]
@@ -121,7 +123,16 @@ def test_compiled_context_and_supply_survive_worker_outcomes(context, tmp_path, 
     assert bundle["stage"] == "implement"
     assert bundle["attempt_id"] == str(ctx.lease.job_id)
     workflow = ctx.service.read(ctx.principal, ctx.workspace_id, "workflow", operations._work_key(ctx))
-    assert all(isinstance(receipt["independent"], bool) for receipt in workflow["receipts"])
+    # Publication receipts have no independence claim in direct store reads.
+    # The compiler receives absence, which its typed receipt defaults to false.
+    assert any(receipt["independent"] is None for receipt in workflow["receipts"])
+    source_receipts = {str(receipt["receipt_id"]): receipt for receipt in workflow["receipts"]}
+    for receipt in body["workflow"]["receipts"]:
+        source = source_receipts[receipt["receipt_id"]]
+        if source["independent"] is None:
+            assert "independent" not in receipt
+        else:
+            assert receipt["independent"] is source["independent"]
     assert manifest["candidate_id"] == bundle["candidate_id"] == str(workflow["item"]["candidate"]["candidate_id"])
     with sqlite3.connect(learning_dir / "learning.sqlite") as conn:
         conn.row_factory = sqlite3.Row

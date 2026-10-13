@@ -16,6 +16,14 @@ def compile_context(ctx: StageContext, worktree: Path, work_key: str) -> tuple[s
     if not ctx.config.context_command:
         return None
     workflow = ctx.service.read(ctx.principal, ctx.workspace_id, "workflow", work_key)
+    # Direct service reads expose SQL NULL for receipts without an independence
+    # claim. Omit that absent claim so the CLI's EvidenceReceipt default applies;
+    # retain explicit false/true claims and leave the stored read unchanged.
+    workflow = {**workflow, "receipts": [
+        {key: value for key, value in receipt.items()
+         if not (key == "independent" and value is None)}
+        for receipt in workflow.get("receipts", ())
+    ]}
     candidate = workflow["item"].get("candidate")
     if candidate is None:
         raise WorkError("invalid_request", diagnostics=("context candidate missing",))
