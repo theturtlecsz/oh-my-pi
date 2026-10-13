@@ -534,8 +534,10 @@ def assess_intake(
             revision=locked.current_revision,
         )
         evaluation = evaluate_provenance(cur, stored.body)
-        assert evaluation.assessment is not None and evaluation.binding is not None
-        assert evaluation.closure is not None and evaluation.settlement is not None
+        if evaluation.assessment is None or evaluation.binding is None:
+            raise AssertionError
+        if evaluation.closure is None or evaluation.settlement is None:
+            raise AssertionError
         append_assessment(cur, locked, IntakeAssessmentView(
             id=f"assessment:{envelope.operation_id}", assessment=evaluation.assessment,
             binding=evaluation.binding, receipts=evaluation.receipts,
