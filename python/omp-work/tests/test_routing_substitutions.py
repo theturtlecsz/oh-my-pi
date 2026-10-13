@@ -38,3 +38,13 @@ def test_plan_pending_and_callers():
     assert by_stage["plan"]["caller"] is None
     assert by_stage["implement"]["caller"] == "omp_work.model_proxy"
     assert by_stage["research"]["caller"] == "omp_work.intake_support_admission"
+
+
+def test_substitutions_marked_pending_governing_file_verification():
+    record = _record()
+    by_stage = {e["stage"]: e for e in record["stages"]}
+    assert "pending governing-file verification (s08)" in by_stage["plan"]["reason"]
+    assert by_stage["plan"]["authority"] == "pending governing-file verification (s08)"
+    overflow_by_rule = {e["rule"]: e for e in record["overflow"]}
+    assert "pending governing-file verification (s08)" in overflow_by_rule["gemini-flash-overflow"]["reason"]
+    assert overflow_by_rule["gemini-flash-overflow"]["authority"] == "pending governing-file verification (s08)"
