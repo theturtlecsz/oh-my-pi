@@ -5,7 +5,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from omp_work.intake_support import SupportReceipt
+from omp_work.intake_support import SupportReceipt, claim_supported
 
 H = "a" * 64
 
@@ -13,6 +13,11 @@ H = "a" * 64
 def _receipt(**over: object) -> dict[str, object]:
     base: dict[str, object] = {
         "verdict": "supports",
+        "source_span": {"start": 0, "end": 5},
+        "source_revision": "rev-1",
+        "model_version": "2026-01",
+        "prompt_version": "p1",
+        "rule_version": "r1",
         "passage_sha256": H,
         "claim_text_sha256": H,
         "context_sha256": H,
@@ -89,3 +94,35 @@ def test_unknown_nulls_survive_json() -> None:
     r = _parse(measurement="unknown", input_tokens=None, output_tokens=None, usage_id=None)
     assert r.input_tokens is None and r.output_tokens is None and r.usage_id is None
     assert r.model_dump(mode="json")["input_tokens"] is None
+
+
+@pytest.mark.parametrize("verdict", ["abstain", "timeout", "evidence-unavailable"])
+def test_pending_verdicts_stored_and_block_support(verdict: str) -> None:
+    pending = _parse(verdict=verdict, measurement="unknown", input_tokens=None, output_tokens=None)
+    assert pending.verdict == verdict
+    assert claim_supported([_parse()]) is True
+    assert claim_supported([_parse(), pending]) is False
+    assert claim_supported([pending]) is False
+
+
+def test_no_supports_verdict_is_not_supported() -> None:
+    assert claim_supported([]) is False
+    assert claim_supported([_parse(verdict="neither")]) is False
+
+
+@pytest.mark.parametrize("field", ["source_revision", "model_version", "prompt_version", "rule_version"])
+def test_binding_fields_required_nonempty(field: str) -> None:
+    with pytest.raises(ValidationError):
+        _parse(**{field: ""})
+    base = _receipt()
+    del base[field]
+    with pytest.raises(ValidationError):
+        SupportReceipt.model_validate_json(json.dumps(base))
+
+
+@pytest.mark.parametrize(
+    "span", [{"start": -1, "end": 2}, {"start": 3, "end": 2}, {"start": True, "end": 2}, {"start": 0}]
+)
+def test_bad_source_span_rejected(span: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        _parse(source_span=span)
