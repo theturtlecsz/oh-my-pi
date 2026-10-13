@@ -4,6 +4,7 @@
 
 ### Added
 
+- The end-to-end NSI-2 intake flow is covered and bounded `mission.intake` still applies ([#522](https://github.com/can1357/oh-my-pi/issues/522)).
 - Typed NSI-1 intake snapshots, claims, contracts, readiness assessments, and authority-bound receipts for client integrations (OMP-521).
 
 - `readOversight` assembles one WebUI oversight snapshot (workspace stop plus per-project missions and pending decisions) over the client-contract reads, and `engageOversightStop` engages the stop through `stop.engage` alone (OMP-425).

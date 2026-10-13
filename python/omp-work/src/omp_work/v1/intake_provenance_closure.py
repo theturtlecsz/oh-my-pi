@@ -148,13 +148,6 @@ def _slice_text(data: bytes, start: object, end: object) -> str:
         _refuse("unknown span")
 
 
-def _history_core(history: DecisionHistory) -> dict[str, object]:
-    return history.model_dump(
-        mode="json",
-        include={"decisions", "criteria", "instruction_hashes", "claim_supersession_decisions"},
-    )
-
-
 def _walk(children: dict[str, list[str]]) -> None:
     visiting: set[str] = set()
     visited: set[str] = set()
@@ -507,22 +500,20 @@ def resolve_provenance_closure(cur: Cursor, body: IntakeRevisionBody) -> Provena
     )
     if not history_rows:
         _refuse("dangling reference")
-    earliest_history = DecisionHistory.model_validate(history_rows[0]["records"])
     current_history_row = next((row for row in history_rows if row["revision"] == revision), None)
-    if current_history_row is None or _history_core(DecisionHistory.model_validate(current_history_row["records"])) != _history_core(earliest_history):
+    if current_history_row is None:
         _refuse("inconsistent source")
-    if _history_core(body.history) != _history_core(earliest_history):
-        _refuse("inconsistent source")
+    history = DecisionHistory.model_validate(current_history_row["records"])
 
-    history_links = {link.criterion.id: link for link in earliest_history.criteria}
-    if len(history_links) != len(earliest_history.criteria):
+    history_links = {link.criterion.id: link for link in history.criteria}
+    if len(history_links) != len(history.criteria):
         _refuse("inconsistent source")
     used: list[str] = []
     for claim in active:
         if claim.predicate_id == _PREDICATE_ACCEPTANCE:
             used.append(claim.id)
     used.extend(criterion.id for criterion in body.criteria)
-    used.extend(link.criterion.id for link in earliest_history.criteria)
+    used.extend(link.criterion.id for link in history.criteria)
     used = list(dict.fromkeys(used))
     criterion_rows = _rows(
         cur,
@@ -609,7 +600,7 @@ def resolve_provenance_closure(cur: Cursor, body: IntakeRevisionBody) -> Provena
     decision_provenance: list[IntakeDecisionProvenance] = []
     relays: list[IntakeRelayProvenance] = []
     seen_relays: set[UUID] = set()
-    for record in earliest_history.decisions:
+    for record in history.decisions:
         versions = decisions_sql.get(record.decision.id)
         if not versions:
             _refuse("dangling reference")
@@ -634,7 +625,7 @@ def resolve_provenance_closure(cur: Cursor, body: IntakeRevisionBody) -> Provena
             artifact_id = str(provenance["artifact_id"])
             if artifact_id not in artifact_bytes or artifact_bytes[artifact_id] != text.encode("utf-8"):
                 _refuse("inconsistent relay" if record.verified_relay_operation_id is not None else "inconsistent source")
-        digest = earliest_history.instruction_hashes.get(record.decision.id)
+        digest = history.instruction_hashes.get(record.decision.id)
         if digest is not None and digest != hashlib.sha256(text.encode("utf-8")).hexdigest():
             _refuse("inconsistent hash")
         if record.verified_relay_operation_id is not None:
@@ -651,8 +642,8 @@ def resolve_provenance_closure(cur: Cursor, body: IntakeRevisionBody) -> Provena
         supersession_versions.setdefault((str(row["claim_id"]), str(row["superseded_claim_id"])), []).append(row)
     supersessions: list[IntakeSupersessionProvenance] = []
     for replacement, old in sorted(current_pairs):
-        decision_id = earliest_history.claim_supersession_decisions.get(old)
-        if decision_id is None or all(item.decision.id != decision_id for item in earliest_history.decisions):
+        decision_id = history.claim_supersession_decisions.get(old)
+        if decision_id is None or all(item.decision.id != decision_id for item in history.decisions):
             _refuse("dangling reference")
         earliest = supersession_versions[(replacement, old)][0]
         supersessions.append(IntakeSupersessionProvenance(
