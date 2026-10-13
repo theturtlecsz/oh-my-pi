@@ -20,7 +20,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isInstallable, readAssetSource, readMirrorFile } from "./catalog";
 import { sha256Hex } from "./hash";
-import { lockFromPlan, readLock, writeLock } from "./lock";
+import { lockAssetsById, lockFromPlan, readLock, writeLock } from "./lock";
 import { loadOverlay } from "./overlay";
 import { buildIndexFromManifest, transformAsset } from "./transform";
 import type { AdaptedLock, InstallPlan, LockAsset, Manifest, ManifestAsset, PlannedFile } from "./types";
@@ -151,7 +151,7 @@ export async function previewPlan(
 			willWrite.push(file.path);
 			continue;
 		}
-		if (owned.has(file.path) || existing === decodeBytes(file.bytes)) willWrite.push(file.path);
+		if (owned.has(file.path)) willWrite.push(file.path);
 		else conflicts.push(file.path);
 	}
 	return { willWrite, conflicts };
@@ -214,6 +214,15 @@ export async function install(
 	}
 
 	const next = lockFromPlan(plan, manifest.upstream, options.adapterVersion ?? manifest.transformVersion);
+	// Selection controls writes, not removal: retain omitted assets and files
+	// with their last installed hashes until explicit remove releases ownership.
+	const assetsById = existing ? lockAssetsById(existing) : new Map<string, LockAsset>();
+	for (const asset of next.assets) {
+		const filesByPath = new Map(assetsById.get(asset.id)?.files.map(file => [file.path, file]));
+		for (const file of asset.files) filesByPath.set(file.path, file);
+		assetsById.set(asset.id, { ...asset, files: [...filesByPath.values()] });
+	}
+	next.assets = [...assetsById.values()];
 	await writeLock(lockPath, next);
 	return {
 		status: written.length === 0 ? "unchanged" : existing ? "updated" : "installed",
