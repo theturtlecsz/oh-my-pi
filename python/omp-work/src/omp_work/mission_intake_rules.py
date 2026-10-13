@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Literal
 
+from omp_work.contracts.nsi.v1.compat import evaluate_typed_bounded_intake
 from omp_work.mission_scope import material_cases
 from omp_work.standing_mandate import MissionScopeDraft, StandingMandate, mission_scope
 from omp_work.v1.models import BoundedIntakeDraft, IntakeBlockingQuestion, MissionDraft
@@ -33,9 +34,15 @@ _RESERVED_SCOPE_KEYS: frozenset[str] = frozenset(
 
 def clarifying_questions(
     intake: BoundedIntakeDraft,
+    selection: Literal["current", "typed"] = "current",
 ) -> tuple[IntakeBlockingQuestion, ...]:
-    """Return the capped blocking questions for a bounded-intake draft."""
-    questions, _issue_count = evaluate_bounded_intake(intake)
+    """Return the capped blocking questions for a bounded-intake draft.
+
+    ``selection`` is the NSI-6 route (``omp_work.nsi_route.route_mode``); an
+    omitted selection stays ``current`` so pure callers keep legacy behavior.
+    """
+    evaluator = evaluate_typed_bounded_intake if selection == "typed" else evaluate_bounded_intake
+    questions, _issue_count = evaluator(intake)
     return questions
 
 
