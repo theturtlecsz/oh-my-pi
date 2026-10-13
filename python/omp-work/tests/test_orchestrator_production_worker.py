@@ -181,12 +181,18 @@ def upstream(forbidden=False, *, status_code=200, block_all=False):
             held = "hold-capacity" in json.dumps(body)
             gemini = self.path.startswith("/v1beta/")
             with entered:
-                calls.append((self.path, body, dict(self.headers), held or block_all))
+                calls.append(
+                    (
+                        self.path,
+                        body,
+                        dict(self.headers),
+                        held or block_all,
+                        datetime.now(UTC),
+                    )
+                )
                 entered.notify_all()
-            if held:
+            if held or block_all:
                 assert release.wait(90)
-            elif block_all:
-                release.wait(2.0)
             if status_code != 200:
                 self.send_response(status_code)
                 self.send_header("Content-Type", "application/json")
@@ -593,7 +599,11 @@ def test_revocation_after_success_failure_timeout(
     def spy_register(capability_path, base_url, payload, **kwargs):
         result = real_register(capability_path, base_url, payload, **kwargs)
         registered_grants.append(
-            {"id": result["id"], "model_token": result["model_token"]}
+            {
+                "id": result["id"],
+                "model_token": result["model_token"],
+                "expires_at": payload["expires_at"],
+            }
         )
         return result
 
@@ -602,6 +612,9 @@ def test_revocation_after_success_failure_timeout(
 
     def spy_revoke_task(capability_path, base_url, task_id, **kwargs):
         revoked_tasks.append((base_url, task_id))
+        # Revocation waits for incurred spend to settle. Once the worker has
+        # returned, unblock the provider so the real DELETE can finish.
+        release.set()
         return real_revoke_task(capability_path, base_url, task_id, **kwargs)
 
     monkeypatch.setattr(
@@ -611,7 +624,8 @@ def test_revocation_after_success_failure_timeout(
         "omp_work.orchestrator.model_proxy_client.revoke_task", spy_revoke_task
     )
 
-    lease_seconds = 1 if scenario == "timeout" else 180
+    # Allow compiled CLI startup while keeping the blocked-provider lease short.
+    lease_seconds = 2 if scenario == "timeout" else 180
     status_code = 500 if scenario == "provider_500" else 200
     block_all = scenario == "timeout"
 
@@ -672,6 +686,7 @@ def test_revocation_after_success_failure_timeout(
 
             try:
                 tick_until(worker, world, implemented, limit=30)
+                finished_at = datetime.now(UTC)
             finally:
                 release.set()
 
@@ -687,6 +702,13 @@ def test_revocation_after_success_failure_timeout(
             assert len(registered_grants) == 1
             grant_id = registered_grants[0]["id"]
             model_token = registered_grants[0]["model_token"]
+            expires_at = datetime.fromisoformat(registered_grants[0]["expires_at"])
+
+            # A startup crash or lease expiring before provider contact must not
+            # stand in for the failure/timeout paths exercised here.
+            with entered:
+                assert calls, outcome
+                assert calls[0][4] < expires_at
 
             assert len(revoked_tasks) == 1
             assert revoked_tasks[0] == (proxy_url.rstrip("/"), grant_id)
@@ -696,6 +718,7 @@ def test_revocation_after_success_failure_timeout(
                 if scenario == "success":
                     assert outcome["outcome"] == "succeeded"
                     assert outcome["data"]["exit_code"] == 0
+                    assert finished_at < expires_at
 
                     revoked_resp = client.post(
                         "/v1beta/models/gemini-3.8-flash-high:streamGenerateContent?alt=sse",
@@ -737,8 +760,11 @@ def test_revocation_after_success_failure_timeout(
 
                 elif scenario == "provider_500":
                     assert outcome["outcome"] == "crashed"
+                    assert outcome["data"]["exit_code"] != 0
+                    assert finished_at < expires_at
 
                 elif scenario == "timeout":
+                    assert calls[0][3], "provider request must enter blocking handler"
                     assert outcome["outcome"] == "crashed"
                     assert outcome["data"].get("code") == "lease_dead"
-
+                    assert finished_at >= expires_at
