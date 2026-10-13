@@ -10,7 +10,7 @@ invariant below is verifiable offline with `bun test`.
 
 | Path                       | Purpose                                                                                                                                  |
 | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `mirror/`                  | Upstream bytes at the pinned revision, one file per declared asset. This is the source of truth for the upstream sha256 pins.             |
+| `mirror/`                  | The full upstream tree at the pinned revision (3716 files), inert: never installed or activated by mirroring. Its git tree id equals `upstream.tree`; the upstream sha256 pins read from here. |
 | `manifest.json`            | Upstream pin, the two packs, every asset record (target, adaptation kind, disposition, dependencies), reserved native command names, and disposition rules. |
 | `adapter/`                 | The deterministic transform, overlay engine, install plan, and install/update/remove lifecycle.                                          |
 | `adapter/emit-lock.ts`     | Build step: rebuilds `adapted.lock.json` from the mirror.                                                                                |
