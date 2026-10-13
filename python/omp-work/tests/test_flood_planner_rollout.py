@@ -6,11 +6,13 @@ qualification must supply it and run them all.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 import pytest
@@ -146,3 +148,63 @@ def test_combined_candidate_compiles_and_requalifies(candidate):
     compose(candidate.parent, PATCHES)
     assert candidate.read_bytes() == before
     compile(candidate.read_bytes(), str(candidate), "exec")
+
+
+@pytest.mark.parametrize("continuation", [
+    {"attempts": 1, "history": []},
+    {"attempts": 0, "history": [{"phase": "plan-review"}]},
+])
+def test_combined_continuation_prompts_keep_loaded_rules(candidate, tmp_path, continuation):
+    """Disk replacement must not change planner or reviewer rules during a retry."""
+    marker = f"Loaded marker: {uuid.uuid4().hex}"
+    rules = candidate.with_name(RULES)
+    loaded = rules.read_bytes() + f"\n{marker}\n".encode()
+    rules.write_bytes(loaded)
+    spec = importlib.util.spec_from_file_location(f"flood_combined_{uuid.uuid4().hex}", candidate)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_repo(repo)
+    cfg_dir = tmp_path / "config"
+    cfg_dir.mkdir()
+    cfg_file = cfg_dir / "flood.json"
+    cfg_file.write_text(json.dumps({"repo": str(repo), "providers": {}, "control_files": [],
+                                    "worktrees_dir": str(tmp_path / "worktrees"),
+                                    "rider_dir": str(tmp_path / "rider")}))
+    flood = module.Flood(json.loads(cfg_file.read_text()), cfg_dir)
+    rules.write_text("Replacement marker\n")
+    task = {"id": ITEM, "body": "Implement isolated continuation change."}
+    st = flood.state.task(task["id"])
+    wt, pdir = flood.plan_worktree(task["id"]), flood.proposed_dir(task["id"])
+    wt.mkdir(parents=True)
+    pdir.mkdir(parents=True)
+    (pdir / f"{ITEM}-s01.md").write_text("Slice output: isolated.json\n")
+    flood.reviewers = [{"cmd": [sys.executable, "-c", "print('VERDICT: PASS')",
+                                "{prompt}", "{prompt_file}"]}]
+    children = []
+    try:
+        for state in ({"attempts": 0, "history": []}, continuation):
+            st.update(**state, last_error="Retry required", note="Owner context")
+            planner = flood.plan_prompt(task, st, wt, pdir)
+            flood.start_plan_review(task)
+            child = flood.procs[task["id"]]
+            children.append(child)
+            assert child.wait(timeout=10) == 0
+            review = (flood.logs_dir / f"{ITEM}.plan-review-prompt.{st['attempts']}.md").read_text()
+            for prompt in (planner, review):
+                assert marker in prompt
+                assert task["body"] in prompt
+                assert "Replacement marker" not in prompt
+            if state is continuation:
+                assert "# Continuation" in planner
+                assert "Retry required" in planner
+                assert "Owner context" in planner
+        assert module.PLANNER_RULES_SHA256 == hashlib.sha256(loaded).hexdigest()
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=10)
