@@ -807,3 +807,32 @@ for separately authorized, active window and fresh native evidence. Rerun uses
 same pipeline and retained consumption history. Chris must decide deployment,
 installed qualification and any ongoing programme; this slice cannot authorize
 those actions. No external credentials or external changes were used here.
+
+# OMP-523-s07 remaining deployment needs
+
+Actual NSI-6 report is NOT QUALIFIED: both arms false-ready 13/19. Merge evidence
+only; keep real route current. No external calls, Chris request, review record,
+owner approval, operational state write or promotion performed.
+
+Before any future cutover: separately fix observed omission/readiness failures,
+retain labels and all failures, regenerate bound comparison/rollback evidence,
+and obtain actual Chris review of safe evidence through existing rollout flow.
+Then separately authorize installed deployment and rehearse installed service
+and workflow-host state paths, durable report/review bindings, restart/replay,
+rollback, concurrent requests and real ledger write deltas. Current host reader
+checks kind/version/mode only; stored host proof uses mocked backend and is not
+service evidence-binding validation. Temporary rehearsal bindings cannot be
+installed as operational state.
+
+Environment prerequisites: frozen Bun dependencies, matching native addon,
+Python dev dependencies and native PostgreSQL for disposable fixtures. Initial
+host attempts failed for missing zod/native addon; frozen dependencies and exact
+18.4.8 npm native addon enabled passing focused tests. No production settings or
+services changed. Runtime qualification/gate execution remains flood's job.
+
+OMP-252 paid Harbor trials still need approved trial arms/model identities,
+matched caps, budget/egress authority, trusted runner and retained corpus/task
+bindings. OMP-317 R13 still needs admitted lifecycle/policy/source bindings,
+fresh disjoint confirmation cohorts/history, independent evidence and owner
+review. Documentation recipes are local API demonstrations, not deployments,
+research policy changes or approvals.

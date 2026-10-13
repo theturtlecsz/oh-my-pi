@@ -1,0 +1,64 @@
+{
+  "verified": true,
+  "owner_approval": false,
+  "scope": "fresh real workflow hosts; mocked backend assessment and writes; copied temporary service states",
+  "observations": [
+    {
+      "mode": "current",
+      "proseResult": "CONFIRM REQUIRED — nothing written.\n\nModel wants to file a work item\n\"Ship gate\"\n→ project TestProject\n→ becomes NOW\n\n# Ship gate\n\n## Acceptance criteria\n- check passes\n\n\nconfirmation_id: cf-3bcae4b48c65\n\nShow this to Chris verbatim. If he says yes, call again with the same arguments plus confirm:true and this confirmation_id.",
+      "preview": "CONFIRM REQUIRED — nothing written.\n\nModel wants to file a work item\n\"Ship gate\"\n→ project TestProject\n→ becomes NOW\n\n# Ship gate\n\n## Acceptance criteria\n- check passes\n\n\nconfirmation_id: cf-3bcae4b48c65\n\nShow this to Chris verbatim. If he says yes, call again with the same arguments plus confirm:true and this confirmation_id.",
+      "confirmed": "created HOME-10 + NOW",
+      "before": {
+        "issues": 0,
+        "now": 0
+      },
+      "after": {
+        "issues": 1,
+        "now": 1
+      },
+      "preview_write_delta": 0,
+      "confirmed_write_delta": {
+        "issues": 1,
+        "now": 1
+      }
+    },
+    {
+      "mode": "typed",
+      "proseResult": "intake_typed_required: typed intake requires matching structured intake draft (intake)",
+      "preview": "CONFIRM REQUIRED — nothing written.\n\nModel wants to file a work item\n\"Ship gate\"\n→ project TestProject\n→ becomes NOW\n\n# Ship gate\n\n## Acceptance criteria\n- check passes\n\n\nconfirmation_id: cf-ace97cdcaa80\n\nShow this to Chris verbatim. If he says yes, call again with the same arguments plus confirm:true and this confirmation_id.",
+      "confirmed": "created HOME-10 + NOW",
+      "before": {
+        "issues": 1,
+        "now": 1
+      },
+      "after": {
+        "issues": 2,
+        "now": 2
+      },
+      "preview_write_delta": 0,
+      "confirmed_write_delta": {
+        "issues": 1,
+        "now": 1
+      }
+    },
+    {
+      "mode": "current",
+      "proseResult": "CONFIRM REQUIRED — nothing written.\n\nModel wants to file a work item\n\"Ship gate\"\n→ project TestProject\n→ becomes NOW\n\n# Ship gate\n\n## Acceptance criteria\n- check passes\n\n\nconfirmation_id: cf-91983db59b39\n\nShow this to Chris verbatim. If he says yes, call again with the same arguments plus confirm:true and this confirmation_id.",
+      "preview": "CONFIRM REQUIRED — nothing written.\n\nModel wants to file a work item\n\"Ship gate\"\n→ project TestProject\n→ becomes NOW\n\n# Ship gate\n\n## Acceptance criteria\n- check passes\n\n\nconfirmation_id: cf-91983db59b39\n\nShow this to Chris verbatim. If he says yes, call again with the same arguments plus confirm:true and this confirmation_id.",
+      "confirmed": "created HOME-10 + NOW",
+      "before": {
+        "issues": 2,
+        "now": 2
+      },
+      "after": {
+        "issues": 3,
+        "now": 3
+      },
+      "preview_write_delta": 0,
+      "confirmed_write_delta": {
+        "issues": 1,
+        "now": 1
+      }
+    }
+  ]
+}
