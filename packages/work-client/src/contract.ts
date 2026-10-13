@@ -3,4 +3,4 @@
 // this module before a contract deployment keeps the old constant and receives
 // the service's typed `contract_mismatch` restart refusal on its next
 // authenticated request.
-export const WORK_CONTRACT_SHA256 = "280ae3ce0cb0b9ff330dff82230b6d85263a383601f5c172d9cdd0fbf931cf0c";
+export const WORK_CONTRACT_SHA256 = "3e257f22e9acf186d2e8b9722ea82cbc6db44b2be28ecfa6bf95437db707e077";

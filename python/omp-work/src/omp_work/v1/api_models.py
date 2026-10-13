@@ -936,6 +936,19 @@ class IntakeAssessmentView(StrictModel):
     provenance: IntakeProvenance
 
 
+class IntakeSupportJudgment(StrictModel):
+    claim_id: str = Field(min_length=1)
+    artifact_id: str = Field(min_length=1)
+    model_id: str = Field(min_length=1)
+    start_byte: int = Field(ge=0, strict=True)
+    end_byte: int = Field(ge=0, strict=True)
+    caller_relation: Literal["supports", "contradicts", "neither"]
+    verdict: Literal["supports", "contradicts", "neither"]
+    passage_sha256: hex64
+    claim_text_sha256: hex64
+    disagreement: bool = Field(strict=True)
+
+
 class IntakeRecordView(StrictModel):
     workspace_id: UUID
     mission_id: UUID
@@ -948,6 +961,7 @@ class IntakeRecordView(StrictModel):
     issues: tuple[IntakeIssueRecord, ...]
     traces: tuple[IntakeTrace, ...]
     assessments: tuple[IntakeAssessmentView, ...]
+    support_judgments: tuple[IntakeSupportJudgment, ...] = ()
     provenance: IntakeProvenance
 
     @field_serializer("snapshot")
