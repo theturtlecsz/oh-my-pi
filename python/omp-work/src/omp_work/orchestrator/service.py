@@ -1835,93 +1835,108 @@ def submit(config: OrchestratorConfig, request: MissionRequest) -> dict[str, Any
     """
     _require_jobs(config.ops)
     automation = _principal(config.automation_capability_path)
-    created = _run_command(
-        config,
-        automation,
-        "create_work_batch",
-        {"items": [request.work.model_dump(mode="json")], "relations": []},
-        _ids(request.mission_id, "work"),
-    )
-    if created.get("replayed"):
-        work_id = _existing_work_id(config, request.mission_id)
-    else:
-        work_id = UUID(str(created["items"][0]["work_id"]))
-    qualified = _release_qualified(config, unattended=request.unattended)
-    if not qualified:
-        facts = Facts(
-            mission_id=str(request.mission_id),
-            project_id=request.project_id,
-            step_index=0,
-            stage=STAGE_ORDER[0],
-            mission_status="draft",
-            outcome="none",
-            qualified=False,
+    store = NativeJobStore(config.ops)
+    with store.transaction(config.workspace_id, automation.actor_id) as cur:
+        # Serialize admission and preparation with the submitted chain identity.
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended('orch:' || %s, 0))",
+            (str(request.mission_id),),
         )
-        chosen = decide(facts, bounds_for(load_policy(), request.scope.kind, STAGE_ORDER[0], config.repair_rounds))
-        decision_id = None if chosen.decision is None else str(chosen.decision.decision_id)
-        if chosen.decision is not None:
-            _run_command(
+        submitted = next(
+            (
+                step
+                for step in list_steps(cur, config.workspace_id, str(request.mission_id))
+                if step.get("kind") == "submitted"
+            ),
+            None,
+        )
+        if submitted is not None:
+            if submitted["request"] != request.document():
+                raise OrchestratorError("idempotency_conflict")
+            return {
+                "status": "enqueued",
+                "code": None,
+                "work_id": str(submitted["work_id"]),
+                "decision_id": None,
+                "job_id": _stage_job(request.mission_id, 0),
+            }
+        try:
+            created = _execute(
                 config,
                 automation,
-                "create_decision",
-                chosen.decision.model_dump(mode="json"),
-                chosen.decision.decision_id,
+                "create_work_batch",
+                {"items": [request.work.model_dump(mode="json")], "relations": []},
+                _ids(request.mission_id, "work"),
             )
+        except WorkError as error:
+            raise OrchestratorError(error.code) from error
+        work_id = UUID(str(created["items"][0]["work_id"]))
+        qualified = _release_qualified(config, unattended=request.unattended)
+        if not qualified:
+            facts = Facts(
+                mission_id=str(request.mission_id),
+                project_id=request.project_id,
+                step_index=0,
+                stage=STAGE_ORDER[0],
+                mission_status="draft",
+                outcome="none",
+                qualified=False,
+            )
+            chosen = decide(facts, bounds_for(load_policy(), request.scope.kind, STAGE_ORDER[0], config.repair_rounds))
+            decision_id = None if chosen.decision is None else str(chosen.decision.decision_id)
+            if chosen.decision is not None:
+                _run_command(
+                    config,
+                    automation,
+                    "create_decision",
+                    chosen.decision.model_dump(mode="json"),
+                    chosen.decision.decision_id,
+                )
+            return {
+                "status": "refused",
+                "code": chosen.rule_id,
+                "work_id": str(work_id),
+                "decision_id": decision_id,
+                "job_id": None,
+            }
+        _prepare_mission(config, request, automation)
+        job_id = _stage_job(request.mission_id, 0)
+        enqueue_job(
+            store,
+            operation_id=str(_ids(request.mission_id, "enqueue:0")),
+            workspace_id=config.workspace_id,
+            actor_id=automation.actor_id,
+            job_id=job_id,
+            work_id=work_id,
+            kind="compute",
+            required_capabilities=[_CAPABILITY],
+            resources=dict(_RESOURCES),
+            lease_seconds=config.lease_seconds,
+            cur=cur,
+        )
+        append_step(
+            store,
+            cur,
+            workspace_id=config.workspace_id,
+            job_id=job_id,
+            step={
+                "mission_id": str(request.mission_id),
+                "step_index": 0,
+                "kind": "submitted",
+                "rule_id": "submitted",
+                "idempotency_key": f"submitted:{request.mission_id}",
+                "request": request.document(),
+                "work_id": str(work_id),
+                "stage": STAGE_ORDER[0],
+            },
+        )
         return {
-            "status": "refused",
-            "code": chosen.rule_id,
-            "work_id": str(work_id) if work_id is not None else None,
-            "decision_id": decision_id,
-            "job_id": None,
-        }
-    _prepare_mission(config, request, automation)
-    job_id = _stage_job(request.mission_id, 0)
-    if work_id is None:
-        raise AssertionError("work_id is None")
-    enqueue_job(
-        NativeJobStore(config.ops),
-        operation_id=str(_ids(request.mission_id, "enqueue:0")),
-        workspace_id=config.workspace_id,
-        actor_id=automation.actor_id,
-        job_id=job_id,
-        work_id=work_id,
-        kind="compute",
-        required_capabilities=[_CAPABILITY],
-        resources=dict(_RESOURCES),
-        lease_seconds=config.lease_seconds,
-    )
-    handler = OrchestratorHandler(config)
-    handler.mission_id = request.mission_id
-    handler.project_id = request.project_id
-    handler._job_id = job_id
-    handler.record(
-        0,
-        {
-            "kind": "submitted",
-            "rule_id": "submitted",
-            "idempotency_key": f"submitted:{request.mission_id}",
-            "request": request.document(),
+            "status": "enqueued",
+            "code": None,
             "work_id": str(work_id),
-            "stage": STAGE_ORDER[0],
-        },
-    )
-    return {
-        "status": "enqueued",
-        "code": None,
-        "work_id": str(work_id),
-        "decision_id": None,
-        "job_id": job_id,
-    }
-
-
-def _existing_work_id(config: OrchestratorConfig, mission_id: UUID) -> UUID | None:
-    handler = OrchestratorHandler(config)
-    handler.mission_id = mission_id
-    try:
-        submitted = next(step for step in handler.steps() if step.get("kind") == "submitted")
-    except StopIteration:
-        return None
-    return UUID(str(submitted["work_id"]))
+            "decision_id": None,
+            "job_id": job_id,
+        }
 
 
 def _prepare_mission(
