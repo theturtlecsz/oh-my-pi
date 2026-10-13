@@ -205,7 +205,9 @@ process.stdout.write(JSON.stringify({ checkout, hostRoot: fs.existsSync("/old/us
 		assertPinned(result.requests, result.proxyUrl);
 	}, 20_000);
 	it("accepts a delayed response spanning the obsolete lease", async () => {
-		const oldLease = Date.now() + 2000;
+		// Lease must outlast jail start-up plus the first request: the worker reached its first
+		// request ~2.1s after spawn on a slow CI runner (2s lease was missed by 126ms).
+		const oldLease = Date.now() + 8000;
 		let started = 0;
 		let finished = 0;
 		const result = await runWorker({
