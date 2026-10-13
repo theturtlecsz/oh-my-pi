@@ -82,7 +82,7 @@ def wiring(service, tmp_path, monkeypatch):
 
     def implement(ctx):
         state.contexts.append(ctx)
-        state.expiry = ctx.lease_expires_at().isoformat()
+        state.expiry = min(ctx.lease_expires_at(), operations._task_deadline(ctx)).isoformat()
         if getattr(state, "request_patch", None):
             ctx.request = {**ctx.request, **state.request_patch}
         if getattr(state, "before_run", None):

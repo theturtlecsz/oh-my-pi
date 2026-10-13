@@ -832,6 +832,10 @@ def _run_model_worker(ctx: StageContext, argv: Sequence[str], worktree: Path) ->
     expires_at = ctx.lease_expires_at()
     if expires_at is None or expires_at <= datetime.now(UTC):
         return None
+    deadline = _task_deadline(ctx)
+    if deadline is None:
+        return None
+    expires_at = min(expires_at, deadline)
     ceiling = _worker_ceiling(ctx)
     base_url = ctx.config.model_proxy_url.rstrip("/")
     try:
