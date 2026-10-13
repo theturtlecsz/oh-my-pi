@@ -18,6 +18,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, TypeGuard
 
+from omp_work.v1.canonical import sha256
 from omp_work.v1.models import ResearchDomain
 
 __all__ = [
@@ -25,7 +26,9 @@ __all__ = [
     "Criterion",
     "PreparedTrial",
     "SearchConfig",
+    "definition_commitment",
     "load_definition",
+    "search_steps",
     "score_campaign",
     "score_metrics",
 ]
@@ -341,6 +344,73 @@ def load_definition(path: Path) -> CampaignDefinition:
         criteria=criteria,
         trials=trials,
         search=search,
+    )
+
+
+def _resolved_id(trial: PreparedTrial, index: int) -> str:
+    return trial.id if trial.id is not None else f"t{index:03d}"
+
+
+def search_steps(definition: CampaignDefinition) -> dict[str, dict[str, Any]]:
+    """Return a fresh trial-ordered tree keyed by resolved trial id.
+
+    Each node has ``parent_id``, ``children`` (definition order), ``cost``,
+    ``candidate_digest``, and unset ``metric`` and ``infra_error``. Trials
+    built without an id get the positional id the loader would assign.
+    """
+    ids = [_resolved_id(trial, index) for index, trial in enumerate(definition.trials)]
+    steps: dict[str, dict[str, Any]] = {
+        trial_id: {
+            "parent_id": trial.parent,
+            "children": [],
+            "cost": trial.cost,
+            "candidate_digest": trial.candidate_digest,
+            "metric": None,
+            "infra_error": None,
+        }
+        for trial_id, trial in zip(ids, definition.trials, strict=True)
+    }
+    for trial_id, trial in zip(ids, definition.trials, strict=True):
+        if trial.parent is not None:
+            steps[trial.parent]["children"].append(trial_id)
+    return steps
+
+
+def definition_commitment(definition: CampaignDefinition) -> str:
+    """Canonical SHA-256 binding the objective, criteria, search config, and pool.
+
+    Paths, harness bytes (beyond each candidate digest), observations, and
+    selection state are excluded. A definition without ``search`` is refused.
+    """
+    search = definition.search
+    if search is None:
+        raise ValueError("definition has no search configuration")
+    return sha256(
+        {
+            "objective": definition.objective,
+            "domain": definition.domain.value,
+            "timeout_seconds": definition.timeout_seconds,
+            "criteria": [
+                {"metric": c.metric, "op": c.op, "threshold": c.threshold}
+                for c in definition.criteria
+            ],
+            "search": {
+                "policy": search.policy,
+                "budget": search.budget,
+                "width": search.width,
+                "seed": search.seed,
+                "metric": search.metric,
+            },
+            "trials": [
+                {
+                    "id": _resolved_id(trial, index),
+                    "parent": trial.parent,
+                    "cost": trial.cost,
+                    "candidate_digest": trial.candidate_digest,
+                }
+                for index, trial in enumerate(definition.trials)
+            ],
+        }
     )
 
 
