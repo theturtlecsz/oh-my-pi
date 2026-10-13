@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "labels": {
+    "supports": "The passage, read with its context, states or directly entails the claim.",
+    "contradicts": "The passage, read with its context, states or directly entails the opposite of the claim.",
+    "neither": "The passage does not establish the claim or its opposite."
+  },
+  "near_miss_kinds": {
+    "topic_wrong_claim": "Passage is on topic but the claim concerns a different fact it never states.",
+    "negation": "Passage matches the claim's wording but asserts the negation.",
+    "scope_mismatch": "Claim is broader than, or about a different scope from, what the passage covers.",
+    "quote_out_of_context": "Passage text matches the claim but its context defeats it as an assertion."
+  },
+  "context_rule": "Context outside the quoted passage can defeat the quote; a label is judged on passage and context together."
+}
