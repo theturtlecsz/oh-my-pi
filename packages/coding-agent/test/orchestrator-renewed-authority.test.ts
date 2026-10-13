@@ -3,8 +3,9 @@ import type { Subprocess } from "bun";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
+import { pivotScript, populateHostSystemLayout } from "./helpers/orchestrator-worker-jail";
+
 const repoRoot = path.resolve(import.meta.dir, "../../..");
-const cliEntry = path.join(repoRoot, "packages/coding-agent/src/cli.ts");
 const candidate = "renewed-candidate";
 const model = "pinned-worker-model";
 const token = "pinned-model-token";
@@ -51,7 +52,10 @@ async function runWorker(options: RunOptions = {}) {
 	let timer: Timer | undefined;
 	try {
 		await fs.mkdir(path.join(root, "work/src"), { recursive: true });
-		await fs.mkdir(path.join(root, "tmp"));
+		for (const dir of ["old", "tmp", "proc", "dev", "sys", "usr", "run"]) {
+			await fs.mkdir(path.join(root, dir));
+		}
+		populateHostSystemLayout(root);
 		await Bun.write(path.join(root, "work/src/allowed.txt"), "old\n");
 		await Bun.write(
 			path.join(root, "work/manifest.json"),
@@ -87,42 +91,13 @@ async function runWorker(options: RunOptions = {}) {
 		}
 		child = Bun.spawn(
 			[
-				"bwrap",
-				"--die-with-parent",
-				"--tmpfs",
-				"/",
-				"--ro-bind",
-				"/usr",
-				"/usr",
-				"--ro-bind",
-				"/lib",
-				"/lib",
-				"--ro-bind",
-				"/lib64",
-				"/lib64",
-				"--ro-bind",
-				repoRoot,
-				repoRoot,
-				"--ro-bind",
-				process.execPath,
-				process.execPath,
-				"--dev-bind",
-				"/dev",
-				"/dev",
-				"--proc",
-				"/proc",
-				"--bind",
-				path.join(root, "work"),
-				"/work",
-				"--bind",
-				path.join(root, "tmp"),
-				"/tmp",
-				"--chdir",
-				"/work",
-				process.execPath,
-				"--no-env-file",
-				cliEntry,
-				"orchestrator-worker",
+				"unshare",
+				"--user",
+				"--map-root-user",
+				"--mount",
+				"bash",
+				"-c",
+				pivotScript(root, undefined, undefined, true),
 			],
 			{ cwd: root, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
 		);
@@ -143,7 +118,6 @@ async function runWorker(options: RunOptions = {}) {
 			stderr,
 			requests,
 			proxyUrl,
-			signalCode: child.signalCode,
 			file: await Bun.file(path.join(root, "work/src/allowed.txt")).text(),
 			forbiddenExists: await Bun.file(path.join(root, "work/src/forbidden.txt")).exists(),
 		};
@@ -173,6 +147,52 @@ function assertPinned(requests: CapturedRequest[], proxyUrl: string): void {
 }
 
 describe.serial("orchestrator renewed authority", () => {
+	it("keeps checkout read-only and host root detached while allowing private work writes", async () => {
+		const root = await fs.mkdtemp(path.join(repoRoot, ".renewed-worker-"));
+		try {
+			for (const dir of ["old", "work", "tmp", "proc", "dev", "sys", "usr", "run"]) {
+				await fs.mkdir(path.join(root, dir));
+			}
+			populateHostSystemLayout(root);
+			const command = `exec /run/bun --no-env-file -e '
+const fs = require("node:fs");
+let checkout;
+try {
+	fs.closeSync(fs.openSync("/run/checkout/package.json", "r+"));
+	checkout = "writable";
+} catch (error) {
+	checkout = error.code;
+}
+fs.writeFileSync("/work/private.txt", "private");
+process.stdout.write(JSON.stringify({ checkout, hostRoot: fs.existsSync("/old/usr"), work: fs.readFileSync("/work/private.txt", "utf8") }));
+'`;
+			const child = Bun.spawn(
+				[
+					"unshare",
+					"--user",
+					"--map-root-user",
+					"--mount",
+					"bash",
+					"-c",
+					pivotScript(root, undefined, command, true),
+				],
+				{
+					stdin: "ignore",
+					stdout: "pipe",
+					stderr: "pipe",
+				},
+			);
+			const [exitCode, stdout, stderr] = await Promise.all([
+				child.exited,
+				new Response(child.stdout).text(),
+				new Response(child.stderr).text(),
+			]);
+			expect(exitCode, stderr).toBe(0);
+			expect(JSON.parse(stdout)).toEqual({ checkout: "EROFS", hostRoot: false, work: "private" });
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
 	it("completes multiple calls after an obsolete lease while keeping grants pinned", async () => {
 		const result = await runWorker({
 			respond: index => (index === 0 ? sse([write("src/allowed.txt", "renewed\n")]) : sse([{ text: "done" }])),
@@ -227,7 +247,8 @@ describe.serial("orchestrator renewed authority", () => {
 				},
 			});
 			expect(result.requests).toHaveLength(1);
-			expect(result.signalCode).toBe("SIGTERM");
+			// Direct CLI handles SIGTERM and exits with its conventional signal status.
+			expect(result.exitCode).toBe(128 + 15);
 			expect(result.stdout).not.toContain('"result":"completed"');
 		} finally {
 			pending.resolve(sse([{ text: "too late" }]));
