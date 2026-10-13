@@ -424,3 +424,20 @@ def test_sign_merge_budget_and_tick(service, tmp_path: Path, monkeypatch) -> Non
     view = tick_until(worker, world, ready, limit=5)
     assert worker.ticks == 2
     assert view["mission_id"] == str(world.mission_id)
+
+
+def test_tick_until_failure_shows_mission_view_and_steps(
+    service, tmp_path: Path, monkeypatch
+) -> None:
+    """A never-true predicate reports the real view and steps, not a handler error."""
+    world = _world(service, tmp_path / "tick-fail", monkeypatch)
+
+    class _Worker:
+        def tick(self) -> None:
+            pass
+
+    with pytest.raises(AssertionError) as raised:
+        tick_until(_Worker(), world, lambda view: False, limit=1)
+    text = str(raised.value)
+    assert '"view"' in text and '"steps"' in text
+    assert "mission_id is None" not in text

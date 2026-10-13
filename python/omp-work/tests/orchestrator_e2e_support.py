@@ -732,12 +732,14 @@ def tick_until(
             return view
         worker.tick()
         view = status(world.config, world.mission_id)
-    raise AssertionError(
-        json.dumps(
-            {"view": view, "steps": OrchestratorHandler(world.config).steps()},
-            default=str,
-        )[:4000]
-    )
+    report: dict[str, Any] = {"view": view}
+    try:
+        handler = OrchestratorHandler(world.config)
+        handler.mission_id = world.mission_id
+        report["steps"] = handler.steps()
+    except Exception as exc:  # noqa: BLE001 - the view must still surface
+        report["steps_error"] = f"{type(exc).__name__}: {exc}"
+    raise AssertionError(json.dumps(report, default=str)[:4000])
 
 
 def crash_on_step(monkeypatch, kind: str) -> dict[str, bool]:
