@@ -64,6 +64,7 @@ from omp_work.v1.service import Principal, WorkService
 from omp_work.v1.store import PostgresWorkStore
 from test_research_contract import _register_component
 from test_workflow_service import OWNER, _grant, _seed_project
+from typed_intake_support import seed_typed_intake
 
 __all__ = [
     "CANDIDATE_SHA256",
@@ -732,12 +733,14 @@ def tick_until(
             return view
         worker.tick()
         view = status(world.config, world.mission_id)
-    raise AssertionError(
-        json.dumps(
-            {"view": view, "steps": OrchestratorHandler(world.config).steps()},
-            default=str,
-        )[:4000]
-    )
+    report: dict[str, Any] = {"view": view}
+    try:
+        handler = OrchestratorHandler(world.config)
+        handler.mission_id = world.mission_id
+        report["steps"] = handler.steps()
+    except Exception as exc:  # noqa: BLE001 - the view must still surface
+        report["steps_error"] = f"{type(exc).__name__}: {exc}"
+    raise AssertionError(json.dumps(report, default=str)[:4000])
 
 
 def crash_on_step(monkeypatch, kind: str) -> dict[str, bool]:
@@ -1164,6 +1167,11 @@ def open_e2e_world(
         control_repo, worktrees_dir, f"{mission_id.hex[:12]}-verify", base_commit
     )
     draft = draft_from_intake(request.intake, request.scope.model_dump())
+
+    seed_typed_intake(
+        store, workspace_id=workspace_id, actor_id=OWNER, mission_id=mission_id,
+        run_id=f"orchestrator:{mission_id}", draft=request.intake,
+    )
 
     return E2EWorld(
         service=service,

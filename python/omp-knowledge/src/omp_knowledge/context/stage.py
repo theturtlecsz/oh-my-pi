@@ -3,7 +3,7 @@
 A service calls :func:`compile_stage` with :class:`ContextSettings` loaded from
 ``context.json``. The compile gathers exact, project, structural and semantic
 items, then reranks, compiles and persists through the same helpers as the
-context CLI. Procedural lessons are never read.
+context CLI. Procedural lessons are compiled when an approved learning store is provided.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from pydantic import Field, field_validator, model_validator
 from omp_knowledge.context.cli import (
     DEFAULT_SEMANTIC_LIMIT,
     DEFAULT_STRUCTURAL_LIMIT,
+    _resolve_repository,
     append_semantic_items,
     append_structural_items,
     finish_compile,
@@ -33,8 +34,19 @@ from omp_knowledge.context.project_sources import (
     repository_items,
 )
 from omp_knowledge.context.rerank import Reranker
-from omp_knowledge.context.sources import ViewInput, exact_items, identity_from_view
+from omp_knowledge.context.sources import (
+    ViewInput,
+    _view_mapping,
+    exact_items,
+    identity_from_view,
+)
 from omp_knowledge.engine.protocol import KnowledgeEngine
+from omp_knowledge.learning.promotion import (
+    ensure_promotion_tables,
+    get_promoted_procedures,
+)
+from omp_knowledge.learning.store import LearningStore
+from omp_knowledge.learning.uses import supply
 
 EngineName = Literal["none", "cognee"]
 
@@ -128,13 +140,15 @@ def compile_stage(
     permitted_repositories: Collection[str | UUID] = (),
     engine: KnowledgeEngine | None = None,
     reranker: Reranker | None = None,
+    learning_store: LearningStore | None = None,
 ) -> dict[str, Any]:
     """Compile one stage for ``view`` and persist the bundle.
 
     Items are the exact workflow view, repository, ADR and project items,
     structural items when ``structural_state_dir`` and ``snapshots`` are set,
-    and semantic items when an engine (or ``settings.engine == "cognee"``) and
-    ``snapshots`` are set. Procedural items are never included. The return
+    procedural items when ``learning_store`` is set and procedures are approved
+    under journey-pass and promotion gates, and semantic items when an engine
+    (or ``settings.engine == "cognee"``) and ``snapshots`` are set. The return
     carries the same keys as the context CLI compile.
     """
     if not settings.state_dir:
@@ -156,6 +170,90 @@ def compile_stage(
         permitted=permitted_repositories,
         limit=DEFAULT_STRUCTURAL_LIMIT,
     )
+
+    if learning_store is not None:
+        ensure_promotion_tables(learning_store)
+        view_dict = _view_mapping(view)
+        item_dict = view_dict["item"]
+        workspace_id = item_dict.get("workspace_id")
+        work_key = str(item_dict["alias"]["key"])
+        project_id = item_dict.get("project_id")
+
+        approved_pairs = get_promoted_procedures(
+            learning_store,
+            workspace_id=workspace_id,
+        )
+
+        learning_context: dict[str, str] = {}
+        if project_id is not None:
+            learning_context["project_id"] = str(project_id)
+        repository = _resolve_repository(cwd)
+        if repository is not None:
+            learning_context["repository"] = repository
+
+        with learning_store.transaction() as conn:
+            supply_result = supply(
+                learning_store,
+                workspace_id=str(workspace_id) if workspace_id is not None else "",
+                work_key=work_key,
+                context=learning_context,
+                limit=0,
+                allowed=approved_pairs,
+            )
+            for supply_id, line in zip(supply_result.supply_ids, supply_result.lines):
+                items.append(
+                    ContextItem(
+                        section="procedural",
+                        source="lesson",
+                        ref=supply_id,
+                        text=line,
+                        status="current",
+                    )
+                )
+            append_semantic_items(
+                items,
+                engine_name=settings.engine,
+                engine=engine,
+                selection=selection,
+                permitted=permitted_repositories,
+                query=query,
+                limit=DEFAULT_SEMANTIC_LIMIT,
+            )
+            active_reranker, reranker_route = resolve_reranker(
+                injected=reranker,
+                reranker_url=settings.reranker_url,
+                reranker_model=settings.reranker_model,
+                route_set=None,
+            )
+            result = finish_compile(
+                items=items,
+                identity=identity,
+                token_budget=settings.token_budget,
+                encoding=settings.encoding,
+                token_cmd=settings.token_cmd,
+                state_dir=settings.state_dir,
+                query=query,
+                reranker=active_reranker,
+                routes=[reranker_route],
+            )
+            excluded_supply_ids = {
+                exclusion["ref"] if isinstance(exclusion, dict) else exclusion.ref
+                for exclusion in result["exclusions"]
+                if (exclusion.get("section") if isinstance(exclusion, dict) else exclusion.section) == "procedural"
+            }
+            if excluded_supply_ids:
+                placeholders = ",".join("?" for _ in excluded_supply_ids)
+                conn.execute(
+                    f"DELETE FROM supplies WHERE supply_id IN ({placeholders})",  # nosec B608
+                    list(excluded_supply_ids),
+                )
+            retained = [
+                sid for sid in supply_result.supply_ids
+                if sid not in excluded_supply_ids
+            ]
+            result["lesson_supply_ids"] = retained
+            return result
+
     append_semantic_items(
         items,
         engine_name=settings.engine,
