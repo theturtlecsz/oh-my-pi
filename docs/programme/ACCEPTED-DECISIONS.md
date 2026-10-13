@@ -82,3 +82,21 @@ The separate 20 consecutive accepted ordinary tasks and 72 continuous hours with
 WorkService retains native authority. Exact contract approval, live cutover, destructive actions, purchases, model-policy activation and withheld Q36 retain applicable gates. Prepare concrete evidence before a final owner decision; do not convert generic support into an approval record. Mandatory Observer and selected durable memory remain. Source review, integration, packaging, installed qualification, native acceptance and production activation stay distinct.
 
 Implementation work still required: current candidate/record reconciliation; release and exact contract-delta preparation; full accounting; scoped reviewer-quality qualification and native criterion reconciliation; inference-effect classification and one-result arbitration; standing exploration enforcement; process ownership/result collection; named fallback qualification; budget baselines and enforcement; all remaining audit phases. G1's provisional framing creates no blocker to this engineering work. No new product-preference question is required before preparation; concrete authority/resource decisions remain for their actual boundaries.
+
+## Programme decision amendment — October 13, 2026 (database advisor retirement)
+
+Owner decision by Chris on 2026-10-13 (programme decision 4): retire the current ECC
+database advisor asset from the ECC adapter's install set. Full record:
+[ECC database advisor retirement decision](../report/ecc-database-advisor-trial/DECISION.md).
+
+The OMP-525 trial (`docs/report/ecc-database-advisor-trial/`, retained byte-for-byte)
+returned 2 useful findings, 23 false alarms, and 0 known defects caught, failing the
+keep rule (`useful >= false_alarm` and `known_defects_caught >= 1`) on both clauses;
+`summary.json` recommends drop.
+
+Scope: this amendment retires only the current ECC database advisor asset. It leaves
+programme obligation O4 (Complete ECC foundation) and ECC WP6 (Add one adapted advisor
+specialization) **open** — neither met nor dropped. A replacement advisor requires a
+new Work Ledger proposal with its own evaluation plan; this amendment builds none and
+confers no inherited authority. All historical accepted requirements in this document
+remain in force.
