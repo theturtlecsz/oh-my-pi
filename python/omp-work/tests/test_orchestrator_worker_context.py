@@ -113,11 +113,14 @@ def test_compiled_context_and_supply_survive_worker_outcomes(context, tmp_path, 
     assert f'{repository}\n{ctx.request["base_commit"]}\nHEAD\nclean' in manifest["context"]
     assert "Verified worker lesson" in manifest["context"]
     assert "Inspect actual worktree" in manifest["context"]
+    assert "context-lesson@v1" in manifest["context"]
     with sqlite3.connect(state.state_dir / "context-bundles.sqlite") as conn:
         conn.row_factory = sqlite3.Row
         bundle = conn.execute("SELECT * FROM context_bundles WHERE bundle_id=?", (outcome.data["bundle_id"],)).fetchone()
     assert bundle["bundle_text"] == manifest["context"]
     assert bundle["bundle_sha256"] == outcome.data["bundle_sha256"]
+    assert outcome.data["compiled_context_hash"] == bundle["bundle_sha256"]
+    assert outcome.data["lesson_versions"] == [{"id": "context-lesson", "version": 1}]
     assert bundle["work_id"] == str(ctx.work_id)
     assert bundle["work_key"] == operations._work_key(ctx)
     assert bundle["stage"] == "implement"
@@ -146,6 +149,7 @@ def test_compiled_context_and_supply_survive_worker_outcomes(context, tmp_path, 
                     if step["kind"] == "outcome" and step["stage"] == "implement")
     assert recorded["data"]["bundle_id"] == bundle["bundle_id"]
     assert recorded["data"]["lesson_supply_ids"] == outcome.data["lesson_supply_ids"]
+    assert recorded["data"]["lesson_versions"] == [{"id": "context-lesson", "version": 1}]
 
 
 def test_disabled_learning_has_no_lesson(context, tmp_path):
@@ -155,9 +159,42 @@ def test_disabled_learning_has_no_lesson(context, tmp_path):
     outcome = run(context)
     assert outcome.outcome == "succeeded", [outcome.data, context.compiles[0][2].stderr]
     assert "Verified worker lesson" not in context.runs[0][3]["context"]
+    assert "context-lesson" not in context.runs[0][3]["context"]
     assert "lesson_supply_ids" not in outcome.data
+    assert "lesson_versions" not in outcome.data
+    recorded = next(step for step in context.worker.handlers["*"].steps()
+                    if step["kind"] == "outcome" and step["stage"] == "implement")
+    assert "lesson_supply_ids" not in recorded["data"]
+    assert "lesson_versions" not in recorded["data"]
     with sqlite3.connect(learning_dir / "learning.sqlite") as conn:
         assert conn.execute("SELECT count(*) FROM supplies").fetchone()[0] == 0
+
+
+def test_unconfigured_launch_persists_none_and_sends_none(context):
+    handler = context.worker.handlers["*"]
+    handler.config = dataclasses.replace(
+        handler.config,
+        context_command=(),
+        context_settings_path=None,
+        learning_state_dir=None,
+        learning_command=(),
+        learning_bearer_file=None,
+    )
+    outcome = run(context)
+    assert outcome.outcome == "succeeded"
+    manifest = context.runs[0][3]
+    assert "context" not in manifest
+    assert "bundle_id" not in outcome.data
+    assert "bundle_sha256" not in outcome.data
+    assert "compiled_context_hash" not in outcome.data
+    assert "lesson_supply_ids" not in outcome.data
+    assert "lesson_versions" not in outcome.data
+    recorded = next(step for step in context.worker.handlers["*"].steps()
+                    if step["kind"] == "outcome" and step["stage"] == "implement")
+    assert "bundle_id" not in recorded["data"]
+    assert "bundle_sha256" not in recorded["data"]
+    assert "compiled_context_hash" not in recorded["data"]
+    assert "lesson_versions" not in recorded["data"]
 
 
 @pytest.mark.parametrize("failure", ["settings", "budget", "output"])

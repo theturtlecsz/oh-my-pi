@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 import subprocess
 from typing import Any
 
@@ -51,6 +52,12 @@ def compile_context(ctx: StageContext, worktree: Path, work_key: str) -> tuple[s
             ))
         ):
             raise WorkError("context_compile_failed")
+        lessons = [
+            {"id": m.group(1), "version": int(m.group(2))}
+            for m in re.finditer(r"PROCEDURE\s+([^\s@]+)@v(\d+)", compiled["text"])
+        ]
+        if lessons:
+            compiled["lesson_versions"] = lessons
     except (OSError, ValueError) as error:
         raise WorkError("context_compile_failed") from error
     return str(candidate["candidate_id"]), compiled

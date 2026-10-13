@@ -845,8 +845,10 @@ def _run_model_worker(
     if context is not None:
         candidate_id, compiled = context
         data.update({key: compiled[key] for key in (
-            "bundle_id", "bundle_sha256", "tokens", "token_budget", "exclusions", "routes", "lesson_supply_ids"
+            "bundle_id", "bundle_sha256", "tokens", "token_budget", "exclusions", "routes", "lesson_supply_ids", "lesson_versions"
         ) if key in compiled})
+        if "bundle_sha256" in compiled:
+            data["compiled_context_hash"] = compiled["bundle_sha256"]
     ceiling = _worker_ceiling(ctx)
     base_url = ctx.config.model_proxy_url.rstrip("/")
     try:
