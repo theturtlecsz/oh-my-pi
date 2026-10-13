@@ -185,6 +185,20 @@ export type IntakeIssueRecord = { issue: Conflict | ClarificationQuestion; gaps:
 export type IntakeCriterionLink = { criterion: AcceptanceCriterion; requirements: RequirementClause[] };
 export type IntakeTrace = { criterion_id: string; requirement_ids: string[]; claim_ids: string[] };
 
+export type IntakeSupportVerdict = "supports" | "contradicts" | "neither";
+export type IntakeSupportJudgment = {
+	claim_id: string;
+	artifact_id: string;
+	model_id: string;
+	start_byte: number;
+	end_byte: number;
+	caller_relation: IntakeSupportVerdict;
+	verdict: IntakeSupportVerdict;
+	passage_sha256: string;
+	claim_text_sha256: string;
+	disagreement: boolean;
+};
+
 export type IntakeRecordView = {
 	workspace_id: UUID;
 	mission_id: UUID;
@@ -192,6 +206,7 @@ export type IntakeRecordView = {
 	revision: number;
 	snapshot: IntakeSnapshot;
 	evidence_links: IntakeClaimEvidenceLink[];
+	support_judgments?: IntakeSupportJudgment[];
 	criterion_links: IntakeCriterionLink[];
 	decisions: IntakeDecisionRecord[];
 	issues: IntakeIssueRecord[];
