@@ -90,7 +90,12 @@ class ProxyConfig:
         for route in transports.values():
             for name in ("input_usd", "output_usd", "cache_usd"):
                 route[name] = Decimal(str(route[name]))
-        return cls(operations=OperationsConfig(**operations), control_capability=Path(data.pop("control_capability")), transports={k: ModelRoute(**v) for k, v in transports.items()}, **data)
+        config = cls(operations=OperationsConfig(**operations), control_capability=Path(data.pop("control_capability")), transports={k: ModelRoute(**v) for k, v in transports.items()}, **data)
+        if not config.control_capability.is_file() or stat.S_IMODE(config.control_capability.stat().st_mode) != 0o600 or config.control_capability.stat().st_uid != os.getuid():
+            raise ValueError("unsafe_capability_permissions")
+        for route in config.transports.values():
+            config.operations.read_secret(route.key_file)
+        return config
 
 
 @dataclass
