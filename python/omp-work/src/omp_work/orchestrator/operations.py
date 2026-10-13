@@ -24,6 +24,7 @@ from typing import Any
 from urllib.parse import urlsplit
 from uuid import NAMESPACE_URL, UUID, uuid5
 
+import httpx
 from pydantic import ValidationError
 
 import omp_work
@@ -813,16 +814,23 @@ def _run_model_worker(ctx: StageContext, argv: Sequence[str], worktree: Path) ->
         return None
     ceiling = _worker_ceiling(ctx)
     base_url = ctx.config.model_proxy_url.rstrip("/")
-    grant = model_proxy_client.register(
-        ctx.config.automation_capability_path, base_url,
-        {
-            "workspace_id": str(ctx.workspace_id), "project_id": str(ctx.project_id),
-            "mission_id": str(ctx.mission_id), "work_id": str(ctx.work_id),
-            "job_id": str(ctx.lease.job_id), "worker_id": ctx.lease.worker_id,
-            "fence": ctx.lease.fence, "stage": "implement",
-            "expires_at": expires_at.isoformat(), "ceiling_usd": str(ceiling),
-        },
-    )
+    try:
+        grant = model_proxy_client.register(
+            ctx.config.automation_capability_path, base_url,
+            {
+                "workspace_id": str(ctx.workspace_id), "project_id": str(ctx.project_id),
+                "mission_id": str(ctx.mission_id), "work_id": str(ctx.work_id),
+                "job_id": str(ctx.lease.job_id), "worker_id": ctx.lease.worker_id,
+                "fence": ctx.lease.fence, "stage": "implement",
+                "expires_at": expires_at.isoformat(), "ceiling_usd": str(ceiling),
+            },
+        )
+    except httpx.HTTPStatusError as error:
+        if error.response.status_code == 403:
+            raise WorkError("grant_refused") from error
+        raise
+    except httpx.TransportError as error:
+        raise WorkError("proxy_unavailable") from error
     manifest_path = None
     try:
         descriptor = grant["descriptor"]
@@ -883,10 +891,11 @@ def run_implement(ctx: StageContext) -> Outcome:
         "identity": "worker",
         "repair_round": ctx.repair_round,
     }
+    model_worker = Path(argv[0]).name == "orchestrator-worker"
     try:
         code = (
             _run_model_worker(ctx, argv, worktree)
-            if Path(argv[0]).name == "orchestrator-worker"
+            if model_worker
             else _sandbox(ctx, argv, worktree)
         )
     except WorkError as err:
@@ -901,6 +910,23 @@ def run_implement(ctx: StageContext) -> Outcome:
         return Outcome(outcome="crashed", data=data)
     if code != 0:
         return Outcome(outcome="crashed", data=data)
+    if model_worker:
+        try:
+            violations = candidate_git.check_envelope(
+                worktree,
+                str(request["base_commit"]),
+                _argv(request, "allowed_paths"),
+                repository=ctx.config.control_repo,
+                live_checkout=ctx.config.live_checkout,
+            )
+        except candidate_git.CandidateGitError as err:
+            data["code"] = err.code
+            data["codes"] = list(err.violations)
+            return Outcome(outcome="failed", data=data)
+        if violations:
+            data["code"] = "envelope_violation"
+            data["codes"] = violations
+            return Outcome(outcome="failed", data=data)
     scope_path = worktree / ".omp" / "new-scope.json"
     new_scope = scope_path.is_file()
     if new_scope:

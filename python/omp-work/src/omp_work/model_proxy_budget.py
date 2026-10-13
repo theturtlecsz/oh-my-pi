@@ -9,9 +9,9 @@ stop state and the job/work/root identity are read again after every lock using
 a fresh ``clock_timestamp()``, never the transaction ``now()``. A refusal writes
 nothing and happens before any upstream send.
 
-Every instance in the process shares one serialization gate (a module-level
-lock) so two in-process admissions cannot interleave their lock acquisition and
-accounting. Each acquisition installs one lifecycle owner token. The token is
+Every instance in the process shares workspace serialization gates, so two
+same-workspace admissions cannot interleave their lock acquisition and
+accounting while independent workspaces can use provider capacity. Each acquisition installs one lifecycle owner token. The token is
 the only owner of that hold: transaction cleanup, gate release, and the
 accounting settled flag are separate, and ``Lock.locked()`` is not an ownership
 test. Owner transitions are serialized. Cleanup of the cursor and connection
@@ -75,21 +75,22 @@ __all__ = [
     "lock_captured_identity",
 ]
 
-# One gate for every ModelProxyBudget in the process. Held from the first
-# database lock through transaction cleanup so an in-process admission cannot
-# be interleaved. The owner token, not Lock.locked(), is the hold. Reentrancy
+# One gate per workspace across every ModelProxyBudget in the process. Held
+# from the first database lock through transaction cleanup so same-workspace
+# admissions cannot interleave; independent workspaces can use provider capacity.
+# The owner token, not Lock.locked(), is the hold. Reentrancy
 # is deliberately absent: an admission nested inside another admission would
 # deadlock against its own held budget locks anyway.
 class _ProcessGate:
     transition = threading.Condition()
-    owner: object | None = None
+    owners: dict[str, object] = {}
     # Call identity -> replay admission whose commit failed before admit returned.
     retained_replay: dict[str, ModelCallAdmission] = {}
     # Terminal process latch; retains identity, authority and USD/token bounds.
     unconfirmed: ModelCallAdmission | None = None
 
 
-def _acquire_process_gate(token: object, identity: str) -> ModelCallAdmission | None:
+def _acquire_process_gate(token: object, identity: str, workspace_id: str) -> ModelCallAdmission | None:
     """Wait for either ownership or a retained replay of this identity.
 
     Publication and acquisition share one condition: a caller already waiting
@@ -102,8 +103,8 @@ def _acquire_process_gate(token: object, identity: str) -> ModelCallAdmission | 
             retained = _ProcessGate.retained_replay.get(identity)
             if retained is not None:
                 return retained
-            if _ProcessGate.owner is None:
-                _ProcessGate.owner = token
+            if workspace_id not in _ProcessGate.owners:
+                _ProcessGate.owners[workspace_id] = token
                 return None
             _ProcessGate.transition.wait()
 
@@ -111,9 +112,12 @@ def _acquire_process_gate(token: object, identity: str) -> ModelCallAdmission | 
 def _release_process_gate(token: object) -> None:
     """Release the gate only when ``token`` still owns it. A stale token no-ops."""
     with _ProcessGate.transition:
-        if _ProcessGate.owner is not token:
+        workspace_id = next(
+            (key for key, owner in _ProcessGate.owners.items() if owner is token), None
+        )
+        if workspace_id is None:
             return
-        _ProcessGate.owner = None
+        del _ProcessGate.owners[workspace_id]
         _ProcessGate.transition.notify_all()
 
 
@@ -156,9 +160,9 @@ class _LifecycleOwner:
         self._released = False
 
     @classmethod
-    def acquire(cls, identity: str) -> _LifecycleOwner | ModelCallAdmission:
+    def acquire(cls, identity: str, workspace_id: str) -> _LifecycleOwner | ModelCallAdmission:
         token = object()
-        retained = _acquire_process_gate(token, identity)
+        retained = _acquire_process_gate(token, identity, workspace_id)
         if retained is not None:
             return retained
         return cls(token, _OneShotExitStack())
@@ -407,7 +411,7 @@ class ModelProxyBudget:
         receipt_request = {"workspace_id": str(workspace_uuid), "fingerprint": fingerprint}
 
         # Acquisition also wakes for retained-owner publication while waiting.
-        owner = _LifecycleOwner.acquire(identity)
+        owner = _LifecycleOwner.acquire(identity, str(workspace_uuid))
         if isinstance(owner, ModelCallAdmission):
             return owner._resolve_retained_replay(receipt_request)
         retained = False
@@ -1231,7 +1235,7 @@ def _keep_replay_owner(
         if (
             current is not None
             and current is not admission
-            and _ProcessGate.owner is current._owner.token
+            and _ProcessGate.owners.get(str(current.workspace_id)) is current._owner.token
         ):
             return False
         _ProcessGate.retained_replay[identity] = admission
