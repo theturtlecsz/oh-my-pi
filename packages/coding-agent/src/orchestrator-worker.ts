@@ -42,6 +42,7 @@ interface WorkerManifest {
 	candidate_id: string;
 	lease_expires_at: string;
 	task_deadline?: string;
+	context?: string;
 	model: {
 		api: GrantedApi;
 		id: string;
@@ -135,6 +136,10 @@ function loadManifest(): { ok: true; loaded: LoadedManifest } | { ok: false; mes
 	if (!nonEmptyString(deadlineValue)) return invalid(`${deadlineField} must be a timestamp`);
 	const deadline = Date.parse(deadlineValue);
 	if (Number.isNaN(deadline)) return invalid(`${deadlineField} is not a timestamp`);
+	const rawContext = parsed.context;
+	if (rawContext !== undefined && !nonEmptyString(rawContext)) {
+		return invalid("context must be a non-empty string");
+	}
 	if (!isRecord(parsed.model)) return invalid("model must be an object");
 	const model = parsed.model;
 	const api = model.api;
@@ -165,6 +170,7 @@ function loadManifest(): { ok: true; loaded: LoadedManifest } | { ok: false; mes
 		candidate_id: candidateId,
 		lease_expires_at: leaseExpiresAt,
 		...(deadlineField === "task_deadline" ? { task_deadline: deadlineValue } : {}),
+		...(rawContext !== undefined ? { context: rawContext } : {}),
 		model: {
 			api,
 			id: model.id,
@@ -300,6 +306,7 @@ export async function runOrchestratorWorker(): Promise<number> {
 				systemPrompt: [
 					prompt.render(workerPrompt, {
 						candidateId: manifest.candidate_id,
+						context: manifest.context,
 						approach: manifest.approach,
 						allowedPaths: manifest.allowed_paths,
 					}),
