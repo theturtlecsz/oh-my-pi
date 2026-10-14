@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import pytest
+from omp_work.v1.canonical import canonical_json
 from omp_work.v1.models import EvidenceKind, EvidenceReceipt
+from support.bound_evidence import ReceiptRecords, assert_work_record_bound, bound_claim, bound_receipt
 from support.stub_events import FakeEvents, make_event
 from support.stub_generator import StubGenerator
 
@@ -66,6 +69,17 @@ def make_lesson(title: str, receipt_id: UUID) -> Lesson:
     )
 
 
+CLAIM_TEXT = "lease outlived the crash"
+
+
+def make_bound_lesson(title: str, receipt: EvidenceReceipt) -> Lesson:
+    return Lesson(
+        title=title,
+        steps=("stop the worker", "clear the lease"),
+        claims=(bound_claim(CLAIM_TEXT, receipt),),
+    )
+
+
 def make_result(
     *lessons: Lesson, model: str = "qwen-2.5", profile: str = "local-qwen"
 ) -> GenerationResult:
@@ -104,16 +118,22 @@ def test_drain_queues_one_unit_per_matching_event_with_full_attribution() -> Non
     """One unit per matching event, one proposal per lesson, run succeeded;
     every unit and proposal row carries model, profile, and source."""
     store = LearningStore(":memory:")
-    receipt = make_receipt()
+    receipt = bound_receipt(CLAIM_TEXT)
+    records = ReceiptRecords(receipt)
     reader = DictReceiptReader({receipt.receipt_id: receipt})
-    matching = make_event(sequence=1, event_type="complete_work")
+    matching = make_event(
+        sequence=1, event_type="complete_work", aggregate_id=receipt.work_id
+    )
     other = make_event(sequence=2, event_type="append_evidence")
     events = FakeEvents([matching, other])
+    lessons = (
+        make_bound_lesson("Lesson A", receipt),
+        make_bound_lesson("Lesson B", receipt),
+    )
     generator = StubGenerator(
         [
             make_result(
-                make_lesson("Lesson A", receipt.receipt_id),
-                make_lesson("Lesson B", receipt.receipt_id),
+                *lessons,
                 model="qwen-3.8",
                 profile="rtx-local",
             )
@@ -122,7 +142,15 @@ def test_drain_queues_one_unit_per_matching_event_with_full_attribution() -> Non
         profile="rtx-local",
     )
 
-    run = drain(store, events, reader, generator, workspace_id=WORKSPACE)
+    run = drain(
+        store, events, reader, generator, workspace_id=WORKSPACE, records=records
+    )
+    for lesson in lessons:
+        claim = lesson.claims[0]
+        assert claim.source_span is not None
+        span = claim.source_span
+        assert canonical_json(receipt.payload)[span.start : span.end] == claim.text
+        assert (claim.evaluator, claim.outcome) == (receipt.issuer, "PASS")
 
     assert run.status == "succeeded"
     assert run.units_total == 1
@@ -150,6 +178,8 @@ def test_drain_queues_one_unit_per_matching_event_with_full_attribution() -> Non
     assert trace["actor_id"] == str(matching.actor_id)
     assert trace["actor_kind"] == matching.actor_kind
     assert trace["payload"] == matching.payload
+    assert_work_record_bound(trace, receipt)
+    assert records.calls == ["work_items", "workflow"]
 
     proposals = store.execute("SELECT * FROM proposals ORDER BY created_at").fetchall()
     assert len(proposals) == 2
@@ -362,26 +392,34 @@ def test_retry_after_recovery_creates_proposals() -> None:
     """Failed retryable units requeue and, once the generator recovers, produce
     attributed proposals."""
     store = LearningStore(":memory:")
-    receipt = make_receipt()
+    receipt = bound_receipt(CLAIM_TEXT)
+    records = ReceiptRecords(receipt)
     reader = DictReceiptReader({receipt.receipt_id: receipt})
-    event = make_event(sequence=1)
+    event = make_event(sequence=1, aggregate_id=receipt.work_id)
     failing = StubGenerator([GeneratorUnavailable("down")], model="m", profile="p")
 
     failed_run = drain(
-        store, FakeEvents([event]), reader, failing, workspace_id=WORKSPACE
+        store,
+        FakeEvents([event]),
+        reader,
+        failing,
+        workspace_id=WORKSPACE,
+        records=records,
     )
     assert failed_run.status == "failed"
 
     recovered = StubGenerator(
         [
             make_result(
-                make_lesson("Recovered", receipt.receipt_id), model="m2", profile="p2"
+                make_bound_lesson("Recovered", receipt), model="m2", profile="p2"
             )
         ],
         model="m2",
         profile="p2",
     )
+    calls_after_drain = list(records.calls)
     retried = retry(store, reader, recovered)
+    assert records.calls == calls_after_drain
 
     assert retried.status == "succeeded"
     assert retried.proposals_accepted == 1
@@ -394,6 +432,7 @@ def test_retry_after_recovery_creates_proposals() -> None:
     assert proposal["source_json"]
 
     unit_row = store.execute("SELECT * FROM units").fetchone()
+    assert_work_record_bound(json.loads(unit_row["trace_json"]), receipt)
     assert unit_row["state"] == "succeeded"
     assert unit_row["model"] == "m2"
     assert unit_row["profile"] == "p2"
