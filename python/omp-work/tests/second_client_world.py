@@ -14,7 +14,6 @@ import contextlib
 import hashlib
 import json
 import secrets
-import socket
 import subprocess
 import sys
 import threading
@@ -27,6 +26,7 @@ from uuid import UUID, uuid4
 import psycopg
 import pytest
 import uvicorn
+from installed_runtime_support import ReservedPort
 
 from omp_work import contract_sha256
 from omp_work.operations.capabilities import (
@@ -288,7 +288,7 @@ class World:
         )
 
 
-def _config(root: Path) -> OperationsConfig:
+def _config(root: Path, port: int) -> OperationsConfig:
     config_dir = root / "xdg" / "omp" / "work-ledger"
     credentials = config_dir / "credentials"
     credentials.mkdir(parents=True, mode=0o700, exist_ok=True)
@@ -309,14 +309,8 @@ def _config(root: Path) -> OperationsConfig:
         config_dir=config_dir,
         state_dir=root / "state",
         data_dir=root / "data",
-        port=_free_port(),
+        port=port,
     )
-
-
-def _free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
 
 
 def _seed_project(
@@ -419,12 +413,19 @@ def _serve(app: object) -> tuple[uvicorn.Server, threading.Thread]:
         uvicorn.Config(
             app,
             host="127.0.0.1",
-            port=_free_port(),
+            port=0,
             log_level="warning",
             access_log=False,
         )
     )
-    thread = threading.Thread(target=server.run, name="omp-work-world", daemon=True)
+    listener = server.config.bind_socket()
+    server.config.port = int(listener.getsockname()[1])
+    thread = threading.Thread(
+        target=server.run,
+        kwargs={"sockets": [listener]},
+        name="omp-work-world",
+        daemon=True,
+    )
     thread.start()
     deadline = time.monotonic() + 30
     while not server.started:
@@ -440,8 +441,10 @@ def world(
 ) -> Generator[World]:
     """Boot a disposable work-ledger world under ``root`` and serve it over HTTP."""
     root = Path(root)
-    config = _config(root)
-    with native_postgres(root, config.port):
+    with contextlib.ExitStack() as stack:
+        reservation = stack.enter_context(ReservedPort())
+        config = _config(root, reservation.port)
+        stack.enter_context(native_postgres(root, config.port, reserve=reservation))
         monkeypatch = pytest.MonkeyPatch()
         monkeypatch.setattr(
             "omp_work.operations.database.validate_bundle", lambda **kwargs: None

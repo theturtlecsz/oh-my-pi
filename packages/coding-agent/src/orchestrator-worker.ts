@@ -300,17 +300,27 @@ export async function runOrchestratorWorker(): Promise<number> {
 				fetch: fetchOverride,
 				fallbacks: undefined,
 			});
+		const systemPrompt = prompt.render(workerPrompt, {
+			candidateId: manifest.candidate_id,
+			context: manifest.context,
+			approach: manifest.approach,
+			allowedPaths: manifest.allowed_paths,
+		});
+		if (manifest.context !== undefined) {
+			writeLine({
+				type: "context-delivery",
+				compiled_context_hash: new Bun.CryptoHasher("sha256")
+					.update(JSON.stringify(manifest.context))
+					.digest("hex"),
+				prompt_hash: new Bun.CryptoHasher("sha256")
+					.update(JSON.stringify([systemPrompt, manifest.instruction]))
+					.digest("hex"),
+			});
+		}
 		agent = new Agent({
 			initialState: {
 				model: grantedModel(manifest, proxyUrl),
-				systemPrompt: [
-					prompt.render(workerPrompt, {
-						candidateId: manifest.candidate_id,
-						context: manifest.context,
-						approach: manifest.approach,
-						allowedPaths: manifest.allowed_paths,
-					}),
-				],
+				systemPrompt: [systemPrompt],
 				tools: scoped.tools,
 				disableReasoning: true,
 			},

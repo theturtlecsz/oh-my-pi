@@ -13,7 +13,9 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
+from omp_work.v1.canonical import canonical_json
 from omp_work.v1.models import EvidenceKind, EvidenceReceipt
+from support.bound_evidence import bound_claim, bound_receipt
 
 from omp_knowledge.inspection import (
     InspectionReport,
@@ -85,6 +87,10 @@ def make_attribution(
     model: str = "qwen-2.5",
     profile: str = "local-qwen",
     workspace_id: str | None = None,
+    *,
+    work_id: UUID | None = None,
+    candidate_id: UUID | None = None,
+    revision_id: UUID | None = None,
 ) -> Attribution:
     ws = workspace_id or str(uuid4())
     return Attribution(
@@ -95,6 +101,9 @@ def make_attribution(
             event_id=str(uuid4()),
             event_sequence=1,
             aggregate_id=str(uuid4()),
+            work_id=str(work_id) if work_id is not None else None,
+            candidate_id=str(candidate_id) if candidate_id is not None else None,
+            revision_id=str(revision_id) if revision_id is not None else None,
         ),
     )
 
@@ -151,7 +160,7 @@ def test_populated_learning_store_inspection(tmp_path: Path, capsys: pytest.Capt
     store = LearningStore(str(db_file))
     ws_id = str(uuid4())
 
-    supp_receipt = make_receipt(kind=EvidenceKind.VERIFICATION, verdict="PASS")
+    supp_receipt = bound_receipt("Accepted claim")
     verif_receipt = make_receipt(kind=EvidenceKind.VERIFICATION, verdict="PASS")
     counter_receipt = make_receipt(kind=EvidenceKind.VERIFICATION, verdict="NEEDS_FIX")
     reader = DictReceiptReader(
@@ -162,19 +171,19 @@ def test_populated_learning_store_inspection(tmp_path: Path, capsys: pytest.Capt
         }
     )
 
-    attr = make_attribution(workspace_id=ws_id)
+    attr = make_attribution(
+        workspace_id=ws_id,
+        work_id=supp_receipt.work_id,
+        candidate_id=supp_receipt.candidate_id,
+        revision_id=supp_receipt.revision_id,
+    )
 
     # 1. Accept proposal with title containing script (also checks XSS escaping later)
     lesson_accepted = Lesson(
         title="Safe Procedure <script>alert(1)</script>",
         steps=("step 1", "step 2"),
         preconditions=(Precondition(key="repository", op="eq", value="ssh://git@github.com/theturtlecsz/oh-my-pi"),),
-        claims=(
-            Claim(
-                text="Accepted claim",
-                receipt_ids=(supp_receipt.receipt_id,),
-            ),
-        ),
+        claims=(bound_claim("Accepted claim", supp_receipt),),
     )
     rec_accepted = create_proposal(
         store,
@@ -186,6 +195,26 @@ def test_populated_learning_store_inspection(tmp_path: Path, capsys: pytest.Capt
     assert rec_accepted.status == "accepted"
     proc_id = rec_accepted.procedure_id
     assert proc_id is not None
+
+    # The accepted proposal's source binds the supporting receipt's ids.
+    accepted_source = rec_accepted.source
+    assert accepted_source.work_id == str(supp_receipt.work_id)
+    assert accepted_source.candidate_id == str(supp_receipt.candidate_id)
+    assert accepted_source.revision_id == str(supp_receipt.revision_id)
+
+    # The accepted claim resolves through its reader and reconstructs its text from the payload.
+    accepted_claim = rec_accepted.lesson.claims[0]
+    assert accepted_claim.source_span is not None
+    resolved_supp = reader.receipt(accepted_claim.receipt_ids[0])
+    assert resolved_supp is supp_receipt
+    assert (
+        canonical_json(resolved_supp.payload)[
+            accepted_claim.source_span.start : accepted_claim.source_span.end
+        ]
+        == accepted_claim.text
+    )
+    assert accepted_claim.evaluator == resolved_supp.issuer
+    assert accepted_claim.outcome == "PASS"
 
     # 2. Reject proposal with invalid citation
     unknown_id = str(uuid4())
@@ -377,23 +406,44 @@ def test_web_server_ephemeral_port_and_endpoints(tmp_path: Path, capsys: pytest.
 
     store = LearningStore(str(db_file))
     ws_id = str(uuid4())
-    supp_receipt = make_receipt(kind=EvidenceKind.VERIFICATION, verdict="PASS")
+    supp_receipt = bound_receipt("Claim text")
     reader = DictReceiptReader({supp_receipt.receipt_id: supp_receipt})
-    attr = make_attribution(workspace_id=ws_id)
+    attr = make_attribution(
+        workspace_id=ws_id,
+        work_id=supp_receipt.work_id,
+        candidate_id=supp_receipt.candidate_id,
+        revision_id=supp_receipt.revision_id,
+    )
 
     # Title containing <script> to verify HTML escaping
     lesson = Lesson(
         title="Exploit <script>alert('pwn')</script>",
         steps=("step a", "step b"),
-        claims=(Claim(text="Claim text", receipt_ids=(supp_receipt.receipt_id,)),),
+        claims=(bound_claim("Claim text", supp_receipt),),
     )
-    create_proposal(
+    rec = create_proposal(
         store,
         unit_id=uuid4(),
         lesson=lesson,
         attribution=attr,
         reader=reader,
     )
+    assert rec.status == "accepted"
+
+    # The acceptance binds the supporting receipt's ids and reconstructs the claim text.
+    assert rec.source.work_id == str(supp_receipt.work_id)
+    assert rec.source.candidate_id == str(supp_receipt.candidate_id)
+    assert rec.source.revision_id == str(supp_receipt.revision_id)
+    claim = rec.lesson.claims[0]
+    assert claim.source_span is not None
+    resolved = reader.receipt(claim.receipt_ids[0])
+    assert resolved is supp_receipt
+    assert (
+        canonical_json(resolved.payload)[claim.source_span.start : claim.source_span.end]
+        == claim.text
+    )
+    assert claim.evaluator == resolved.issuer
+    assert claim.outcome == "PASS"
 
     # Obtain CLI JSON for procedures
     cli_main(["show", "--state-root", str(state_root), "--section", "procedures", "--json"])
@@ -475,21 +525,41 @@ def test_report_rebuilt_per_request(tmp_path: Path, live_loopback: None) -> None
         # Now create learning store and populate one procedure
         db_file = state_root / "learning.sqlite"
         store = LearningStore(str(db_file))
-        supp_receipt = make_receipt()
+        supp_receipt = bound_receipt("Dynamically added")
         reader = DictReceiptReader({supp_receipt.receipt_id: supp_receipt})
-        attr = make_attribution()
+        attr = make_attribution(
+            work_id=supp_receipt.work_id,
+            candidate_id=supp_receipt.candidate_id,
+            revision_id=supp_receipt.revision_id,
+        )
         lesson = Lesson(
             title="Dynamically Added Procedure",
             steps=("step 1",),
-            claims=(Claim(text="Dynamically added", receipt_ids=(supp_receipt.receipt_id,)),),
+            claims=(bound_claim("Dynamically added", supp_receipt),),
         )
-        create_proposal(
+        rec = create_proposal(
             store,
             unit_id=uuid4(),
             lesson=lesson,
             attribution=attr,
             reader=reader,
         )
+        assert rec.status == "accepted"
+
+        # The acceptance binds the supporting receipt's ids and reconstructs the claim text.
+        assert rec.source.work_id == str(supp_receipt.work_id)
+        assert rec.source.candidate_id == str(supp_receipt.candidate_id)
+        assert rec.source.revision_id == str(supp_receipt.revision_id)
+        claim = rec.lesson.claims[0]
+        assert claim.source_span is not None
+        resolved = reader.receipt(claim.receipt_ids[0])
+        assert resolved is supp_receipt
+        assert (
+            canonical_json(resolved.payload)[claim.source_span.start : claim.source_span.end]
+            == claim.text
+        )
+        assert claim.evaluator == resolved.issuer
+        assert claim.outcome == "PASS"
 
         # Subsequent request immediately reflects the new procedure
         with urllib.request.urlopen(f"{base_url}/api/procedures") as resp:

@@ -1,0 +1,83 @@
+{
+  "mission_id": "00000000-0000-0000-0000-000000000000",
+  "project_id": "00000000-0000-0000-0000-000000000000",
+  "unattended": false,
+  "intake": {
+    "archetype": "small_code_change",
+    "source": {
+      "text": "Write NOTES-OMP-615.md = proxy settlement drill\\n",
+      "sha256": "7c4a033cd7ffbd9d606f036fcc7ba71bd878b0f78a06be8e70e926b3daa9b14e",
+      "spans": []
+    },
+    "goal": {
+      "id": "goal-1",
+      "statement": "Write NOTES-OMP-615.md = proxy settlement drill\\n",
+      "source_span_ids": []
+    },
+    "acceptance_criteria": [
+      {
+        "id": "ac-1",
+        "statement": "Write NOTES-OMP-615.md = proxy settlement drill\\n",
+        "source_span_ids": [],
+        "observable_outcome": "Write NOTES-OMP-615.md = proxy settlement drill\\n",
+        "oracle": "automated_test"
+      }
+    ],
+    "budget": {
+      "usd": "5",
+      "tokens": 2000000,
+      "wall_clock_seconds": 1800,
+      "max_subagents": 0
+    }
+  },
+  "scope": {
+    "project_id": "00000000-0000-0000-0000-000000000000",
+    "repositories": ["repository"],
+    "requested_capabilities": ["git_read", "git_write"],
+    "risk_policy": "standard",
+    "approval_policy": "standard",
+    "effort_policy": "standard",
+    "budget_policy": {
+      "usd": "5",
+      "tokens": 2000000,
+      "wall_clock_seconds": 1800,
+      "max_subagents": 0
+    },
+    "kind": "engineering.execute"
+  },
+  "instruction": {
+    "text": "Write NOTES-OMP-615.md = proxy settlement drill\\n",
+    "provenance": {
+      "channel": "cli",
+      "message_ref": "omp-615-model-proxy-drill",
+      "received_at": "2026-10-14T00:00:00+00:00"
+    }
+  },
+  "work": {
+    "client_ref": "pending",
+    "title": "Proxy settlement drill",
+    "project_id": "00000000-0000-0000-0000-000000000000",
+    "description": "Write NOTES-OMP-615.md = proxy settlement drill\\n",
+    "acceptance_criteria": [
+      "Write NOTES-OMP-615.md = proxy settlement drill\\n"
+    ]
+  },
+  "repository": "repository",
+  "remote": "repository",
+  "candidate_ref": "refs/heads/omp/00000000-0000-0000-0000-000000000000",
+  "target_ref": "repository",
+  "base_commit": "repository",
+  "allowed_paths": ["NOTES-OMP-615.md"],
+  "test_command": [
+    "/usr/bin/python3",
+    "-c",
+    "import pathlib, sys\npath = pathlib.Path('NOTES-OMP-615.md')\ndata = path.read_bytes() if path.is_file() else b''\nsys.exit(0 if data == b'proxy settlement drill\\n' else 1)\n"
+  ],
+  "worker_argv": [
+    "/home/thetu/flood-repos/oh-my-pi-deploy/packages/coding-agent/dist/omp",
+    "orchestrator-worker"
+  ],
+  "controls": {
+    "wall_clock_seconds": 1800
+  }
+}

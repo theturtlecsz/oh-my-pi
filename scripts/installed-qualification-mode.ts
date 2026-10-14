@@ -12,6 +12,7 @@ export const SUBSET_TARGETS: readonly string[] = [
 export const FULL_TARGETS: readonly string[] = [
 	"python/omp-work/tests/test_installed_runtime_isolation.py",
 	"python/omp-work/tests/test_installed_execution_recovery.py",
+	"python/omp-work/tests/test_installed_runtime_lifetime.py",
 ];
 
 export const PROTECTED_PATHS: readonly string[] = [

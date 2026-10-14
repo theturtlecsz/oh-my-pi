@@ -77,6 +77,7 @@ __all__ = [
     "StageContext",
     "dry_run",
     "factory",
+    "model_receipts",
     "qualify",
     "register_stage_operation",
     "request_terminal",
@@ -2262,6 +2263,58 @@ def qualify(lock_map: Path, out: Path, *, release: str | None = None) -> dict[st
     return body
 
 
+def model_receipts(config: OrchestratorConfig, job_id: str) -> dict[str, Any]:
+    """Settled model-call receipts of one sealed job; never prompts or tokens.
+
+    Needs the automation principal to hold the workspace and ``work.read``. An
+    unknown job has ``status`` null; a job without a ``settled`` event has its
+    status and no receipts.
+    """
+    _require_jobs(config.ops)
+    principal = _principal(config.automation_capability_path)
+    if config.workspace_id not in principal.workspaces or "work.read" not in principal.scopes:
+        raise OrchestratorError("forbidden")
+    with NativeJobStore(config.ops).transaction(config.workspace_id, principal.actor_id) as cur:
+        cur.execute(
+            "SELECT status FROM omp_jobs.jobs WHERE workspace_id=%s AND job_id=%s",
+            (config.workspace_id, job_id),
+        )
+        row = cur.fetchone()
+        status_value = None if row is None else row["status"]
+        settled = 0
+        receipts: list[dict[str, Any]] = []
+        if row is not None:
+            cur.execute(
+                "SELECT count(*) AS cnt FROM omp_jobs.job_events WHERE job_id=%s AND kind='settled'",
+                (job_id,),
+            )
+            settled = int(cur.fetchone()["cnt"])
+        if status_value == "sealed" and settled:
+            cur.execute(
+                """
+                SELECT operation_id,
+                       result->'fingerprint'->>'job_id' AS job_id,
+                       result->'fingerprint'->>'mission_id' AS mission_id,
+                       result->'settlement'->>'model' AS model,
+                       result->'settlement' AS settlement
+                FROM omp_jobs.operations
+                WHERE workspace_id=%s AND kind='model_call_receipt'
+                  AND result->'fingerprint'->>'job_id'=%s
+                  AND result->'settlement' IS NOT NULL
+                  AND result->'settlement' <> 'null'::jsonb
+                ORDER BY created_at, operation_id
+                """,
+                (config.workspace_id, job_id),
+            )
+            receipts = [dict(item) for item in cur.fetchall()]
+    return {
+        "job_id": job_id,
+        "status": status_value,
+        "settled_events": settled,
+        "receipts": receipts,
+    }
+
+
 def _ops_from(value: Any) -> OperationsConfig | None:
     if value is None or isinstance(value, OperationsConfig):
         return value
@@ -2309,6 +2362,8 @@ def main(argv: list[str]) -> int:
     terminal_parser.add_argument("--draft", type=Path)
     dry_parser = _with_config(commands.add_parser("dry-run"))
     dry_parser.add_argument("--request", required=True, type=Path)
+    receipts_parser = _with_config(commands.add_parser("model-receipts"))
+    receipts_parser.add_argument("--job", required=True)
     commands.add_parser("verify")
     qualify_parser = commands.add_parser("qualify")
     qualify_parser.add_argument("--lock-map", required=True, type=Path)
@@ -2326,6 +2381,8 @@ def main(argv: list[str]) -> int:
                 body = submit(config, load_request(args.request))
             elif args.orchestrator_command == "status":
                 body = status(config, args.mission)
+            elif args.orchestrator_command == "model-receipts":
+                body = model_receipts(config, args.job)
             elif args.orchestrator_command == "dry-run":
                 body = dry_run(config, load_request(args.request))
             else:

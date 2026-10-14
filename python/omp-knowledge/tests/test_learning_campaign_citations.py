@@ -12,8 +12,10 @@ from omp_knowledge.learning.generation import LocalChatGenerator
 from omp_knowledge.learning.models import Attribution, Lesson, SourceIdentity
 from omp_knowledge.learning.proposals import ProposalRecord, create_proposal
 from omp_knowledge.learning.store import LearningStore
-from omp_work.v1.canonical import sha256
+from omp_work.v1.canonical import canonical_json, sha256
 from omp_work.v1.models import EvidenceKind, EvidenceReceipt
+
+from support.bound_evidence import bound_claim
 
 CAMPAIGN_ID = str(UUID(int=588))
 
@@ -30,7 +32,7 @@ class ReceiptReader:
 
 @pytest.fixture
 def receipt() -> EvidenceReceipt:
-    payload = {"exit_code": 0}
+    payload = {"exit_code": 0, "summary": "Candidate verification passed"}
     return EvidenceReceipt(
         receipt_id=uuid4(),
         work_id=uuid4(),
@@ -47,12 +49,14 @@ def receipt() -> EvidenceReceipt:
 
 
 @pytest.fixture
-def attribution() -> Attribution:
+def attribution(receipt: EvidenceReceipt) -> Attribution:
     return Attribution(
         model="local-model",
         profile="local",
         source=SourceIdentity(
             workspace_id=uuid4(), event_id=uuid4(), event_sequence=1, aggregate_id=uuid4(),
+            work_id=str(receipt.work_id), candidate_id=str(receipt.candidate_id),
+            revision_id=str(receipt.revision_id),
         ),
     )
 
@@ -61,7 +65,7 @@ def lesson_payload(receipt: EvidenceReceipt) -> dict[str, object]:
     return {
         "title": "Verify the selected deliverable",
         "steps": ["Run verification on the selected candidate"],
-        "claims": [{"text": "Candidate verification passed", "receipt_ids": [str(receipt.receipt_id)]}],
+        "claims": [bound_claim("Candidate verification passed", receipt).model_dump(mode="json")],
     }
 
 
@@ -97,6 +101,9 @@ def test_generated_campaign_citation_survives_accepted_proposal_reopen(
     """Chat citations survive proposal JSON persistence without becoming receipt support."""
     lesson = generate(lesson_payload(receipt) | {"research_campaign_ids": [CAMPAIGN_ID]}, receipt)
     assert lesson.research_campaign_ids == (CAMPAIGN_ID,)
+    assert attribution.source.work_id == str(receipt.work_id)
+    assert attribution.source.candidate_id == str(receipt.candidate_id)
+    assert attribution.source.revision_id == str(receipt.revision_id)
     db_path = tmp_path / "learning.sqlite"
     with LearningStore(db_path) as store:
         record = create_proposal(
@@ -121,7 +128,23 @@ def test_generated_campaign_citation_survives_accepted_proposal_reopen(
         restored = ProposalRecord.model_validate(dict(row))
         assert restored.status == "accepted"
         assert restored.lesson == lesson
+        assert restored.source.work_id == str(receipt.work_id)
+        assert restored.source.candidate_id == str(receipt.candidate_id)
+        assert restored.source.revision_id == str(receipt.revision_id)
+        assert restored.lesson.research_campaign_ids == (CAMPAIGN_ID,)
         assert restored.lesson.claims[0].receipt_ids == (str(receipt.receipt_id),)
+        for evidenced_lesson in (lesson, restored.lesson):
+            for claim in evidenced_lesson.claims:
+                assert claim.receipt_ids == (str(receipt.receipt_id),)
+                for receipt_id in claim.receipt_ids:
+                    resolved = ReceiptReader(receipt).receipt(receipt_id)
+                    assert resolved == receipt
+                    assert claim.source_span is not None
+                    assert canonical_json(resolved.payload)[
+                        claim.source_span.start:claim.source_span.end
+                    ] == claim.text
+                    assert claim.evaluator == resolved.issuer
+                    assert claim.outcome == resolved.verdict == "PASS"
         support = store.execute("SELECT receipt_id FROM procedure_support").fetchall()
         assert [row["receipt_id"] for row in support] == [str(receipt.receipt_id)]
 
@@ -133,6 +156,9 @@ def test_legacy_payload_has_no_inferred_campaign_citation(
     payload = lesson_payload(receipt)
     lesson = generate(payload, receipt)
     assert lesson.research_campaign_ids == ()
+    assert attribution.source.work_id == str(receipt.work_id)
+    assert attribution.source.candidate_id == str(receipt.candidate_id)
+    assert attribution.source.revision_id == str(receipt.revision_id)
     db_path = tmp_path / "learning.sqlite"
     with LearningStore(db_path) as store:
         record = create_proposal(
@@ -150,8 +176,23 @@ def test_legacy_payload_has_no_inferred_campaign_citation(
             "SELECT * FROM proposals WHERE proposal_id = ?", (record.proposal_id,),
         ).fetchone()
         restored = ProposalRecord.model_validate(dict(row))
+        assert restored.source.work_id == str(receipt.work_id)
+        assert restored.source.candidate_id == str(receipt.candidate_id)
+        assert restored.source.revision_id == str(receipt.revision_id)
         assert restored.lesson.research_campaign_ids == ()
         assert restored.lesson.claims[0].receipt_ids == (str(receipt.receipt_id),)
+        for evidenced_lesson in (lesson, restored.lesson):
+            for claim in evidenced_lesson.claims:
+                assert claim.receipt_ids == (str(receipt.receipt_id),)
+                for receipt_id in claim.receipt_ids:
+                    resolved = ReceiptReader(receipt).receipt(receipt_id)
+                    assert resolved == receipt
+                    assert claim.source_span is not None
+                    assert canonical_json(resolved.payload)[
+                        claim.source_span.start:claim.source_span.end
+                    ] == claim.text
+                    assert claim.evaluator == resolved.issuer
+                    assert claim.outcome == resolved.verdict == "PASS"
 
 
 @pytest.mark.parametrize(

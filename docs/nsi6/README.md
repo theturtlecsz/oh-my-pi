@@ -143,6 +143,59 @@ Bounded current findings use existing evaluator on independent issue units to
 recover findings beyond public two-question cap; typed raw results preserve all
 gaps. This is deterministic labeled replay, not a new model comparison.
 
+## Resealing after a pinned-source change
+
+`shadow.json` pins the bytes of the code and schemas that produced it
+(`nsi_eval.report_pins()`). Changing any pinned source makes the stored report
+fail qualification until its pins are resealed. A reseal is needed after a change to:
+
+- Helper modules (`v1/intake_provenance.helper_sources`): `compat`, `validate`,
+  `authority`, `nsi`, `semantics`, `models`, `api_models`, `intake_provenance`,
+  `intake_provenance_closure`, `intake_decisions`.
+- Referenced NSI schemas (`v1/intake_provenance.referenced_schemas`): the
+  `contracts/nsi/v1` contract/status schema closure.
+- Listed implementation modules and tests (`nsi_eval_postgres.implementation_hashes`,
+  plus `nsi_eval` and `nsi6_corpus`): `nsi_eval_postgres`, `frozen_corpus`,
+  `intake_repository`, `operations/database`, `v1/canonical`, `v1/store_shared`,
+  `pg_native`, `installed_runtime_support`, `test_nsi2_provenance_closure`,
+  `test_nsi2_repository`, `test_workflow_service`, `test_project_store` and
+  `pg_supervisor.py`.
+- Route sources (`nsi_route.implementation_binding`): `v1/*.py`,
+  `contracts/nsi/v1` (`*.py`, `*.json`), `nsi_route`, `nsi_rollout`, `nsi_eval`,
+  `nsi_eval_postgres`, `nsi6_corpus`, `frozen_corpus`, `intake_repository`,
+  `operations/config`, `operations/database`, `mission_intake_rules`,
+  `packages/work-client/src/intake*.ts` and `index.ts`, and workflow
+  `work.ts`, `host.ts` and `backend.ts`.
+
+Qualification then fails with the drift error, listing the differing dotted pin paths:
+
+```text
+implementation/schema drift: <differing pin paths>; for an intended source change docs/nsi6 is resealed with exactly: uv run --project python/omp-work --extra dev python -m omp_work.nsi6_reseal --origin "$(git rev-parse HEAD)"
+```
+
+Reseal with:
+
+```sh
+uv run --project python/omp-work --extra dev python -m omp_work.nsi6_reseal --origin "$(git rev-parse HEAD)"
+```
+
+It rewrites `pins` and `report_sha256` in `shadow.json` and refreezes
+`evidence-manifest.json`. PostgreSQL is not rerun. Reseal replays the stored
+report first and writes nothing when replayed observations, metrics or totals
+differ from it. An intended change of results needs full regeneration under
+Reproduction, not a reseal.
+
+Reviewer check. Set `BASE` to the base commit (or `main`); this prints nothing
+when `shadow.json` changed only in `pins` and `report_sha256`:
+
+```sh
+BASE=main uv run --project python/omp-work python -c 'import json,os,subprocess as s;a=json.loads(s.check_output(["git","show",os.environ["BASE"]+":docs/nsi6/shadow.json"]));b=json.load(open("docs/nsi6/shadow.json"));d=lambda r:{k:v for k,v in r.items() if k not in("pins","report_sha256")};a,b=d(a),d(b);[print(k) for k in sorted(a.keys()|b.keys()) if a.get(k)!=b.get(k)]'
+```
+
+`evidence-manifest.json` may change only the `shadow` sha256, `tree_sha256`,
+`manifest_sha256` and `origin_commit`. `git diff --stat` besides the source change
+must list only `shadow.json` and `evidence-manifest.json`.
+
 ## Reproduction
 
 From root, with frozen Bun dependencies, exact-version native addon and native

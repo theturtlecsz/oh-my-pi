@@ -37,10 +37,19 @@ Ledger OMP-615 r3, Chris, 2026-10-13:
   in use immediately.
 - A new listing triggers evaluation, never automatic replacement.
 
-This task installs no scheduler or live provider runner. The governing policy
-must record this schedule and each review's date/outcome in the integration task;
-its current file has no review schedule or receipts. That known gap is not a
-claim that recurring checks already run.
+The governing policy records this schedule under `review.schedule`, with
+`review.task_set_digest`, `review.last_review` (date/outcome) and per-recipe
+status in `review.recipes`. Current last review: 2026-10-14, `baseline_retained`
+(Chris decision 5); no live qualification is claimed. No scheduler or live
+provider runner is installed by this policy.
+
+Current grandfathered recipes (stages, tiers, alternate, every reviewer identity
+with suffix, and concrete test-verified lane/role bindings) are frozen in
+[`model-review-baseline.v1.json`](../python/omp-work/src/omp_work/routing/model-review-baseline.v1.json),
+pinned by SHA256 in `routing/model_review.py`. `check_policy_review(policy)`
+accepts a `baseline` entry only for the exact frozen recipe; any addition or
+change needs a dated `qualified` entry whose outputs are re-graded with
+`qualify`. Bindings without a resolved wire or verified caller stay `pending`.
 
 ## Written rubric
 

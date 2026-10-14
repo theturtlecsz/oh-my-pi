@@ -4,8 +4,17 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
+import sys
+from pathlib import Path
+
+_tests_dir = str(Path(__file__).resolve().parent)
+if _tests_dir not in sys.path:
+    sys.path.insert(0, _tests_dir)
+
 import pytest
+from omp_work.v1.canonical import canonical_json
 from omp_work.v1.models import EvidenceKind, EvidenceReceipt
+from support.bound_evidence import bound_claim, bound_receipt
 
 from omp_knowledge.learning.models import (
     Attribution,
@@ -78,6 +87,9 @@ def make_receipt(
 def make_attribution(
     model: str = "qwen-2.5",
     profile: str = "local-qwen",
+    work_id: UUID | str | None = None,
+    candidate_id: UUID | str | None = None,
+    revision_id: UUID | str | None = None,
 ) -> Attribution:
     return Attribution(
         model=model,
@@ -87,8 +99,19 @@ def make_attribution(
             event_id=str(uuid4()),
             event_sequence=1,
             aggregate_id=str(uuid4()),
+            work_id=str(work_id) if work_id is not None else None,
+            candidate_id=str(candidate_id) if candidate_id is not None else None,
+            revision_id=str(revision_id) if revision_id is not None else None,
         ),
     )
+
+
+def assert_claim_bound_to_receipt(claim: Claim, receipt: EvidenceReceipt) -> None:
+    assert claim.source_span is not None
+    assert canonical_json(receipt.payload)[claim.source_span.start : claim.source_span.end] == claim.text
+    assert claim.evaluator == receipt.issuer
+    assert claim.outcome == "PASS"
+    assert receipt.verdict == "PASS"
 
 
 def test_native_receipts_protocol_conformance() -> None:
@@ -223,7 +246,7 @@ def test_verdict_none_verification_only_rejected_tool_success_only() -> None:
 
 def test_accepted_creates_procedure_v1_with_attribution() -> None:
     store = LearningStore(":memory:")
-    r_pass = make_receipt(kind=EvidenceKind.VERIFICATION, verdict="PASS")
+    r_pass = bound_receipt("Proved claim", kind=EvidenceKind.VERIFICATION)
     reader = DictReceiptReader({r_pass.receipt_id: r_pass})
 
     precond = Precondition(key="project_id", op="eq", value="proj-alpha")
@@ -232,10 +255,16 @@ def test_accepted_creates_procedure_v1_with_attribution() -> None:
         steps=("step one", "step two"),
         preconditions=(precond,),
         claims=(
-            Claim(text="Proved claim", receipt_ids=(r_pass.receipt_id,)),
+            bound_claim("Proved claim", r_pass),
         ),
     )
-    attr = make_attribution(model="claude-3-opus", profile="anthropic-prod")
+    attr = make_attribution(
+        model="claude-3-opus",
+        profile="anthropic-prod",
+        work_id=r_pass.work_id,
+        candidate_id=r_pass.candidate_id,
+        revision_id=r_pass.revision_id,
+    )
     unit_id = uuid4()
 
     record = create_proposal(
@@ -250,6 +279,21 @@ def test_accepted_creates_procedure_v1_with_attribution() -> None:
     assert record.reason is None
     assert record.procedure_id is not None
     proc_id = record.procedure_id
+
+    # The receipt, the claim, and the source identity share one work/candidate/revision.
+    claim = lesson.claims[0]
+    assert attr.source.work_id == str(r_pass.work_id)
+    assert attr.source.candidate_id == str(r_pass.candidate_id)
+    assert attr.source.revision_id == str(r_pass.revision_id)
+    assert attr.source.aggregate_id is not None
+    for rid in claim.receipt_ids:
+        assert reader.receipt(rid) is r_pass
+    assert_claim_bound_to_receipt(claim, r_pass)
+    assert claim.source_span is not None
+    assert canonical_json(r_pass.payload)[claim.source_span.start : claim.source_span.end] == claim.text
+    assert claim.evaluator == r_pass.issuer
+    assert claim.outcome == "PASS"
+    assert r_pass.verdict == "PASS"
 
     # Check proposals row
     prop_row = store.execute("SELECT * FROM proposals WHERE proposal_id = ?", (record.proposal_id,)).fetchone()
@@ -293,8 +337,24 @@ def test_accepted_creates_procedure_v1_with_attribution() -> None:
 
 def test_same_lesson_same_receipt_support_count_unchanged_plus_new_receipt_plus_one() -> None:
     store = LearningStore(":memory:")
-    r1 = make_receipt(kind=EvidenceKind.VERIFICATION, verdict="PASS")
-    r2 = make_receipt(kind=EvidenceKind.VERIFICATION, verdict="PASS")
+    r1 = bound_receipt("Proved with r1", kind=EvidenceKind.VERIFICATION)
+    r1 = r1.model_copy(
+        update={
+            "payload": {
+                "exit_code": 0,
+                "summary": "Proved with r1",
+                "detail": "Proved with same r1",
+            }
+        }
+    )
+    r2 = bound_receipt("Proved with new r2", kind=EvidenceKind.VERIFICATION)
+    r2 = r2.model_copy(
+        update={
+            "work_id": r1.work_id,
+            "candidate_id": r1.candidate_id,
+            "revision_id": r1.revision_id,
+        }
+    )
     reader = DictReceiptReader({
         r1.receipt_id: r1,
         r2.receipt_id: r2,
@@ -306,16 +366,39 @@ def test_same_lesson_same_receipt_support_count_unchanged_plus_new_receipt_plus_
         steps=("step alpha", "step beta"),
         preconditions=(precond,),
         claims=(
-            Claim(text="Proved with r1", receipt_ids=(r1.receipt_id,)),
+            bound_claim("Proved with r1", r1),
         ),
     )
-    attr = make_attribution()
+    attr = make_attribution(
+        work_id=r1.work_id,
+        candidate_id=r1.candidate_id,
+        revision_id=r1.revision_id,
+    )
+
+    # The two receipts and the source identity share one work/candidate/revision.
+    assert attr.source.work_id == str(r1.work_id) == str(r2.work_id)
+    assert attr.source.candidate_id == str(r1.candidate_id) == str(r2.candidate_id)
+    assert attr.source.revision_id == str(r1.revision_id) == str(r2.revision_id)
+    assert attr.source.aggregate_id is not None
 
     # Proposal 1: initial acceptance
     p1 = create_proposal(store, unit_id=uuid4(), lesson=lesson1, attribution=attr, reader=reader)
     assert p1.status == "accepted"
     proc_id = p1.procedure_id
     assert proc_id is not None
+
+    claim1 = lesson1.claims[0]
+    assert attr.source.work_id == str(r1.work_id)
+    assert attr.source.candidate_id == str(r1.candidate_id)
+    assert attr.source.revision_id == str(r1.revision_id)
+    for rid in claim1.receipt_ids:
+        assert reader.receipt(rid) is r1
+    assert_claim_bound_to_receipt(claim1, r1)
+    assert claim1.source_span is not None
+    assert canonical_json(r1.payload)[claim1.source_span.start : claim1.source_span.end] == claim1.text
+    assert claim1.evaluator == r1.issuer
+    assert claim1.outcome == "PASS"
+    assert r1.verdict == "PASS"
 
     supp1 = store.execute("SELECT COUNT(*) as c FROM procedure_support WHERE procedure_id = ?", (proc_id,)).fetchone()["c"]
     assert supp1 == 1
@@ -326,12 +409,24 @@ def test_same_lesson_same_receipt_support_count_unchanged_plus_new_receipt_plus_
         steps=("step alpha", "step beta"),
         preconditions=(precond,),
         claims=(
-            Claim(text="Proved with same r1", receipt_ids=(r1.receipt_id,)),
+            bound_claim("Proved with same r1", r1),
         ),
     )
     p2 = create_proposal(store, unit_id=uuid4(), lesson=lesson_same, attribution=attr, reader=reader)
     assert p2.status == "accepted"
     assert p2.procedure_id == proc_id
+
+    claim_same = lesson_same.claims[0]
+    assert attr.source.work_id == str(r1.work_id)
+    assert attr.source.candidate_id == str(r1.candidate_id)
+    assert attr.source.revision_id == str(r1.revision_id)
+    for rid in claim_same.receipt_ids:
+        assert reader.receipt(rid) is r1
+    assert_claim_bound_to_receipt(claim_same, r1)
+    assert claim_same.source_span is not None
+    assert canonical_json(r1.payload)[claim_same.source_span.start : claim_same.source_span.end] == claim_same.text
+    assert claim_same.evaluator == r1.issuer
+    assert claim_same.outcome == "PASS"
 
     # Known fingerprint adds no version
     ver_count = store.execute("SELECT COUNT(*) as c FROM procedure_versions WHERE procedure_id = ?", (proc_id,)).fetchone()["c"]
@@ -347,12 +442,28 @@ def test_same_lesson_same_receipt_support_count_unchanged_plus_new_receipt_plus_
         steps=("step alpha", "step beta"),
         preconditions=(precond,),
         claims=(
-            Claim(text="Proved with new r2", receipt_ids=(r2.receipt_id,)),
+            bound_claim("Proved with new r2", r2),
         ),
     )
     p3 = create_proposal(store, unit_id=uuid4(), lesson=lesson_new_receipt, attribution=attr, reader=reader)
     assert p3.status == "accepted"
     assert p3.procedure_id == proc_id
+
+    claim_new = lesson_new_receipt.claims[0]
+    assert attr.source.work_id == str(r2.work_id)
+    assert attr.source.candidate_id == str(r2.candidate_id)
+    assert attr.source.revision_id == str(r2.revision_id)
+    assert r1.work_id == r2.work_id
+    assert r1.candidate_id == r2.candidate_id
+    assert r1.revision_id == r2.revision_id
+    for rid in claim_new.receipt_ids:
+        assert reader.receipt(rid) is r2
+    assert_claim_bound_to_receipt(claim_new, r2)
+    assert claim_new.source_span is not None
+    assert canonical_json(r2.payload)[claim_new.source_span.start : claim_new.source_span.end] == claim_new.text
+    assert claim_new.evaluator == r2.issuer
+    assert claim_new.outcome == "PASS"
+    assert r2.verdict == "PASS"
 
     # Still no new version added
     ver_count3 = store.execute("SELECT COUNT(*) as c FROM procedure_versions WHERE procedure_id = ?", (proc_id,)).fetchone()["c"]
@@ -497,15 +608,33 @@ def test_each_rejection_row_stores_its_reason() -> None:
 
 def test_audit_receipt_with_pass_verdict_supports_claim() -> None:
     store = LearningStore(":memory:")
-    r_audit = make_receipt(kind=EvidenceKind.AUDIT, verdict="PASS")
+    r_audit = bound_receipt("Audit passed", kind=EvidenceKind.AUDIT)
     reader = DictReceiptReader({r_audit.receipt_id: r_audit})
 
     lesson = Lesson(
         title="Audit Supported Lesson",
         steps=("audit step",),
-        claims=(Claim(text="Audit passed", receipt_ids=(r_audit.receipt_id,)),),
+        claims=(bound_claim("Audit passed", r_audit),),
     )
-    attr = make_attribution()
+    attr = make_attribution(
+        work_id=r_audit.work_id,
+        candidate_id=r_audit.candidate_id,
+        revision_id=r_audit.revision_id,
+    )
+
+    claim = lesson.claims[0]
+    assert attr.source.work_id == str(r_audit.work_id)
+    assert attr.source.candidate_id == str(r_audit.candidate_id)
+    assert attr.source.revision_id == str(r_audit.revision_id)
+    assert attr.source.aggregate_id is not None
+    for rid in claim.receipt_ids:
+        assert reader.receipt(rid) is r_audit
+    assert_claim_bound_to_receipt(claim, r_audit)
+    assert claim.source_span is not None
+    assert canonical_json(r_audit.payload)[claim.source_span.start : claim.source_span.end] == claim.text
+    assert claim.evaluator == r_audit.issuer
+    assert claim.outcome == "PASS"
+    assert r_audit.verdict == "PASS"
 
     decision = evaluate(lesson, reader)
     assert decision.accepted is True
