@@ -1,90 +1,46 @@
-# Native Audit Model Policy Caller-Boundary Evidence
+# Native audit caller evidence (OMP-615-s08-s06)
 
-Evidence record for native auditor execution boundary and model policy governance review (OMP-615-s08-s06). This document records how policy assertions loaded from `python/omp-work/src/omp_work/routing/routing-policy.v1.json` and agent role bindings in `session-system/agents/auditor.md` reach executable caller boundaries, transport preflight, and subagent session creation.
-
-## 1. Exact Run Command
+Run from repository root:
 
 ```bash
 bun test session-system/tests/model-policy-native-review.test.ts
 ```
 
-The test runs fully offline without requiring live provider credentials or external network access. It executes real `prepareNativeAuditRunner` and real `task/executor.runSubprocess`, spying exclusively at the transport preflight (`ai.completeSimple`) and subagent session creation (`sdkModule.createAgentSession`) boundaries.
+This offline fixture covers `session-system/extensions/workflow/auditor-runner.ts::prepareNativeAuditRunner` through real `packages/coding-agent/src/task/executor.ts::runSubprocess`. Only `completeSimple` transport preflight and SDK `createAgentSession` execution boundary are spied on. Agent discovery and alias resolution are real; SDK session fixture prompts and yields valid typed `AuditResult` output using executor-pass-through fixture pattern.
 
-## 2. Covered Caller and Preconditions
+The command starts a fresh Bun test process running the same file, with isolated HOME, agent directory, XDG roots, profiles, credentials and config overlays. Each child case pins discovery to its own workspace, installs a copy of `session-system/agents/auditor.md` and writes `.omp/config.yml`. Thus the runner's independent `Settings.loadReadOnly` and context's `Settings.isolated` see matching audit bindings. Fresh process avoids cached host home/configuration without adding discovery or settings spies. Child runs three cases; parent requires successful exit, includes child diagnostics on failure and removes temporary tree. Child restores execution spies and discovery override after each case.
 
-- **Covered Caller**: `session-system/extensions/workflow/auditor-runner.ts::prepareNativeAuditRunner` executing real `packages/coding-agent/src/task/executor.ts::runSubprocess`.
-- **Preconditions Exercised**:
-  - **Agent Discovery**: Discovers installed `auditor` agent definition (`session-system/agents/auditor.md`) from `.omp/agents/auditor.md`, verifying `model: ["@audit"]` and the contract-governed typed output schema (`$defs/AuditResult`).
-  - **Role Resolution**: `resolveAuditModel(ctx)` evaluates `ctx.models.resolve("@audit")` using the real `resolveModelRoleValue` implementation against isolated settings.
-  - **Transport Preflight**: Calls `ctx.modelRegistry.getApiKey(auditModel)` and runs a single-turn preflight probe via `completeSimple` to prove credentials and transport connectivity before reserving any audit launch.
-  - **Subprocess Dispatch**: Executes `runSubprocess` with `modelOverride: ["@audit"]`, `modelRole: "audit"`, `outputSchemaMode: "strict"`, and `outputSchema: agent.output`.
-  - **Credential Resolution**: Passes the attempt-scoped key resolver `getApiKey: requestModel => ctx.modelRegistry.resolver(requestModel, attemptId)` to `createAgentSession`.
-  - **Pass-Through Fixture Pattern**: Uses the `createMockSession` and `createSessionResult` pattern from `packages/coding-agent/test/task/executor-pass-through.test.ts` unchanged; restores all spies via `vi.restoreAllMocks()` in `afterEach`.
+## Authority and observed identity
 
-## 3. Alias -> Wire Provider/Model -> Lane Mapping
+As recorded in `docs/model-policy-governance.md`, packaged `python/omp-work/src/omp_work/routing/routing-policy.v1.json` governs Work routing/reviewer admission. Session role assignments remain independent configuration. This test assigns admitted reviewer to isolated session `@audit`; native runner does not itself read Work policy or enforce reviewer admission. Evidence proves configured caller consumption, not an owner assignment or settled policy scope.
 
-| Surface | Entity | Identifier | Details |
-| --- | --- | --- | --- |
-| Agent Definition | Selector Alias | `@audit` | Defined in `session-system/agents/auditor.md#model` |
-| Settings Role | Configured Role | `modelRoles.audit` | Assigned to `openai-codex/gpt-5.6-sol` |
-| Policy Reviewer | Governed Identity | `openai-codex/gpt-5.6-sol:medium` | Admitted in `routing-policy.v1.json#stages.audit.reviewers` |
-| Catalog Model | Wire Provider / ID | `openai-codex` / `gpt-5.6-sol` | Wire API: `openai-codex-responses`, Context: 1M tokens |
-| Policy Concurrency | Concurrency Lane | `openai_codex` | Concurrency cap: 1, unresolved owner: `Chris` |
-
-### Boundary Observation
-
-1. **Preflight Probe**: `ai.completeSimple` receives `Model { provider: "openai-codex", id: "gpt-5.6-sol" }`.
-2. **Preflight Key Lookup**: `ctx.modelRegistry.getApiKey` receives `Model { provider: "openai-codex", id: "gpt-5.6-sol" }`.
-3. **Session Creation**: `sdkModule.createAgentSession` receives `opts.model` with `{ provider: "openai-codex", id: "gpt-5.6-sol" }`.
-4. **Subprocess Credential Resolver**: `ctx.modelRegistry.resolver` is invoked with `(Model { provider: "openai-codex", id: "gpt-5.6-sol" }, attemptId)`.
-5. **Lane Agreement**: The wire provider `openai-codex` corresponds directly to concurrency lane `openai_codex` (cap: 1), matching policy declaration and owner governance.
-
-### Provider Drift Exposure
-
-When isolated `@audit` is pointed to `openai/gpt-5.6-sol`:
-- The model ID (`gpt-5.6-sol`) is identical.
-- The wire provider switches to `openai` (wire API: `openai-responses`).
-- Preflight and session creation boundaries capture provider `"openai"`, exposing drift away from the admitted reviewer provider (`openai-codex`) and the governed concurrency lane (`openai_codex`).
-
-## 4. Reviewer-vs-Stage Distinction
-
-| Dimension | Stage Route (`stages.audit`) | Admitted Reviewer (`stages.audit.reviewers[0]`) |
+| Surface | Fixture or policy value | Evidence |
 | --- | --- | --- |
-| **Provider** | `kimi` | `openai-codex` |
-| **Model** | `kimi-code/k3-256k` | `gpt-5.6-sol` |
-| **Effort** | `E3` | `medium` |
-| **Lane** | `kimi` (cap: 2) | `openai_codex` (cap: 1) |
-| **Caller** | Orchestrator stage dispatch | Native audit runner (`prepareNativeAuditRunner`) |
+| Discovered auditor selector | `@audit` | Repository auditor copied into isolated `.omp/agents` |
+| Isolated role assignment | `modelRoles.audit = openai-codex/gpt-5.6-sol` | Real `resolveModelRoleValue`, real executor selection |
+| Admitted reviewer | `openai-codex/gpt-5.6-sol:medium` | `stages.audit.reviewers[0]` |
+| Observed Model.provider / Model.id | `openai-codex` / `gpt-5.6-sol` | Preflight, preflight credential lookup, SDK session creation, attempt-scoped credential resolver |
+| Policy concurrency lane | `openai_codex`, cap 1 | `concurrency.providers`; **not an observed execution lane** |
+| Lane/wire association | `wire: null`, `status: pending_owner`, owner Chris | `governance.lanes.openai_codex`; unresolved, no lane-agreement claim |
 
-As recorded in `routing-policy.v1.json#governance.authority.reconciliation` and `docs/model-policy-governance.md#authority-and-reconciliation`:
-> "Audit route Kimi and admitted Sol medium reviewer are distinct selectors, not interchangeable execution evidence."
+Alias resolves to observed provider/model; mapping onward to a concurrency lane remains unqualified. Governance explicitly rejects reviewer prefixes, matching names and API availability as lane/wire evidence. Test preserves that unresolved record rather than deriving a lane by changing hyphens to underscores. Native caller path does not exercise Work proxy lane admission.
 
-The native audit runner executes the admitted reviewer (`@audit` -> `openai-codex/gpt-5.6-sol`), NOT the stage route (`kimi/kimi-code/k3-256k`). The test asserts that the boundary receives the reviewer identity (`openai-codex`), proving caller consumption of the reviewer specification rather than the stage route.
+Changing only isolated `@audit` to `openai/gpt-5.6-sol` keeps model ID identical while preflight and SDK session boundary switch provider to `openai`. Runner reports `openai/gpt-5.6-sol`, exposing reviewer-provider drift. No lane is inferred from either provider spelling.
 
-## 5. Fallback Exposure Contract
+## Reviewer versus stage
 
-- `task/executor.ts` extracts `resolvedModelIsFallback` directly from `session.servingModel.isFallback`.
-- When fallback routing is active (e.g., primary model saturated or unavailable):
-  - `result.resolvedModelIsFallback` is set to `true`.
-  - Fallback use is explicitly exposed in `NativeAuditRunResult.resolvedModelIsFallback`.
-- **Primary Agreement Contract**: Fallback execution must NEVER be counted as primary agreement.
-  - Primary agreement strictly requires:
-    ```ts
-    const isPrimaryAgreement =
-      result.resolvedModel === "openai-codex/gpt-5.6-sol" && !result.resolvedModelIsFallback;
-    ```
-  - When `resolvedModelIsFallback` is `true`, `isPrimaryAgreement` evaluates to `false`.
+Work audit stage declares provider/lane `kimi`, model `kimi-code/k3-256k`, effort `E3`. Its admitted reviewer is distinct: `openai-codex/gpt-5.6-sol:medium`. Fixture checks native caller receives configured reviewer identity rather than stage route. It does not establish that owner's session `@audit` must equal that reviewer; reconciliation belongs to s05. Both `kimi` and `openai_codex` lane/wire records remain pending owner.
 
-## 6. Owner-Only Checks and Real Native Audit Receipts Still Required
+Fixture uses provider/model identity without reviewer effort suffix. This is provider/model execution evidence, not effort qualification.
 
-The test fixture proves caller consumption and boundary observation under controlled, isolated settings. It does NOT attest to the owner's (Chris's) current local installation, user-level configuration, or live production qualification.
+## Fallback evidence
 
-The following prerequisites remain strictly owner-only and cannot be inferred from test execution:
-1. **Effective User Configuration Check**: Verifying that the target deployment host actually configures `modelRoles.audit: "openai-codex/gpt-5.6-sol"` in user-level settings (`~/.omp/config.json` or `~/.omp/settings.json`, outside the repository).
-2. **Host Provider Credentials**: Verifying that valid, unexpired provider credentials for `openai-codex` exist on the target deployment host to satisfy the `completeSimple` transport preflight.
-3. **Real Native Audit Receipt**: An end-to-end audit receipt from a live execution against an actual Work Ledger candidate, reserved and settled on the ledger via `WorkClient.settleAuditorLaunch`.
+SDK fixture reports `servingModel.isFallback: true`, retaining same model identity to prove identity agreement alone is insufficient. Real executor and runner expose `resolvedModelIsFallback: true`; primary agreement requires matching reviewer identity **and** no fallback. This checks propagation of SDK fallback metadata, not live fallback selection, quota saturation, alternate approval or scheduling.
 
-## 7. Scope Boundary and S05 Separation
+## Required owner evidence
 
-- This evidence covers the TypeScript native audit runner caller boundary (`session-system/extensions/workflow/auditor-runner.ts`) and its consumption of governed reviewer policy.
-- Any disputed policy scope, model reassignments, live token receipts, or production qualifications are reserved for `OMP-615-s05` rather than changing models or policy mechanically.
+Fixture does not attest Chris's current installation. Still required:
+
+- Owner-only effective-config check on target installation: discovered auditor, effective `modelRoles.audit`, overlays, profiles and provider credentials. Fixture preflight is intercepted; no live connectivity is established.
+- Real native audit receipt against actual Work Ledger candidate, including launch reservation/settlement, selected provider/model and fallback/substitution evidence.
+- Qualification of exact lane/wire association and disputed session-reviewer versus stage scope, reserved for OMP-615-s05. No models or routing policy changed mechanically.

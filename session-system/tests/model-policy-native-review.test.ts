@@ -1,7 +1,6 @@
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
+import { afterEach, describe, expect, test, vi } from "bun:test";
 import * as ai from "@oh-my-pi/pi-ai";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
@@ -14,6 +13,7 @@ import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "@oh-my
 import type { AgentSession, AgentSessionEvent, PromptOptions } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { ServingModel } from "@oh-my-pi/pi-coding-agent/session/retry-fallback-chains";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
+import { hostIsolatedEnv } from "../../packages/coding-agent/test/helpers/host-isolation";
 import { createSessionDefaults } from "../../packages/coding-agent/test/helpers/session-defaults";
 import { prepareNativeAuditRunner } from "../extensions/workflow/auditor-runner";
 
@@ -93,8 +93,46 @@ function createSessionResult(session: AgentSession): CreateAgentSessionResult {
 	};
 }
 
-describe("native audit model policy review and boundary observation (OMP-615-s08-s06)", () => {
+// A fresh process isolates cached os.homedir(), profile settings and discovery
+// without spying on any caller, resolver or settings loader.
+if (!process.env.OMP_NATIVE_REVIEW_FIXTURE_ROOT) {
+	test("native audit boundaries consume isolated reviewer bindings", async () => {
+		const root = await fs.mkdtemp(path.resolve(import.meta.dir, "../../.native-review-"));
+		try {
+			const child = Bun.spawn([process.execPath, "test", import.meta.path], {
+				cwd: root,
+				env: {
+					...hostIsolatedEnv(process.env, root),
+					OMP_NATIVE_REVIEW_FIXTURE_ROOT: root,
+					PI_CODING_AGENT_DIR: path.join(root, ".omp", "agent"),
+					PI_CONFIG_FILES: "",
+					PI_CONFIG_DIR: ".omp",
+					OMP_PROFILE: "",
+					PI_PROFILE: "",
+					OMP_DISCOVERY_CWD: undefined,
+					XDG_CONFIG_HOME: path.join(root, "config"),
+					XDG_DATA_HOME: path.join(root, "data"),
+					XDG_STATE_HOME: path.join(root, "state"),
+					XDG_CACHE_HOME: path.join(root, "cache"),
+					TMPDIR: root,
+				},
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			const [stdout, stderr, exitCode] = await Promise.all([
+				new Response(child.stdout).text(),
+				new Response(child.stderr).text(),
+				child.exited,
+			]);
+			if (exitCode !== 0) throw new Error(`Isolated native review failed:\n${stdout}${stderr}`);
+			expect(exitCode).toBe(0);
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	}, 30_000);
+} else describe("native audit model policy review and boundary observation (OMP-615-s08-s06)", () => {
 	const fixtureDirs: string[] = [];
+	const originalDiscoveryCwd = process.env.OMP_DISCOVERY_CWD;
 
 	// Load authoritative packaged routing policy for governance assertions
 	const policyPath = path.resolve(
@@ -115,17 +153,20 @@ describe("native audit model policy review and boundary observation (OMP-615-s08
 
 	afterEach(async () => {
 		vi.restoreAllMocks();
+		if (originalDiscoveryCwd === undefined) delete process.env.OMP_DISCOVERY_CWD;
+		else process.env.OMP_DISCOVERY_CWD = originalDiscoveryCwd;
 		for (const dir of fixtureDirs.splice(0)) {
 			await fs.rm(dir, { recursive: true, force: true });
 		}
 	});
 
 	/**
-	 * Sets up an isolated workspace directory with discovered auditor.md and settings.json.
+	 * Sets up an isolated workspace directory with discovered auditor.md and config.yml.
 	 */
 	async function createIsolatedAuditWorkspace(auditRoleSelector: string): Promise<string> {
-		const tmpCwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-native-review-"));
+		const tmpCwd = await fs.mkdtemp(path.join(process.env.OMP_NATIVE_REVIEW_FIXTURE_ROOT!, "workspace-"));
 		fixtureDirs.push(tmpCwd);
+		process.env.OMP_DISCOVERY_CWD = tmpCwd;
 
 		const agentsDir = path.join(tmpCwd, ".omp", "agents");
 		await fs.mkdir(agentsDir, { recursive: true });
@@ -138,12 +179,12 @@ describe("native audit model policy review and boundary observation (OMP-615-s08
 				audit: auditRoleSelector,
 			},
 		});
-		await fs.writeFile(path.join(tmpCwd, ".omp", "settings.json"), settingsContent);
+		await Bun.write(path.join(tmpCwd, ".omp", "config.yml"), settingsContent);
 
 		return tmpCwd;
 	}
 
-	test("governed reviewer identity and lane mapping observed at execution boundary", async () => {
+	test("governed reviewer reaches execution boundary while lane mapping stays unresolved", async () => {
 		const policy = await Bun.file(policyPath).json();
 		const admittedReviewer = policy.stages.audit.reviewers[0]; // "openai-codex/gpt-5.6-sol:medium"
 		const auditStageProvider = policy.stages.audit.provider; // "kimi"
@@ -280,7 +321,7 @@ describe("native audit model policy review and boundary observation (OMP-615-s08
 			attemptId,
 		});
 
-		// Assert that captured model matches governed reviewer identity and documented lane
+		// Captured identity matches admitted reviewer; lane remains unqualified.
 		const governedWireProvider = "openai-codex";
 		const governedModelId = "gpt-5.6-sol";
 		const documentedLane = "openai_codex";
@@ -292,8 +333,13 @@ describe("native audit model policy review and boundary observation (OMP-615-s08
 		expect(subprocessResolverRequests[0]?.provider).toBe(governedWireProvider);
 		expect(subprocessResolverRequests[0]?.id).toBe(governedModelId);
 
-		// Verify that the wire provider matches the concurrency lane name
-		expect(governedWireProvider.replace("-", "_")).toBe(documentedLane);
+		// Governance forbids inferring lane/wire agreement from matching names.
+		expect(policy.governance.lanes[documentedLane]).toEqual({
+			wire: null,
+			status: "pending_owner",
+			evidence: [],
+			unresolved_owner: "Chris",
+		});
 
 		// Verify distinctness from audit stage route (kimi/kimi-code/k3-256k in kimi lane)
 		expect(governedWireProvider).not.toBe(auditStageProvider);
@@ -398,10 +444,6 @@ describe("native audit model policy review and boundary observation (OMP-615-s08
 		// Governed reviewer wire provider is "openai-codex", NOT "openai"
 		const governedReviewerWire = "openai-codex";
 		expect(sessionCreationCalls[0]?.model?.provider).not.toBe(governedReviewerWire);
-
-		// Lane mapping: "openai" is NOT the governed "openai_codex" lane
-		const actualLane = sessionCreationCalls[0]?.model?.provider.replace("-", "_");
-		expect(actualLane).not.toBe("openai_codex");
 
 		// Primary agreement does NOT hold because resolved model provider drifted
 		expect(result.resolvedModel).toBe("openai/gpt-5.6-sol");
