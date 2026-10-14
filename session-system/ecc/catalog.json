@@ -19517,9 +19517,9 @@
     {
       "path": "skills/agent-architecture-audit/SKILL.md",
       "sha256": "64f57e232c3533877403703bc95b3c75df9de23f657899a306f13c703009ff57",
-      "classification": "reference-only",
-      "reason": "Upstream skills family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Maintenance pack member; helper paths pending WP3 adaptation; not installed",
+      "assetId": "ecc-agent-architecture-audit"
     },
     {
       "path": "skills/agent-eval/SKILL.md",
@@ -20273,9 +20273,9 @@
     {
       "path": "skills/context-budget/SKILL.md",
       "sha256": "920c5edde48e495b267fb0d42d8411c8b75ce1d8ab76e793b2eb6d23da01b0f1",
-      "classification": "reference-only",
-      "reason": "Upstream skills family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Maintenance pack member; helper paths pending WP3 adaptation; not installed",
+      "assetId": "ecc-context-budget"
     },
     {
       "path": "skills/continuous-agent-loop/SKILL.md",
@@ -21309,9 +21309,9 @@
     {
       "path": "skills/loop-design-check/SKILL.md",
       "sha256": "fc929d24cdbf2349deb56613d312f4731a911c2bf2d67c3834e9e45614aec658",
-      "classification": "reference-only",
-      "reason": "Upstream skills family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Maintenance pack member; helper paths pending WP3 adaptation; not installed",
+      "assetId": "ecc-loop-design-check"
     },
     {
       "path": "skills/mailtrap-email-integration/SKILL.md",
@@ -22149,23 +22149,23 @@
     {
       "path": "skills/rules-distill/SKILL.md",
       "sha256": "c451a63f96077f92ef6b40c4310f5a470a5d05103a181af518b115c4e828292c",
-      "classification": "reference-only",
-      "reason": "Upstream skills family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Maintenance pack member; helper paths pending WP3 adaptation; not installed",
+      "assetId": "ecc-rules-distill"
     },
     {
       "path": "skills/rules-distill/scripts/scan-rules.sh",
       "sha256": "0cfac69aff6c6ea37eeb914639625b4f6d3d3dacbcaef99c6e0ab4a7d376ed9d",
-      "classification": "reference-only",
-      "reason": "Upstream skills family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Maintenance pack member; helper paths pending WP3 adaptation; not installed",
+      "assetId": "ecc-rules-distill"
     },
     {
       "path": "skills/rules-distill/scripts/scan-skills.sh",
       "sha256": "de6a938e14ce44d45e37fff24442ff3276b3cf1446cd2025e565426fb33d5cb5",
-      "classification": "reference-only",
-      "reason": "Upstream skills family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Maintenance pack member; helper paths pending WP3 adaptation; not installed",
+      "assetId": "ecc-rules-distill"
     },
     {
       "path": "skills/rust-patterns/SKILL.md",
@@ -22429,30 +22429,30 @@
     {
       "path": "skills/skill-stocktake/SKILL.md",
       "sha256": "aa8f287c48c5a33bf15094358ffccbe0d4faff9eee9fa2ffcd70c8e9f3d22cdd",
-      "classification": "reference-only",
-      "reason": "Upstream skills family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Maintenance pack member; helper paths pending WP3 adaptation; not installed",
+      "assetId": "ecc-skill-stocktake"
     },
     {
       "path": "skills/skill-stocktake/scripts/quick-diff.sh",
       "sha256": "ebb95f8bb38e2cc1624d16b9f4eaa075b0f2aaff352cd1d1c8b6f04a7e75beca",
-      "classification": "reference-only",
-      "reason": "Upstream skills family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Maintenance pack member; helper paths pending WP3 adaptation; not installed",
+      "assetId": "ecc-skill-stocktake"
     },
     {
       "path": "skills/skill-stocktake/scripts/save-results.sh",
       "sha256": "250968532dc3bf1074f024a710d5d8aeec930e6798269703072f062fad1905bd",
-      "classification": "reference-only",
-      "reason": "Upstream skills family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Maintenance pack member; helper paths pending WP3 adaptation; not installed",
+      "assetId": "ecc-skill-stocktake"
     },
     {
       "path": "skills/skill-stocktake/scripts/scan.sh",
       "sha256": "366cbf75ec4ecb7bb1609e843ebb16917d42a81b983ad90cb69341f764456cb6",
-      "classification": "reference-only",
-      "reason": "Upstream skills family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Maintenance pack member; helper paths pending WP3 adaptation; not installed",
+      "assetId": "ecc-skill-stocktake"
     },
     {
       "path": "skills/social-graph-ranker/SKILL.md",

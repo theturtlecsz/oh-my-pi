@@ -24,6 +24,10 @@ class SourceIdentity(StrictModel):
     event_id: StringId
     event_sequence: int
     aggregate_id: StringId
+    # Plain str, not StringId: a missing id is null, and StringId rejects None.
+    work_id: str | None = None
+    candidate_id: str | None = None
+    revision_id: str | None = None
 
 
 class Attribution(StrictModel):
@@ -49,9 +53,19 @@ class Precondition(StrictModel):
     value: str
 
 
+class SourceSpan(StrictModel):
+    """Integer offsets into canonical payload text. No payload field name."""
+
+    start: int = Field(ge=0)
+    end: int = Field(ge=0)
+
+
 class Claim(StrictModel):
     text: str
     receipt_ids: tuple[StringId, ...] = ()
+    source_span: SourceSpan | None = None
+    evaluator: str | None = None
+    outcome: Literal["PASS", "NEEDS_FIX", "BLOCKED"] | None = None
 
 
 class Lesson(StrictModel):
@@ -74,6 +88,7 @@ __all__ = [
     "PreconditionOp",
     "RunStatus",
     "SourceIdentity",
+    "SourceSpan",
     "StrictModel",
     "StringId",
     "UnitState",

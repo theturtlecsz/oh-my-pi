@@ -46,11 +46,17 @@ Upstream pin: repository `https://github.com/affaan-m/ECC.git`, commit
   plus the existing database-reviewer advisor.
 - **`ecc-domain-security`** — common, Rust, TypeScript, and Python security rules,
   security reviewer, and security-scan skill.
+- **`ecc-maintenance`** — benchmark-optimization-loop plus the agent-architecture-audit,
+  loop-design-check, skill-stocktake, rules-distill, and context-budget skills.
 
-New domain members are inactive and deferred pending WP3 adaptation. Domain packs
-reuse existing adapted assets: Rust installs both coding-style rules, PostgreSQL
-installs the disabled database advisor, and the other domain packs install no
-content until their deferred members are adapted.
+New domain members are inactive and deferred pending WP3 adaptation. The
+maintenance members are inactive and deferred pending WP3 adaptation of their
+helper paths and result locations. Domain packs reuse existing adapted assets:
+Rust installs both coding-style rules, PostgreSQL installs the disabled database
+advisor, and the other domain packs install no content until their deferred
+members are adapted. The maintenance pack installs only the already-adapted
+benchmark-optimization-loop skill: its other five members are deferred and
+install nothing.
 
 Assets are only ever installed through a declared pack; arbitrary subsets are not
 part of the contract.
