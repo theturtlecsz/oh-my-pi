@@ -9,15 +9,19 @@ read reports.
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import secrets
+import socket
 import stat
 from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import uuid4
 
+import httpx
 import pytest
+import second_client_world
 
 from omp_work import event_push
 from omp_work.__main__ import main
@@ -147,6 +151,42 @@ def _inbox(
     )
     assert code == 0, body
     return body
+
+
+def test_world_ports_remain_bound_until_server_startup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Parallel workers cannot steal either world's port during startup."""
+    protected: dict[str, bool] = {}
+
+    def probe(name: str, port: int) -> None:
+        with socket.socket() as rival:
+            try:
+                rival.bind(("127.0.0.1", port))
+            except OSError as error:
+                assert error.errno == errno.EADDRINUSE
+                protected[name] = True
+            else:
+                protected[name] = False
+
+    real_postgres = second_client_world.native_postgres
+    real_run = second_client_world.uvicorn.Server.run
+
+    def postgres(root: Path, port: int, **kwargs: object):
+        probe("postgres", port)
+        return real_postgres(root, port, **kwargs)
+
+    def run(server: second_client_world.uvicorn.Server, *args: object, **kwargs: object):
+        probe("http", server.config.port)
+        return real_run(server, *args, **kwargs)
+
+    monkeypatch.setattr(second_client_world, "native_postgres", postgres)
+    monkeypatch.setattr(second_client_world.uvicorn.Server, "run", run)
+    with world(tmp_path) as w:
+        assert protected == {"postgres": True, "http": True}
+        response = httpx.get(f"{w.base_url}/v1/health/live")
+        assert response.status_code == 200
+        assert response.json()["live"] is True
 
 
 def test_second_client_push(
