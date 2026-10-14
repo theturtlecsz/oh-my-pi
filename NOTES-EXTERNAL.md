@@ -851,220 +851,179 @@ research policy changes or approvals.
 
 # OMP-615: Model policy execution role evidence and authority decision
 
-Offline role evidence validator CLI `python -m omp_work.routing.role_evidence --evidence PATH --decision PATH` is implemented and verified under offline test fixtures (OMP-615-s08-s07). Live qualification and operational deployment remain unresolved; no live runner or external service dispatch was executed in this slice.
+OMP-615-s08-s07 adds an offline agreement check:
 
-## Role / caller table
+```sh
+uv run --project python/omp-work python -m omp_work.routing.role_evidence --evidence PATH --decision PATH
+```
 
-| Role | Policy route / selector | Provider / model | Concurrency lane | Expected caller | Repository evidence status | Proof gap / owner requirement |
-| --- | --- | --- | --- | --- | --- | --- |
-| plan | `stages.plan` | `openai_codex` / `gpt-5.6-sol` (E2) | `openai_codex` | Orchestrator operations / plan runner | Unverified in repo (`orchestrator/service.py` is deterministic software; `operations.py::run_plan` builds deterministic packets) | Actual execution receipt and trace needed from external plan runner dispatch. |
-| implement | `stages.implement` | `gemini_flash` / `gemini-3.8-flash-high` (E1) | `gemini_flash` | `omp_work.model_proxy` | Test-verified in repo (offline recording transport in s02; gated integration lane in `package.json`) | Requires live PostgreSQL integration run on main or external deployment receipt. |
-| review | `stages.audit.reviewers[0]` / `stages.audit` | `openai-codex` / `gpt-5.6-sol:medium` (or `kimi` / `kimi-code/k3-256k:E3`) | `openai_codex` (or `kimi`) | `session-system/extensions/workflow/auditor-runner.ts` | Test-verified in repo for preflight boundary (s06); execution unverified | Requires execution receipt beyond preflight; preflight alone is rejected. |
-| research | `stages.research` | `ollama_cloud` / `deepseek-v4.1-flash:cloud` (E1) | `ollama_cloud` | Research campaign / runner | Unverified in repo (`research_campaign.py` uses local `_default_generate`; ledger model is null) | Chris must locate external paths/receipts for actual model execution; otherwise incomplete. |
-| judge | `governance.roles.judge` | `pending_owner` in policy (admitted in priority chain: `typesafe` / `jev-latest`) | `pending_owner` | `resolve_admission` / judge runner | Unverified in repo (`intake_support_admission.py::resolve_admission` has no execution consumers in `src`) | Chris must locate external paths/receipts; otherwise incomplete. |
-| operator | `governance.roles.operator` | `pending_owner` in policy (session-system operator) | `pending_owner` | Session operator | Unverified in repo (session ledger records synthetic Chris attribution; advisor note is not operator binding) | Requires distinct operator session trace; deterministic supervisor software cannot substitute. |
-| supervisor | `governance.supervisor` | `null` (deterministic software) | `null` | `omp_work.orchestrator.service` | Verified in repo (`stages.py::decide` deterministic transitions) | Proves no dispatch under ADR 0006 D33 with explicit run reference; cannot replace session operator. |
+No live runner, credentials, external dispatch, service installation or owner
+approval was performed. Passing offline fixtures qualify the validator only.
+A real success requires Chris's dated decision and complete matching execution
+records for all six roles. The decision is a trusted input; this CLI cannot
+authenticate its author or establish that fabricated files describe a real run.
+Chris must retain original runner records and verify their provenance before
+supplying a decision. SHA-256 pins prevent records drifting after that decision.
 
-## Proof gaps
+## Role/caller table and proof gaps
 
-1. **Research and Judge lack execution callers in the repository**:
-   - `docs/model-policy-python-evidence.md` sections 3 and 4 show that research campaign ledger events persist `"model": null` with local generator `_default_generate`, while `resolve_admission` in `intake_support_admission.py` has zero execution consumers in `python/omp-work/src`.
-   - Chris must locate external paths, execution harnesses, or live receipts for research and judge roles; otherwise role verification remains incomplete.
-2. **Audit execution beyond preflight**:
-   - `docs/model-policy-native-evidence.md` and `session-system/tests/model-policy-native-review.test.ts` prove reviewer model/provider resolution through the native auditor preflight boundary.
-   - Live execution receipts must show full audit execution beyond preflight (`phase: "execution"`). Preflight-only receipts are rejected.
-3. **Plan deterministic orchestrator gap**:
-   - `orchestrator/service.py` evaluates state transitions deterministically without LLM calls. A real caller trace demonstrating dispatch of `openai_codex` / `gpt-5.6-sol` is required.
-4. **Operator session separation**:
-   - `session-system/extensions/workflow/session-ledger.ts` renders an advisor note with synthetic Chris attribution. This does not prove operator model binding.
-   - Supervisor deterministic software proof requires an explicit run reference and citation of ADR 0006; it cannot replace the operator session trace.
-5. **Substitutions pending merge**:
-   - The missing substitution artifact (`substitutions.v1.json` overflow approval) remains pending and unresolved until earlier slice merges and conformance reruns take place. No speculative approvals are admitted.
+| Role | Packaged selector / current baseline | Caller evidence | Remaining proof |
+| --- | --- | --- | --- |
+| plan | `stages.plan`: `openai_codex/gpt-5.6-sol`, E2 | Python `run_plan` builds deterministic packets; session `/plan` uses session context | External model dispatch, exact caller, wire effort and lane association |
+| implement | `stages.implement`: `gemini_flash/gemini-3.8-flash-high`, E1 | `omp_work.model_proxy`; recording transport evidence in s02; gated PostgreSQL execution pending | Target deployment receipt; requested/resolved wire identity and exact lane |
+| review | `stages.audit`: `kimi/kimi-code/k3-256k`, E3; distinct `stages.audit.reviewers[0]`: `openai-codex/gpt-5.6-sol:medium` | s06 native auditor runner exercises preflight AND SDK session creation with offline execution fixtures | Real completed audit, effective session binding, exact lane/wire and effort; preflight alone cannot qualify |
+| research | `stages.research`: `ollama_cloud/deepseek-v4.1-flash:cloud`, E1 | Default campaign generation is local; ledger model null | Chris must locate external execution caller paths and actual call receipts; otherwise incomplete |
+| judge | No packaged selector; model/lane pending Chris | Admission has no execution consumer here; coding-agent judge config has separate scope | Chris must locate external execution caller paths and actual call receipts, and settle exact binding; otherwise incomplete |
+| operator | No packaged selector; model/lane pending Chris | Separate operator session; advisor note and synthetic Chris attribution do not prove this role | Distinct session receipt and exact caller/model/lane binding |
+| supervisor | `governance.supervisor`: deterministic software, `omp_work.orchestrator.service`, model/lane null | ADR 0005/0006 software coordination | Run reference and exact ADR 0006 citation for no-dispatch proof; cannot replace operator |
+
+Lane means a literal `concurrency.providers` key. Wire means a transport binding;
+wire provider/model/effort are literal dispatched identities. Lane names,
+reviewer prefixes, E-tier values and wire effort strings have different domains.
+Never derive associations by replacing hyphens/underscores or interpreting an
+alias. Only `gemini_flash` / `google-generative-ai` and `ollama_cloud` /
+`ollama-chat` currently have policy wire evidence; other associations remain
+pending until explicitly supported in the owner decision. Known callers and
+wire associations cannot be overridden by that decision.
 
 ## Q1 evidence and options
 
-Owner authority question Q1 concerns whether Work routing policy or native session role bindings govern session callers.
+Packaged `python/omp-work/src/omp_work/routing/routing-policy.v1.json` governs Work
+routes, admission and concurrency. `docs/models.md` covers coding-agent config,
+is not generated from Work policy, and does not override it. Current models
+remain baseline; historical O2 names are not restored. Sources:
+`docs/model-policy-governance.md`, `docs/model-policy-python-evidence.md`,
+`docs/model-policy-native-evidence.md`, ADR 0001, G5, ADR 0005 and ADR 0006 D33.
+Audit stage and admitted reviewer are distinct selectors. s06 proves isolated
+configured consumption, not an owner assignment or a lane/effort qualification.
 
-- **Question**: Do stage policy or native session bindings govern session callers?
-- **Option A**: Policy stage/reviewer selectors with evidenced lane mapping govern session callers.
-- **Option B**: Scoped current session bindings in governing file govern session callers.
-- **Governing obligations & constraints**:
-  - G5 in `docs/programme/ACCEPTED-DECISIONS.md` and ADR 0001 require independent audit and native acceptance.
-  - ADR 0006 D33 establishes on-demand native roles and deterministic supervisor software.
-  - Historical O2 model names are not restored; current packaged models remain the baseline.
-  - Concurrency lanes require evidence of exact lane/wire associations; reviewer prefixes and matching names alone do not qualify.
-  - Chris must select Option A or Option B in the dated decision file passed to `--decision`.
+Q1: Do Work stage/reviewer selectors or scoped session bindings govern native
+session callers?
+
+- A: Use current policy stage/reviewer selectors with evidenced wire/lane binding.
+- B: Record scoped current session bindings in the governing file before capture.
+  If bindings disagree with declared selectors, earlier owner slice must settle
+  policy/reconciliation and rerun conformance; this validator cannot override it.
+
+Chris supplies the dated answer and exact bindings. Every additional unanswered
+question must also have an answered record with a nonempty selected option.
+Pending/missing judge, operator, caller or lane bindings cannot qualify. No
+approval is inferred from matching filenames, config or API availability.
+Missing substitution artifact stays unresolved until earlier slice merges and
+conformance reruns. Packaged unapproved overflow is not an approval.
 
 ## Receipt JSON format
 
-Role evidence validation consumes an evidence bundle JSON (`--evidence`) and a dated decision JSON (`--decision`), with referenced caller trace files.
+All paths below are local files, never URLs. Trace paths resolve relative to the
+evidence bundle; substitution paths resolve relative to the decision. Each
+referenced file has a SHA-256 of its exact bytes. Examples are schema examples,
+not actual receipts or owner decisions; repeat role records for all six roles.
 
-### Evidence bundle JSON (`--evidence PATH`)
+Evidence bundle:
 
 ```json
 {
-  "policy_sha": "e78770d6576015177cae4dd288b09ebd27512e51c7cd5ead922f82dc18d10146",
+  "policy_sha": "<SHA256 of exact packaged policy bytes>",
   "receipts": {
-    "plan": {
-      "receipt_id": "rcpt-plan-20261014-001",
-      "role": "plan",
-      "caller": "omp_work.plan_runner",
-      "provider": "openai_codex",
-      "model": "gpt-5.6-sol",
-      "lane": "openai_codex",
-      "effort": "E2",
-      "policy_sha": "e78770d6576015177cae4dd288b09ebd27512e51c7cd5ead922f82dc18d10146",
-      "status": "resolved",
-      "phase": "execution",
-      "trace_file": "traces/plan_trace.json"
-    },
     "implement": {
-      "receipt_id": "rcpt-impl-20261014-001",
       "role": "implement",
+      "receipt_id": "receipt-123",
+      "run_reference": "run-123",
+      "call_id": "call-123",
+      "policy_sha": "<same SHA256>",
       "caller": "omp_work.model_proxy",
-      "provider": "gemini_flash",
-      "model": "gemini-3.8-flash-high",
       "lane": "gemini_flash",
-      "effort": "E1",
       "wire": "google-generative-ai",
-      "policy_sha": "e78770d6576015177cae4dd288b09ebd27512e51c7cd5ead922f82dc18d10146",
-      "status": "resolved",
-      "phase": "execution",
-      "trace_file": "traces/implement_trace.json"
-    },
-    "review": {
-      "receipt_id": "rcpt-rev-20261014-001",
-      "role": "review",
-      "caller": "session-system/extensions/workflow/auditor-runner.ts",
-      "provider": "openai-codex",
-      "model": "gpt-5.6-sol",
-      "lane": "openai_codex",
-      "effort": "medium",
-      "policy_sha": "e78770d6576015177cae4dd288b09ebd27512e51c7cd5ead922f82dc18d10146",
-      "status": "resolved",
-      "phase": "execution",
-      "trace_file": "traces/review_trace.json"
-    },
-    "research": {
-      "receipt_id": "rcpt-res-20261014-001",
-      "role": "research",
-      "caller": "external/research_runner",
-      "provider": "ollama_cloud",
-      "model": "deepseek-v4.1-flash:cloud",
-      "lane": "ollama_cloud",
-      "effort": "E1",
-      "wire": "ollama-chat",
-      "policy_sha": "e78770d6576015177cae4dd288b09ebd27512e51c7cd5ead922f82dc18d10146",
-      "status": "resolved",
+      "requested": {"provider": "<observed provider>", "model": "gemini-3.8-flash-high", "effort": "<observed wire effort>"},
+      "resolved": {"provider": "<observed provider>", "model": "gemini-3.8-flash-high", "effort": "<observed wire effort>"},
+      "kind": "execution",
       "phase": "execution",
       "actual_call": true,
-      "trace_file": "traces/research_trace.json"
-    },
-    "judge": {
-      "receipt_id": "rcpt-jdg-20261014-001",
-      "role": "judge",
-      "caller": "external/judge_runner",
-      "provider": "typesafe",
-      "model": "jev-latest",
-      "lane": "judge_lane",
-      "effort": "E1",
-      "policy_sha": "e78770d6576015177cae4dd288b09ebd27512e51c7cd5ead922f82dc18d10146",
-      "status": "resolved",
-      "phase": "execution",
-      "actual_call": true,
-      "trace_file": "traces/judge_trace.json"
-    },
-    "operator": {
-      "receipt_id": "rcpt-opr-20261014-001",
-      "role": "operator",
-      "caller": "session-system/operator_session",
-      "provider": "anthropic_fable",
-      "model": "claude-opus-5-5",
-      "lane": "anthropic_fable",
-      "effort": "E2",
-      "policy_sha": "e78770d6576015177cae4dd288b09ebd27512e51c7cd5ead922f82dc18d10146",
-      "status": "resolved",
-      "phase": "execution",
-      "trace_file": "traces/operator_trace.json"
+      "status": "completed",
+      "fallback": false,
+      "trace": {"file": "traces/implement.json", "sha256": "<exact trace digest>"}
     }
-  },
-  "supervisor": {
-    "kind": "deterministic_software",
-    "caller": "omp_work.orchestrator.service",
-    "run_reference": "run-eng-exec-20261014-01",
-    "authority": "docs/adr/0006-on-demand-roles.md",
-    "note": "Software coordination verified; no LLM dispatch"
   }
 }
 ```
 
-### Caller trace JSON (`traces/<role>_trace.json`)
+Referenced trace/receipt JSON has the same execution fields as its claim,
+without `trace`. Required fields include actual call, completed status, role,
+receipt/call/run IDs, policy hash, caller, lane, wire, requested/resolved provider,
+model and effort, and explicit boolean fallback. Config-only, synthetic,
+ledger/admission-only and audit-preflight records fail. No fields are inferred
+from config. A provider change with the same model ID still fails agreement.
 
-```json
-{
-  "trace_id": "tr-impl-20261014-001",
-  "receipt_id": "rcpt-impl-20261014-001",
-  "role": "implement",
-  "dispatched_caller": "omp_work.model_proxy",
-  "dispatched_provider": "gemini_flash",
-  "dispatched_model": "gemini-3.8-flash-high",
-  "dispatched_lane": "gemini_flash",
-  "dispatched_effort": "E1",
-  "wire": "google-generative-ai",
-  "policy_sha": "e78770d6576015177cae4dd288b09ebd27512e51c7cd5ead922f82dc18d10146",
-  "phase": "execution",
-  "kind": "execution",
-  "fallback": false,
-  "is_synthetic": false,
-  "status": "success"
-}
-```
-
-### Dated decision JSON (`--decision PATH`)
+Owner decision:
 
 ```json
 {
   "date": "2026-10-14",
-  "policy_sha": "e78770d6576015177cae4dd288b09ebd27512e51c7cd5ead922f82dc18d10146",
-  "authority_questions": {
-    "Q1": {
-      "question": "Do stage policy or native session bindings govern session callers?",
-      "selected_option": "A",
-      "status": "answered",
-      "decision": "Option A: Policy stage/reviewer selectors with evidenced lane mapping govern session callers"
+  "owner": "Chris",
+  "governing_policy": "python/omp-work/src/omp_work/routing/routing-policy.v1.json",
+  "policy_sha": "<same SHA256>",
+  "authority_questions": {"Q1": {"status": "answered", "selected_option": "A"}},
+  "bindings": {
+    "implement": {
+      "status": "resolved",
+      "evidence_reference": "<owner-verified external caller/run binding>",
+      "selector": {"stage": "implement"},
+      "route": {"provider": "gemini_flash", "model": "gemini-3.8-flash-high", "effort": "E1"},
+      "caller": "omp_work.model_proxy",
+      "lane": "gemini_flash",
+      "wire": "google-generative-ai",
+      "requested": {"provider": "<observed provider>", "model": "gemini-3.8-flash-high", "effort": "<observed wire effort>"},
+      "resolved": {"provider": "<observed provider>", "model": "gemini-3.8-flash-high", "effort": "<observed wire effort>"}
     }
   },
-  "receipt_refs": {
-    "plan": "rcpt-plan-20261014-001",
-    "implement": "rcpt-impl-20261014-001",
-    "review": "rcpt-rev-20261014-001",
-    "research": "rcpt-res-20261014-001",
-    "judge": "rcpt-jdg-20261014-001",
-    "operator": "rcpt-opr-20261014-001"
-  }
+  "receipt_refs": {"implement": {"receipt_id": "receipt-123", "sha256": "<exact trace digest>"}}
 }
 ```
 
+Stage selectors must match role's policy selectors; route fields match exact
+stage provider/model/E-tier. Reviewer selector is e.g.
+`{"stage":"audit","reviewer_index":0}` and its wire identity must equal the
+entire admitted reviewer string, effort included when specified. A reviewer
+without an effort suffix still needs an explicit wire effort binding. Judge/operator use
+`"selector": null` until governing policy supplies selectors; they still need
+explicit owner-approved caller/lane/wire/requested/resolved binding and real
+execution receipts. Lane must exist in policy concurrency keys.
+
+Fallback needs `approved_fallbacks.<role> = {"file":"substitution.json",
+"sha256":"<artifact digest>"}` in the decision. Artifact requires `owner: Chris`,
+`status: approved`, ISO `date`, `conformance_reference`, and exact `role`,
+`policy_sha`, `requested`, `resolved`, `lane`, `caller`, `run_reference` matching
+the dispatch. Stage fallback changing model/lane must also target a declared
+policy alternate.
+A bare true/list approval cannot qualify. Same-identity SDK fallback still
+requires approval. Missing artifact or conformance reference remains incomplete.
+
+Optional bundle `supervisor` proof requires `kind: deterministic_software`,
+`caller: omp_work.orchestrator.service`, nonempty `run_reference`,
+`authority: docs/adr/0006-on-demand-roles.md`, `model: null`, `lane: null`,
+`dispatch_count: 0`, and matching `policy_sha`. Six model roles remain mandatory.
+
 ## Trace capture instructions
 
-For each of the six execution roles, Chris must capture the actual dispatch evidence:
-
-1. **Plan**:
-   - Capture wire dispatch from plan runner: record actual requested/dispatched URL, provider (`openai_codex`), model (`gpt-5.6-sol`), effort (`E2`), and lane (`openai_codex`).
-2. **Implement**:
-   - Capture upstream proxy dispatch: endpoint `models/gemini-3.8-flash-high:streamGenerateContent`, provider (`gemini_flash`), wire (`google-generative-ai`), lane (`gemini_flash`), billed spend row in `omp_jobs.usage_events`.
-3. **Review**:
-   - Run native auditor runner beyond preflight: capture execution session creation with `openai-codex` / `gpt-5.6-sol:medium` (or audit stage `kimi` / `kimi-code/k3-256k`), ensuring `phase: "execution"` and `resolvedModelIsFallback: false`.
-4. **Research**:
-   - Locate external research campaign caller: record actual model call against `ollama_cloud` / `deepseek-v4.1-flash:cloud` (wire `ollama-chat`, lane `ollama_cloud`). Local generator output or null ledger model is insufficient.
-5. **Judge**:
-   - Locate external intake support judge caller: record actual model call against admitted judge route (e.g. `typesafe` / `jev-latest`). `resolve_admission` admission check is insufficient.
-6. **Operator**:
-   - Run distinct operator session and capture session trace with actual model and lane. Supervisor software proof does not replace operator session.
-7. **Supervisor**:
-   - For supervisor software proof of no dispatch, provide the orchestrator run reference and cite ADR 0006.
-
-Execute verification via:
-```sh
-uv run --project python/omp-work --extra dev python -m omp_work.routing.role_evidence --evidence "$OMP615_RECEIPTS" --decision "$OMP615_DECISION"
-```
+1. After earlier authority/substitution slices merge, Chris verifies effective
+   config, policy SHA, current selectors, caller paths, transport and literal
+   lane/wire/effort bindings on target installation. Retain decision provenance.
+2. Locate real plan, research and judge execution boundaries externally. Admission
+   or local campaign accounting cannot supply missing actual-call evidence.
+   Missing external callers/receipts leaves qualification incomplete.
+3. At actual transport/native session dispatch, record requested and resolved
+   provider/model/effort, lane, caller, policy hash, receipt/call/run IDs and
+   fallback. Retain completed response/runner settlement as provenance. For native
+   audit record execution beyond `completeSimple` preflight, through SDK prompt
+   and result/settlement; verify actual Work candidate and run reference.
+4. Preserve raw caller records; export execution JSON without credentials or
+   private prompts. Do not relabel config, deterministic output, admission or
+   ledger rows as calls. SHA-256-pin exported bytes in bundle and owner decision.
+5. Capture operator session separately. If supplying deterministic supervisor
+   proof, retain its run reference and ADR 0006 basis without treating it as an
+   operator session receipt.
+6. For observed fallback, retain exact owner substitution artifact and rerun
+   conformance after earlier slice merges. No artifact means unresolved.
+7. Run CLI offline against retained files. It exits 1 naming role/reason on first
+   mismatch; exit 0 requires complete agreement for all six roles. Changed policy
+   requires new decision and receipts. Never rewrite policy to make evidence pass.

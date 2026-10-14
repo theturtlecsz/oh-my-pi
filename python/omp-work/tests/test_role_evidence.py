@@ -1,521 +1,341 @@
-"""Offline tests for role_evidence CLI and validator (OMP-615-s08-s07).
-
-Asserts complete agreement for six execution roles, detection of forged traces,
-mutated lanes/providers, missing research/judge actual-call evidence, missing
-audit receipts, config-only evidence, wrong policy hashes, unresolved authority,
-and forged deterministic-session equivalence.
-"""
+"""Offline boundary fixtures; none attest a live caller or owner approval."""
 from __future__ import annotations
 
 import copy
 import hashlib
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
+from omp_work.routing.policy import load_policy
 from omp_work.routing.role_evidence import (
-    SIX_ROLES,
-    RoleEvidenceError,
-    find_repo_root,
-    main,
-    validate_role_evidence,
+    ADR_0006, POLICY_PATH, SIX_ROLES, RoleEvidenceError, find_repo_root, validate_role_evidence,
 )
 
 
-@pytest.fixture
-def repo_root() -> Path:
-    return find_repo_root()
+def write(path: Path, data: dict) -> str:
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def read(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 @pytest.fixture
-def policy_sha(repo_root: Path) -> str:
-    policy_path = repo_root / "python/omp-work/src/omp_work/routing/routing-policy.v1.json"
-    return hashlib.sha256(policy_path.read_bytes()).hexdigest()
-
-
-@pytest.fixture
-def valid_fixture(tmp_path: Path, policy_sha: str) -> dict[str, Path]:
-    """Create offline matching fixtures for decision, evidence bundle, and traces."""
-    traces_dir = tmp_path / "traces"
-    traces_dir.mkdir(parents=True, exist_ok=True)
-
-    trace_files: dict[str, Path] = {}
-
-    traces_data = {
-        "plan": {
-            "trace_id": "tr-plan-001",
-            "receipt_id": "rcpt-plan-001",
-            "role": "plan",
-            "dispatched_caller": "omp_work.plan_runner",
-            "dispatched_provider": "openai_codex",
-            "dispatched_model": "gpt-5.6-sol",
-            "dispatched_lane": "openai_codex",
-            "dispatched_effort": "E2",
-            "policy_sha": policy_sha,
-            "phase": "execution",
-            "kind": "execution",
-            "fallback": False,
-            "is_synthetic": False,
-        },
-        "implement": {
-            "trace_id": "tr-impl-001",
-            "receipt_id": "rcpt-impl-001",
-            "role": "implement",
-            "dispatched_caller": "omp_work.model_proxy",
-            "dispatched_provider": "gemini_flash",
-            "dispatched_model": "gemini-3.8-flash-high",
-            "dispatched_lane": "gemini_flash",
-            "dispatched_effort": "E1",
-            "wire": "google-generative-ai",
-            "policy_sha": policy_sha,
-            "phase": "execution",
-            "kind": "execution",
-            "fallback": False,
-            "is_synthetic": False,
-        },
-        "review": {
-            "trace_id": "tr-rev-001",
-            "receipt_id": "rcpt-rev-001",
-            "role": "review",
-            "dispatched_caller": "session-system/extensions/workflow/auditor-runner.ts",
-            "dispatched_provider": "openai-codex",
-            "dispatched_model": "gpt-5.6-sol",
-            "dispatched_lane": "openai_codex",
-            "dispatched_effort": "medium",
-            "policy_sha": policy_sha,
-            "phase": "execution",
-            "kind": "execution",
-            "fallback": False,
-            "is_synthetic": False,
-        },
-        "research": {
-            "trace_id": "tr-res-001",
-            "receipt_id": "rcpt-res-001",
-            "role": "research",
-            "dispatched_caller": "omp_work.research_runner",
-            "dispatched_provider": "ollama_cloud",
-            "dispatched_model": "deepseek-v4.1-flash:cloud",
-            "dispatched_lane": "ollama_cloud",
-            "dispatched_effort": "E1",
-            "wire": "ollama-chat",
-            "policy_sha": policy_sha,
-            "phase": "execution",
-            "kind": "execution",
-            "actual_call": True,
-            "fallback": False,
-            "is_synthetic": False,
-        },
-        "judge": {
-            "trace_id": "tr-jdg-001",
-            "receipt_id": "rcpt-jdg-001",
-            "role": "judge",
-            "dispatched_caller": "omp_work.judge_runner",
-            "dispatched_provider": "typesafe",
-            "dispatched_model": "jev-latest",
-            "dispatched_lane": "judge_lane",
-            "dispatched_effort": "E1",
-            "policy_sha": policy_sha,
-            "phase": "execution",
-            "kind": "execution",
-            "actual_call": True,
-            "fallback": False,
-            "is_synthetic": False,
-        },
-        "operator": {
-            "trace_id": "tr-opr-001",
-            "receipt_id": "rcpt-opr-001",
-            "role": "operator",
-            "dispatched_caller": "session-system/operator_session",
-            "dispatched_provider": "anthropic_fable",
-            "dispatched_model": "claude-opus-5-5",
-            "dispatched_lane": "anthropic_fable",
-            "dispatched_effort": "E2",
-            "policy_sha": policy_sha,
-            "phase": "execution",
-            "kind": "execution",
-            "fallback": False,
-            "is_synthetic": False,
-        },
+def bundle(tmp_path: Path) -> tuple[Path, Path]:
+    policy_file = find_repo_root() / POLICY_PATH
+    policy = load_policy(policy_file)
+    sha = hashlib.sha256(policy_file.read_bytes()).hexdigest()
+    evidence = {"policy_sha": sha, "receipts": {}}
+    decision = {
+        "date": "2026-10-14", "owner": "Chris", "policy_sha": sha,
+        "governing_policy": POLICY_PATH,
+        "authority_questions": {"Q1": {"status": "answered", "selected_option": "A"}},
+        "bindings": {}, "receipt_refs": {},
     }
+    # Hypothetical external bindings, explicitly supplied by fixture decision.
+    # These names do not assert that execution callers exist in the repository.
+    for role in SIX_ROLES:
+        stage_name = {"plan": "plan", "implement": "implement", "research": "research"}.get(role)
+        route = None
+        if stage_name:
+            stage = policy.stages[stage_name]
+            route = {"provider": stage.provider, "model": stage.model, "effort": stage.effort}
+            lane = stage.provider
+            selector = {"stage": stage_name}
+            wire = policy.raw["governance"]["lanes"][lane]["wire"] or "responses"
+            provider = {"plan": "openai-codex", "implement": "google", "research": "ollama"}[role]
+            identity = {"provider": provider, "model": stage.model, "effort": "medium"}
+        elif role == "review":
+            selector = {"stage": "audit", "reviewer_index": 0}
+            lane, wire = "openai_codex", "responses"
+            identity = {"provider": "openai-codex", "model": "gpt-5.6-sol", "effort": "medium"}
+        else:
+            selector = None
+            lane, wire = "ollama_cloud", "ollama-chat"
+            identity = {"provider": "ollama", "model": "external-session-model", "effort": "none"}
+        caller = "omp_work.model_proxy" if role == "implement" else f"external.fixture.{role}"
+        binding = {
+            "status": "resolved", "evidence_reference": f"owner-external-binding:{role}",
+            "selector": selector, "caller": caller, "lane": lane, "wire": wire,
+            "requested": identity, "resolved": copy.deepcopy(identity),
+        }
+        if route is not None:
+            binding["route"] = route
+        decision["bindings"][role] = binding
+        trace = {
+            "role": role, "receipt_id": f"receipt-{role}", "run_reference": "fixture-run",
+            "call_id": f"call-{role}", "policy_sha": sha, "caller": caller, "lane": lane,
+            "wire": wire, "requested": identity, "resolved": copy.deepcopy(identity),
+            "kind": "execution", "phase": "execution", "actual_call": True,
+            "status": "completed", "fallback": False,
+        }
+        trace_path = tmp_path / f"{role}.json"
+        digest = write(trace_path, trace)
+        evidence["receipts"][role] = {**trace, "trace": {"file": trace_path.name, "sha256": digest}}
+        decision["receipt_refs"][role] = {"receipt_id": trace["receipt_id"], "sha256": digest}
+    evidence_path, decision_path = tmp_path / "evidence.json", tmp_path / "decision.json"
+    write(evidence_path, evidence)
+    write(decision_path, decision)
+    return evidence_path, decision_path
 
-    for role_name, data in traces_data.items():
-        t_path = traces_dir / f"{role_name}_trace.json"
-        t_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        trace_files[role_name] = t_path
 
-    evidence_data = {
-        "policy_sha": policy_sha,
-        "receipts": {
-            "plan": {
-                "receipt_id": "rcpt-plan-001",
-                "role": "plan",
-                "caller": "omp_work.plan_runner",
-                "provider": "openai_codex",
-                "model": "gpt-5.6-sol",
-                "lane": "openai_codex",
-                "effort": "E2",
-                "policy_sha": policy_sha,
-                "status": "resolved",
-                "phase": "execution",
-                "trace_file": "traces/plan_trace.json",
-            },
-            "implement": {
-                "receipt_id": "rcpt-impl-001",
-                "role": "implement",
-                "caller": "omp_work.model_proxy",
-                "provider": "gemini_flash",
-                "model": "gemini-3.8-flash-high",
-                "lane": "gemini_flash",
-                "effort": "E1",
-                "wire": "google-generative-ai",
-                "policy_sha": policy_sha,
-                "status": "resolved",
-                "phase": "execution",
-                "trace_file": "traces/implement_trace.json",
-            },
-            "review": {
-                "receipt_id": "rcpt-rev-001",
-                "role": "review",
-                "caller": "session-system/extensions/workflow/auditor-runner.ts",
-                "provider": "openai-codex",
-                "model": "gpt-5.6-sol",
-                "lane": "openai_codex",
-                "effort": "medium",
-                "policy_sha": policy_sha,
-                "status": "resolved",
-                "phase": "execution",
-                "trace_file": "traces/review_trace.json",
-            },
-            "research": {
-                "receipt_id": "rcpt-res-001",
-                "role": "research",
-                "caller": "omp_work.research_runner",
-                "provider": "ollama_cloud",
-                "model": "deepseek-v4.1-flash:cloud",
-                "lane": "ollama_cloud",
-                "effort": "E1",
-                "wire": "ollama-chat",
-                "policy_sha": policy_sha,
-                "status": "resolved",
-                "phase": "execution",
-                "actual_call": True,
-                "trace_file": "traces/research_trace.json",
-            },
-            "judge": {
-                "receipt_id": "rcpt-jdg-001",
-                "role": "judge",
-                "caller": "omp_work.judge_runner",
-                "provider": "typesafe",
-                "model": "jev-latest",
-                "lane": "judge_lane",
-                "effort": "E1",
-                "policy_sha": policy_sha,
-                "status": "resolved",
-                "phase": "execution",
-                "actual_call": True,
-                "trace_file": "traces/judge_trace.json",
-            },
-            "operator": {
-                "receipt_id": "rcpt-opr-001",
-                "role": "operator",
-                "caller": "session-system/operator_session",
-                "provider": "anthropic_fable",
-                "model": "claude-opus-5-5",
-                "lane": "anthropic_fable",
-                "effort": "E2",
-                "policy_sha": policy_sha,
-                "status": "resolved",
-                "phase": "execution",
-                "trace_file": "traces/operator_trace.json",
-            },
-        },
+def check(bundle: tuple[Path, Path], role: str | None, reason: str) -> None:
+    with pytest.raises(RoleEvidenceError) as error:
+        validate_role_evidence(*bundle)
+    assert (error.value.role, error.value.reason) == (role, reason)
+
+
+def update_trace(bundle: tuple[Path, Path], role: str, trace: dict, *, claim: bool = False) -> None:
+    """Re-pin altered fixture bytes so identity checks, not digest check, run."""
+    evidence_path, decision_path = bundle
+    evidence, decision = read(evidence_path), read(decision_path)
+    receipt = evidence["receipts"][role]
+    digest = write(evidence_path.parent / receipt["trace"]["file"], trace)
+    if claim:
+        receipt = {**trace, "trace": receipt["trace"]}
+        evidence["receipts"][role] = receipt
+    receipt["trace"]["sha256"] = digest
+    decision["receipt_refs"][role]["sha256"] = digest
+    write(evidence_path, evidence)
+    write(decision_path, decision)
+
+
+def cli(bundle: tuple[Path, Path]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-m", "omp_work.routing.role_evidence", "--evidence", str(bundle[0]),
+         "--decision", str(bundle[1])], capture_output=True, text=True, timeout=15,
+    )
+
+
+def test_matching_fixture_and_module_cli_require_six_roles(bundle: tuple[Path, Path]) -> None:
+    assert validate_role_evidence(*bundle)["roles_validated"] == list(SIX_ROLES)
+    result = cli(bundle)
+    assert result.returncode == 0, result.stderr
+    assert "roles=plan,implement,review,research,judge,operator" in result.stdout
+
+
+def test_forged_trace_digest_fails_cli_with_role_and_reason(bundle: tuple[Path, Path]) -> None:
+    path = bundle[0].parent / "review.json"
+    trace = read(path)
+    trace["resolved"]["model"] = "forged"
+    write(path, trace)
+    result = cli(bundle)
+    assert result.returncode == 1
+    assert "role=review reason=trace_digest_mismatch" in result.stderr
+
+
+@pytest.mark.parametrize("role,field,value", [
+    ("plan", "model", "forged"), ("review", "provider", "openai"),
+    ("implement", "effort", "high"),
+])
+def test_dispatch_identity_must_match_binding_even_when_claim_agrees(
+    bundle: tuple[Path, Path], role: str, field: str, value: str,
+) -> None:
+    trace = read(bundle[0].parent / f"{role}.json")
+    trace["requested"][field] = value
+    trace["resolved"][field] = value
+    update_trace(bundle, role, trace, claim=True)
+    check(bundle, role, "identity_mismatch")
+
+
+@pytest.mark.parametrize("field,value", [
+    ("lane", "kimi"), ("caller", "another.caller"), ("wire", "wrong-protocol"),
+    ("receipt_id", "another-receipt"), ("role", "judge"),
+])
+def test_trace_claim_cannot_override_explicit_binding(
+    bundle: tuple[Path, Path], field: str, value: str,
+) -> None:
+    trace = read(bundle[0].parent / "review.json")
+    trace[field] = value
+    update_trace(bundle, "review", trace, claim=True)
+    check(bundle, "review", "identity_mismatch")
+
+
+@pytest.mark.parametrize("role,changes,reason", [
+    ("research", {"kind": "ledger"}, "missing_actual_call"),
+    ("judge", {"kind": "admission"}, "missing_actual_call"),
+    ("research", {"actual_call": None}, "missing_actual_call"),
+    ("review", {"phase": "preflight"}, "audit_preflight_only"),
+    ("implement", {"config_only": True}, "config_only_evidence"),
+    ("plan", {"synthetic": True}, "synthetic_record"),
+    ("operator", {"kind": "deterministic_software"}, "forged_deterministic_session_equivalence"),
+    ("operator", {"caller": "omp_work.orchestrator.service"}, "forged_deterministic_session_equivalence"),
+    ("review", {"status": "started"}, "incomplete_execution"),
+])
+def test_non_execution_records_never_qualify(
+    bundle: tuple[Path, Path], role: str, changes: dict, reason: str,
+) -> None:
+    trace = read(bundle[0].parent / f"{role}.json")
+    trace.update(changes)
+    update_trace(bundle, role, trace)
+    check(bundle, role, reason)
+
+
+@pytest.mark.parametrize("field,reason", [
+    ("caller", "identity_mismatch"), ("lane", "identity_mismatch"),
+    ("policy_sha", "wrong_policy_hash"), ("effort", "missing_effort"),
+    ("call_id", "missing_call_id"), ("run_reference", "missing_run_reference"),
+])
+def test_omitted_trace_fields_fail_closed(bundle: tuple[Path, Path], field: str, reason: str) -> None:
+    trace = read(bundle[0].parent / "judge.json")
+    if field == "effort":
+        del trace["resolved"][field]
+    else:
+        del trace[field]
+    update_trace(bundle, "judge", trace)
+    check(bundle, "judge", reason)
+
+
+def test_missing_audit_receipt(bundle: tuple[Path, Path]) -> None:
+    evidence = read(bundle[0])
+    del evidence["receipts"]["review"]
+    write(bundle[0], evidence)
+    check(bundle, "review", "missing_role")
+
+
+@pytest.mark.parametrize("target", ["evidence", "decision", "trace", "claim"])
+def test_policy_hash_required_and_exact(bundle: tuple[Path, Path], target: str) -> None:
+    if target == "trace":
+        trace = read(bundle[0].parent / "implement.json")
+        trace["policy_sha"] = "0" * 64
+        update_trace(bundle, "implement", trace)
+    else:
+        path = bundle[1] if target == "decision" else bundle[0]
+        data = read(path)
+        record = data["receipts"]["implement"] if target == "claim" else data
+        record["policy_sha"] = "0" * 64
+        write(path, data)
+    check(bundle, "implement" if target in ("trace", "claim") else None, "wrong_policy_hash")
+
+
+@pytest.mark.parametrize("question", ["Q1", "Q2"])
+def test_all_authority_questions_require_answer(bundle: tuple[Path, Path], question: str) -> None:
+    decision = read(bundle[1])
+    decision["authority_questions"][question] = {"status": "pending", "selected_option": "A"}
+    write(bundle[1], decision)
+    check(bundle, None, "unresolved_authority")
+
+
+@pytest.mark.parametrize("field,value,reason", [
+    ("date", "yesterday", "invalid_date"), ("owner", "fixture", "identity_mismatch"),
+    ("governing_policy", "docs/models.md", "identity_mismatch"),
+])
+def test_dated_owner_authority_required(bundle: tuple[Path, Path], field: str, value: str, reason: str) -> None:
+    decision = read(bundle[1])
+    decision[field] = value
+    write(bundle[1], decision)
+    check(bundle, None, reason)
+
+
+@pytest.mark.parametrize("role,field,value", [
+    ("judge", "status", "pending_owner"), ("operator", "unresolved_owner", "Chris"),
+    ("research", "lane", "invented_lane"), ("plan", "selector", {"stage": "implement"}),
+    ("implement", "wire", "invented-wire"), ("implement", "caller", "forged-caller"),
+    ("review", "requested", {"provider": "openai", "model": "gpt-5.6-sol", "effort": "medium"}),
+])
+def test_decision_cannot_override_resolved_policy(
+    bundle: tuple[Path, Path], role: str, field: str, value: object,
+) -> None:
+    decision = read(bundle[1])
+    decision["bindings"][role][field] = value
+    write(bundle[1], decision)
+    reason = "unresolved_binding" if field in ("status", "unresolved_owner", "lane", "selector") else "identity_mismatch"
+    check(bundle, role, reason)
+
+
+def test_stage_effort_is_separate_from_wire_effort_and_must_agree(bundle: tuple[Path, Path]) -> None:
+    decision = read(bundle[1])
+    decision["bindings"]["plan"]["route"]["effort"] = "E4"
+    write(bundle[1], decision)
+    check(bundle, "plan", "identity_mismatch")
+
+
+@pytest.mark.parametrize("changed_identity", [False, True])
+def test_fallback_needs_referenced_owner_artifact(bundle: tuple[Path, Path], changed_identity: bool) -> None:
+    trace = read(bundle[0].parent / "implement.json")
+    trace["fallback"] = not changed_identity
+    if changed_identity:
+        trace["resolved"]["model"] = "alternate-model"
+    update_trace(bundle, "implement", trace, claim=True)
+    check(bundle, "implement", "unapproved_fallback")
+
+
+def test_exact_substitution_artifact_allows_approved_fallback(bundle: tuple[Path, Path]) -> None:
+    trace = read(bundle[0].parent / "implement.json")
+    trace["fallback"] = True
+    trace["resolved"] = {"provider": "ollama", "model": "deepseek-v4.1-flash:cloud", "effort": "medium"}
+    trace["lane"], trace["wire"] = "ollama_cloud", "ollama-chat"
+    update_trace(bundle, "implement", trace, claim=True)
+    decision = read(bundle[1])
+    decision["bindings"]["implement"]["resolved"] = trace["resolved"]
+    decision["bindings"]["implement"].update(lane=trace["lane"], wire=trace["wire"])
+    approval = {key: trace[key] for key in
+                ("role", "policy_sha", "requested", "resolved", "lane", "caller", "run_reference")}
+    approval.update(owner="Chris", status="approved", date="2026-10-14", conformance_reference="external-run-123")
+    path = bundle[0].parent / "substitution.json"
+    digest = write(path, approval)
+    decision["approved_fallbacks"] = {"implement": {"file": path.name, "sha256": digest}}
+    write(bundle[1], decision)
+    assert validate_role_evidence(*bundle)["status"] == "pass"
+    approval["resolved"]["provider"] = "another-provider"
+    decision["approved_fallbacks"]["implement"]["sha256"] = write(path, approval)
+    write(bundle[1], decision)
+    check(bundle, "implement", "identity_mismatch")
+
+
+def test_supervisor_proof_requires_run_and_exact_adr_and_keeps_operator(bundle: tuple[Path, Path]) -> None:
+    evidence = read(bundle[0])
+    proof = {
+        "kind": "deterministic_software", "caller": "omp_work.orchestrator.service",
+        "run_reference": "fixture-run", "authority": ADR_0006, "model": None, "lane": None,
+        "dispatch_count": 0, "policy_sha": evidence["policy_sha"],
     }
-
-    evidence_path = tmp_path / "evidence.json"
-    evidence_path.write_text(json.dumps(evidence_data, indent=2), encoding="utf-8")
-
-    decision_data = {
-        "date": "2026-10-14",
-        "policy_sha": policy_sha,
-        "authority_questions": {
-            "Q1": {
-                "question": "Do stage policy or native session bindings govern session callers?",
-                "selected_option": "A",
-                "status": "answered",
-                "decision": "Option A: Policy stage/reviewer selectors with evidenced lane mapping govern",
-            }
-        },
-        "receipt_refs": {
-            "plan": "rcpt-plan-001",
-            "implement": "rcpt-impl-001",
-            "review": "rcpt-rev-001",
-            "research": "rcpt-res-001",
-            "judge": "rcpt-jdg-001",
-            "operator": "rcpt-opr-001",
-        },
-    }
-
-    decision_path = tmp_path / "decision.json"
-    decision_path.write_text(json.dumps(decision_data, indent=2), encoding="utf-8")
-
-    return {
-        "evidence": evidence_path,
-        "decision": decision_path,
-        "traces_dir": traces_dir,
-        "root": tmp_path,
-    }
+    evidence["supervisor"] = proof
+    write(bundle[0], evidence)
+    assert validate_role_evidence(*bundle)["status"] == "pass"
+    proof["authority"] = "made-up-0006"
+    write(bundle[0], evidence)
+    check(bundle, "supervisor", "identity_mismatch")
+    proof["authority"] = ADR_0006
+    del proof["run_reference"]
+    write(bundle[0], evidence)
+    check(bundle, "supervisor", "missing_run_reference")
+    del evidence["receipts"]["operator"]
+    write(bundle[0], evidence)
+    check(bundle, "operator", "missing_role")
 
 
-def test_matching_fixture_validates(valid_fixture: dict[str, Path], capsys: pytest.CaptureFixture) -> None:
-    res = validate_role_evidence(valid_fixture["evidence"], valid_fixture["decision"])
-    assert res["status"] == "pass"
-    assert set(res["roles_validated"]) == set(SIX_ROLES)
-    assert res["authority_resolved"] is True
-
-    # Test CLI invocation
-    ret = main(["--evidence", str(valid_fixture["evidence"]), "--decision", str(valid_fixture["decision"])])
-    assert ret == 0
-    captured = capsys.readouterr()
-    assert "PASS" in captured.out
+def test_missing_explicit_policy_never_silently_uses_packaged_policy(bundle: tuple[Path, Path]) -> None:
+    with pytest.raises(RoleEvidenceError, match="policy_review_failed"):
+        validate_role_evidence(*bundle, policy_path=bundle[0].parent / "absent-policy.json")
 
 
-def test_forged_trace_fails(valid_fixture: dict[str, Path], capsys: pytest.CaptureFixture) -> None:
-    plan_trace_path = valid_fixture["traces_dir"] / "plan_trace.json"
-    data = json.loads(plan_trace_path.read_text(encoding="utf-8"))
-    data["dispatched_model"] = "forged-model"
-    plan_trace_path.write_text(json.dumps(data), encoding="utf-8")
-
-    with pytest.raises(RoleEvidenceError) as exc_info:
-        validate_role_evidence(valid_fixture["evidence"], valid_fixture["decision"])
-    assert exc_info.value.reason == "identity_mismatch"
-    assert exc_info.value.role == "plan"
-
-    ret = main(["--evidence", str(valid_fixture["evidence"]), "--decision", str(valid_fixture["decision"])])
-    assert ret == 1
-    err = capsys.readouterr().err
-    assert "plan" in err
-    assert "identity_mismatch" in err
+def test_malformed_receipt_is_cli_failure_without_traceback(bundle: tuple[Path, Path]) -> None:
+    evidence = read(bundle[0])
+    evidence["receipts"]["review"] = []
+    write(bundle[0], evidence)
+    result = cli(bundle)
+    assert result.returncode == 1
+    assert "role=review reason=invalid_shape" in result.stderr
+    assert "Traceback" not in result.stderr
 
 
-def test_mutated_provider_same_model_fails(valid_fixture: dict[str, Path]) -> None:
-    # Mutate plan provider to 'openai' instead of 'openai_codex' while keeping model gpt-5.6-sol
-    ev_path = valid_fixture["evidence"]
-    data = json.loads(ev_path.read_text(encoding="utf-8"))
-    data["receipts"]["plan"]["provider"] = "openai"
-    ev_path.write_text(json.dumps(data), encoding="utf-8")
-
-    plan_trace_path = valid_fixture["traces_dir"] / "plan_trace.json"
-    trace_data = json.loads(plan_trace_path.read_text(encoding="utf-8"))
-    trace_data["dispatched_provider"] = "openai"
-    plan_trace_path.write_text(json.dumps(trace_data), encoding="utf-8")
-
-    with pytest.raises(RoleEvidenceError) as exc_info:
-        validate_role_evidence(ev_path, valid_fixture["decision"])
-    assert exc_info.value.reason in ("provider_mismatch", "identity_mismatch")
-    assert exc_info.value.role == "plan"
-
-
-def test_mutated_lane_same_model_fails(valid_fixture: dict[str, Path]) -> None:
-    # Mutate plan lane to 'kimi' instead of 'openai_codex' while keeping model gpt-5.6-sol
-    ev_path = valid_fixture["evidence"]
-    data = json.loads(ev_path.read_text(encoding="utf-8"))
-    data["receipts"]["plan"]["lane"] = "kimi"
-    ev_path.write_text(json.dumps(data), encoding="utf-8")
-
-    plan_trace_path = valid_fixture["traces_dir"] / "plan_trace.json"
-    trace_data = json.loads(plan_trace_path.read_text(encoding="utf-8"))
-    trace_data["dispatched_lane"] = "kimi"
-    plan_trace_path.write_text(json.dumps(trace_data), encoding="utf-8")
-
-    with pytest.raises(RoleEvidenceError) as exc_info:
-        validate_role_evidence(ev_path, valid_fixture["decision"])
-    assert exc_info.value.reason in ("lane_mismatch", "identity_mismatch")
-    assert exc_info.value.role == "plan"
-
-
-def test_missing_research_actual_call_fails(valid_fixture: dict[str, Path]) -> None:
-    # Research ledger-only or admission-only receipt/trace
-    res_trace_path = valid_fixture["traces_dir"] / "research_trace.json"
-    trace_data = json.loads(res_trace_path.read_text(encoding="utf-8"))
-    trace_data["kind"] = "ledger"
-    trace_data["actual_call"] = False
-    trace_data["dispatched_model"] = None
-    res_trace_path.write_text(json.dumps(trace_data), encoding="utf-8")
-
-    with pytest.raises(RoleEvidenceError) as exc_info:
-        validate_role_evidence(valid_fixture["evidence"], valid_fixture["decision"])
-    assert exc_info.value.reason == "missing_actual_call"
-    assert exc_info.value.role == "research"
-
-
-def test_missing_judge_actual_call_fails(valid_fixture: dict[str, Path]) -> None:
-    # Judge admission-only without actual model call
-    jdg_trace_path = valid_fixture["traces_dir"] / "judge_trace.json"
-    trace_data = json.loads(jdg_trace_path.read_text(encoding="utf-8"))
-    trace_data["kind"] = "admission"
-    trace_data["actual_call"] = False
-    trace_data["dispatched_model"] = None
-    jdg_trace_path.write_text(json.dumps(trace_data), encoding="utf-8")
-
-    with pytest.raises(RoleEvidenceError) as exc_info:
-        validate_role_evidence(valid_fixture["evidence"], valid_fixture["decision"])
-    assert exc_info.value.reason == "missing_actual_call"
-    assert exc_info.value.role == "judge"
-
-
-def test_missing_audit_receipt_fails(valid_fixture: dict[str, Path]) -> None:
-    # 1. Audit receipt completely missing
-    ev_path = valid_fixture["evidence"]
-    data = json.loads(ev_path.read_text(encoding="utf-8"))
-    del data["receipts"]["review"]
-    ev_path.write_text(json.dumps(data), encoding="utf-8")
-
-    with pytest.raises(RoleEvidenceError) as exc_info:
-        validate_role_evidence(ev_path, valid_fixture["decision"])
-    assert exc_info.value.reason == "missing_role"
-    assert exc_info.value.role == "review"
-
-
-def test_audit_preflight_only_fails(valid_fixture: dict[str, Path]) -> None:
-    # 2. Audit receipt preflight only
-    ev_path = valid_fixture["evidence"]
-    data = json.loads(ev_path.read_text(encoding="utf-8"))
-    data["receipts"]["review"]["phase"] = "preflight"
-    data["receipts"]["review"]["preflight_only"] = True
-    ev_path.write_text(json.dumps(data), encoding="utf-8")
-
-    with pytest.raises(RoleEvidenceError) as exc_info:
-        validate_role_evidence(ev_path, valid_fixture["decision"])
-    assert exc_info.value.reason == "audit_preflight_only"
-    assert exc_info.value.role == "review"
-
-
-def test_config_only_evidence_fails(valid_fixture: dict[str, Path]) -> None:
-    ev_path = valid_fixture["evidence"]
-    data = json.loads(ev_path.read_text(encoding="utf-8"))
-    data["receipts"]["implement"]["config_only"] = True
-    ev_path.write_text(json.dumps(data), encoding="utf-8")
-
-    with pytest.raises(RoleEvidenceError) as exc_info:
-        validate_role_evidence(ev_path, valid_fixture["decision"])
-    assert exc_info.value.reason == "config_only_evidence"
-    assert exc_info.value.role == "implement"
-
-
-def test_synthetic_evidence_fails(valid_fixture: dict[str, Path]) -> None:
-    ev_path = valid_fixture["evidence"]
-    data = json.loads(ev_path.read_text(encoding="utf-8"))
-    data["receipts"]["implement"]["is_synthetic"] = True
-    ev_path.write_text(json.dumps(data), encoding="utf-8")
-
-    with pytest.raises(RoleEvidenceError) as exc_info:
-        validate_role_evidence(ev_path, valid_fixture["decision"])
-    assert exc_info.value.reason == "synthetic_record"
-    assert exc_info.value.role == "implement"
-
-
-def test_wrong_policy_hash_fails(valid_fixture: dict[str, Path]) -> None:
-    ev_path = valid_fixture["evidence"]
-    data = json.loads(ev_path.read_text(encoding="utf-8"))
-    data["policy_sha"] = "0000000000000000000000000000000000000000000000000000000000000000"
-    ev_path.write_text(json.dumps(data), encoding="utf-8")
-
-    with pytest.raises(RoleEvidenceError) as exc_info:
-        validate_role_evidence(ev_path, valid_fixture["decision"])
-    assert exc_info.value.reason == "wrong_policy_hash"
-
-
-def test_unresolved_authority_fails(valid_fixture: dict[str, Path]) -> None:
-    dec_path = valid_fixture["decision"]
-    data = json.loads(dec_path.read_text(encoding="utf-8"))
-    data["authority_questions"]["Q1"]["status"] = "unanswered"
-    dec_path.write_text(json.dumps(data), encoding="utf-8")
-
-    with pytest.raises(RoleEvidenceError) as exc_info:
-        validate_role_evidence(valid_fixture["evidence"], dec_path)
-    assert exc_info.value.reason == "unresolved_authority"
-
-
-def test_missing_decision_date_fails(valid_fixture: dict[str, Path]) -> None:
-    dec_path = valid_fixture["decision"]
-    data = json.loads(dec_path.read_text(encoding="utf-8"))
-    del data["date"]
-    dec_path.write_text(json.dumps(data), encoding="utf-8")
-
-    with pytest.raises(RoleEvidenceError) as exc_info:
-        validate_role_evidence(valid_fixture["evidence"], dec_path)
-    assert exc_info.value.reason == "missing_decision_date"
-
-
-def test_forged_deterministic_session_equivalence_fails(valid_fixture: dict[str, Path]) -> None:
-    ev_path = valid_fixture["evidence"]
-    data = json.loads(ev_path.read_text(encoding="utf-8"))
-    # Claim supervisor deterministic software replaces session operator
-    data["receipts"]["operator"]["is_supervisor"] = True
-    data["receipts"]["operator"]["caller"] = "omp_work.orchestrator.service"
-    data["receipts"]["operator"]["kind"] = "deterministic_software"
-    ev_path.write_text(json.dumps(data), encoding="utf-8")
-
-    with pytest.raises(RoleEvidenceError) as exc_info:
-        validate_role_evidence(ev_path, valid_fixture["decision"])
-    assert exc_info.value.reason == "forged_deterministic_session_equivalence"
-    assert exc_info.value.role == "operator"
-
-
-def test_unapproved_fallback_fails(valid_fixture: dict[str, Path]) -> None:
-    impl_trace_path = valid_fixture["traces_dir"] / "implement_trace.json"
-    data = json.loads(impl_trace_path.read_text(encoding="utf-8"))
-    data["fallback"] = True
-    impl_trace_path.write_text(json.dumps(data), encoding="utf-8")
-
-    with pytest.raises(RoleEvidenceError) as exc_info:
-        validate_role_evidence(valid_fixture["evidence"], valid_fixture["decision"])
-    assert exc_info.value.reason == "unapproved_fallback"
-    assert exc_info.value.role == "implement"
-
-
-def test_unresolved_binding_fails(valid_fixture: dict[str, Path]) -> None:
-    ev_path = valid_fixture["evidence"]
-    data = json.loads(ev_path.read_text(encoding="utf-8"))
-    data["receipts"]["judge"]["status"] = "pending_owner"
-    data["receipts"]["judge"]["unresolved_owner"] = "Chris"
-    ev_path.write_text(json.dumps(data), encoding="utf-8")
-
-    with pytest.raises(RoleEvidenceError) as exc_info:
-        validate_role_evidence(ev_path, valid_fixture["decision"])
-    assert exc_info.value.reason == "unresolved_binding"
-    assert exc_info.value.role == "judge"
-
-
-def test_supervisor_proof_validation(valid_fixture: dict[str, Path]) -> None:
-    # 1. Valid supervisor proof with run_ref and ADR 0006 citation passes
-    ev_path = valid_fixture["evidence"]
-    data = json.loads(ev_path.read_text(encoding="utf-8"))
-    data["supervisor"] = {
-        "kind": "deterministic_software",
-        "caller": "omp_work.orchestrator.service",
-        "run_reference": "run-eng-exec-101",
-        "authority": "docs/adr/0006-on-demand-roles.md",
-        "note": "Software coordination verified; no LLM dispatch",
-    }
-    ev_path.write_text(json.dumps(data), encoding="utf-8")
-
-    res = validate_role_evidence(ev_path, valid_fixture["decision"])
-    assert res["status"] == "pass"
-
-    # 2. Missing run_reference in supervisor proof fails
-    bad_data = copy.deepcopy(data)
-    del bad_data["supervisor"]["run_reference"]
-    ev_path.write_text(json.dumps(bad_data), encoding="utf-8")
-    with pytest.raises(RoleEvidenceError) as exc_info:
-        validate_role_evidence(ev_path, valid_fixture["decision"])
-    assert exc_info.value.reason == "missing_run_reference"
-
-    # 3. Missing ADR 0006 citation in supervisor proof fails
-    bad_data_2 = copy.deepcopy(data)
-    bad_data_2["supervisor"]["authority"] = "docs/adr/0005-mission-first-architecture.md"
-    ev_path.write_text(json.dumps(bad_data_2), encoding="utf-8")
-    with pytest.raises(RoleEvidenceError) as exc_info:
-        validate_role_evidence(ev_path, valid_fixture["decision"])
-    assert exc_info.value.reason == "missing_adr_0006_citation"
+def test_reviewer_without_policy_effort_still_requires_explicit_wire_binding(bundle: tuple[Path, Path]) -> None:
+    decision = read(bundle[1])
+    binding = decision["bindings"]["review"]
+    binding.update(selector={"stage": "acceptance_review", "reviewer_index": 0}, lane="kimi", wire="external-wire")
+    identity = {"provider": "kimi-code", "model": "k3-256k", "effort": "none"}
+    binding.update(requested=identity, resolved=copy.deepcopy(identity))
+    write(bundle[1], decision)
+    trace = read(bundle[0].parent / "review.json")
+    trace.update(lane=binding["lane"], wire=binding["wire"], requested=identity, resolved=copy.deepcopy(identity))
+    update_trace(bundle, "review", trace, claim=True)
+    assert validate_role_evidence(*bundle)["status"] == "pass"
+    trace["resolved"]["effort"] = "high"
+    update_trace(bundle, "review", trace, claim=True)
+    check(bundle, "review", "unapproved_fallback")
