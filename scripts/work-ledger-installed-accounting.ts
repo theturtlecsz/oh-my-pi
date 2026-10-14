@@ -6,7 +6,12 @@
 //
 // Every flag is required. Values are not read from the environment. The command
 // runs only the selected subset or full qualification targets under the skip
-// accounting plugin and requires exactly one receipt.
+// accounting plugin and requires exactly one receipt. It then asks the
+// skip-accounting CLI which installed-file nodes of the unit receipt stay
+// pending after this invocation's selected receipt. In subset mode those
+// pending ids are executed by a supplement run in DIR/supplement, then the
+// pending call repeats with both receipts. The selected and supplement receipts
+// of this invocation are the only alternates the final judgement may see.
 
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
@@ -35,15 +40,24 @@ export interface InstalledAccountingOptions {
 }
 
 export interface InstalledAccountingRun {
-	name: "selected";
+	name: "selected" | "supplement";
 	mode: "subset" | "full";
 	exitCode: number;
 	receipts: string[];
 }
 
+/** The final skip-accounting reconciliation of the unit receipt. */
+export interface InstalledAccountingPending {
+	pending: Array<{ id: string; phases?: Record<string, string> }>;
+	failed: Array<{ id: string; check: string; phases?: Record<string, string> }>;
+	rejected: Array<{ check: string; reason: string }>;
+	absent: string[];
+}
+
 export interface InstalledAccountingResult {
 	exitCode: number;
 	runs: InstalledAccountingRun[];
+	pending: InstalledAccountingPending;
 }
 
 interface FlagValues {
@@ -74,9 +88,13 @@ function blank(value: string | undefined): boolean {
 	return typeof value !== "string" || value.trim() === "";
 }
 
+function emptyPending(): InstalledAccountingPending {
+	return { pending: [], failed: [], rejected: [], absent: [] };
+}
+
 function refuse(reason: string): InstalledAccountingResult {
 	console.error(`work-ledger-installed-accounting: ${reason}`);
-	return { exitCode: 1, runs: [] };
+	return { exitCode: 1, runs: [], pending: emptyPending() };
 }
 
 function sameList(left: readonly string[], right: readonly string[]): boolean {
@@ -151,18 +169,131 @@ async function readUnitRunId(unit: string): Promise<{ runId: string } | { error:
 	return { runId };
 }
 
-function selectedPaths(root: string, out: string): { envDir: string; dir: string; basetemp: string } {
-	const envDir = path.join(out, "selected");
-	return {
-		envDir,
-		dir: path.resolve(root, envDir),
-		basetemp: path.join(out, "selected-state"),
-	};
+interface AccountingPaths {
+	envDir: string;
+	dir: string;
+	basetemp: string;
+}
+
+function accountingPaths(root: string, out: string, label: string): AccountingPaths {
+	const envDir = path.join(out, label);
+	return { envDir, dir: path.resolve(root, envDir), basetemp: path.join(out, `${label}-state`) };
+}
+
+function pytestCommand(uv: string, targets: readonly string[], basetemp: string): string[] {
+	return [
+		uv,
+		"run",
+		"--project",
+		"python/omp-work",
+		"--extra",
+		"dev",
+		"pytest",
+		"-n",
+		"3",
+		"-p",
+		"omp_work.skip_accounting",
+		...targets,
+		`--basetemp=${basetemp}`,
+	];
+}
+
+/** `python -m omp_work.skip_accounting pending` on the unit receipt and this invocation's alternates. */
+function pendingCommand(uv: string, unit: string, alternates: readonly string[]): string[] {
+	return [
+		uv,
+		"run",
+		"--project",
+		"python/omp-work",
+		"--extra",
+		"dev",
+		"python",
+		"-m",
+		"omp_work.skip_accounting",
+		"pending",
+		"--unit",
+		unit,
+		...alternates.flatMap(alternate => ["--alternate", alternate]),
+		"--files",
+		...FULL_TARGETS,
+	];
+}
+
+function reasonMap(value: unknown): Record<string, string> | undefined {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+	return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, String(entry)]));
+}
+
+/** Parse the skip-accounting CLI's stdout JSON; any missing or malformed field is an error. */
+export function parsePending(stdout: string): InstalledAccountingPending | { error: string } {
+	let raw: unknown;
+	try {
+		raw = JSON.parse(stdout.trim());
+	} catch {
+		return { error: "pending output is not JSON" };
+	}
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+		return { error: "pending output is not a JSON object" };
+	}
+	const value = raw as Record<string, unknown>;
+	for (const key of ["pending", "failed", "rejected", "absent"] as const) {
+		if (!Array.isArray(value[key])) return { error: `pending output has no ${key} array` };
+	}
+	const pending: InstalledAccountingPending["pending"] = [];
+	for (const entry of value.pending as unknown[]) {
+		if (typeof entry !== "object" || entry === null || typeof (entry as { id?: unknown }).id !== "string") {
+			return { error: "pending output has a malformed pending entry" };
+		}
+		pending.push({ id: (entry as { id: string }).id, phases: reasonMap((entry as { phases?: unknown }).phases) });
+	}
+	const failed: InstalledAccountingPending["failed"] = [];
+	for (const entry of value.failed as unknown[]) {
+		if (
+			typeof entry !== "object" ||
+			entry === null ||
+			typeof (entry as { id?: unknown }).id !== "string" ||
+			typeof (entry as { check?: unknown }).check !== "string"
+		) {
+			return { error: "pending output has a malformed failed entry" };
+		}
+		failed.push({
+			id: (entry as { id: string }).id,
+			check: (entry as { check: string }).check,
+			phases: reasonMap((entry as { phases?: unknown }).phases),
+		});
+	}
+	const rejected: InstalledAccountingPending["rejected"] = [];
+	for (const entry of value.rejected as unknown[]) {
+		if (
+			typeof entry !== "object" ||
+			entry === null ||
+			typeof (entry as { check?: unknown }).check !== "string" ||
+			typeof (entry as { reason?: unknown }).reason !== "string"
+		) {
+			return { error: "pending output has a malformed rejected entry" };
+		}
+		rejected.push({ check: (entry as { check: string }).check, reason: (entry as { reason: string }).reason });
+	}
+	const absent: string[] = [];
+	for (const entry of value.absent as unknown[]) {
+		if (typeof entry !== "string") return { error: "pending output has a malformed absent entry" };
+		absent.push(entry);
+	}
+	return { pending, failed, rejected, absent };
+}
+
+function summarize(text: string, max = 400): string {
+	const collapsed = text.replace(/\s+/g, " ").trim();
+	return collapsed.length <= max ? collapsed : collapsed.slice(0, max);
 }
 
 /**
- * Run the selected installed-qualification pytest targets and require one skip receipt.
- * Refusals return a nonzero exit and an empty `runs` list without spawning.
+ * Run the selected installed-qualification targets, then let the skip-accounting
+ * CLI decide which unit-receipt nodes stay pending. In subset mode, uncovered
+ * pending ids are executed by a supplement run in DIR/supplement, and the
+ * pending call repeats with both of this invocation's receipts. The final
+ * pending/failed/rejected/absent lists must all be empty. Refusals return a
+ * nonzero exit and an empty `runs` list without spawning.
  */
 export async function runInstalledAccounting(options: InstalledAccountingOptions): Promise<InstalledAccountingResult> {
 	const unit = options.unit;
@@ -185,66 +316,127 @@ export async function runInstalledAccounting(options: InstalledAccountingOptions
 
 	const requestedRoot = options.root;
 	const root = path.resolve(requestedRoot !== undefined && requestedRoot.trim() !== "" ? requestedRoot : repoRoot);
-	const paths = selectedPaths(root, out);
-	const existing = await listReceipts(paths.dir);
+	const selected = accountingPaths(root, out, "selected");
+	const existing = await listReceipts(selected.dir);
 	if ("error" in existing) return refuse(existing.error);
-	if (existing.receipts.length > 0) return refuse(`${paths.dir} already has a ${RECEIPT_SUFFIX}`);
+	if (existing.receipts.length > 0) return refuse(`${selected.dir} already has a ${RECEIPT_SUFFIX}`);
 
 	const requestedUv = options.uv;
 	const uv = requestedUv !== undefined && requestedUv.trim() !== "" ? requestedUv : "uv";
-	const command = [
-		uv,
-		"run",
-		"--project",
-		"python/omp-work",
-		"--extra",
-		"dev",
-		"pytest",
-		"-n",
-		"3",
-		"-p",
-		"omp_work.skip_accounting",
-		...resolved.targets,
-		`--basetemp=${paths.basetemp}`,
-	];
-	const env: CommandOptions["env"] = {
+	const runner = options.runner ?? spawnWithCoreDumpGuard;
+	const baseEnv: CommandOptions["env"] = {
 		...process.env,
 		OMP_INSTALLED_RELEASE: release,
 		OMP_INSTALLED_MANIFEST_SHA256: manifestSha,
-		OMP_ACCOUNTING_DIR: paths.envDir,
 		OMP_ACCOUNTING_RUN: run,
 		OMP_ACCOUNTING_CHECK: "installed",
 		OMP_ACCOUNTING_ROOT: root,
 	};
-	const runner = options.runner ?? spawnWithCoreDumpGuard;
-	let pytest: CommandResult;
-	try {
-		pytest = await runner(command, { cwd: root, env });
-	} catch (err) {
-		pytest = { exitCode: 1, stdout: "", stderr: err instanceof Error ? err.message : String(err) };
-	}
+	const resolvedUnit = path.resolve(unit);
 
-	const written = await listReceipts(paths.dir);
-	if ("error" in written) {
-		console.error(`work-ledger-installed-accounting: ${written.error}`);
-		const exitCode = pytest.exitCode === 0 ? 1 : pytest.exitCode;
-		return { exitCode, runs: [{ name: "selected", mode, exitCode, receipts: [] }] };
-	}
-
+	const runs: InstalledAccountingRun[] = [];
 	const problems: string[] = [];
-	if (pytest.exitCode !== 0) {
-		const detail = pytest.stderr.trim();
-		problems.push(
-			detail ? `pytest exited ${pytest.exitCode}: ${detail.slice(0, 400)}` : `pytest exited ${pytest.exitCode}`,
+	let exitCode = 0;
+	const fail = (code: number): void => {
+		if (exitCode === 0) exitCode = code === 0 ? 1 : code;
+	};
+
+	const spawn = async (command: string[], env: CommandOptions["env"]): Promise<CommandResult> => {
+		try {
+			return await runner(command, { cwd: root, env });
+		} catch (err) {
+			return { exitCode: 1, stdout: "", stderr: err instanceof Error ? err.message : String(err) };
+		}
+	};
+
+	const runQualification = async (label: "selected" | "supplement", targets: readonly string[]): Promise<string[]> => {
+		const paths = accountingPaths(root, out, label);
+		const result = await spawn(pytestCommand(uv, targets, paths.basetemp), {
+			...baseEnv,
+			OMP_ACCOUNTING_DIR: paths.envDir,
+		});
+		const written = await listReceipts(paths.dir);
+		if ("error" in written) {
+			problems.push(written.error);
+			fail(1);
+			return [];
+		}
+		runs.push({ name: label, mode, exitCode: result.exitCode, receipts: written.receipts });
+		if (result.exitCode !== 0) {
+			const detail = result.stderr.trim();
+			problems.push(
+				detail
+					? `${label} pytest exited ${result.exitCode}: ${summarize(detail)}`
+					: `${label} pytest exited ${result.exitCode}`,
+			);
+			fail(result.exitCode);
+		}
+		if (written.receipts.length !== 1) {
+			problems.push(`expected exactly one receipt in ${paths.dir}, found ${written.receipts.length}`);
+			fail(1);
+		}
+		return written.receipts;
+	};
+
+	/** Run the pending CLI and record its judgement; a failure keeps the previous judgement. */
+	const judge = async (
+		alternates: readonly string[],
+		fallback: InstalledAccountingPending,
+	): Promise<InstalledAccountingPending> => {
+		const result = await spawn(pendingCommand(uv, resolvedUnit, alternates), baseEnv);
+		if (result.exitCode !== 0) {
+			const detail = result.stderr.trim();
+			problems.push(
+				detail ? `pending exited ${result.exitCode}: ${summarize(detail)}` : `pending exited ${result.exitCode}`,
+			);
+			fail(result.exitCode);
+		}
+		const parsed = parsePending(result.stdout);
+		if ("error" in parsed) {
+			problems.push(parsed.error);
+			fail(1);
+			return fallback;
+		}
+		return parsed;
+	};
+
+	// 1. Selected run on the mode's targets, exactly one skip receipt.
+	const selectedReceipts = await runQualification("selected", resolved.targets);
+	if (selectedReceipts.length !== 1) {
+		console.error(`work-ledger-installed-accounting: ${problems.join("; ")}`);
+		return { exitCode: exitCode === 0 ? 1 : exitCode, runs, pending: emptyPending() };
+	}
+
+	// 2. Pending after the selected run: this invocation's selected receipt is the only alternate.
+	let judged = await judge(selectedReceipts, emptyPending());
+
+	// 3. Subset mode executes the pending ids once, then re-judges with both receipts.
+	if (mode === "subset" && judged.pending.length > 0) {
+		const supplementReceipts = await runQualification(
+			"supplement",
+			judged.pending.map(entry => entry.id),
+		);
+		if (supplementReceipts.length === 1) {
+			judged = await judge([...selectedReceipts, ...supplementReceipts], judged);
+		}
+	}
+
+	// 4. The final judgement decides: any pending, failed, rejected or absent node fails the run.
+	if (judged.pending.length > 0) problems.push(`pending: ${summarize(judged.pending.map(e => e.id).join(", "))}`);
+	if (judged.failed.length > 0) problems.push(`failed: ${summarize(judged.failed.map(e => e.id).join(", "))}`);
+	if (judged.rejected.length > 0) {
+		problems.push(`rejected: ${summarize(judged.rejected.map(e => `${e.check}: ${e.reason}`).join(", "))}`);
+	}
+	if (judged.absent.length > 0) problems.push(`absent: ${summarize(judged.absent.join(", "))}`);
+	if (problems.length > 0) {
+		fail(1);
+		console.error(`work-ledger-installed-accounting: ${problems.join("; ")}`);
+	} else {
+		console.log(
+			`work-ledger-installed-accounting: selected mode=${mode} runs=${runs.map(r => r.name).join("+")} receipt=${selectedReceipts[0]}`,
 		);
 	}
-	if (written.receipts.length !== 1) {
-		problems.push(`expected exactly one receipt in ${paths.dir}, found ${written.receipts.length}`);
-	}
-	const exitCode = pytest.exitCode !== 0 ? pytest.exitCode : written.receipts.length === 1 ? 0 : 1;
-	if (problems.length > 0) console.error(`work-ledger-installed-accounting: ${problems.join("; ")}`);
-	else console.log(`work-ledger-installed-accounting: selected mode=${mode} receipt=${written.receipts[0]}`);
-	return { exitCode, runs: [{ name: "selected", mode, exitCode, receipts: written.receipts }] };
+	return { exitCode, runs, pending: judged };
 }
 
 export async function runInstalledAccountingCli(argv: readonly string[]): Promise<InstalledAccountingResult> {
