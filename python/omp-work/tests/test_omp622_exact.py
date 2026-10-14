@@ -24,6 +24,11 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def active_rules_path(candidate: Path) -> Path:
+    name = "planner-independence.md" if b"planner-independence.md" in (candidate / "flood.py").read_bytes() else "omp584-planner-rules.md"
+    return candidate / name
+
+
 def source_snapshot(source: Path) -> dict:
     return {
         str(path.relative_to(source)): (digest(path), path.stat().st_mtime_ns)
@@ -176,14 +181,20 @@ def test_real_spawn_records_import_hash_and_implement_attempts(harness, candidat
     {"attempts": 0, "history": [{"phase": "plan-review", "verdict": "FAIL"}]},
 ])
 def test_prompts_keep_loaded_rule_bytes(candidate, tmp_path, continuation):
-    rules = candidate / "omp584-planner-rules.md"
     loaded_bytes = b"# Exact rules\r\n" + "Read producer artifacts — 独立 slices.\r\n".encode()
-    rules.write_bytes(loaded_bytes)
+    for name in ("planner-independence.md", "omp584-planner-rules.md"):
+        target = candidate / name
+        if target.is_file():
+            target.write_bytes(loaded_bytes)
     h = Harness(candidate, tmp_path)
     try:
         flood = h.flood
         assert h.module.PLANNER_RULES_SHA256 == hashlib.sha256(loaded_bytes).hexdigest()
-        rules.write_bytes(b"Replacement rules must not reach running prompts.\n")
+        replacement = b"Replacement rules must not reach running prompts.\n"
+        for name in ("planner-independence.md", "omp584-planner-rules.md"):
+            target = candidate / name
+            if target.is_file():
+                target.write_bytes(replacement)
         task = {"id": ITEM, "body": "Plan exact candidate qualification."}
         st = flood.state.task(ITEM)
         wt, pdir = flood.plan_worktree(ITEM), flood.proposed_dir(ITEM)
@@ -216,12 +227,15 @@ def test_prompts_keep_loaded_rule_bytes(candidate, tmp_path, continuation):
 
 def test_run_once_emits_one_loaded_record(harness, candidate, monkeypatch, capsys):
     code_hash = digest(candidate / "flood.py")
-    rules_hash = digest(candidate / "omp584-planner-rules.md")
+    rules_hash = digest(active_rules_path(candidate))
     head = command(["git", "rev-parse", "HEAD"], candidate)
     assert head.returncode == 0, head.stderr
     with (candidate / "flood.py").open("ab") as handle:
         handle.write(b"\n# changed after load\n")
-    (candidate / "omp584-planner-rules.md").write_bytes(b"changed after load\n")
+    for name in ("planner-independence.md", "omp584-planner-rules.md"):
+        target = candidate / name
+        if target.is_file():
+            target.write_bytes(b"changed after load\n")
     monkeypatch.setattr(harness.flood, "tick", harness.flood.state.save)
     capsys.readouterr()
     assert harness.flood.run(once=True) == 0
