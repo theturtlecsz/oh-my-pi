@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from uuid import uuid4
 
+import psycopg
 import pytest
 from pydantic import ValidationError
 
@@ -17,7 +19,14 @@ from omp_work.contracts.nsi.v1.models import (
     OwnerRef,
     TypedNullValue,
 )
-from omp_work.intake_repository import EvidenceLinkRecord, IntakeRevisionBody
+from omp_work.intake_repository import (
+    EvidenceLinkRecord,
+    IntakeRevisionBody,
+    append_revision,
+    read_revision,
+)
+from test_nsi2_repository import connection, locked, revision_body, write_repository
+from test_workflow_service import service  # noqa: F401
 from omp_work.intake_support import (
     ClaimProjection,
     SupportReceipt,
@@ -562,3 +571,90 @@ def test_link_rejects_malformed_receipt(bad: dict[str, object]) -> None:
         EvidenceLinkRecord.model_validate(
             _link(relation="supports", support_receipt=_receipt(**bad))
         )
+
+
+# --- database integration: migration 0042 column metadata & legacy NULL ---
+
+
+@pytest.mark.skipif(
+    os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1",
+    reason="set OMP_WORK_POSTGRES_INTEGRATION=1",
+)
+def test_support_receipt_column_metadata(service) -> None:
+    with psycopg.connect(**service.config.connection_kwargs("omp_work_app")) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT data_type, udt_name, is_nullable, column_default
+                FROM information_schema.columns
+                WHERE table_schema = 'omp_work'
+                  AND table_name = 'intake_claim_evidence'
+                  AND column_name = 'support_receipt'
+                """
+            )
+            row = cur.fetchone()
+            assert row is not None
+            data_type, udt_name, is_nullable, column_default = row
+            assert data_type == "jsonb"
+            assert udt_name == "jsonb"
+            assert is_nullable == "YES"
+            assert column_default is None
+
+
+@pytest.mark.skipif(
+    os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1",
+    reason="set OMP_WORK_POSTGRES_INTEGRATION=1",
+)
+def test_legacy_insert_leaves_receipt_sql_null(service, write_repository) -> None:
+    workspace_id, _ = write_repository
+    body = revision_body(workspace_id)
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        head = locked(cur, write_repository)
+        revision = append_revision(cur, head, body, operation_id=uuid4())
+
+        # Direct SQL query verifies support_receipt column value is SQL NULL
+        cur.execute(
+            """
+            SELECT claim_id, artifact_id, start_byte, end_byte, support_receipt,
+                   support_receipt IS NULL
+            FROM omp_work.intake_claim_evidence
+            WHERE workspace_id = %s AND run_id = %s AND revision = %s
+            """,
+            (workspace_id, "run-1", revision),
+        )
+        rows = cur.fetchall()
+        assert len(rows) > 0
+        for row in rows:
+            assert row[4] is None
+            assert row[5] is True
+
+        # Raw legacy insert without specifying support_receipt
+        artifact_id = body["snapshot"]["artifacts"][0]["id"]
+        cur.execute(
+            """
+            INSERT INTO omp_work.intake_claim_evidence
+              (workspace_id, run_id, revision, claim_id, artifact_id, start_byte, end_byte, quote, relation, operation_id, nsi_version)
+            VALUES
+              (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (workspace_id, "run-1", revision, "prior", artifact_id, 20, 25, "quote", "neither", uuid4(), "nsi/v1"),
+        )
+        cur.execute(
+            """
+            SELECT support_receipt, support_receipt IS NULL
+            FROM omp_work.intake_claim_evidence
+            WHERE workspace_id = %s AND run_id = %s AND revision = %s AND claim_id = 'prior' AND start_byte = 20
+            """,
+            (workspace_id, "run-1", revision),
+        )
+        legacy_row = cur.fetchone()
+        assert legacy_row is not None
+        assert legacy_row[0] is None
+        assert legacy_row[1] is True
+
+        # Read revision reconstructs evidence links with support_receipt=None
+        view = read_revision(cur, workspace_id=workspace_id, run_id="run-1", revision=revision)
+        assert len(view.body.evidence_links) > 0
+        for link in view.body.evidence_links:
+            assert link.support_receipt is None
+            assert "support_receipt" not in link.model_dump()
