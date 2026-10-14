@@ -15,6 +15,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 _REPO = Path(__file__).resolve().parents[3]
 _DOC = _REPO / "docs" / "model-policy-governance.md"
 _PRIORITY = _REPO / "packages" / "coding-agent" / "src" / "priority.json"
@@ -44,11 +46,13 @@ _DOCTRINE_SOURCE = "session-system/agents/omp-AGENTS.md"
 _DOCTRINE_TOPICS = {
     "default-worker",
     "slow-triggers",
+    "deep-effort-suffix",
     "deep-adjudication",
     "intake-deep-exclusion",
     "audit-role-ownership",
     "owner-assignments",
     "no-automatic-replacement",
+    "custom-role-assignments",
 }
 _RESOLVER = "packages/coding-agent/src/config/model-resolver.ts"
 _NON_EXECUTABLE_PREFIXES = ("docs/models.md", "packages/catalog/")
@@ -116,9 +120,9 @@ def qualify(rows: list[Row], priority: dict[str, list[str]], repo: Path) -> list
     active = [r for r in rows if "_malformed" not in r and r["Scope"] == "active-selection"]
     for key, chain in priority.items():
         selector = f"packages/coding-agent/src/priority.json#{key}"
-        covering = [r for r in active if r["Source/selector"] == selector]
+        covering = [r for r in active if r["Source/selector"] == selector and r["Authority"] == "executable"]
         if not covering:
-            problems.append(f"priority.json chain {key!r}: no active-selection row")
+            problems.append(f"priority.json chain {key!r}: no executable active-selection row")
         elif chain and not any(f"`{chain[0]}`" in r["Assertion"] for r in covering):
             problems.append(f"priority.json chain {key!r}: no row asserts head `{chain[0]}`")
 
@@ -126,7 +130,10 @@ def qualify(rows: list[Row], priority: dict[str, list[str]], repo: Path) -> list
     scopes: dict[str, str] = {}
     for row in doctrine:
         scope = row["Scope"]
-        if row["Authority"] == "doctrine" and scope in scopes:
+        if row["Authority"] != "doctrine":
+            problems.append(f"{row['ID']}: owner doctrine requires doctrine authority")
+            continue
+        if scope in scopes:
             problems.append(f"{row['ID']}: doctrine scope {scope!r} shared with {scopes[scope]}")
         scopes[scope] = row["ID"]
     covered = {s.removeprefix("doctrine/") for s in scopes if s.startswith("doctrine/")}
@@ -178,10 +185,32 @@ def test_changed_chain_head_is_reported() -> None:
     assert any("head `openai-codex/gpt-9-new`" in p for p in qualify(rows, changed, _REPO))
 
 
-def test_deleted_doctrine_coverage_is_reported() -> None:
+@pytest.mark.parametrize("topic", sorted(_DOCTRINE_TOPICS))
+def test_deleted_doctrine_coverage_is_reported(topic: str) -> None:
     rows, priority = _load()
-    kept = [r for r in rows if r["Scope"] != "doctrine/slow-triggers"]
-    assert any("'slow-triggers'" in p for p in qualify(kept, priority, _REPO))
+    kept = [r for r in rows if r["Scope"] != f"doctrine/{topic}"]
+    assert any(f"doctrine topic {topic!r}: no row" in p for p in qualify(kept, priority, _REPO))
+
+
+@pytest.mark.parametrize("key", sorted(json.loads(_PRIORITY.read_text())))
+@pytest.mark.parametrize("column,value", [("Authority", "syntax"), ("Scope", "historical")])
+def test_misclassified_priority_chain_is_reported(key: str, column: str, value: str) -> None:
+    rows, priority = _load()
+    mutated = [dict(r) for r in rows]
+    for row in mutated:
+        if row["Source/selector"] == f"packages/coding-agent/src/priority.json#{key}":
+            row[column] = value
+    assert any(f"chain {key!r}: no executable active-selection row" in p for p in qualify(mutated, priority, _REPO))
+
+
+@pytest.mark.parametrize("topic", sorted(_DOCTRINE_TOPICS))
+def test_syntax_cannot_cover_doctrine(topic: str) -> None:
+    rows, priority = _load()
+    mutated = [dict(r) for r in rows]
+    for row in mutated:
+        if row["Scope"] == f"doctrine/{topic}":
+            row["Authority"] = "syntax"
+    assert any(f"doctrine topic {topic!r}: no row" in p for p in qualify(mutated, priority, _REPO))
 
 
 def test_shared_doctrine_scope_is_reported() -> None:
