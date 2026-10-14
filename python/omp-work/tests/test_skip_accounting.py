@@ -53,17 +53,37 @@ def run_pytest(
     env: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[sa.Receipt]]:
     out = out or root / "receipts"
+    # The gate sets PYTEST_ADDOPTS=--basetemp to a directory that contains this
+    # tmp_path. Pytest exits 4 when that basetemp is the cwd or a parent of it
+    # (it would delete the suite). Drop the parent's pytest env and give the
+    # child a sibling basetemp that is not an ancestor of cwd.
     full_env = {
-        **os.environ,
-        **(env or {}),
-        "PYTHONPATH": str(SRC),
-        "OMP_ACCOUNTING_DIR": str(out),
-        "OMP_ACCOUNTING_RUN": run,
-        "OMP_ACCOUNTING_CHECK": check,
-        "OMP_ACCOUNTING_ROOT": str(accounting_root or root),
+        k: v
+        for k, v in {**os.environ, **(env or {})}.items()
+        if k != "PYTEST_ADDOPTS" and not k.startswith("PYTEST_")
     }
+    full_env.update(
+        {
+            "PYTHONPATH": str(SRC),
+            "OMP_ACCOUNTING_DIR": str(out),
+            "OMP_ACCOUNTING_RUN": run,
+            "OMP_ACCOUNTING_CHECK": check,
+            "OMP_ACCOUNTING_ROOT": str(accounting_root or root),
+        }
+    )
+    basetemp = root.with_name(root.name + "-basetemp")
     proc = subprocess.run(
-        [sys.executable, "-m", "pytest", "-p", "omp_work.skip_accounting", "-p", "no:cacheprovider", *args],
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-p",
+            "omp_work.skip_accounting",
+            "-p",
+            "no:cacheprovider",
+            f"--basetemp={basetemp}",
+            *args,
+        ],
         cwd=root,
         env=full_env,
         capture_output=True,
@@ -89,7 +109,7 @@ def only(receipts: list[sa.Receipt]) -> sa.Receipt:
 
 def test_skips_in_every_phase_keep_exact_ids_and_reasons(repo: Path) -> None:
     proc, receipts = run_pytest(repo, "tests")
-    assert proc.returncode == 0, proc.stdout
+    assert proc.returncode == 0, proc.stderr + proc.stdout
     receipt = only(receipts)
     assert receipt.complete and receipt.run_id == "run1" and receipt.check == "unit"
     skipped = {n: sa._skipped_phases(p) for n, p in receipt.nodes.items() if sa._skipped_phases(p)}
@@ -106,7 +126,7 @@ def test_skips_in_every_phase_keep_exact_ids_and_reasons(repo: Path) -> None:
 def test_xdist_controller_writes_single_receipt(repo: Path) -> None:
     pytest.importorskip("xdist")
     proc, receipts = run_pytest(repo, "-n", "3", "tests")
-    assert proc.returncode == 0, proc.stdout
+    assert proc.returncode == 0, proc.stderr + proc.stdout
     receipt = only(receipts)
     assert receipt.complete
     assert "tests/test_suite.py::test_body[2]" in receipt.selected
@@ -120,8 +140,16 @@ def test_node_ids_are_repo_relative_when_rootdir_is_nested(tmp_path: Path) -> No
     (nested / "tests" / "test_suite.py").write_text(SUITE)
     (nested / "pytest.ini").write_text("[pytest]\n")
     proc, receipts = run_pytest(nested, "tests", accounting_root=tmp_path, out=tmp_path / "out")
-    assert proc.returncode == 0, proc.stdout
+    assert proc.returncode == 0, proc.stderr + proc.stdout
     assert "python/omp-work/tests/test_suite.py::test_body[2]" in only(receipts).selected
+
+
+def test_parent_basetemp_ancestor_does_not_abort_the_child(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Reproduce the gate: PYTEST_ADDOPTS names a basetemp that contains the suite cwd.
+    monkeypatch.setenv("PYTEST_ADDOPTS", f"--basetemp={repo.parent} -q")
+    proc, receipts = run_pytest(repo, "tests")
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert only(receipts).nodes["tests/test_suite.py::test_body[2]"]["call"].reason == "body-skip-2"
 
 
 def test_deselected_and_collect_only_are_not_complete_evidence(repo: Path) -> None:
