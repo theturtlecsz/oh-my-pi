@@ -86,20 +86,112 @@ PYCODE
     cp -- "$OMP584_ASSETS/omp584-planner-rules.md" "$OMP584_STAGE/planner-independence.md" || return
     # The planner prompt patch loads the sibling rules under their legacy filename.
     ln -s planner-independence.md "$OMP584_STAGE/omp584-planner-rules.md" || return
-    local patches=(omp584-dependencies.patch omp584-start-metrics.patch "$OMP584_PROMPT_PATCH")
-    local i patch
-    # Normalize exact installations in reverse composition order. git apply is
-    # atomic per patch, has no fuzz, and rejects partial installations.
-    for ((i=${#patches[@]}-1; i>=0; i--)); do
-        patch=$OMP584_ASSETS/${patches[i]}
-        if git -C "$OMP584_STAGE" apply --reverse --check "$patch" 2>/dev/null; then
-            git -C "$OMP584_STAGE" apply --reverse "$patch" || return
+
+    local parts_out rc
+    if ! parts_out=$(python3 "$OMP584_ASSETS/omp584-parts.py" "$OMP584_STAGE/flood.py"); then
+        rc=$?
+        if (( rc == 3 )); then
+            return 2
+        fi
+        return 2
+    fi
+
+    local prompt_patch=${OMP584_PROMPT_PATCH:-omp584-planner-prompt.patch}
+    [[ -s "$OMP584_ASSETS/$prompt_patch" ]] || prompt_patch=omp584-prompt.patch
+
+    local -A patch_files=(
+        [dependencies]="omp584-dependencies.patch"
+        [start-metrics]="omp584-start-metrics.patch"
+        [planner-prompt]="$prompt_patch"
+    )
+
+    local -A states=()
+    local part state
+    while read -r part state; do
+        [[ -n "$part" ]] || continue
+        states["$part"]="$state"
+    done <<< "$parts_out"
+
+    local -a applied_parts=()
+    local -a part_order=(dependencies start-metrics planner-prompt)
+    local patch
+
+    for part in "${part_order[@]}"; do
+        state=${states["$part"]:-missing}
+        if [[ "$state" == "installed" ]]; then
+            echo "part $part: present" >&2
+        elif [[ "$state" == "missing" ]]; then
+            patch=${patch_files["$part"]}
+            if ! git -C "$OMP584_STAGE" apply --check "$OMP584_ASSETS/$patch" 2>/dev/null; then
+                echo "error: part $part is missing and its patch does not apply" >&2
+                return 2
+            fi
+            git -C "$OMP584_STAGE" apply "$OMP584_ASSETS/$patch" || return 2
+            applied_parts+=("$part")
+            echo "part $part: applied" >&2
+        else
+            return 2
         fi
     done
-    for patch in "${patches[@]}"; do
-        git -C "$OMP584_STAGE" apply --check "$OMP584_ASSETS/$patch" || return
-        git -C "$OMP584_STAGE" apply "$OMP584_ASSETS/$patch" || return
+
+    > "$OMP584_STAGE/applied-parts"
+    for part in "${applied_parts[@]}"; do
+        echo "$part" >> "$OMP584_STAGE/applied-parts"
     done
+
+    if ! parts_out=$(python3 "$OMP584_ASSETS/omp584-parts.py" "$OMP584_STAGE/flood.py"); then
+        return 2
+    fi
+    local reclass_count=0
+    while read -r part state; do
+        [[ -n "$part" ]] || continue
+        if [[ "$state" != "installed" ]]; then
+            return 2
+        fi
+        reclass_count=$(( reclass_count + 1 ))
+    done <<< "$parts_out"
+    if [[ "$reclass_count" -ne 3 ]]; then
+        return 2
+    fi
+
+    local scratch_dir="$OMP584_STAGE/legacy-scratch"
+    mkdir -p -- "$scratch_dir"
+    cp -p -- "$OMP584_STAGE/original-flood.py" "$scratch_dir/flood.py"
+    python3 - "$scratch_dir/flood.py" <<'PYCODE' 2>/dev/null || true
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+p.write_bytes(p.read_bytes().replace(b'with_name("planner-independence.md")',
+                                    b'with_name("omp584-planner-rules.md")'))
+PYCODE
+    cp -- "$OMP584_ASSETS/omp584-planner-rules.md" "$scratch_dir/planner-independence.md" 2>/dev/null || true
+    ln -s planner-independence.md "$scratch_dir/omp584-planner-rules.md" 2>/dev/null || true
+
+    local legacy_ok=1
+    local legacy_patches=(omp584-dependencies.patch omp584-start-metrics.patch "$prompt_patch")
+    local i p_name
+    for ((i=${#legacy_patches[@]}-1; i>=0; i--)); do
+        p_name=${legacy_patches[i]}
+        if git -C "$scratch_dir" apply --reverse --check "$OMP584_ASSETS/$p_name" 2>/dev/null; then
+            if ! git -C "$scratch_dir" apply --reverse "$OMP584_ASSETS/$p_name" 2>/dev/null; then
+                legacy_ok=0
+                break
+            fi
+        fi
+    done
+    if (( legacy_ok )); then
+        for p_name in "${legacy_patches[@]}"; do
+            if ! git -C "$scratch_dir" apply --check "$OMP584_ASSETS/$p_name" 2>/dev/null || \
+               ! git -C "$scratch_dir" apply "$OMP584_ASSETS/$p_name" 2>/dev/null; then
+                legacy_ok=0
+                break
+            fi
+        done
+    fi
+    rm -rf -- "$scratch_dir"
+    if (( legacy_ok )); then
+        touch "$OMP584_STAGE/legacy-composable"
+    fi
+    return 0
 }
 
 omp584_verify() (
