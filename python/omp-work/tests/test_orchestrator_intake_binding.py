@@ -17,17 +17,19 @@ import psycopg
 import pytest
 from psycopg import sql
 
-from omp_work.intake_repository import INTAKE_REVISION_ADVANCED, hold_bindings
+from omp_work.intake_repository import (
+    INTAKE_REVISION_ADVANCED, append_revision, hold_bindings, lock_revision, read_revision,
+)
 from omp_work.jobs.store import NativeJobStore
 from omp_work.orchestrator.intake_binding import (
     Binding, IntakeBindingRefused, admit, hold, prepare, read,
 )
-from omp_work.orchestrator.intake_gate import cursor
+from omp_work.orchestrator.intake_gate import cursor, read_head
 from omp_work.v1.models import BoundedIntakeDraft
 from test_nsi2_repository import connection
 from test_project_store import _insert_project, _workspace
 from test_workflow_service import OWNER
-from typed_intake_support import advance_revision, forge_receipt, seed_typed_intake
+from typed_intake_support import advance_revision, forge_receipt, record_pass, seed_typed_intake
 
 pytest_plugins = ("test_workflow_service",)
 pytestmark = pytest.mark.skipif(
@@ -134,7 +136,20 @@ def test_hold_updates_only_state_and_code(world):
         prepare(cur, workspace_id=workspace_id, mission_id=mission_id, run_id="bind", revision=0)
         admitted = admit(cur, workspace_id=workspace_id, mission_id=mission_id, run_id="bind",
                          revision=0, assessment_id=receipt)
+        cur.execute(
+            "SELECT binding_id,run_id,revision,assessment_id,created_at FROM omp_work.mission_intake_bindings "
+            "WHERE workspace_id=%s AND mission_id=%s ORDER BY binding_id",
+            (workspace_id, mission_id),
+        )
+        evidence = cur.fetchall()
         hold(cur, workspace_id=workspace_id, mission_id=mission_id, code="owner_cancelled")
+        cur.execute(
+            "SELECT binding_id,run_id,revision,assessment_id,created_at,state,hold_code "
+            "FROM omp_work.mission_intake_bindings "
+            "WHERE workspace_id=%s AND mission_id=%s ORDER BY binding_id",
+            (workspace_id, mission_id),
+        )
+        assert cur.fetchall() == [(*row, "held", "owner_cancelled") for row in evidence]
         held = read(cur, workspace_id=workspace_id, mission_id=mission_id)
         assert held == Binding(admitted, "bind", 0, receipt, "held", "owner_cancelled")
         # A second hold never rewrites the recorded revision or receipt.
@@ -169,5 +184,52 @@ def test_hold_bindings_scopes_to_mission(world):
                          revision=0, assessment_id=receipt)
         hold_bindings(cur, workspace_id=workspace_id, mission_id=other_mission,
                       code="intake_revision_advanced")
+        assert read(cur, workspace_id=workspace_id, mission_id=mission_id) == Binding(
+            admitted, "bind", 0, receipt, "admitted", None)
+
+
+def test_new_pass_leaves_history_held_until_explicit_admission(world):
+    store, scope, receipt = world
+    workspace_id, mission_id = scope["workspace_id"], scope["mission_id"]
+    with cursor(store, workspace_id=workspace_id, actor_id=OWNER) as cur:
+        admitted = admit(cur, workspace_id=workspace_id, mission_id=mission_id, run_id="bind",
+                         revision=0, assessment_id=receipt)
+    advance_revision(store, workspace_id=workspace_id, actor_id=OWNER, mission_id=mission_id)
+    new_receipt = record_pass(store, workspace_id=workspace_id, actor_id=OWNER, mission_id=mission_id)
+    with cursor(store, workspace_id=workspace_id, actor_id=OWNER) as cur:
+        assert read(cur, workspace_id=workspace_id, mission_id=mission_id) == Binding(
+            admitted, "bind", 0, receipt, "held", INTAKE_REVISION_ADVANCED)
+        new_admission = admit(cur, workspace_id=workspace_id, mission_id=mission_id, run_id="bind",
+                              revision=1, assessment_id=new_receipt)
+    with cursor(store, workspace_id=workspace_id, actor_id=OWNER) as cur:
+        assert read(cur, workspace_id=workspace_id, mission_id=mission_id) == Binding(
+            new_admission, "bind", 1, new_receipt, "admitted", None)
+        cur.execute(
+            "SELECT revision,assessment_id,state,hold_code FROM omp_work.mission_intake_bindings "
+            "WHERE workspace_id=%s AND binding_id=%s", (workspace_id, admitted),
+        )
+        assert cur.fetchone() == (0, receipt, "held", INTAKE_REVISION_ADVANCED)
+
+
+def test_rolled_back_revision_keeps_prior_admission(service, world):
+    store, scope, receipt = world
+    workspace_id, mission_id = scope["workspace_id"], scope["mission_id"]
+    with cursor(store, workspace_id=workspace_id, actor_id=OWNER) as cur:
+        admitted = admit(cur, workspace_id=workspace_id, mission_id=mission_id, run_id="bind",
+                         revision=0, assessment_id=receipt)
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        body = read_revision(cur, workspace_id=workspace_id, run_id="bind", revision=0).body
+        body.snapshot.revision += 1
+        body.binding.revision += 1
+        body.assessments = []
+        body.derivations = []
+        operation_id = uuid4()
+        locked = lock_revision(cur, workspace_id=workspace_id, mission_id=mission_id, run_id="bind",
+                               expected_revision=0, operation_id=operation_id)
+        append_revision(cur, locked, body, operation_id=operation_id)
+        assert read(cur, workspace_id=workspace_id, mission_id=mission_id).state == "held"
+        conn.rollback()
+    with cursor(store, workspace_id=workspace_id, actor_id=OWNER) as cur:
+        assert read_head(cur, workspace_id=workspace_id, mission_id=mission_id).revision == 0
         assert read(cur, workspace_id=workspace_id, mission_id=mission_id) == Binding(
             admitted, "bind", 0, receipt, "admitted", None)
