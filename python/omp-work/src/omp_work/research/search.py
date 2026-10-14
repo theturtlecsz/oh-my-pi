@@ -168,7 +168,11 @@ def run_policy(policy: str | PolicyFn, steps: Steps, *, budget: float, seed: int
         if step_id is None:
             break
         cost = steps[step_id]["cost"]
-        if math.fsum([*costs, cost]) > budget:
+        try:
+            prospective_total = math.fsum([*costs, cost])
+        except OverflowError:
+            break
+        if prospective_total > budget:
             break
         opened.append(step_id)
         opened_set.add(step_id)

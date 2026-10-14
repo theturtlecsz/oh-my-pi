@@ -80,9 +80,14 @@ def test_fractional_budget_uses_fsum():
     assert run_policy("fixed", steps, budget=math.nextafter(total, 0)) == ["s0", "s1"]
 
 
-def test_zero_budget_and_prospective_overflow():
+def test_zero_budget_and_unaffordable_selection_stop():
     steps = _chain([1, 1])
     assert run_policy("fixed", steps, budget=0) == []
-    # second trial would overflow; cheaper later node is not substituted
+    # Second trial exceeds budget; cheaper later node is not substituted.
     steps = {"a": _node(cost=3), "b": _node(cost=3), "c": _node(cost=1)}
     assert run_policy("fixed", steps, budget=5) == ["a"]
+
+
+def test_prospective_total_overflow_stops_before_opening():
+    steps = _chain([1e308, 1e308, 1])
+    assert run_policy("fixed", steps, budget=1.5e308) == ["s0"]
