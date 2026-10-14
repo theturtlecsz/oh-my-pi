@@ -8,11 +8,11 @@ from uuid import UUID, uuid4
 import pytest
 
 from omp_knowledge.learning.cli import EXIT_OK, EXIT_RUN_FAILED, main
-from omp_knowledge.learning.models import Attribution, Claim, Lesson, SourceIdentity
+from omp_knowledge.learning.models import Attribution, Claim, Lesson, SourceIdentity, SourceSpan
 from omp_knowledge.learning.promotion import has_journey_pass
 from omp_knowledge.learning.proposals import ProposalRecord, create_proposal
 from omp_knowledge.learning.store import LearningStore
-from omp_work.v1.canonical import sha256
+from omp_work.v1.canonical import canonical_json, sha256
 from omp_work.v1.models import EvidenceKind, EvidenceReceipt
 
 WORK_ID = UUID(int=588)
@@ -80,13 +80,46 @@ def propose(
     workspace_id: UUID | str = WORKSPACE_ID,
     supported: bool = True,
 ) -> ProposalRecord:
+    # Journey matching reads aggregate_id, including a caller-supplied FOREIGN_ID.
+    claims: tuple[Claim, ...] = ()
+    cited = receipt
+    binding: dict[str, str] = {}
+    if supported:
+        text = "Verification passed"
+        payload = {**receipt.payload, "text": text}
+        encoded = canonical_json(payload)
+        start = encoded.index(text)
+        if receipt.candidate_id is None:
+            raise AssertionError("verification receipt is missing candidate_id")
+        cited = receipt.model_copy(
+            update={
+                "work_id": receipt.work_id,
+                "candidate_id": receipt.candidate_id,
+                "revision_id": receipt.revision_id,
+                "payload": payload,
+                "payload_sha256": sha256(payload),
+            }
+        )
+        claims = (
+            Claim(
+                text=text,
+                receipt_ids=(str(cited.receipt_id),),
+                source_span=SourceSpan(start=start, end=start + len(text)),
+                evaluator=cited.issuer,
+                outcome="PASS",
+            ),
+        )
+        binding = {
+            "work_id": str(cited.work_id),
+            "candidate_id": str(cited.candidate_id),
+            "revision_id": str(cited.revision_id),
+        }
     return create_proposal(
         store, unit_id=uuid4(),
         lesson=Lesson(
             title=f"Learned from campaign {CAMPAIGN_ID}",
             steps=(f"Apply research result from {CAMPAIGN_ID}",),
-            claims=(Claim(text="Verification passed", receipt_ids=(str(receipt.receipt_id),)),)
-            if supported else (),
+            claims=claims,
             research_campaign_ids=citations,
         ),
         attribution=Attribution(
@@ -94,9 +127,10 @@ def propose(
             source=SourceIdentity(
                 workspace_id=workspace_id, event_id=uuid4(), event_sequence=1,
                 aggregate_id=aggregate_id,
+                **binding,
             ),
         ),
-        reader=ReceiptReader(receipt),
+        reader=ReceiptReader(cited),
     )
 
 
