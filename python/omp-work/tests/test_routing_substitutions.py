@@ -37,7 +37,10 @@ def test_plan_pending_and_callers():
     assert by_stage["plan"]["disposition"] == "pending_owner"
     assert by_stage["plan"]["caller"] is None
     assert by_stage["implement"]["caller"] == "omp_work.model_proxy"
-    assert by_stage["research"]["caller"] == "omp_work.intake_support_admission"
+    research = by_stage["research"]
+    assert research["caller"] is None
+    assert research["admission"] == "omp_work.intake_support_admission"
+    assert research["execution"] == "unverified"
 
 
 def test_substitutions_marked_pending_governing_file_verification():

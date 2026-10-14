@@ -9,7 +9,7 @@ Three things stay distinct: a **route** is a stage's declared provider/model; a 
 | plan | openai_codex / gpt-5.6-sol | planning: Fable 5.1 | none (orchestrator plan is deterministic) | pending_owner | pending governing-file verification (s08) |
 | implement | gemini_flash / gemini-3.8-flash-high | implementation: Gemini 3.8 Flash high | `model_proxy.py` | kept | pending governing-file verification (s08) |
 | verify | gemini_flash / gemini-3.8-flash-high | none recorded | none | kept | pending governing-file verification (s08) |
-| research | ollama_cloud / deepseek-v4.1-flash:cloud | none recorded | `intake_support_admission.py` | kept | pending governing-file verification (s08) |
+| research | ollama_cloud / deepseek-v4.1-flash:cloud | none recorded | none; admission by `intake_support_admission.py` (selects route, records usage; no production caller found, execution unverified) | kept | pending governing-file verification (s08) |
 | audit | kimi / kimi-code/k3-256k; reviewer openai-codex/gpt-5.6-sol:medium | auditor: Sol medium | none | kept | pending governing-file verification (s08) |
 | acceptance_review | kimi / kimi-code/k3-256k; reviewer kimi-code/k3-256k | independent reviewer: Kimi K3 256K | none | kept | pending governing-file verification (s08) |
 
