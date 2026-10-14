@@ -284,13 +284,15 @@ def append_revision(
             asserted_kind=claim.asserted_by.kind,
             admitted_kind=claim.admitted_by.kind if claim.admitted_by else None,
             **value_fields(claim.value, "value"))
-    relations = {(link.claim_id, link.artifact_id, link.start_byte, link.end_byte): link.relation
-                 for link in body.evidence_links}
+    links = {(link.claim_id, link.artifact_id, link.start_byte, link.end_byte): link
+             for link in body.evidence_links}
     for claim in snapshot.claims:
         for evidence in claim.evidence:
+            link = links.get((claim.id, evidence.artifact_id, evidence.start_byte, evidence.end_byte))
             put("claim_evidence", claim_id=claim.id, **evidence.model_dump(),
-                relation=relations.get((claim.id, evidence.artifact_id, evidence.start_byte,
-                                        evidence.end_byte), "neither"))
+                relation=link.relation if link is not None else "neither",
+                support_receipt=Jsonb(link.support_receipt.model_dump(mode="json"))
+                if link is not None and link.support_receipt is not None else None)
         for premise in claim.premise_ids:
             put("claim_premises", claim_id=claim.id, premise_id=premise)
     for claim_id, superseded_ids in body.supersessions.items():
@@ -544,7 +546,7 @@ def read_revision(
         history=DecisionHistory.model_validate(history_rows[0]["records"]) if history_rows else DecisionHistory(),
         workspace_id=workspace_id, snapshot=snapshot, binding=binding, artifact_bytes=artifact_bytes,
         evidence_links=[EvidenceLinkRecord.model_validate({name: row[name] for name in
-                        ("claim_id", "artifact_id", "start_byte", "end_byte", "quote", "relation")})
+                        ("claim_id", "artifact_id", "start_byte", "end_byte", "quote", "relation", "support_receipt")})
                         for row in evidence],
         conflicts=conflicts, gaps=gaps, questions=questions, decisions=decisions,
         instructions=[InstructionProvenance.model_validate(dict(id=row["provenance_id"],
