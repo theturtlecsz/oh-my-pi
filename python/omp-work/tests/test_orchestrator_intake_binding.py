@@ -17,14 +17,12 @@ import psycopg
 import pytest
 from psycopg import sql
 
-from omp_work.intake_repository import (
-    INTAKE_REVISION_ADVANCED, append_revision, hold_bindings, lock_revision, read_revision,
-)
+from omp_work.intake_repository import append_revision, hold_bindings, lock_revision, read_revision
 from omp_work.jobs.store import NativeJobStore
 from omp_work.orchestrator.intake_binding import (
     Binding, IntakeBindingRefused, admit, hold, prepare, read,
 )
-from omp_work.orchestrator.intake_gate import cursor, read_head
+from omp_work.orchestrator.intake_gate import INTAKE_REVISION_ADVANCED, cursor, read_head
 from omp_work.v1.models import BoundedIntakeDraft
 from test_nsi2_repository import connection
 from test_project_store import _insert_project, _workspace
@@ -188,6 +186,42 @@ def test_hold_bindings_scopes_to_mission(world):
             admitted, "bind", 0, receipt, "admitted", None)
 
 
+def test_append_revision_holds_prepared_and_admitted_in_one_commit(service, world):
+    store, scope, receipt = world
+    workspace_id, mission_id = scope["workspace_id"], scope["mission_id"]
+    with cursor(store, workspace_id=workspace_id, actor_id=OWNER) as cur:
+        prepared = prepare(cur, workspace_id=workspace_id, mission_id=mission_id, run_id="bind", revision=0)
+        admitted = admit(cur, workspace_id=workspace_id, mission_id=mission_id, run_id="bind",
+                         revision=0, assessment_id=receipt)
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        body = read_revision(cur, workspace_id=workspace_id, run_id="bind", revision=0).body
+        body.snapshot.revision += 1
+        body.binding.revision += 1
+        body.assessments = []
+        body.derivations = []
+        operation_id = uuid4()
+        locked = lock_revision(cur, workspace_id=workspace_id, mission_id=mission_id, run_id="bind",
+                               expected_revision=0, operation_id=operation_id)
+        assert append_revision(cur, locked, body, operation_id=operation_id) == 1
+        # Within the appender's own transaction both open rows and the head move
+        # together, so no reader can observe the new head against a stale binding.
+        assert read_head(cur, workspace_id=workspace_id, mission_id=mission_id).revision == 1
+        cur.execute(
+            "SELECT binding_id,revision,assessment_id,state,hold_code "
+            "FROM omp_work.mission_intake_bindings "
+            "WHERE workspace_id=%s AND mission_id=%s",
+            (workspace_id, mission_id),
+        )
+        assert set(cur.fetchall()) == {
+            (prepared, 0, None, "held", INTAKE_REVISION_ADVANCED),
+            (admitted, 0, receipt, "held", INTAKE_REVISION_ADVANCED),
+        }
+        conn.commit()
+    with cursor(store, workspace_id=workspace_id, actor_id=OWNER) as cur:
+        assert read(cur, workspace_id=workspace_id, mission_id=mission_id) == Binding(
+            admitted, "bind", 0, receipt, "held", INTAKE_REVISION_ADVANCED)
+
+
 def test_new_pass_leaves_history_held_until_explicit_admission(world):
     store, scope, receipt = world
     workspace_id, mission_id = scope["workspace_id"], scope["mission_id"]
@@ -233,3 +267,8 @@ def test_rolled_back_revision_keeps_prior_admission(service, world):
         assert read_head(cur, workspace_id=workspace_id, mission_id=mission_id).revision == 0
         assert read(cur, workspace_id=workspace_id, mission_id=mission_id) == Binding(
             admitted, "bind", 0, receipt, "admitted", None)
+        cur.execute(
+            "SELECT binding_id,revision,assessment_id,state FROM omp_work.mission_intake_bindings "
+            "WHERE workspace_id=%s AND mission_id=%s", (workspace_id, mission_id),
+        )
+        assert cur.fetchall() == [(admitted, 0, receipt, "admitted")]
