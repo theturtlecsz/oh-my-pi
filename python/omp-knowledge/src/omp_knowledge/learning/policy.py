@@ -145,7 +145,11 @@ def _claim_bound(claim: Claim, receipt: EvidenceReceipt) -> bool:
     span = claim.source_span
     if span is None or span.start >= span.end:
         return False
-    text = canonical_json(receipt.payload)
+    try:
+        text = canonical_json(receipt.payload)
+    except Exception:
+        # A receipt without canonical payload text cannot prove a source span.
+        return False
     if span.end > len(text):
         return False
     if text[span.start : span.end] != claim.text:

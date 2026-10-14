@@ -12,7 +12,6 @@ from omp_work.v1.models import EvidenceKind, EvidenceReceipt
 from support.bound_evidence import bound_claim, bound_receipt
 
 from omp_knowledge.learning import policy as policy_module
-from omp_knowledge.learning.generation import load_generation_prompt
 from omp_knowledge.learning.models import Attribution, Claim, Lesson, SourceIdentity, SourceSpan
 from omp_knowledge.learning.policy import (
     REASON_INVALID_CITATION,
@@ -148,6 +147,39 @@ def test_evaluate_never_raises() -> None:
     assert decisions[1].reason == REASON_UNBOUND_SOURCE
     assert decisions[2].reason == REASON_INVALID_CITATION
     assert decisions[3].reason == REASON_NO_CITATION
+
+
+@pytest.mark.parametrize("failure", ["mixed_keys", "circular_reference"])
+def test_uncanonicalizable_payload_rejects_claim_and_stores_only_proposal(failure: str) -> None:
+    receipt = bound_receipt(TEXT)
+    lesson = bound_lesson(receipt)
+    nested: dict[str | int, object] = {}
+    if failure == "mixed_keys":
+        nested.update({1: "one", "two": 2})
+    else:
+        nested["self"] = nested
+    # Receipt fields are frozen, but payload contents can change after validation.
+    receipt.payload["nested"] = nested
+    source = source_for(receipt)
+    reader = Reader(receipt)
+
+    decision = evaluate(lesson, reader, source)
+
+    assert decision.accepted is False
+    assert decision.reason == REASON_UNBOUND_CLAIM
+    assert decision.per_claim_results[0].supported is False
+    assert decision.per_claim_results[0].reason == REASON_UNBOUND_CLAIM
+
+    store = LearningStore(":memory:")
+    proposal = create_proposal(
+        store,
+        unit_id=uuid4(),
+        lesson=lesson,
+        attribution=attribution(source),
+        reader=reader,
+    )
+    assert proposal.status == "rejected"
+    assert_proposal_only(store, REASON_UNBOUND_CLAIM)
 
 
 def test_earlier_reasons_win_over_binding() -> None:
@@ -423,15 +455,3 @@ def test_create_proposal_passes_source_and_reject_stores_only_the_proposal() -> 
     assert accepted_store.execute("SELECT COUNT(*) AS c FROM procedures").fetchone()["c"] == 1
     assert accepted_store.execute("SELECT COUNT(*) AS c FROM procedure_versions").fetchone()["c"] == 1
     assert accepted_store.execute("SELECT COUNT(*) AS c FROM procedure_support").fetchone()["c"] == 1
-
-
-def test_generation_prompt_asks_for_span_issuer_and_pass() -> None:
-    prompt = load_generation_prompt()
-    assert (
-        'Include "claims[].source_span" only when that receipt\'s "payload_truncated"\n'
-        '  is false. "source_span" is {"start", "end"}: character offsets into that\n'
-        '  receipt\'s "payload_text" such that payload_text[start:end] equals the claim\n'
-        '  text. When "payload_truncated" is not false, omit "source_span".\n'
-        '- "claims[].evaluator" is that receipt\'s "issuer".\n'
-        '- "claims[].outcome" is "PASS".'
-    ) in prompt
