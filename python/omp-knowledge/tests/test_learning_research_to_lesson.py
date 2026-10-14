@@ -25,7 +25,7 @@ from omp_work.v1.api_models import (
     WorkItemSummary,
     WorkItemView,
 )
-from omp_work.v1.canonical import sha256
+from omp_work.v1.canonical import canonical_json, sha256
 from omp_work.v1.client import WorkClient
 from omp_work.v1.models import (
     Candidate,
@@ -56,14 +56,17 @@ def _run_integration_variant(
     now = datetime.now(timezone.utc)
 
     # 1. Native domain projections and models
+    claim_text = "Verification receipt confirms candidate quality"
+    receipt_payload = {"exit_code": 0, "claim": claim_text}
+    claim_start = canonical_json(receipt_payload).index(claim_text)
     receipt = EvidenceReceipt(
         receipt_id=receipt_id,
         work_id=work_id,
         revision_id=revision_id,
         candidate_id=candidate_id,
         kind=EvidenceKind.VERIFICATION,
-        payload={"exit_code": 0},
-        payload_sha256=sha256({"exit_code": 0}),
+        payload=receipt_payload,
+        payload_sha256=sha256(receipt_payload),
         issuer="test-runner",
         issued_at=now,
         verdict="PASS",
@@ -255,8 +258,11 @@ def _run_integration_variant(
             "steps": ["Apply research findings", "Execute candidate verification"],
             "claims": [
                 {
-                    "text": "Verification receipt confirms candidate quality",
+                    "text": claim_text,
                     "receipt_ids": [receipts[0]["receipt_id"]],
+                    "source_span": {"start": claim_start, "end": claim_start + len(claim_text)},
+                    "evaluator": receipt.issuer,
+                    "outcome": "PASS",
                 }
             ],
             "research_campaign_ids": citations,

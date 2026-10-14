@@ -8,13 +8,14 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from omp_work.v1.api_models import WorkflowView, WorkItemsPage, WorkItemSummary
+from omp_work.v1.canonical import canonical_json, sha256
 from omp_work.v1.models import EvidenceKind, EvidenceReceipt
 from support.stub_events import FakeEvents, make_event
 from support.stub_generator import StubGenerator
 
 from omp_knowledge.learning.capture import DEFAULT_CAPTURE_TYPES, drain
 from omp_knowledge.learning.generation import GenerationResult
-from omp_knowledge.learning.models import Claim, Lesson
+from omp_knowledge.learning.models import Claim, Lesson, SourceSpan
 from omp_knowledge.learning.store import LearningStore
 
 WORKSPACE = "11111111-1111-1111-1111-111111111111"
@@ -78,14 +79,17 @@ def test_execute_completion_is_captured_and_accepted_on_pass() -> None:
     work_id = str(view.item.work_id)
     records = OneWorkRecord(key, view)
 
+    claim_text = "the audit passed"
+    audit_payload = {"report": "pass", "claim": claim_text}
+    claim_start = canonical_json(audit_payload).index(claim_text)
     audit = EvidenceReceipt(
         receipt_id=uuid4(),
         work_id=view.item.work_id,
-        revision_id=uuid4(),
-        candidate_id=uuid4(),
+        revision_id=view.item.revision.revision_id,
+        candidate_id=view.item.candidate.candidate_id,
         kind=EvidenceKind.AUDIT,
-        payload={"report": "pass"},
-        payload_sha256=HEX,
+        payload=audit_payload,
+        payload_sha256=sha256(audit_payload),
         issuer="test-auditor",
         issued_at=datetime.now(timezone.utc),
         verdict="PASS",
@@ -94,7 +98,13 @@ def test_execute_completion_is_captured_and_accepted_on_pass() -> None:
     lesson = Lesson(
         title="Finish the execution item from its own record",
         steps=("read the finished item", "cite the passing audit"),
-        claims=(Claim(text="the audit passed", receipt_ids=(audit.receipt_id,)),),
+        claims=(Claim(
+            text=claim_text,
+            receipt_ids=(audit.receipt_id,),
+            source_span=SourceSpan(start=claim_start, end=claim_start + len(claim_text)),
+            evaluator=audit.issuer,
+            outcome="PASS",
+        ),),
     )
     generator = StubGenerator(
         [

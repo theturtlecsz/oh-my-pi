@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from omp_work.v1.api_models import ResearchView, WorkflowView, WorkItemsPage, WorkItemSummary
+from omp_work.v1.canonical import canonical_json, sha256
 from omp_work.v1.models import (
     EvidenceKind,
     EvidenceReceipt,
@@ -23,7 +24,7 @@ from support.stub_generator import StubGenerator
 
 from omp_knowledge.learning.capture import DEFAULT_CAPTURE_TYPES, drain, retry
 from omp_knowledge.learning.generation import GenerationResult, GeneratorUnavailable
-from omp_knowledge.learning.models import Claim, Lesson
+from omp_knowledge.learning.models import Claim, Lesson, SourceSpan
 from omp_knowledge.learning.record import (
     NativeRecords,
     NativeResearchRecords,
@@ -553,7 +554,15 @@ def test_retry_retains_stored_trace_snapshot_without_new_reads() -> None:
     store = LearningStore(":memory:")
     records = RecordingRecordsDouble({key: (work_id, wf_view, res_view)}, store=store)
 
-    receipt = make_receipt(work_id=work_id)
+    claim_text = "verified"
+    receipt_payload = {"exit_code": 0, "claim": claim_text}
+    claim_start = canonical_json(receipt_payload).index(claim_text)
+    receipt = make_receipt(work_id=work_id).model_copy(update={
+        "revision_id": wf_view.item.revision.revision_id,
+        "candidate_id": wf_view.item.candidate.candidate_id,
+        "payload": receipt_payload,
+        "payload_sha256": sha256(receipt_payload),
+    })
     reader = DictReceiptReader({str(receipt.receipt_id): receipt})
 
     event = make_event(
@@ -574,7 +583,13 @@ def test_retry_retains_stored_trace_snapshot_without_new_reads() -> None:
     lesson = Lesson(
         title="Apply campaign outcome",
         steps=("step 1",),
-        claims=(Claim(text="verified", receipt_ids=(receipt.receipt_id,)),),
+        claims=(Claim(
+            text=claim_text,
+            receipt_ids=(receipt.receipt_id,),
+            source_span=SourceSpan(start=claim_start, end=claim_start + len(claim_text)),
+            evaluator=receipt.issuer,
+            outcome="PASS",
+        ),),
         research_campaign_ids=(str(UUID(int=10)),),
     )
     recovered_gen = StubGenerator(
@@ -604,6 +619,9 @@ def test_retry_retains_stored_trace_snapshot_without_new_reads() -> None:
     assert len(recovered_gen.calls) == 1
     retried_trace = recovered_gen.calls[0]
     assert retried_trace["work_record"]["work_key"] == key
+    assert retried_trace["work_record"]["work_id"] == str(work_id)
+    assert retried_trace["work_record"]["revision"]["revision_id"] == str(receipt.revision_id)
+    assert retried_trace["work_record"]["candidate"]["candidate_id"] == str(receipt.candidate_id)
     assert retried_trace["research_record"]["work_id"] == str(work_id)
     assert [c["campaign_id"] for c in retried_trace["research_record"]["campaigns"]] == [str(UUID(int=10))]
 
