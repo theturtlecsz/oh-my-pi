@@ -82,7 +82,8 @@ def wiring(service, tmp_path, monkeypatch):
 
     def implement(ctx):
         state.contexts.append(ctx)
-        state.expiry = min(ctx.lease_expires_at(), operations._task_deadline(ctx)).isoformat()
+        state.lease = ctx.lease_expires_at().isoformat()
+        state.expiry = operations._task_deadline(ctx).isoformat()
         if getattr(state, "request_patch", None):
             ctx.request = {**ctx.request, **state.request_patch}
         if getattr(state, "before_run", None):
@@ -151,7 +152,8 @@ def test_worker_grant_manifest_and_cleanup(wiring, exit_code, revoke_error):
         "approach": operations._worker_approach(ctx),
         "allowed_paths": list(ctx.request["allowed_paths"]),
         "candidate_id": str(orchestrator_service._ids(ctx.mission_id, "plan-candidate")),
-        "lease_expires_at": payload["expires_at"],
+        "lease_expires_at": state.lease,
+        "task_deadline": state.expiry,
         "model": {
             "api": state.grant["descriptor"]["api"], "id": state.grant["descriptor"]["id"],
             "limits": {

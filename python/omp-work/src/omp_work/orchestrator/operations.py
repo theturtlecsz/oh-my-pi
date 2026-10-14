@@ -839,7 +839,6 @@ def _run_model_worker(
     deadline = _task_deadline(ctx)
     if deadline is None:
         return None
-    expires_at = min(expires_at, deadline)
     context = lesson_context.compile_context(ctx, worktree, _work_key(ctx)) if ctx.config.context_command else None
     candidate_id = str(service._ids(ctx.mission_id, "plan-candidate"))
     if context is not None:
@@ -859,7 +858,7 @@ def _run_model_worker(
                 "mission_id": str(ctx.mission_id), "work_id": str(ctx.work_id),
                 "job_id": str(ctx.lease.job_id), "worker_id": ctx.lease.worker_id,
                 "fence": ctx.lease.fence, "stage": "implement",
-                "expires_at": expires_at.isoformat(), "ceiling_usd": str(ceiling),
+                "expires_at": deadline.isoformat(), "ceiling_usd": str(ceiling),
             },
         )
     except httpx.HTTPStatusError as error:
@@ -877,6 +876,7 @@ def _run_model_worker(
             "allowed_paths": list(ctx.request.get("allowed_paths") or ()),
             "candidate_id": candidate_id,
             "lease_expires_at": expires_at.isoformat(),
+            "task_deadline": deadline.isoformat(),
             "model": {
                 "api": descriptor["api"], "id": descriptor["id"],
                 "limits": {
@@ -897,11 +897,16 @@ def _run_model_worker(
             ctx, argv, worktree, ro_binds=(Path(argv[0]), manifest_path),
             model_proxy=(endpoint.hostname, endpoint.port or (443 if endpoint.scheme == "https" else 80)),
             model_token=grant["model_token"], manifest_path=manifest_path,
+            deadline=deadline,
             candidate_id=UUID(candidate_id),
         )
-        # The grant ends with the lease this launch saw. A failure after that
-        # moment is the model being cut off, not a worker verdict: lease_dead.
-        if code not in (0, None) and datetime.now(UTC) >= expires_at:
+        # A non-zero exit at the task deadline, under cancel, or after lease
+        # loss is the model being cut off, not a worker verdict.
+        if code not in (0, None) and (
+            datetime.now(UTC) >= deadline
+            or (ctx.cancel is not None and ctx.cancel.is_set())
+            or not ctx.lease_ok()
+        ):
             return None
         return code
     finally:
