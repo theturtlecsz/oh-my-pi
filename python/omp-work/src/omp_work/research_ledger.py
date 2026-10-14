@@ -32,7 +32,6 @@ def run_campaign_with_ledger(
     question: str,
     retrieved_facts: list[str],
     parent_budget_tokens: int = 8000,
-    model: str = "gemini-3.8-flash-high",
     role: str = "researcher",
 ) -> LedgedCampaign:
     from omp_work.research_campaign import run_campaign
@@ -49,7 +48,7 @@ def run_campaign_with_ledger(
         "conversation_id": campaign_id,
         "step_index": 1,
         "role": role,
-        "model": model,
+        "model": None,
         "input_tokens": half,
         "output_tokens": camp.spent_tokens - half,
         "at": time.time(),
