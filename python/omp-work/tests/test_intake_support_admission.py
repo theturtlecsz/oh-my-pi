@@ -9,8 +9,9 @@ accounting of its usage:
   model and reports ``remaining_usd`` as ``ceiling - spent`` under the tightest
   present budget;
 - a budget already spent out is ``budget_exceeded``;
-- a measured reply stores its input/output counts with a zero cache and no
-  price; a tokenless reply stores null counts and price, never zero; a mixed
+- a measured reply stores its input/output counts with unknown cache usage
+  unless measured cache usage is supplied, and no price; a tokenless reply
+  stores null counts and price, never zero; a mixed
   pair is ``ValueError`` and writes nothing;
 - the usage row is committed by ``settle_judge_usage`` itself, so it survives a
   rollback of the caller's transaction.
@@ -157,7 +158,9 @@ def _usage_row(ctx, usage_id: str) -> dict[str, object] | None:
         ).fetchone()
 
 
-def _settle(ctx, mission_id: UUID, *, input_tokens, output_tokens) -> str:
+def _settle(
+    ctx, mission_id: UUID, *, input_tokens, output_tokens, cache_tokens: int | None = None
+) -> str:
     return settle_judge_usage(
         ctx.jobs,
         operation_id=f"op-{uuid4()}",
@@ -168,6 +171,7 @@ def _settle(ctx, mission_id: UUID, *, input_tokens, output_tokens) -> str:
         request_id=f"req-{uuid4()}",
         input_tokens=input_tokens,
         output_tokens=output_tokens,
+        cache_tokens=cache_tokens,
     )
 
 
@@ -225,7 +229,7 @@ def test_spent_out_budget_is_exceeded(admission) -> None:
 
 
 def test_measured_settle_stores_counts(admission) -> None:
-    """A measured reply stores its counts, a zero cache and no price."""
+    """A measured reply leaves unmeasured cache usage and total unknown."""
     ctx = admission
     mission_id = _mission(ctx)
     usage_id = _settle(ctx, mission_id, input_tokens=1200, output_tokens=300)
@@ -237,10 +241,27 @@ def test_measured_settle_stores_counts(admission) -> None:
     assert row["job_id_derived"] is None
     assert row["input_tokens"] == 1200
     assert row["output_tokens"] == 300
-    assert row["cache_tokens"] == 0
+    assert row["cache_tokens"] is None
     assert row["measurement"] == "measured"
     assert row["price_usd"] is None
-    assert row["tokens"] == 1500
+    assert row["tokens"] is None
+
+
+def test_measured_settle_stores_supplied_cache_count(admission) -> None:
+    """Measured cache usage is stored and contributes to the known total."""
+    ctx = admission
+    mission_id = _mission(ctx)
+    usage_id = _settle(
+        ctx, mission_id, input_tokens=1200, output_tokens=300, cache_tokens=200
+    )
+
+    row = _usage_row(ctx, usage_id)
+    assert row is not None
+    assert row["measurement"] == "measured"
+    assert row["input_tokens"] == 1200
+    assert row["output_tokens"] == 300
+    assert row["cache_tokens"] == 200
+    assert row["tokens"] == 1700
 
 
 def test_unknown_settle_stores_nulls_not_zero(admission) -> None:
@@ -268,6 +289,8 @@ def test_mixed_counts_refuse_and_write_nothing(admission) -> None:
         _settle(ctx, mission_id, input_tokens=1, output_tokens=None)
     with pytest.raises(ValueError):
         _settle(ctx, mission_id, input_tokens=None, output_tokens=1)
+    with pytest.raises(ValueError):
+        _settle(ctx, mission_id, input_tokens=None, output_tokens=None, cache_tokens=1)
     assert _usage_count(ctx) == before
 
 
