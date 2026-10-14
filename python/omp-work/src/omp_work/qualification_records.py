@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal
 
 from pydantic import ValidationError
@@ -31,6 +31,29 @@ class ScopeIdentity:
 
 
 @dataclass(frozen=True)
+class DeclaredExperiment:
+    experiment_id: str
+    trial_id: str
+    task_id: str
+    proof_record_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class QualifiedBackend:
+    backend_id: str
+    experiment_ids: tuple[str, ...]
+    proof_record_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class PreregisteredStratum:
+    dimension: str
+    value: str
+    allocation: int
+    proof_record_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class FrozenProtocol:
     """Internal projection only; never inferred from a research protocol hash."""
     proof_record_ids: tuple[str, ...]
@@ -42,6 +65,66 @@ class FrozenProtocol:
     run_end: datetime
     allocations: tuple[tuple[str, int], ...]
     qualified_backend_proof_ids: tuple[str, ...]
+    experiments: tuple[DeclaredExperiment, ...] = ()
+    backends: tuple[QualifiedBackend, ...] = ()
+    strata: tuple[PreregisteredStratum, ...] = ()
+
+
+@dataclass(frozen=True)
+class ResourceUsage:
+    """Keep measurement basis and units separate; None means unknown, not zero."""
+    name: str
+    basis: str
+    unit: str
+    amount: float | None
+    evidence_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class StratumEvidence:
+    dimension: str
+    value: str
+    evidence_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ExecutionAttempt:
+    """Trusted read projection of linked trial/job/start evidence, not job claims.
+
+    A future adapter must verify these bindings before constructing this type.
+    Existing observation payloads cannot populate it merely by naming these keys.
+    Resources/outcomes remain attached even when counting excludes the candidate.
+    """
+    record_id: str
+    protocol_sha256: str
+    scope: ScopeIdentity
+    recorded_at: datetime
+    execution_attempt_id: str | None
+    experiment_id: str | None
+    trial_id: str | None
+    task_id: str | None
+    job_id: str | None
+    backend_id: str | None
+    trial_evidence_id: str | None
+    job_evidence_id: str | None
+    start_evidence_id: str | None
+    started_at: datetime | None
+    kind: str
+    execution_outcome: str
+    scientific_outcome: str | None = None
+    retry_of: str | None = None
+    category: str | None = None
+    resources: tuple[ResourceUsage, ...] = ()
+    strata: tuple[StratumEvidence, ...] = ()
+    replacement_for: str | None = None
+
+
+@dataclass(frozen=True)
+class ScopeEvent:
+    record_id: str
+    protocol_sha256: str
+    observed_at: datetime
+    scope: ScopeIdentity
 
 
 @dataclass(frozen=True)
@@ -75,6 +158,8 @@ class Snapshot:
     acceptance_record_ids: tuple[str, ...]
     exclusions: tuple[Exclusion, ...]
     protocol: FrozenProtocol | None = None
+    attempts: tuple[ExecutionAttempt, ...] = ()
+    scope_events: tuple[ScopeEvent, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -95,6 +180,35 @@ def scope_boundary(expected: ScopeIdentity, actual: ScopeIdentity) -> tuple[str,
         name for name in ("release", "configuration", "recipe", "evaluator", "workload", "criteria")
         if getattr(expected, name) != getattr(actual, name)
     )
+
+
+def frozen_run_boundary(
+    protocol: FrozenProtocol, protocol_sha256: str, at: datetime, scope: ScopeIdentity,
+) -> str | None:
+    """One run only; matching scope never moves a record from another freeze."""
+    if protocol_sha256 != protocol.protocol_sha256:
+        return "different frozen run"
+    if not protocol.run_start <= at < protocol.run_end:
+        return "outside frozen 72h run"
+    drift = scope_boundary(protocol.scope, scope)
+    if drift:
+        return "frozen scope drift: " + ", ".join(drift)
+    return None
+
+
+def frozen_run_missing_proof(protocol: FrozenProtocol) -> tuple[str, ...]:
+    missing = []
+    if not protocol.proof_record_ids or not protocol.protocol_sha256:
+        missing.append("acceptance-bound O9 freeze")
+    if not protocol.release_baseline_sha256 or not protocol.scope.release:
+        missing.append("release baseline")
+    if not all(getattr(protocol.scope, name) for name in (
+        "configuration", "recipe", "evaluator", "workload", "criteria",
+    )):
+        missing.append("frozen scope identities")
+    if protocol.run_end - protocol.run_start != timedelta(hours=72):
+        missing.append("frozen 72h interval")
+    return tuple(missing)
 
 
 def decode_evidence(
@@ -185,7 +299,7 @@ def unavailable_report(snapshot: Snapshot, gate: Gate) -> Report:
     return Report(
         gate, "not started", None, (), snapshot.exclusions + tuple(
             Exclusion(record.record_id, "O9 freeze and release baseline unavailable")
-            for record in (*snapshot.receipts, *snapshot.observations)
+            for record in (*snapshot.receipts, *snapshot.observations, *snapshot.attempts, *snapshot.scope_events)
         ) + tuple(
             Exclusion(record_id, "O9 freeze and release baseline unavailable")
             for record_id in snapshot.acceptance_record_ids
