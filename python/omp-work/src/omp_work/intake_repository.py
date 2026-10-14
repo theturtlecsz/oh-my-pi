@@ -20,6 +20,8 @@ from .contracts.nsi.v1.validate import content_hash
 from .intake_support import SupportReceipt
 from .v1.api_models import IntakeAssessmentView, IntakeCriterionLink, IntakeDecisionRecord, IntakeIssueRecord
 
+INTAKE_REVISION_ADVANCED = "intake_revision_advanced"
+
 
 class IntakeRepositoryError(ValueError):
     """A rejected repository operation; message is a stable reason code."""
@@ -344,7 +346,23 @@ def append_revision(
         )
         if cur.rowcount != 1:
             raise IntakeRepositoryError("stale_revision")
+        hold_bindings(cur, workspace_id=locked.workspace_id, mission_id=locked.mission_id,
+                      code=INTAKE_REVISION_ADVANCED)
     return revision
+
+
+def hold_bindings(cur: Cursor, *, workspace_id: UUID, mission_id: UUID, code: str) -> None:
+    """Hold every open mission binding; its revision and assessment stay put.
+
+    Bindings are history: a hold only marks the row so a consumer stops acting
+    on the revision it was admitted on. The append that advances the head owns
+    the transaction, so the hold is atomic with the new revision.
+    """
+    cur.execute(
+        "UPDATE omp_work.mission_intake_bindings SET state='held', hold_code=%s "
+        "WHERE workspace_id=%s AND mission_id=%s AND state IN ('prepared','admitted')",
+        (code, workspace_id, mission_id),
+    )
 
 
 @dataclass(frozen=True)
