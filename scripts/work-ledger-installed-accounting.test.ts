@@ -238,10 +238,11 @@ async function readReceipt(file: string): Promise<SkipReceipt> {
 }
 
 describe("installed accounting subset supplement", () => {
-	test("selected receipt lacks test_supplement_only, the supplement executes it and the lifetime node", async () => {
+	test("fresh output merges selected and supplement calls including the lifetime node", async () => {
 		const fix = await makeFixture();
 		await writeUnitReceipt(fix);
 		const { calls, results, runner } = fixtureRunner("pass");
+		await fs.rm(fix.out, { recursive: true });
 
 		const result = await runInstalledAccounting(input(fix, { mode: "subset", runner }));
 

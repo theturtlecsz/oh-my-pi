@@ -335,6 +335,8 @@ export async function runInstalledAccounting(options: InstalledAccountingOptions
 		OMP_ACCOUNTING_ROOT: root,
 	};
 	const resolvedUnit = path.resolve(unit);
+	const outputDir = path.resolve(root, out);
+	await fs.mkdir(outputDir, { recursive: true });
 
 	const runs: InstalledAccountingRun[] = [];
 	const provenanceRuns: Array<{
@@ -420,8 +422,6 @@ export async function runInstalledAccounting(options: InstalledAccountingOptions
 	};
 
 	const finalize = async (pending: InstalledAccountingPending): Promise<InstalledAccountingResult> => {
-		const outputDir = path.resolve(root, out);
-		await fs.mkdir(outputDir, { recursive: true });
 		const merged = await spawn(
 			[
 				uv,
