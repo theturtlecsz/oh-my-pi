@@ -1,9 +1,10 @@
-"""Tests for procedural lesson compilation into stage context bundles (OMP-607-s03).
+"""Tests for procedural lesson compilation into stage context bundles (OMP-607-s03/s06).
 
 Active procedures require both a journey pass and owner-approved promotion batch
-to be supplied. Supplies are recorded in SQLite in a single transaction, immutable
-supply lines are rendered, compiler failure rolls back supplies, and exclusions
-delete provisional supplies.
+to be supplied. Compilation only proposes supplies: it renders immutable supply
+lines and returns their ids and records without writing supply rows. The
+deliver CLI persists those proposals with the launch's worker job and context
+and prompt hashes. Exclusions drop excluded ids from the proposal.
 """
 
 from __future__ import annotations
@@ -141,7 +142,7 @@ def _approve_procedure(
     return decision["decision_id"]
 
 
-def test_active_procedure_with_journey_pass_and_approved_batch(tmp_path: Path) -> None:
+def test_procedure_with_journey_pass_and_approval_is_included(tmp_path: Path) -> None:
     repo, _state_dir, settings, view = _setup_environment(tmp_path)
     store = LearningStore(tmp_path / "learning")
 
@@ -178,19 +179,27 @@ def test_active_procedure_with_journey_pass_and_approved_batch(tmp_path: Path) -
     assert f"supply={supply_id}" in text
     assert f"- lesson#{supply_id}:" in text
 
-    # Verify matching supply recorded in SQLite
-    rows = store.connection.execute(
-        "SELECT * FROM supplies WHERE supply_id = ?", (supply_id,)
-    ).fetchall()
-    assert len(rows) == 1
-    row = rows[0]
-    assert row["procedure_id"] == "proc-success"
-    assert row["version"] == 1
-    assert row["workspace_id"] == str(view.item.workspace_id)
-    assert row["work_key"] == "OMP-311"
-    ctx = json.loads(row["context_json"])
-    assert ctx["project_id"] == str(view.item.project_id)
-    assert ctx["repository"] == norm_repo
+    # Compilation proposes the lesson; it must not record delivery
+    # (OMP-607 r3 ac3). Recording happens later, at worker launch.
+    supplies = store.connection.execute("SELECT COUNT(*) AS cnt FROM supplies").fetchone()["cnt"]
+    assert supplies == 0
+
+    proposed = result.get("lesson_supplies")
+    assert isinstance(proposed, list)
+    assert len(proposed) == 1
+    record = proposed[0]
+    assert record["supply_id"] == supply_id
+    assert record["procedure_id"] == "proc-success"
+    assert record["version"] == 1
+    assert record["workspace_id"] == str(view.item.workspace_id)
+    assert record["work_key"] == "OMP-311"
+    assert record["context"] == {
+        "project_id": str(view.item.project_id),
+        "repository": norm_repo,
+    }
+    assert record["worker_job_id"] is None
+    assert record["compiled_context_hash"] is None
+    assert record["prompt_hash"] is None
 
 
 def test_missing_journey_pass_yields_no_lesson_text(tmp_path: Path) -> None:
@@ -395,13 +404,86 @@ def test_cli_stage_uses_same_learning_db(tmp_path: Path) -> None:
     assert isinstance(lesson_supply_ids, list)
     assert len(lesson_supply_ids) == 1
 
-    # Reopen DB to verify supplies recorded
+    # The stage CLI proposes the lesson and writes no supply rows.
+    store_check = LearningStore(learning_dir)
+    assert store_check.connection.execute("SELECT COUNT(*) AS cnt FROM supplies").fetchone()["cnt"] == 0
+    store_check.close()
+
+    # deliver CLI persists the proposed supplies with the launch's delivery hashes.
+    proposed = payload.get("lesson_supplies")
+    assert isinstance(proposed, list)
+    assert len(proposed) == 1
+    deliver_stdin = io.StringIO(
+        json.dumps(
+            {
+                "worker_job_id": "job-cli-1",
+                "compiled_context_hash": payload["bundle_sha256"],
+                "prompt_hash": "prompt-hash-cli",
+                "supplies": proposed,
+            }
+        )
+    )
+    deliver_stdout = io.StringIO()
+    deliver_exit = main(
+        ["deliver", "--learning-state-dir", str(learning_dir)],
+        stdin=deliver_stdin,
+        stdout=deliver_stdout,
+    )
+    assert deliver_exit == 0, deliver_stdout.getvalue()
+    assert json.loads(deliver_stdout.getvalue()) == {"supply_ids": lesson_supply_ids}
+
     store_check = LearningStore(learning_dir)
     rows = store_check.connection.execute("SELECT * FROM supplies").fetchall()
     store_check.close()
     assert len(rows) == 1
     assert rows[0]["supply_id"] == lesson_supply_ids[0]
     assert rows[0]["procedure_id"] == "proc-cli"
+    assert rows[0]["worker_job_id"] == "job-cli-1"
+    assert rows[0]["compiled_context_hash"] == payload["bundle_sha256"]
+    assert rows[0]["prompt_hash"] == "prompt-hash-cli"
+
+
+@pytest.mark.parametrize("missing", ["worker_job_id", "compiled_context_hash", "prompt_hash"])
+def test_deliver_refuses_blank_identity_without_writing(
+    tmp_path: Path, missing: str
+) -> None:
+    learning_dir = tmp_path / "learning"
+    LearningStore(learning_dir).close()
+
+    identity = {
+        "worker_job_id": "job-1",
+        "compiled_context_hash": "ctx-hash",
+        "prompt_hash": "prompt-hash",
+    }
+    identity[missing] = "   "
+    payload = {
+        **identity,
+        "supplies": [
+            {
+                "supply_id": "sup-1",
+                "procedure_id": "proc-1",
+                "version": 1,
+                "workspace_id": "ws-1",
+                "work_key": "OMP-311",
+                "context": {},
+                "supplied_at": "2026-10-14T00:00:00Z",
+            }
+        ],
+    }
+
+    stdout = io.StringIO()
+    exit_code = main(
+        ["deliver", "--learning-state-dir", str(learning_dir)],
+        stdin=io.StringIO(json.dumps(payload)),
+        stdout=stdout,
+    )
+
+    assert exit_code == 2
+    assert stdout.getvalue() == ""
+    store = LearningStore(learning_dir)
+    count = store.connection.execute("SELECT COUNT(*) AS cnt FROM supplies").fetchone()["cnt"]
+    store.close()
+    assert count == 0
 
 
 def test_mutating_versions_between_supply_selection_and_rendering(
@@ -487,7 +569,7 @@ def test_compiler_failure_rolls_back_supplies(tmp_path: Path) -> None:
             learning_store=store,
         )
 
-    # Supplies inserted by supply() during the failed compile MUST be rolled back
+    # A failed compile proposes nothing and still writes no supply rows.
     count = store.connection.execute("SELECT COUNT(*) FROM supplies").fetchone()[0]
     assert count == 0
 
@@ -556,13 +638,9 @@ def test_procedural_exclusions_delete_provisional_supplies(tmp_path: Path) -> No
     retained_supply_id = retained_ids[0]
     assert dropped_supply_id != retained_supply_id
 
-    # Verify: the dropped supply was deleted from the supplies table
-    supplies_in_db = [
-        row["supply_id"]
-        for row in store.connection.execute(
-            "SELECT supply_id FROM supplies WHERE work_key = 'OMP-311' AND supply_id IN (?, ?)",
-            (dropped_supply_id, retained_supply_id),
-        ).fetchall()
-    ]
-    assert dropped_supply_id not in supplies_in_db
-    assert retained_supply_id in supplies_in_db
+    # The exclusion drops the dropped id from the proposed supplies while
+    # keeping the retained one; compilation still writes no rows.
+    retained_supplies = restricted_res["lesson_supplies"]
+    assert [record["supply_id"] for record in retained_supplies] == [retained_supply_id]
+    assert dropped_supply_id not in {record["supply_id"] for record in retained_supplies}
+    assert store.connection.execute("SELECT COUNT(*) AS cnt FROM supplies").fetchone()["cnt"] == 0
