@@ -102,7 +102,10 @@ CREATE TABLE IF NOT EXISTS supplies (
     workspace_id TEXT NOT NULL,
     work_key TEXT NOT NULL,
     context_json TEXT NOT NULL,
-    supplied_at TEXT NOT NULL
+    supplied_at TEXT NOT NULL,
+    worker_job_id TEXT,
+    compiled_context_hash TEXT,
+    prompt_hash TEXT
 );
 
 CREATE TABLE IF NOT EXISTS uses (
@@ -194,6 +197,10 @@ class LearningStore:
 
     def _init_db(self) -> None:
         self._conn.executescript(SCHEMA_SQL)
+        supply_cols = {row["name"] for row in self._conn.execute("PRAGMA table_info(supplies)")}
+        for column in ("worker_job_id", "compiled_context_hash", "prompt_hash"):
+            if column not in supply_cols:
+                self._conn.execute(f"ALTER TABLE supplies ADD COLUMN {column} TEXT")
         cursor = self._conn.execute("PRAGMA table_info(cleanup_queue)")
         cols = {row["name"] for row in cursor.fetchall()}
         if "attempts" not in cols:
