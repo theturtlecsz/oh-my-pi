@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -54,11 +55,12 @@ class TaskSet:
         norm = normalize_role(role)
         return [t for t in self.tasks if normalize_role(t["role"]) == norm]
 
+    def candidate_input(self, task_id: str) -> Any:
+        """Only this input view may be sent to a candidate; checks remain local."""
+        return deepcopy(self.tasks_by_id[task_id]["input"])
+
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "version": self.version,
-            "tasks": self.tasks,
-        }
+        return {"version": self.version, "tasks": self.tasks}
 
     def __getitem__(self, task_id: str) -> dict[str, Any]:
         return self.tasks_by_id[task_id]
@@ -135,6 +137,26 @@ class QualificationResult:
         )
 
 
+def _validate_check(check: Any) -> None:
+    if not isinstance(check, dict):
+        raise ValueError("check must be an object")
+    kind = check.get("check")
+    if not isinstance(kind, str) or kind not in CLOSED_CHECKS:
+        raise ValueError(f"unknown check type: {kind!r}")
+    if set(check) != {"check", "expected"}:
+        raise ValueError("check must contain only 'check' and 'expected'")
+    expected = check["expected"]
+    if kind == "contains_all":
+        if not isinstance(expected, list) or not expected or not all(
+            isinstance(text, str) and text for text in expected
+        ):
+            raise ValueError("contains_all expected must be a non-empty list of non-empty strings")
+    elif not isinstance(expected, str):
+        raise ValueError(f"{kind} expected must be a string")
+    elif kind == "verdict_equals" and expected not in {"supports", "contradicts", "neither"}:
+        raise ValueError("verdict_equals expected must be a corpus verdict")
+
+
 def _validate_task_set_dict(data: Any) -> TaskSet:
     if not isinstance(data, dict):
         raise ValueError("task set root must be a JSON object")
@@ -171,30 +193,11 @@ def _validate_task_set_dict(data: Any) -> TaskSet:
             raise ValueError(f"task {tid} missing required 'input' field")
 
         checks = task.get("checks")
-        if checks is None and "check" in task:
-            single_check = task["check"]
-            checks = [single_check] if isinstance(single_check, dict) else [{"check": single_check}]
-
-        if not isinstance(checks, list) or len(checks) == 0:
+        if not isinstance(checks, list) or not checks:
             raise ValueError(f"task {tid} must define at least one check in 'checks'")
-
         for check in checks:
-            if not isinstance(check, dict):
-                raise ValueError(f"check in task {tid} must be an object")
-            check_type = check.get("check") or check.get("type")
-            if check_type not in CLOSED_CHECKS:
-                raise ValueError(f"unknown check type: {check_type!r} in task {tid}")
-            if check_type == "exact_text":
-                if "expected" not in check and "expected_text" not in check:
-                    raise ValueError(f"exact_text check in task {tid} missing 'expected'")
-            elif check_type == "contains_all":
-                expected = check.get("expected") or check.get("substrings") or check.get("values")
-                if expected is None:
-                    raise ValueError(f"contains_all check in task {tid} missing 'expected'")
-            elif check_type == "verdict_equals":
-                expected = check.get("expected") or check.get("verdict")
-                if expected is None:
-                    raise ValueError(f"verdict_equals check in task {tid} missing 'expected'")
+            _validate_check(check)
+
 
     return TaskSet(version=version, tasks=tasks)
 
@@ -205,9 +208,7 @@ def load_task_set(path: str | Path | None = None) -> TaskSet:
     try:
         raw_text = target_path.read_text(encoding="utf-8")
         data = json.loads(raw_text)
-    except Exception as exc:
-        if isinstance(exc, ValueError) and not isinstance(exc, json.JSONDecodeError):
-            raise
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"failed to read task set from {target_path}: {exc}") from exc
 
     return _validate_task_set_dict(data)
@@ -231,7 +232,7 @@ def task_set_sha256(task_set: TaskSet | dict[str, Any] | Path | str | bytes | No
         ts = _validate_task_set_dict(task_set)
         raw_bytes = canonical_task_set_bytes(ts)
     elif isinstance(task_set, bytes):
-        raw_bytes = task_set
+        raw_bytes = canonical_task_set_bytes(_validate_task_set_dict(json.loads(task_set)))
     else:
         raise ValueError(f"unsupported task_set type for digest: {type(task_set)}")
 
@@ -239,44 +240,13 @@ def task_set_sha256(task_set: TaskSet | dict[str, Any] | Path | str | bytes | No
 
 
 def _grade_single_check(check: dict[str, Any], output: Any) -> bool:
-    check_type = check.get("check") or check.get("type")
-    if check_type not in CLOSED_CHECKS:
-        raise ValueError(f"unknown check type: {check_type!r}")
-
-    if check_type == "exact_text":
-        expected = check.get("expected")
-        if expected is None:
-            expected = check.get("expected_text", "")
-        if not isinstance(output, (str, int, float)):
-            return False
-        return str(output).strip() == str(expected).strip()
-
-    if check_type == "contains_all":
-        expected = check.get("expected") or check.get("substrings") or check.get("values")
-        if isinstance(expected, str):
-            expected = [expected]
-        if not isinstance(expected, (list, tuple, set)):
-            return False
-        out_str = str(output) if output is not None else ""
-        case_sensitive = check.get("case_sensitive", True)
-        if case_sensitive:
-            return all(str(sub) in out_str for sub in expected)
-        out_lower = out_str.lower()
-        return all(str(sub).lower() in out_lower for sub in expected)
-
-    if check_type == "verdict_equals":
-        expected = check.get("expected") or check.get("verdict")
-        if output is None or expected is None:
-            return False
-        if isinstance(output, dict) and "verdict" in output:
-            val = output["verdict"]
-        elif hasattr(output, "verdict"):
-            val = output.verdict
-        else:
-            val = str(output)
-        return str(val).strip().lower() == str(expected).strip().lower()
-
-    return False
+    kind, expected = check["check"], check["expected"]
+    if kind == "exact_text":
+        return isinstance(output, str) and output == expected
+    if kind == "contains_all":
+        return isinstance(output, str) and all(text in output for text in expected)
+    verdict = output.get("verdict") if isinstance(output, dict) else getattr(output, "verdict", output)
+    return isinstance(verdict, str) and verdict == expected
 
 
 def grade(check_or_task: dict[str, Any], output: Any) -> bool:
@@ -291,8 +261,11 @@ def grade(check_or_task: dict[str, Any], output: Any) -> bool:
     if checks is not None and isinstance(checks, list):
         if not checks:
             return False
+        for check in checks:
+            _validate_check(check)
         return all(_grade_single_check(c, output) for c in checks)
 
+    _validate_check(check_or_task)
     return _grade_single_check(check_or_task, output)
 
 

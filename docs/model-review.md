@@ -1,139 +1,136 @@
-# Model Review and Qualification Procedure
+# Model review and qualification
 
-This document specifies the rubric, provider offering evaluations, qualification policy, and evidence recording standards governing model selection for OMP execution roles.
+Qualification precedes routing. A change to model, provider, reasoning effort,
+role assignment, or offering revision requires fresh candidate-call evidence on
+the fixed task set. New listings trigger evaluation, never automatic replacement.
+The deterministic supervisor (ADR 0006 D33) is code, not a model offering.
 
-## Core Principle: Qualification Precedes Routing
+## Authority and scope
 
-No model offering enters `routing-policy.v1.json` or receives traffic for any execution role (`plan`, `implement`, `verify`, `research`, `intake_support_judge`, `review`, `operator_session`) without passing the frozen qualification task set.
+For Work Ledger execution routing, the governing file is
+[`routing-policy.v1.json`](../python/omp-work/src/omp_work/routing/routing-policy.v1.json).
+`routing/policy.py:load_policy` loads that packaged file by default; stages,
+escalation tiers, alternates, and reviewer declarations are its policy facts.
+[`docs/models.md`](models.md) documents coding-agent model configuration and
+runtime selection, not a competing Work Ledger assignment table. Coding-agent
+catalog compatibility rules govern that separate subsystem. This review document
+is a procedure and policy snapshot, not another routing source.
 
-Fresh qualification evidence is mandatory whenever any of the following changes occur:
-1. **Model identity**: Switching to a different model identifier or checkpoint.
-2. **Provider**: Changing the hosting provider or wire transport.
-3. **Effort level**: Adjusting reasoning effort (e.g. `low`, `medium`, `high`, or tier `E0`-`E4`).
-4. **Role assignment**: Assigning an offering to a new execution role or stage.
-5. **Offering revision**: Provider updates, API revisions, or upstream model redeployments.
+Current policy stages cover plan, implement, verify, research, audit and acceptance
+review. Judge and operator session have qualification tasks, but no stage assignment
+in this policy; qualify their actual offering before use. End-to-end caller/lane
+verification and reconciliation of any other role files remain separate ledger
+work: this offline grader neither proves runtime routing nor changes it. Preserve
+current model identifiers; do not restore historical O2 assignments mechanically.
+Where governing policy settles an assignment, follow it; unresolved disagreements
+require owner decision, recorded with evidence before activation.
 
-Outputs evaluated during qualification must always originate from actual candidate model calls. Candidate outputs must **never** be copied from gold labels or reference corpora.
+## Owner schedule
 
-> [!NOTE]
-> Per ADR 0006 D33, the supervisor is deterministic code and is not an LLM model offering. The supervisor requires no model review, rubric grading, or task qualification.
+Ledger OMP-615 r3, Chris, 2026-10-13:
 
----
+- Check offerings from every provider in use daily, including reviewer providers.
+  OMP-615-s09 implements the read-only check of listings, published retirement or
+  deprecation notices, and provider status. Findings open evaluations.
+- Qualify relevant changes weekly on the fixed task set before routing them.
+- Review an urgent retirement, deprecation notice, or service failure of a model
+  in use immediately.
+- A new listing triggers evaluation, never automatic replacement.
 
-## Review Rubric
+This task installs no scheduler or live provider runner. The governing policy
+must record this schedule and each review's date/outcome in the integration task;
+its current file has no review schedule or receipts. That known gap is not a
+claim that recurring checks already run.
 
-Every model offering is evaluated across five standardized rubric axes:
+## Written rubric
 
-| Rubric Axis | Definition & Measurement Criteria |
-|---|---|
-| **Capability** | Bounded reasoning depth, code generation correctness, strict instruction following, domain performance across role tasks (bounded planning, patch+behavior, verification synthesis, intake support judgements, defect identification, operator commands). |
-| **Cost** | USD per million input tokens and output tokens (`USD/M input/output`), context caching write/read pricing, and cost scaling across effort tiers (`E0` through `E4`). |
-| **Quota** | Subscription entitlements, provider concurrency limits in routing policy, organization rate limits (RPM/TPM), burst tolerance, and availability of non-substituting concurrency overflow alternates. |
-| **Latency** | Median and p95 turn latency, time-to-first-token (TTFT), streaming responsiveness, and completion duration under representative prompt sizes. |
-| **Role Fit** | Functional alignment with the target role's constraints, token context requirements, and output schema contracts. |
+| Axis | Required evidence and decision |
+| --- | --- |
+| Capability | Candidate output artifacts, task digest, passed/failed IDs, and human assessment of task correctness. Every role task must pass. |
+| Cost | USD/M input and USD/M output, source URL/artifact and observation date; distinguish subscription inclusion from metered pricing. Record cache costs when applicable. |
+| Quota | Subscription entitlement, provider/account concurrency, RPM/TPM when published, and dated source. Policy caps alone do not prove available quota. |
+| Latency | Median and p95 completion latency in ms, sample count, prompt/output sizes, effort, measurement window and failures. Compare against recorded role budget. |
+| Role fit | Role, effort, revision, context/tool/output constraints, and evidence that the intended lane can meet them. Reviewer independence is part of review fit. |
 
----
+Record acceptance thresholds before candidate calls. Missing measurements or
+unmet thresholds prevent approval. A passing closed-check receipt is necessary,
+but does not replace rubric review: substring checks cannot prove arbitrary code
+correctness or the quality of a plan. Record rubric pass/fail separately, with
+reason and reviewer. Only task pass plus rubric pass qualifies an offering.
 
-## Offerings from Providers in Use
+## Providers and offerings to review
 
-The following offerings from every provider currently configured in `routing-policy.v1.json` (including reviewer offerings) have been evaluated under the rubric:
+Snapshot of governing policy inspected 2026-10-14. All rows below have outcome
+**pending evidence**, not qualified by this document. No provider calls, pricing
+lookup, quota checks or latency measurements were made here. Cost (USD/M
+input/output), subscription quota, median/p95 latency and capability results are
+**unknown** for every row until sourced/measured. Concurrency numbers below are
+local policy caps, not measured provider entitlements.
 
-### 1. `gemini_flash` — `gemini-3.8-flash-high`
-- **Assigned Roles**: `implement`, `verify` (Effort `E1`, estimated 40,000 tokens)
-- **Concurrency Limit**: 6 in-flight calls
-- **Capability**: Exceptional code generation and patching speed, precise instruction adherence on scoped edits, and dependable test pass verification synthesis.
-- **Cost**: $0.15 / M input tokens, $0.60 / M output tokens. Highly economical for iterative implement and verify loops.
-- **Quota**: High concurrency allocation (6 slots); robust rate limit ceiling.
-- **Latency**: Median ~400ms, p95 ~900ms.
-- **Role Fit**: Primary workhorse for high-frequency code implementation and verification passes.
+| Provider | Offering | Policy role/effort and role-fit target | Cap |
+| --- | --- | --- | --- |
+| `gemini_flash` | `gemini-3.8-flash-high` | Implement/verify E1; E1 tier; patch and verification tasks | 6 |
+| `anthropic_fable` | `claude-opus-5-5` | E2 escalation tier; qualify whichever role is escalated | 2 |
+| `kimi` | `kimi-code/k3-256k` | Audit/acceptance review E3; E3 tier; acceptance reviewer; defect identification | 2 |
+| `chatgpt_astra` | `gpt-6-sol` | E4 tier; qualify escalated role and reserve authorization before use | 0 |
+| `ollama_cloud` | `deepseek-v4.1-flash:cloud` | Research E1, best-of-2 fact coverage; Gemini overflow alternate; qualify each substituted role | 4 |
+| `openai_codex` | `gpt-5.6-sol` | Plan E2; audit reviewer `openai-codex/gpt-5.6-sol:medium`; qualify plan and review separately | 1 |
 
-### 2. `anthropic_fable` — `claude-opus-5-5`
-- **Assigned Roles**: Tier `E2` (estimated 80,000 tokens)
-- **Concurrency Limit**: 2 in-flight calls
-- **Capability**: Frontier architectural reasoning, deep refactoring analysis, complex multi-file planning.
-- **Cost**: $15.00 / M input tokens, $75.00 / M output tokens.
-- **Quota**: Restricted concurrency (2 slots); tight subscription usage boundaries.
-- **Latency**: Median ~1,200ms, p95 ~3,000ms.
-- **Role Fit**: High-effort escalation tier for challenging reasoning and refactoring tasks.
+Include new offerings from each of these providers in daily comparison, not only
+listed models. Include actual judge/operator providers if used. Overflow must
+queue or use an owner-approved alternate recorded as a substitution. Review this
+snapshot against governing policy each time; it is not generated or authoritative.
 
-### 3. `kimi` — `kimi-code/k3-256k`
-- **Assigned Roles**: `audit`, `acceptance_review` (Effort `E3`, estimated 120,000 tokens)
-- **Reviewer Offering**: Independent reviewer for `acceptance_review` stage (`kimi-code/k3-256k`)
-- **Concurrency Limit**: 2 in-flight calls
-- **Capability**: Large 256k context window, specialized for repository-scale defect identification, deep security review, and multi-stage audit synthesis.
-- **Cost**: $2.00 / M input tokens, $8.00 / M output tokens.
-- **Quota**: Concurrency 2 slots.
-- **Latency**: Median ~800ms, p95 ~2,100ms.
-- **Role Fit**: Dedicated code review and audit authority; independent reviewer for acceptance gates.
+## Fixed set and protected checks
 
-### 4. `chatgpt_astra` — `gpt-6-sol`
-- **Assigned Roles**: Tier `E4` (estimated 200,000 tokens)
-- **Concurrency Limit**: 0 in-flight calls (configured premium reserve; manual dispatch only)
-- **Capability**: Maximum-capability flagship reasoning model across open-ended problem domains.
-- **Cost**: $30.00 / M input tokens, $120.00 / M output tokens.
-- **Quota**: Reserve status; concurrency set to 0 to prevent automated spillover without explicit authorization.
-- **Latency**: Median ~1,500ms, p95 ~4,000ms.
-- **Role Fit**: Reserved for critical escalations where lesser tiers fail after retries.
+[`qualification-tasks.v1.json`](../python/omp-work/src/omp_work/routing/qualification-tasks.v1.json)
+freezes bounded planning, patch plus boundary behavior, verification synthesis,
+source-based research, support verdicts, defect identification, and operator
+instructions. Every role has at least one task. Judge pairs reuse
+`intake_support_corpus.judge_input`; only id, claim_text, passage and context reach
+the candidate. Gold verdicts, rationale and near-miss tags stay local. Training
+labels use the corpus training-label API; held-out gold is never candidate input.
 
-### 5. `ollama_cloud` — `deepseek-v4.1-flash:cloud`
-- **Assigned Roles**: `research` (Effort `E1`, with `best_of_n` n=2 and `metric=fact_coverage`), concurrency-overflow alternate for `gemini_flash`
-- **Concurrency Limit**: 4 in-flight calls
-- **Capability**: Rapid fact extraction, structured evidence synthesis, factual coverage evaluation.
-- **Cost**: $0.50 / M input tokens, $1.50 / M output tokens.
-- **Quota**: Concurrency 4 slots; designated overflow alternate when `gemini_flash` reaches capacity.
-- **Latency**: Median ~500ms, p95 ~1,100ms.
-- **Role Fit**: Fast factual synthesis for research missions and reliable overflow execution.
+Load with `load_task_set()`. Send only `task_set.candidate_input(task_id)` to
+candidate calls, with role instructions supplied by the caller (judge returns a
+supports/contradicts/neither verdict). Never send the task object, expected checks,
+or the entire JSON file. Checks are supervisor-side data, not access-controlled
+secrets: callers must enforce separation. This module makes no provider calls.
 
-### 6. `openai_codex` — `gpt-5.6-sol`
-- **Assigned Roles**: `plan` (Effort `E2`)
-- **Reviewer Offering**: `openai-codex/gpt-5.6-sol:medium` (independent reviewer for `audit` stage)
-- **Concurrency Limit**: 1 in-flight call
-- **Capability**: Rigorous bounded plan formulation, edge-case identification, strict adherence to file boundaries and acceptance contracts.
-- **Cost**: $5.00 / M input tokens, $15.00 / M output tokens.
-- **Quota**: Concurrency 1 slot.
-- **Latency**: Median ~900ms, p95 ~2,200ms.
-- **Role Fit**: Authoritative source for plan generation and independent audit review.
+The closed checks are:
 
----
+- `exact_text`: string equals expected bytes, including whitespace.
+- `contains_all`: string contains every required substring, case-sensitive.
+- `verdict_equals`: string verdict, verdict dictionary, or receipt's verdict
+  equals a corpus label exactly.
 
-## Review Cadence and Scheduling
+`qualify(role, outputs)` requires all role task IDs. Wrong answers, missing IDs,
+and extra IDs fail. Unknown roles, duplicate task IDs, unknown check types, or
+malformed expected values are refused at the file boundary. Judge/operator aliases
+map to intake_support_judge/operator_session; audit maps to review.
 
-- **Review Cadence**: **Unspecified**. Per Owner Decision 5 (2026-10-13, Chris), the review cadence is reserved for human owner determination. Until explicitly set by the owner, it remains recorded as unspecified.
-- **Scheduling**: **Schedule nothing**. No cron jobs, background pollers, or automated timers are registered. Reviews occur on-demand when new offerings are evaluated or when re-qualification triggers are tripped.
+`task_set_sha256` hashes UTF-8 canonical JSON (sorted keys, compact separators,
+ASCII escaping); formatting and object-key order do not change the digest. Input,
+check, task order, or ID changes do. Retain old fixed-set files and receipts;
+future intentional revisions get a new versioned file. Compare candidates on the
+same version/digest; changed content invalidates prior evidence for that set.
 
----
+## Evidence record
 
-## Fixed-Set Versioning & Integrity
+Retain `QualificationResult.to_dict()` with digest, role, passed/failed IDs,
+pass/fail outcome, UTC recorded_at, caller, model, provider and rubric_evidence.
+Real review records must populate caller/model/provider; omitted metadata is
+allowed only for offline grader tests, never for routing approval.
 
-Qualification tasks are frozen into versioned specification files under `python/omp-work/src/omp_work/routing/`:
-- **Current Version**: `qualification-tasks.v1.json`
-- **Integrity Digest**: `task_set_sha256` produces a canonical SHA256 hex digest (`hex64`) over the canonicalized JSON structure.
-- **Drift Protection**: Any modification to task inputs, checks, or task IDs immediately alters the canonical digest, invalidating previously recorded qualification receipts and requiring fresh evaluation.
-- **Gold Separation**: Tasks for the `intake_support_judge` role reuse `intake_support_corpus.py` data structures (`judge_input`). Candidate inputs contain only `id`, `claim_text`, `passage`, and `context`; gold verdicts, rationales, and near-miss tags are strictly excluded from inputs and remain behind protected checks.
+Rubric evidence records effort, offering revision, task-set version, each axis's
+measurements/sources and thresholds, candidate-call IDs/output artifact locations,
+call timestamps, rubric date/outcome/reason, and reviewer. Preserve raw outputs
+from actual candidate calls, never copied gold. Synthetic test outputs exercise
+the grader and are not model qualification evidence. The offline grader cannot
+establish output provenance; reviewers must check the call artifacts.
 
----
-
-## Qualification Checks
-
-Checks enforced by `omp_work.routing.model_review.grade` belong to a closed set:
-1. `exact_text`: Candidate scalar output must match expected text exactly (after stripping whitespace).
-2. `contains_all`: Candidate output string must contain all expected substrings.
-3. `verdict_equals`: Candidate judgment must match expected verdict string (`supports`, `contradicts`, `neither`, etc.), accepting raw strings, verdict dictionaries, or `SupportReceipt` objects.
-
-All task IDs within a role must pass. Missing tasks, wrong answers, or unexpected extra task IDs result in immediate `fail` outcome.
-
----
-
-## Qualification Evidence and Audit Logging
-
-Every qualification run generates a structured receipt recording:
-- **`digest`**: Canonical SHA256 of the qualification task set.
-- **`role`**: Target execution role.
-- **`outcome`**: `"pass"` or `"fail"`.
-- **`passed_ids`**: List of passed task IDs.
-- **`failed_ids`**: List of failed or missing task IDs.
-- **`caller`**: Originating service or test runner.
-- **`model`**: Candidate model identifier.
-- **`provider`**: Candidate provider identifier.
-- **`rubric_evidence`**: Key-value mapping of evaluated rubric metrics (`capability`, `cost_usd_m_input`, `cost_usd_m_output`, `latency_p95_ms`, etc.).
-- **`recorded_at`**: UTC ISO 8601 timestamp.
+Record each review's date/outcome in the governing policy through its designated
+integration workflow, linking immutable evidence. Record failed evaluations too.
+Routing still requires qualification and, where policy does not settle it, owner
+approval. No policy loader, routing caller, or provider configuration changes are
+made by this task.
