@@ -132,5 +132,226 @@
       "on": "review_rejected",
       "step": 1
     }
-  ]
+  ],
+  "governance": {
+    "authority": {
+      "policy": "python/omp-work/src/omp_work/routing/routing-policy.v1.json",
+      "consumers": [
+        "python/omp-work/src/omp_work/routing/policy.py::load_policy",
+        "python/omp-work/src/omp_work/routing/router.py::route_stage"
+      ],
+      "subject_to": [
+        "docs/adr/0001-autonomous-execution-and-qualification.md",
+        "docs/programme/ACCEPTED-DECISIONS.md G5",
+        "docs/adr/0005-mission-first-architecture.md",
+        "docs/adr/0006-on-demand-roles.md"
+      ],
+      "scope": "Packaged routing policy governs declared stage routes, reviewer admission and concurrency caps. Metadata is outside Work Ledger contracts and grants no new authority.",
+      "reconciliation": [
+        {
+          "source": "docs/models.md",
+          "status": "separate_scope",
+          "outcome": "Describes coding-agent model configuration and judge role; not generated from this policy and not authoritative for Work routing."
+        },
+        {
+          "source": "docs/programme/ORIGINAL-OBLIGATIONS.md O2",
+          "status": "historical",
+          "outcome": "Current packaged models remain baseline; historical model names are not restored."
+        },
+        {
+          "source": "python/omp-work/src/omp_work/routing/substitutions.v1.json",
+          "status": "pending_owner",
+          "unresolved_owner": "Chris",
+          "outcome": "Packaged policy settles current routing authority despite stale pending governing-file verification notes. Historical plan mismatch stays historical; audit route and admitted reviewer are distinct selectors, not interchangeable execution evidence. Existing unapproved overflow remains pending Chris; this metadata does not approve or edit substitutions."
+        }
+      ]
+    },
+    "qualification": "Test-only metadata qualification; absent callers remain unverified. No live run or end-to-end qualification inferred from a declared route, API, spelling or reviewer prefix.",
+    "roles": {
+      "plan": {
+        "selectors": [
+          {
+            "stage": "plan"
+          }
+        ],
+        "route_status": "resolved",
+        "invocation": {
+          "caller": null,
+          "status": "unverified",
+          "evidence": [
+            "python/omp-work/src/omp_work/orchestrator/operations.py::run_plan"
+          ]
+        },
+        "unresolved_owner": "Chris",
+        "note": "Declared model route; current orchestrator plan operation is deterministic, not a model invocation."
+      },
+      "implement": {
+        "selectors": [
+          {
+            "stage": "implement"
+          }
+        ],
+        "route_status": "resolved",
+        "invocation": {
+          "caller": "omp_work.model_proxy",
+          "status": "test_verified",
+          "evidence": [
+            "python/omp-work/src/omp_work/model_proxy.py",
+            "python/omp-work/tests/test_orchestrator_production_worker.py::test_production_worker"
+          ]
+        },
+        "unresolved_owner": null,
+        "note": "Proxy and production worker have test evidence, not live qualification."
+      },
+      "review": {
+        "selectors": [
+          {
+            "stage": "audit"
+          },
+          {
+            "stage": "acceptance_review"
+          },
+          {
+            "stage": "audit",
+            "reviewer_index": 0
+          },
+          {
+            "stage": "acceptance_review",
+            "reviewer_index": 0
+          }
+        ],
+        "route_status": "resolved",
+        "invocation": {
+          "caller": null,
+          "status": "unverified",
+          "evidence": [
+            "python/omp-work/src/omp_work/routing/review.py::check_reviewer",
+            "python/omp-work/src/omp_work/orchestrator/operations.py::run_audit"
+          ]
+        },
+        "unresolved_owner": "Chris",
+        "note": "Reviewer admission and audit launching do not prove invocation of the declared models or concurrency lanes."
+      },
+      "research": {
+        "selectors": [
+          {
+            "stage": "research"
+          }
+        ],
+        "route_status": "resolved",
+        "invocation": {
+          "caller": null,
+          "status": "unverified",
+          "evidence": [
+            "python/omp-work/src/omp_work/research_campaign.py::run_campaign",
+            "python/omp-work/src/omp_work/intake_support_admission.py::resolve_admission"
+          ]
+        },
+        "unresolved_owner": "Chris",
+        "note": "Campaign harness and admission select policy data; no verified model caller."
+      },
+      "judge": {
+        "selectors": [],
+        "route_status": "pending_owner",
+        "invocation": {
+          "caller": null,
+          "status": "unverified",
+          "evidence": [
+            "python/omp-work/src/omp_work/intake_support_admission.py::resolve_admission",
+            "docs/models.md"
+          ]
+        },
+        "unresolved_owner": "Chris",
+        "note": "Research-route admission is not judge invocation evidence. Coding-agent judge configuration is separate; model and lane remain unresolved."
+      },
+      "operator": {
+        "selectors": [],
+        "route_status": "pending_owner",
+        "invocation": {
+          "caller": null,
+          "status": "unverified",
+          "evidence": [
+            "docs/adr/0005-mission-first-architecture.md",
+            "docs/models.md"
+          ]
+        },
+        "unresolved_owner": "Chris",
+        "note": "Separate operator session; no packaged stage, verified caller, model or lane association."
+      },
+      "verify": {
+        "selectors": [
+          {
+            "stage": "verify"
+          }
+        ],
+        "route_status": "resolved",
+        "invocation": {
+          "caller": null,
+          "status": "unverified",
+          "evidence": [
+            "python/omp-work/src/omp_work/orchestrator/operations.py"
+          ]
+        },
+        "unresolved_owner": "Chris",
+        "note": "Declared verify route does not establish model invocation; deterministic checks are separate."
+      }
+    },
+    "supervisor": {
+      "kind": "deterministic_software",
+      "caller": "omp_work.orchestrator.service",
+      "selectors": [],
+      "model": null,
+      "lane": null,
+      "evidence": [
+        "docs/adr/0005-mission-first-architecture.md",
+        "docs/adr/0006-on-demand-roles.md"
+      ],
+      "note": "Stage order and coordination are software; Run Owner is not a persistent LLM agent."
+    },
+    "lanes": {
+      "gemini_flash": {
+        "wire": "google-generative-ai",
+        "status": "test_verified",
+        "evidence": [
+          "python/omp-work/src/omp_work/model_proxy.py::ProxyConfig.__post_init__",
+          "python/omp-work/tests/test_orchestrator_production_worker.py::test_production_worker"
+        ],
+        "unresolved_owner": null
+      },
+      "ollama_cloud": {
+        "wire": "ollama-chat",
+        "status": "test_verified",
+        "evidence": [
+          "python/omp-work/src/omp_work/model_proxy.py::ProxyConfig.__post_init__",
+          "python/omp-work/tests/test_orchestrator_production_worker.py::test_production_worker"
+        ],
+        "unresolved_owner": null
+      },
+      "anthropic_fable": {
+        "wire": null,
+        "status": "pending_owner",
+        "evidence": [],
+        "unresolved_owner": "Chris"
+      },
+      "kimi": {
+        "wire": null,
+        "status": "pending_owner",
+        "evidence": [],
+        "unresolved_owner": "Chris"
+      },
+      "chatgpt_astra": {
+        "wire": null,
+        "status": "pending_owner",
+        "evidence": [],
+        "unresolved_owner": "Chris"
+      },
+      "openai_codex": {
+        "wire": null,
+        "status": "pending_owner",
+        "evidence": [],
+        "unresolved_owner": "Chris"
+      }
+    },
+    "lane_semantics": "Lane is a concurrency.providers key, not a wire prefix. Resolved wires require evidence of the exact lane/wire association; reviewer prefixes, matching names and API availability alone do not qualify. Pending Chris records ownership, not an approval step."
+  }
 }
