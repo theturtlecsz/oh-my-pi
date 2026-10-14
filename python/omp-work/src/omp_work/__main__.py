@@ -412,6 +412,18 @@ def _run_research_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_qualification_count() -> int:
+    """Dispatch qualification count after argparse has accepted the command."""
+    from .qualification_counter import diagnostic, run_count
+
+    try:
+        config = OperationsConfig.defaults()
+    except Exception as error:  # noqa: BLE001 - config failure before any read
+        print(diagnostic(error), file=sys.stderr)
+        return 1
+    return run_count(config)
+
+
 def _run_drain_command(args: argparse.Namespace) -> int:
     try:
         missions = drain_ops.in_flight(OperationsConfig.defaults())
@@ -433,7 +445,7 @@ def main(argv: list[str] | None = None) -> int | None:
     subcommands = parser.add_subparsers(
         dest="command",
         required=True,
-        metavar="{schema,hash,approve,validate,ops,serve,headroom,stall-check,parallel-admit,budget-alerts,projects,stop,alarms,jobs,owner-key,ingress,orchestrator,drain,research}",
+        metavar="{schema,hash,approve,validate,ops,serve,headroom,stall-check,parallel-admit,budget-alerts,projects,stop,alarms,jobs,owner-key,ingress,orchestrator,drain,research,qualification}",
     )
 
     schema = subcommands.add_parser("schema")
@@ -596,6 +608,24 @@ def main(argv: list[str] | None = None) -> int | None:
     run_parser.add_argument("--data-dir", type=Path)
     run_parser.add_argument("--db-port", type=int)
 
+    qualification = subcommands.add_parser(
+        "qualification",
+        help="Read qualification gate counts from existing records",
+        description="Read qualification gate counts from existing records.",
+    )
+    qualification_commands = qualification.add_subparsers(
+        dest="qualification_command",
+        required=True,
+        metavar="{count}",
+    )
+    qualification_commands.add_parser(
+        "count",
+        help="Print the three-gate counter as JSON; counts grant no acceptance",
+        description=(
+            "Print the three-gate counter as JSON. Counts grant no acceptance."
+        ),
+    )
+
     args = parser.parse_args(argv)
     if args.command == "alarms":
         if args.client_config is None:
@@ -607,6 +637,8 @@ def main(argv: list[str] | None = None) -> int | None:
         return _run_drain_command(args)
     if args.command == "research":
         return _run_research_command(args)
+    if args.command == "qualification":
+        return _run_qualification_count()
     if args.command == "stop":
         return _run_stop_command(args)
     if args.command == "serve":
