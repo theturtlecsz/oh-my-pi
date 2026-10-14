@@ -526,7 +526,7 @@ async function runTestCommand(testCommand: TestCommand): Promise<ChunkOutcome | 
 // cell), where no marker/concurrency knob applies. That residual crash is
 // handled by retrying crashed chunks in a fresh process (MAX_CHUNK_ATTEMPTS).
 export function buildChildEnv(
-	options: { agentDir?: string; baseEnv?: Record<string, string | undefined> } = {},
+	options: { agentDir?: string; baseEnv?: Record<string, string | undefined>; tmpDir?: string } = {},
 ): Record<string, string | undefined> {
 	const env: Record<string, string | undefined> = {
 		...(options.baseEnv ?? Bun.env),
@@ -535,6 +535,7 @@ export function buildChildEnv(
 		BUN_JSC_useConcurrentGC: "0",
 		BUN_JSC_numberOfGCMarkers: "1",
 		...(options.agentDir ? { PI_CODING_AGENT_DIR: options.agentDir } : {}),
+		...(options.tmpDir ? { TMPDIR: options.tmpDir, TMP: options.tmpDir, TEMP: options.tmpDir } : {}),
 	};
 	for (const key of Object.keys(env)) {
 		if (isScrubbedEnvVar(key)) {
@@ -546,19 +547,21 @@ export function buildChildEnv(
 
 /**
  * Allocate a unique temporary agent directory, run `fn(agentDir, env)` with
- * PI_CODING_AGENT_DIR set, and guarantee the temporary directory is removed in
+ * PI_CODING_AGENT_DIR and a private TMPDIR/TMP/TEMP set, and guarantee the temporary root is removed in
  * `finally` on success, rejection, or error.
  */
 export async function withTempAgentDir<T>(
 	fn: (agentDir: string, env: Record<string, string | undefined>) => Promise<T>,
 	baseEnv?: Record<string, string | undefined>,
 ): Promise<T> {
-	const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ci-agent-"));
+	const tmpBase = baseEnv?.TMPDIR || os.tmpdir();
+	const tmpDir = await fs.mkdtemp(path.join(tmpBase, "omp-t-"));
 	try {
-		const env = buildChildEnv({ agentDir, baseEnv });
+		const agentDir = await fs.mkdtemp(path.join(tmpDir, "a-"));
+		const env = buildChildEnv({ agentDir, baseEnv, tmpDir });
 		return await fn(agentDir, env);
 	} finally {
-		await fs.rm(agentDir, { recursive: true, force: true }).catch(() => {});
+		await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
 	}
 }
 
