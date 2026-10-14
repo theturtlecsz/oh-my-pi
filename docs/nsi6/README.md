@@ -29,9 +29,9 @@ no corpus labels, evaluator semantics or research policy were changed.
   consumed for deterministic recomputation; generating a new report exercises
   disposable PostgreSQL again. SHA-256 pins detect drift, not forged authorship.
 
-Frozen origin: `104e32467c239f771e64a499077097862ee113c5`.
-Manifest digest: `ece90805def1d575893494d64f0abe112890244e40eb2c42de41790efa5bfd29`.
-Tree digest: `29c3fe26c4ae657c86efa4bce4eb0366ca93e9dfe1d0517e363c892b6f411a26`.
+Frozen origin: `ae7d23b0c8bad663b229ed987de90196ada58e80`.
+Manifest digest: `0b4269e4a2fb9cd3dcf8325ff7aa9e208086733ba13ef51ae3326ad1ed114b4b`.
+Tree digest: `d46431adc846f66b0ae3a634e6d10b578fc9388a3bf35861bbb1d7bbad5f85e1`.
 
 Requested `python/omp-work/tests/fixtures/nsi6-manifest.json` is absent in this
 checkout. Existing `nsi_eval.run` resolves that exact legacy name to
