@@ -149,6 +149,36 @@ def _claim() -> ClaimProjection:
     }
 
 
+def _receipt_kwargs(receipt: SupportReceipt, claim_text: str, quote: str) -> dict[str, object]:
+    return {
+        "claim_text": claim_text,
+        "quote": quote,
+        "model_id": receipt.model_id,
+        "model_version": receipt.model_version,
+        "prompt_version": receipt.prompt_version,
+        "rule_version": receipt.rule_version,
+        "source_span": receipt.source_span,
+        "source_revision": receipt.source_revision,
+    }
+
+
+def test_claim_supported_mix_supports_and_contradicts_is_contested_not_supported() -> None:
+    supports = _parse(verdict="supports")
+    contradicts = _parse(verdict="contradicts")
+    # Supports plus contradicts is contested, so claim_supported must be False.
+    assert claim_supported([supports, contradicts]) is False
+    assert claim_supported([("supports", supports), ("contradicts", contradicts)]) is False
+
+
+def test_claim_supported_caller_label_disagreement_blocks_support() -> None:
+    supports = _parse(verdict="supports")
+    # Disagreement between caller label and judge verdict blocks support
+    assert claim_supported([("neither", supports)]) is False
+    assert claim_supported([("contradicts", supports)]) is False
+    assert claim_supported([("supports", supports)]) is True
+    assert claim_supported([("supports", None)]) is False
+
+
 @pytest.mark.parametrize(
     "value, rendered_value",
     [
@@ -177,7 +207,7 @@ def test_claim_rendering_is_canonical_and_hashes_unicode_bytes(
         claim_text_sha256=text_sha256(rendered),
         passage_sha256=text_sha256("証拠 café 🧭"),
     )
-    assert verify_receipt(receipt, rendered, "証拠 café 🧭", "judge-1")
+    assert verify_receipt(receipt, **_receipt_kwargs(receipt, rendered, "証拠 café 🧭"))
 
 
 @pytest.mark.parametrize(
@@ -196,7 +226,8 @@ def test_each_claim_semantic_change_invalidates_receipt(field: str, changed: obj
     text = render_claim_text(claim)
     receipt = _parse(claim_text_sha256=text_sha256(text), passage_sha256=text_sha256("quote"))
     changed_claim = {**claim, field: changed}
-    assert not verify_receipt(receipt, render_claim_text(changed_claim), "quote", "judge-1")
+    kwargs = _receipt_kwargs(receipt, render_claim_text(changed_claim), "quote")
+    assert not verify_receipt(receipt, **kwargs)
 
 
 def test_render_requires_caller_predicate_title() -> None:
@@ -206,32 +237,118 @@ def test_render_requires_caller_predicate_title() -> None:
         render_claim_text(claim)
 
 
-@pytest.mark.parametrize("field", ["claim_text_sha256", "passage_sha256", "model_id"])
-def test_tampered_receipt_binding_fails_verification(field: str) -> None:
-    bindings = {
-        "claim_text_sha256": text_sha256("claim café"),
-        "passage_sha256": text_sha256("quote 東京"),
-        "model_id": "judge-1",
+@pytest.mark.parametrize(
+    "field, tampered",
+    [
+        ("claim_text_sha256", "b" * 64),
+        ("passage_sha256", "b" * 64),
+        ("source_span", {"start": 1, "end": 5}),
+        ("source_revision", "rev-2"),
+        ("model_id", "judge-2"),
+        ("model_version", "2026-02"),
+        ("prompt_version", "p2"),
+        ("rule_version", "r2"),
+    ],
+)
+def test_tampered_receipt_binding_fails_verification(field: str, tampered: object) -> None:
+    claim_text = "claim café"
+    quote = "quote 東京"
+    base_receipt = _parse(
+        claim_text_sha256=text_sha256(claim_text),
+        passage_sha256=text_sha256(quote),
+    )
+    over = {
+        "claim_text_sha256": text_sha256(claim_text),
+        "passage_sha256": text_sha256(quote),
     }
-    bindings[field] = "judge-2" if field == "model_id" else H
-    assert not verify_receipt(_parse(**bindings), "claim café", "quote 東京", "judge-1")
+    over[field] = tampered
+    tampered_receipt = _parse(**over)
+    expected_kwargs = _receipt_kwargs(base_receipt, claim_text, quote)
+    assert verify_receipt(base_receipt, **expected_kwargs)
+    assert not verify_receipt(tampered_receipt, **expected_kwargs)
 
 
 @pytest.mark.parametrize(
-    "claim_text, quote, model_id",
+    "kwarg, changed_val",
     [
-        ("claim cafe\u0301", "quote 東京", "judge-1"),
-        ("claim café", "quote 東京\n", "judge-1"),
-        ("claim café", "quote 東京", "Judge-1"),
+        ("claim_text", "claim cafe\u0301"),
+        ("quote", "quote 東京\n"),
+        ("source_span", {"start": 0, "end": 4}),
+        ("source_revision", "rev-other"),
+        ("model_id", "Judge-1"),
+        ("model_version", "2026-02"),
+        ("prompt_version", "p_other"),
+        ("rule_version", "r_other"),
     ],
 )
-def test_changed_expected_binding_fails_verification(
-    claim_text: str, quote: str, model_id: str,
-) -> None:
+def test_changed_expected_binding_fails_verification(kwarg: str, changed_val: object) -> None:
+    claim_text = "claim café"
+    quote = "quote 東京"
     receipt = _parse(
-        claim_text_sha256=text_sha256("claim café"), passage_sha256=text_sha256("quote 東京"),
+        claim_text_sha256=text_sha256(claim_text),
+        passage_sha256=text_sha256(quote),
     )
-    assert not verify_receipt(receipt, claim_text, quote, model_id)
+    kwargs = _receipt_kwargs(receipt, claim_text, quote)
+    assert verify_receipt(receipt, **kwargs)
+    kwargs[kwarg] = changed_val
+    assert not verify_receipt(receipt, **kwargs)
+
+
+def test_verify_receipt_accepts_span_formats_and_positional_calls() -> None:
+    claim_text = "claim café"
+    quote = "quote 東京"
+    receipt = _parse(
+        claim_text_sha256=text_sha256(claim_text),
+        passage_sha256=text_sha256(quote),
+    )
+    # SourceSpan instance
+    assert verify_receipt(
+        receipt,
+        claim_text,
+        quote,
+        "judge-1",
+        "2026-01",
+        "p1",
+        "r1",
+        receipt.source_span,
+        "rev-1",
+    )
+    # tuple span
+    assert verify_receipt(
+        receipt,
+        claim_text,
+        quote,
+        "judge-1",
+        "2026-01",
+        "p1",
+        "r1",
+        (0, 5),
+        "rev-1",
+    )
+    # dict span
+    assert verify_receipt(
+        receipt,
+        claim_text,
+        quote,
+        "judge-1",
+        "2026-01",
+        "p1",
+        "r1",
+        {"start": 0, "end": 5},
+        "rev-1",
+    )
+    # positional call with criterion 4 ordering
+    assert verify_receipt(
+        receipt,
+        claim_text,
+        quote,
+        (0, 5),
+        "rev-1",
+        "judge-1",
+        "2026-01",
+        "p1",
+        "r1",
+    )
 
 
 @pytest.mark.parametrize(

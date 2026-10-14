@@ -80,12 +80,56 @@ class SupportReceipt(StrictModel):
         return self
 
 
-def verify_receipt(receipt: SupportReceipt, claim_text: str, quote: str, model_id: str) -> bool:
-    """Verify exact supplied text/model bindings; other bindings remain shape-validated."""
+def _span_matches(receipt_span: SourceSpan, expected_span: SourceSpan | tuple[int, int] | dict[str, int]) -> bool:
+    if isinstance(expected_span, SourceSpan):
+        return receipt_span.start == expected_span.start and receipt_span.end == expected_span.end
+    if isinstance(expected_span, tuple) and len(expected_span) == 2:
+        return (receipt_span.start, receipt_span.end) == expected_span
+    if isinstance(expected_span, dict):
+        return receipt_span.start == expected_span.get("start") and receipt_span.end == expected_span.get("end")
+    return False
+
+
+def verify_receipt(
+    receipt: SupportReceipt,
+    claim_text: str,
+    quote: str,
+    model_id: str | SourceSpan | tuple[int, int] | dict[str, int],
+    model_version: str | SourceSpan | tuple[int, int] | dict[str, int],
+    prompt_version: str,
+    rule_version: str,
+    source_span: SourceSpan | tuple[int, int] | dict[str, int] | str,
+    source_revision: str,
+) -> bool:
+    """Verify all receipt bindings from OMP-604 criterion 4 fail on any mismatch.
+
+    Bindings verified: claim text hash, passage hash, source span, source revision,
+    judge model id and version, prompt version, and rule version.
+    """
+    if isinstance(model_id, (SourceSpan, tuple, dict)):
+        expected_span = model_id
+        expected_revision = str(model_version)
+        expected_model_id = str(prompt_version)
+        expected_model_version = str(rule_version)
+        expected_prompt_version = str(source_span)
+        expected_rule_version = str(source_revision)
+    else:
+        expected_model_id = str(model_id)
+        expected_model_version = str(model_version)
+        expected_prompt_version = str(prompt_version)
+        expected_rule_version = str(rule_version)
+        expected_span = source_span  # type: ignore[assignment]
+        expected_revision = str(source_revision)
+
     return (
         receipt.claim_text_sha256 == text_sha256(claim_text)
         and receipt.passage_sha256 == text_sha256(quote)
-        and receipt.model_id == model_id
+        and receipt.model_id == expected_model_id
+        and receipt.model_version == expected_model_version
+        and receipt.prompt_version == expected_prompt_version
+        and receipt.rule_version == expected_rule_version
+        and receipt.source_revision == expected_revision
+        and _span_matches(receipt.source_span, expected_span)
     )
 
 
@@ -110,8 +154,12 @@ def status_from_receipts(
     return "unsupported" if status == "supported" and blocked else status
 
 
-def claim_supported(receipts: Sequence[SupportReceipt]) -> bool:
-    """A claim is supported only with at least one supports verdict and no pending verdict."""
-    if any(r.verdict in PENDING_VERDICTS for r in receipts):
-        return False
-    return any(r.verdict == "supports" for r in receipts)
+def claim_supported(
+    receipts: Sequence[SupportReceipt | tuple[Label | None, SupportReceipt | None]],
+) -> bool:
+    """A claim is supported only when status_from_receipts derives supported."""
+    pairs: list[tuple[Label | None, SupportReceipt | None]] = [
+        item if isinstance(item, tuple) else (None, item)
+        for item in receipts
+    ]
+    return status_from_receipts(pairs) == "supported"
