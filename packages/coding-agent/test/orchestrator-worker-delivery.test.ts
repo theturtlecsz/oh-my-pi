@@ -51,15 +51,22 @@ function systemInstructionText(body: string): string {
 	return parts.map(part => (typeof part?.text === "string" ? part.text : "")).join("\n");
 }
 
-async function runWorker(manifest: Record<string, unknown>): Promise<WorkerRun> {
+async function runWorker(manifest: Record<string, unknown>, options?: { status?: number }): Promise<WorkerRun> {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-worker-delivery-"));
 	const layout = resolveHostSystemLayout();
 	const requests: CapturedRequest[] = [];
+	const status = options?.status ?? 200;
 	const server = Bun.serve({
 		hostname: "127.0.0.1",
 		port: 0,
 		async fetch(request) {
 			requests.push({ url: request.url, headers: request.headers, body: await request.text() });
+			if (status !== 200) {
+				return new Response('{"error":"refused"}', {
+					status,
+					headers: { "content-type": "application/json" },
+				});
+			}
 			return new Response(geminiSse([{ text: "done" }]), {
 				status: 200,
 				headers: { "content-type": "text/event-stream" },
@@ -151,31 +158,35 @@ function workerEvents(stdout: string): WorkerEvent[] {
 	return Bun.JSONL.parse(stdout) as WorkerEvent[];
 }
 
+function renderedContextPrompt(): string {
+	return prompt.render(workerPrompt, {
+		candidateId: CANDIDATE_ID,
+		context: CONTEXT_SENTINEL,
+		approach: [APPROACH],
+		allowedPaths: ["src/*.py"],
+	});
+}
+
+function contextDelivery(renderedPrompt: string): WorkerEvent {
+	return {
+		type: "context-delivery",
+		compiled_context_hash: new Bun.CryptoHasher("sha256").update(JSON.stringify(CONTEXT_SENTINEL)).digest("hex"),
+		prompt_hash: new Bun.CryptoHasher("sha256").update(JSON.stringify([renderedPrompt, INSTRUCTION])).digest("hex"),
+	};
+}
+
 describe.serial("orchestrator-worker context delivery", () => {
 	it("reports exact context and prompt hashes for context received by the provider", async () => {
 		const result = await runWorker({ context: CONTEXT_SENTINEL });
 		expect(result.exitCode, `${result.stderr}\n${result.stdout}`).toBe(0);
 		expect(result.requests).toHaveLength(1);
 		const system = systemInstructionText(result.requests[0]!.body);
-		const renderedPrompt = prompt.render(workerPrompt, {
-			candidateId: CANDIDATE_ID,
-			context: CONTEXT_SENTINEL,
-			approach: [APPROACH],
-			allowedPaths: ["src/*.py"],
-		});
+		const renderedPrompt = renderedContextPrompt();
 		expect(system).toContain(CONTEXT_SENTINEL);
 		expect(system).toBe(renderedPrompt);
 		const events = workerEvents(result.stdout);
 		const deliveries = events.filter(event => event.type === "context-delivery");
-		expect(deliveries).toEqual([
-			{
-				type: "context-delivery",
-				compiled_context_hash: new Bun.CryptoHasher("sha256")
-					.update(JSON.stringify(CONTEXT_SENTINEL))
-					.digest("hex"),
-				prompt_hash: new Bun.CryptoHasher("sha256").update(JSON.stringify([system, INSTRUCTION])).digest("hex"),
-			},
-		]);
+		expect(deliveries).toEqual([contextDelivery(system)]);
 		expect(events[0]).toEqual(deliveries[0]);
 	}, 180_000);
 
@@ -187,5 +198,32 @@ describe.serial("orchestrator-worker context delivery", () => {
 		expect(system).not.toContain(CONTEXT_SENTINEL);
 		expect(system).not.toContain("Context:");
 		expect(workerEvents(result.stdout).filter(event => event.type === "context-delivery")).toEqual([]);
+	}, 180_000);
+
+	it("emits one context-delivery record when the lease deadline is already past", async () => {
+		const result = await runWorker({
+			context: CONTEXT_SENTINEL,
+			lease_expires_at: "2000-01-01T00:00:00.000Z",
+		});
+		expect(result.exitCode, `${result.stderr}\n${result.stdout}`).not.toBe(0);
+		expect(result.stderr).toContain("deadline exceeded");
+		expect(result.requests).toHaveLength(0);
+		const renderedPrompt = renderedContextPrompt();
+		const deliveries = workerEvents(result.stdout).filter(event => event.type === "context-delivery");
+		expect(deliveries).toEqual([contextDelivery(renderedPrompt)]);
+	}, 180_000);
+
+	it("emits one context-delivery record when the provider returns HTTP 500", async () => {
+		const result = await runWorker({ context: CONTEXT_SENTINEL }, { status: 500 });
+		expect(result.exitCode, `${result.stderr}\n${result.stdout}`).not.toBe(0);
+		expect(result.requests).toHaveLength(1);
+		const body = result.requests[0]!.body;
+		const system = systemInstructionText(body);
+		const renderedPrompt = renderedContextPrompt();
+		expect(system).toContain(CONTEXT_SENTINEL);
+		expect(system).toBe(renderedPrompt);
+		expect(body).toContain(INSTRUCTION);
+		const deliveries = workerEvents(result.stdout).filter(event => event.type === "context-delivery");
+		expect(deliveries).toEqual([contextDelivery(renderedPrompt)]);
 	}, 180_000);
 });

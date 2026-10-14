@@ -235,7 +235,8 @@ function writeLine(line: unknown): void {
  * Run the single granted turn. Returns 0 only when it completed with no HTTP,
  * model, or tool refusal and the selected deadline was still in the future. A later model
  * call cannot clear a refusal: the flag stays set and the pre-model gate stops
- * the loop.
+ * the loop. When the manifest supplies context, the context-delivery record is
+ * written before the lease deadline check, including when that check or the turn fails.
  */
 export async function runOrchestratorWorker(): Promise<number> {
 	const loaded = loadManifest();
@@ -244,10 +245,6 @@ export async function runOrchestratorWorker(): Promise<number> {
 		return 1;
 	}
 	const { manifest, deadline, proxyUrl, token } = loaded.loaded;
-	if (Date.now() > deadline) {
-		process.stderr.write("orchestrator-worker: deadline exceeded\n");
-		return 1;
-	}
 
 	let failure: string | undefined;
 	const fail = (reason: string): void => {
@@ -258,6 +255,30 @@ export async function runOrchestratorWorker(): Promise<number> {
 	let lastStop: string | undefined;
 
 	try {
+		// Before the lease gate: a supplied context is still delivery evidence
+		// when the deadline is already past or the turn fails afterwards.
+		const systemPrompt = prompt.render(workerPrompt, {
+			candidateId: manifest.candidate_id,
+			context: manifest.context,
+			approach: manifest.approach,
+			allowedPaths: manifest.allowed_paths,
+		});
+		if (manifest.context !== undefined) {
+			writeLine({
+				type: "context-delivery",
+				compiled_context_hash: new Bun.CryptoHasher("sha256")
+					.update(JSON.stringify(manifest.context))
+					.digest("hex"),
+				prompt_hash: new Bun.CryptoHasher("sha256")
+					.update(JSON.stringify([systemPrompt, manifest.instruction]))
+					.digest("hex"),
+			});
+		}
+		if (Date.now() > deadline) {
+			process.stderr.write("orchestrator-worker: deadline exceeded\n");
+			return 1;
+		}
+
 		const scoped = createScopedTools({
 			root: WORK_ROOT,
 			allowedPaths: manifest.allowed_paths,
@@ -300,23 +321,6 @@ export async function runOrchestratorWorker(): Promise<number> {
 				fetch: fetchOverride,
 				fallbacks: undefined,
 			});
-		const systemPrompt = prompt.render(workerPrompt, {
-			candidateId: manifest.candidate_id,
-			context: manifest.context,
-			approach: manifest.approach,
-			allowedPaths: manifest.allowed_paths,
-		});
-		if (manifest.context !== undefined) {
-			writeLine({
-				type: "context-delivery",
-				compiled_context_hash: new Bun.CryptoHasher("sha256")
-					.update(JSON.stringify(manifest.context))
-					.digest("hex"),
-				prompt_hash: new Bun.CryptoHasher("sha256")
-					.update(JSON.stringify([systemPrompt, manifest.instruction]))
-					.digest("hex"),
-			});
-		}
 		agent = new Agent({
 			initialState: {
 				model: grantedModel(manifest, proxyUrl),
