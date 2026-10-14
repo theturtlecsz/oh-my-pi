@@ -1,4 +1,4 @@
-"""Admission binding of source ids and claim span (OMP-607-s01-s01).
+"""Admission binding of source ids and claim span (OMP-607).
 
 Legacy source JSON and a claim without a span still validate. Capture copies
 work_id, candidate_id, and revision_id from the stored trace, and retry
@@ -14,6 +14,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from omp_work.v1.api_models import WorkflowView, WorkItemsPage, WorkItemSummary
+from omp_work.v1.canonical import canonical_json
 from omp_work.v1.models import EvidenceKind, EvidenceReceipt
 from pydantic import ValidationError
 from support.stub_events import FakeEvents, make_event
@@ -21,7 +22,9 @@ from support.stub_generator import StubGenerator
 
 from omp_knowledge.learning.capture import drain, retry
 from omp_knowledge.learning.generation import GenerationResult, GeneratorUnavailable
-from omp_knowledge.learning.models import Claim, Lesson, SourceIdentity, SourceSpan
+from omp_knowledge.learning.models import Attribution, Claim, Lesson, SourceIdentity, SourceSpan
+from omp_knowledge.learning.policy import evaluate
+from omp_knowledge.learning.proposals import create_proposal
 from omp_knowledge.learning.store import LearningStore
 
 WORKSPACE = "11111111-1111-1111-1111-111111111111"
@@ -307,7 +310,8 @@ def test_drain_record_work_id_mismatch_stores_null_ids() -> None:
     assert source.revision_id is None
 
 
-def test_retry_rebinds_overwritten_source_without_records_call() -> None:
+@pytest.mark.parametrize("other_candidate", [False, True])
+def test_retry_rebinds_overwritten_source_without_records_call(other_candidate: bool) -> None:
     """Retry keeps the trace candidate on the proposal and does not read records."""
     key, view = load_fixture_workflow()
     assert view.item.candidate is not None
@@ -322,7 +326,7 @@ def test_retry_rebinds_overwritten_source_without_records_call() -> None:
         revision_id=view.item.revision.revision_id,
         candidate_id=view.item.candidate.candidate_id,
         kind=EvidenceKind.VERIFICATION,
-        payload={"exit_code": 0},
+        payload={"summary": "verification passed"},
         payload_sha256=HEX,
         issuer="test-runner",
         issued_at=datetime.now(timezone.utc),
@@ -365,11 +369,10 @@ def test_retry_rebinds_overwritten_source_without_records_call() -> None:
         (tampered.model_dump_json(), row["unit_id"]),
     )
 
-    lesson = Lesson(
-        title="Cite the passing verification",
-        steps=("read the finished item", "cite the receipt"),
-        claims=(Claim(text="verification passed", receipt_ids=(receipt.receipt_id,)),),
-    )
+    if other_candidate:
+        receipt = receipt.model_copy(update={"candidate_id": uuid4()})
+        reader = DictReceiptReader({str(receipt.receipt_id): receipt})
+    lesson = lesson_for_receipt(receipt)
     recovered = StubGenerator(
         [
             GenerationResult(
@@ -403,3 +406,205 @@ def test_retry_rebinds_overwritten_source_without_records_call() -> None:
     restored = SourceIdentity.model_validate_json(unit["source_json"])
     assert restored.candidate_id == item_candidate
     assert restored.revision_id == item_revision
+
+    assert_proposal_outcome(
+        store, "unbound_receipt" if other_candidate else None
+    )
+
+
+def receipt_for_work(view: WorkflowView) -> EvidenceReceipt:
+    assert view.item.candidate is not None
+    return EvidenceReceipt(
+        receipt_id=uuid4(),
+        work_id=view.item.work_id,
+        revision_id=view.item.revision.revision_id,
+        candidate_id=view.item.candidate.candidate_id,
+        kind=EvidenceKind.VERIFICATION,
+        payload={"summary": "verification passed"},
+        payload_sha256=HEX,
+        issuer="test-runner",
+        issued_at=datetime(2026, 9, 12, tzinfo=timezone.utc),
+        verdict="PASS",
+        independent=True,
+    )
+
+
+def lesson_for_receipt(receipt: EvidenceReceipt) -> Lesson:
+    text = "verification passed"
+    start = canonical_json(receipt.payload).index(text)
+    return Lesson(
+        title="Cite the passing verification",
+        steps=("read the finished item", "cite the receipt"),
+        claims=(Claim(
+            text=text,
+            receipt_ids=(receipt.receipt_id,),
+            source_span=SourceSpan(start=start, end=start + len(text)),
+            evaluator=receipt.issuer,
+            outcome="PASS",
+        ),),
+    )
+
+
+def assert_proposal_outcome(store: LearningStore, reason: str | None) -> None:
+    """Rejected proposals persist without admitting executable lessons or support."""
+    proposals = store.execute("SELECT * FROM proposals").fetchall()
+    assert len(proposals) == 1
+    proposal = proposals[0]
+    assert proposal["status"] == ("rejected" if reason else "accepted")
+    assert proposal["reason"] == reason
+    if reason:
+        assert proposal["procedure_id"] is None
+        assert store.execute("SELECT COUNT(*) FROM procedures").fetchone()[0] == 0
+        assert store.execute("SELECT COUNT(*) FROM procedure_versions").fetchone()[0] == 0
+        assert store.execute("SELECT COUNT(*) FROM procedure_support").fetchone()[0] == 0
+    else:
+        procedure = store.execute("SELECT * FROM procedures").fetchone()
+        assert procedure is not None
+        assert procedure["procedure_id"] == proposal["procedure_id"]
+        assert procedure["status"] == "active"
+        assert store.execute("SELECT COUNT(*) FROM procedure_versions").fetchone()[0] == 1
+        support = store.execute("SELECT * FROM procedure_support").fetchall()
+        lesson = Lesson.model_validate_json(proposal["lesson_json"])
+        assert {row["receipt_id"] for row in support} == set(lesson.claims[0].receipt_ids)
+
+
+@pytest.mark.parametrize(("case", "reason"), [
+    ("bound", None),
+    ("unrelated_work", "unbound_receipt"),
+    ("other_candidate", "unbound_receipt"),
+    ("other_claim", "unbound_claim"),
+    ("missing_span", "unbound_claim"),
+    ("mixed_candidates", "unbound_receipt"),
+    ("unknown_receipt", "invalid_citation"),
+    ("payload_candidate_conflict", "unbound_source"),
+    ("no_claims", "no_citation"),
+    ("narration", "narration_only"),
+    ("no_verdict", "tool_success_only"),
+    ("exit_code_only", "unbound_claim"),
+])
+def test_capture_admission_binds_every_citation_and_claim(
+    case: str, reason: str | None
+) -> None:
+    """Completion admits only its own candidate's proof of the cited claim."""
+    key, view = load_fixture_workflow()
+    receipt = receipt_for_work(view)
+    lesson = lesson_for_receipt(receipt)
+    claim = lesson.claims[0]
+    receipts = {str(receipt.receipt_id): receipt}
+    payload = {"work_id": str(view.item.work_id), "state": "DONE"}
+    aggregate_id = uuid4()
+    assert aggregate_id != view.item.work_id
+
+    if case == "unrelated_work":
+        receipt = receipt.model_copy(update={"work_id": uuid4()})
+    elif case == "other_candidate":
+        receipt = receipt.model_copy(update={"candidate_id": uuid4()})
+    elif case == "other_claim":
+        claim = claim.model_copy(update={"text": "a different claim"})
+    elif case == "missing_span":
+        claim = claim.model_copy(update={"source_span": None})
+    elif case == "mixed_candidates":
+        wrong = receipt.model_copy(update={"receipt_id": uuid4(), "candidate_id": uuid4()})
+        receipts[str(wrong.receipt_id)] = wrong
+        claim = claim.model_copy(update={"receipt_ids": (*claim.receipt_ids, str(wrong.receipt_id))})
+    elif case == "unknown_receipt":
+        claim = claim.model_copy(update={"receipt_ids": (*claim.receipt_ids, str(uuid4()))})
+    elif case == "payload_candidate_conflict":
+        payload["candidate_id"] = str(uuid4())
+    elif case == "narration":
+        receipt = receipt.model_copy(update={"kind": EvidenceKind.PLAN})
+    elif case == "no_verdict":
+        receipt = receipt.model_copy(update={"verdict": None, "payload": {"exit_code": 0}})
+    elif case == "exit_code_only":
+        receipt = receipt.model_copy(update={"payload": {"exit_code": 0}})
+    receipts[str(receipt.receipt_id)] = receipt
+    lesson = lesson.model_copy(update={"claims": () if case == "no_claims" else (claim,)})
+    store = LearningStore(":memory:")
+    result = drain(
+        store,
+        FakeEvents([make_event(
+            sequence=1,
+            event_type="complete_execution_item",
+            workspace_id=UUID(WORKSPACE),
+            aggregate_id=aggregate_id,
+            payload=payload,
+        )]),
+        DictReceiptReader(receipts),
+        StubGenerator([GenerationResult(
+            model="m", profile="p", request_sha256=HEX, response_sha256=HEX,
+            lessons=(lesson,),
+        )]),
+        workspace_id=WORKSPACE,
+        records=OneWorkRecord(key, view),
+    )
+    assert result.status == "succeeded"
+    assert_proposal_outcome(store, reason)
+    source = SourceIdentity.model_validate_json(
+        store.execute("SELECT source_json FROM proposals").fetchone()["source_json"]
+    )
+    assert source.work_id == str(view.item.work_id)
+    assert source.aggregate_id == str(aggregate_id)
+    if case == "payload_candidate_conflict":
+        assert source.candidate_id is None
+        assert source.revision_id is None
+    else:
+        assert view.item.candidate is not None
+        assert source.candidate_id == str(view.item.candidate.candidate_id)
+        assert source.revision_id == str(view.item.revision.revision_id)
+
+
+@pytest.mark.parametrize("missing_id", ["work_id", "candidate_id", "revision_id", "all"])
+def test_missing_source_ids_cannot_admit_a_procedure(missing_id: str) -> None:
+    """Legacy or incomplete sources cannot borrow a valid receipt's identity."""
+    _, view = load_fixture_workflow()
+    receipt = receipt_for_work(view)
+    lesson = lesson_for_receipt(receipt)
+    reader = DictReceiptReader({str(receipt.receipt_id): receipt})
+    ids = {
+        "work_id": str(receipt.work_id),
+        "candidate_id": str(receipt.candidate_id),
+        "revision_id": str(receipt.revision_id),
+    }
+    if missing_id == "all":
+        ids = {}
+        decision = evaluate(lesson, reader)
+        assert decision.accepted is False
+        assert decision.reason == "unbound_source"
+    else:
+        del ids[missing_id]
+    source = SourceIdentity(
+        workspace_id=WORKSPACE, event_id=str(uuid4()), event_sequence=1,
+        aggregate_id=str(uuid4()), **ids,
+    )
+    store = LearningStore(":memory:")
+    proposal = create_proposal(
+        store, unit_id=uuid4(), lesson=lesson,
+        attribution=Attribution(model="m", profile="p", source=source), reader=reader,
+    )
+    assert proposal.status == "rejected"
+    assert proposal.reason == "unbound_source"
+    assert_proposal_outcome(store, "unbound_source")
+
+
+def test_direct_proposal_cannot_reuse_same_work_pass_for_different_claim() -> None:
+    """Direct callers cannot bypass span binding with a same-work PASS."""
+    _, view = load_fixture_workflow()
+    receipt = receipt_for_work(view)
+    lesson = Lesson(
+        title="Unproved behaviour", steps=("reuse verification",),
+        claims=(Claim(text="a different claim", receipt_ids=(receipt.receipt_id,)),),
+    )
+    source = SourceIdentity(
+        workspace_id=WORKSPACE, event_id=str(uuid4()), event_sequence=1,
+        aggregate_id=str(uuid4()), work_id=str(receipt.work_id),
+        candidate_id=str(receipt.candidate_id), revision_id=str(receipt.revision_id),
+    )
+    store = LearningStore(":memory:")
+    proposal = create_proposal(
+        store, unit_id=uuid4(), lesson=lesson,
+        attribution=Attribution(model="m", profile="p", source=source),
+        reader=DictReceiptReader({str(receipt.receipt_id): receipt}),
+    )
+    assert proposal.status == "rejected"
+    assert proposal.reason == "unbound_claim"
+    assert_proposal_outcome(store, "unbound_claim")
