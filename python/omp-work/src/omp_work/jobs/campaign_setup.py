@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from omp_work.jobs.campaign_definition import CampaignDefinition
+from omp_work.jobs.campaign_definition import CampaignDefinition, definition_commitment
 from omp_work.operations.fingerprints import code_fingerprint
 from omp_work.v1.canonical import sha256
 from omp_work.v1.client import WorkClient
@@ -108,10 +108,15 @@ def prepare_campaign(
             f"research-run-evaluator-{digest}", digest,
         )
 
+    protocol_sha256 = (
+        sha256([asdict(c) for c in definition.criteria])
+        if definition.search is None
+        else definition_commitment(definition)
+    )
     spec = ResearchCampaignSpec(
         objective=definition.objective,
         evaluation_protocol_id="research-run",
-        evaluation_protocol_sha256=sha256([asdict(c) for c in definition.criteria]),
+        evaluation_protocol_sha256=protocol_sha256,
         resource_policy_ref="res-policy-standard",
         resource_vector=ResearchResourceVector(
             cpu_seconds=60, gpu_seconds=0, memory_mib=512,

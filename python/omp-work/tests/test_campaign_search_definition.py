@@ -21,6 +21,10 @@ from omp_work.jobs.campaign_definition import (
     score_metrics,
     search_steps,
 )
+from omp_work.jobs import campaign_setup
+from omp_work.jobs.campaign_setup import prepare_campaign
+from omp_work.research.search import next_step, run_policy
+from omp_work.v1.canonical import sha256
 from omp_work.v1.models import ResearchDomain
 
 
@@ -291,3 +295,82 @@ def test_commitment_binds_every_field_and_ignores_presentation(tmp_path: Path) -
     steps["a"]["metric"] = 1.5
     steps["a"]["infra_error"] = "boom"
     assert definition_commitment(loaded) == base
+
+
+@pytest.fixture
+def offline_setup(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        campaign_setup, "_register",
+        lambda client, workspace, kind, name, artifact, **kw: sha256([str(kind), name, artifact]),
+    )
+    monkeypatch.setattr(campaign_setup, "code_fingerprint", lambda: "f" * 64)
+
+
+def _prepare(definition: CampaignDefinition, tmp_path: Path):
+    return prepare_campaign(None, None, definition, harness_dir=tmp_path / "cache")  # type: ignore[arg-type]
+
+
+def test_prepared_spec_binds_commitment_and_every_mutation(offline_setup: None, tmp_path: Path) -> None:
+    search = {"policy": "greedy", "budget": 4, "width": 2, "seed": 3, "metric": "score"}
+    trials = [{"harness": "h.sh", "id": "a"}, {"harness": "h.sh", "id": "b", "parent": "a"}]
+    loaded = _load(tmp_path, search=search, trials=trials)
+    base = _prepare(loaded, tmp_path)
+    assert base.spec.evaluation_protocol_sha256 == definition_commitment(loaded)
+    assert base.spec_sha256 == _prepare(loaded, tmp_path).spec_sha256
+    for name, mutated in _mutations(loaded).items():
+        changed = _prepare(mutated, tmp_path)
+        assert changed.spec.evaluation_protocol_sha256 != base.spec.evaluation_protocol_sha256, name
+        assert changed.spec_sha256 != base.spec_sha256, name
+
+    # Pool-size change and relocated identical bytes.
+    bigger = replace(loaded, trials=(*loaded.trials, replace(loaded.trials[1], id="c")))
+    assert _prepare(bigger, tmp_path).spec_sha256 != base.spec_sha256
+    moved = tmp_path / "moved"
+    moved.mkdir()
+    (moved / "h.sh").write_bytes(b"cached harness\n")
+    (moved / "d.json").write_text(json.dumps({
+        "objective": "improve score", "domain": "engineering", "criteria": [
+            {"metric": "loss", "op": "lt", "threshold": 0}, {"metric": "score", "op": "gte", "threshold": 1},
+        ][::-1], "search": search, "trials": trials,
+    }, indent=3))
+    relocated = _prepare(load_definition(moved / "d.json"), moved)
+    assert relocated.spec_sha256 == base.spec_sha256
+
+
+def test_absent_search_keeps_criteria_only_evaluation_hash(offline_setup: None, tmp_path: Path) -> None:
+    loaded = _load(tmp_path)
+    setup = _prepare(loaded, tmp_path)
+    expected = sha256([{"metric": "score", "op": "gte", "threshold": 1},
+                       {"metric": "loss", "op": "lt", "threshold": 0}])
+    assert setup.spec.evaluation_protocol_sha256 == expected
+    assert score_metrics({"score": 1, "loss": -1}, loaded.criteria, "completed")[0] == "supported"
+
+
+def test_loaded_default_budget_opens_fixed_trials_and_smaller_budget_stops(tmp_path: Path) -> None:
+    two = _load(tmp_path, search={}, trials=[{"harness": "h.sh", "cost": 1}, {"harness": "h.sh", "cost": 2}])
+    assert two.search.budget == 3
+    assert run_policy(two.search.policy, search_steps(two), budget=two.search.budget) == ["t000", "t001"]
+    assert run_policy("fixed", search_steps(two), budget=2.5) == ["t000"]
+    assert run_policy("fixed", search_steps(two), budget=0.5) == []
+    frac = _load(tmp_path, search={}, trials=[{"harness": "h.sh", "cost": c} for c in (0.1, 0.2, 0.1)])
+    assert run_policy("fixed", search_steps(frac), budget=frac.search.budget) == ["t000", "t001", "t002"]
+
+
+def test_fixed_follows_definition_order_not_lexical(tmp_path: Path) -> None:
+    loaded = _load(tmp_path, search={}, trials=[
+        {"harness": "h.sh", "id": "z"}, {"harness": "h.sh", "id": "a"}, {"harness": "h.sh", "id": "m", "parent": "z"},
+    ])
+    assert run_policy("fixed", search_steps(loaded), budget=loaded.search.budget) == ["z", "a", "m"]
+
+
+def test_greedy_child_follows_swapped_parent_metrics(tmp_path: Path) -> None:
+    loaded = _load(tmp_path, search={"policy": "greedy"}, trials=[
+        {"harness": "h.sh", "id": "p1"}, {"harness": "h.sh", "id": "p2"},
+        {"harness": "h.sh", "id": "c1", "parent": "p1"}, {"harness": "h.sh", "id": "c2", "parent": "p2"},
+    ])
+    picks = []
+    for first, second in ((1, 2), (2, 1)):
+        steps = search_steps(loaded)
+        steps["p1"]["metric"], steps["p2"]["metric"] = first, second
+        picks.append(next_step(loaded.search.policy, steps, {"p1", "p2"})[0])
+    assert picks == ["c2", "c1"]
