@@ -233,13 +233,6 @@ def run_ml(directory: str | Path, literature_dir: str | Path) -> dict[str, Any]:
         raise AssertionError
     beam_metric = float(tree[beam_winner_id]["metric"])
 
-    receipt_sha = "0" * 64
-    experiments = [
-        {"name": "best_of_n", "metrics": {"metric": bon_metric}, "receipt_sha256": receipt_sha},
-        {"name": "beam", "metrics": {"metric": beam_metric}, "receipt_sha256": receipt_sha},
-    ]
-
-    # 10. Lessons: scientific staged against resolved receipts, narrative rejected.
     claim = "Mean gain can mislead when median gain is negative"
     binding = {
         "source_span": f"1:{1 + len(claim)}",
@@ -248,18 +241,21 @@ def run_ml(directory: str | Path, literature_dir: str | Path) -> dict[str, Any]:
         "candidate": artifact_sha256(canonical_json({"budget": 3, "width": 2})),
         "evaluator": "winner",
     }
+    experiments: list[dict[str, Any]] = []
     records: dict[str, dict[str, Any]] = {}
-    for experiment in experiments:
-        preimage = {"name": experiment["name"], "metrics": experiment["metrics"]}
+    for name, metric in (("best_of_n", bon_metric), ("beam", beam_metric)):
+        preimage = {"name": name, "metrics": {"metric": metric}}
         digest = artifact_sha256(canonical_json(preimage))
+        experiments.append({**preimage, "receipt_sha256": digest})
         records[digest] = {
             **preimage,
-            "receipt_sha256": experiment["receipt_sha256"],
+            "receipt_sha256": digest,
             "project_id": "ml-project",
             "claim": claim,
             "outcome": "PASS",
             "binding": dict(binding),
         }
+    # 10. Lessons: scientific staged against resolved receipts, narrative rejected.
     scientific_draft = LessonDraft(
         lesson_id="lesson-scientific-1",
         project_id="ml-project",
@@ -277,7 +273,7 @@ def run_ml(directory: str | Path, literature_dir: str | Path) -> dict[str, Any]:
         kind="narrative",
         title="Narrative Thoughts on Training",
         claim="A narrative reflection",
-        receipt_ids=[receipt_sha],
+        receipt_ids=["0" * 64],
     )
     lessons_dir = dir_path / "lessons"
     staged_sci = stage(scientific_draft, lessons_dir, resolve=records.get)
