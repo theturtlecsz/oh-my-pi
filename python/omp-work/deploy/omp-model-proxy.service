@@ -1,0 +1,16 @@
+[Unit]
+Description=OMP Model Proxy Loopback Relay
+Requires=omp-work-postgres.service
+After=omp-work-postgres.service
+
+[Service]
+Type=simple
+UMask=0077
+ExecStart=/home/thetu/flood-repos/oh-my-pi-deploy/python/omp-work/.venv/bin/python -I -B -m omp_work.model_proxy --config /home/thetu/.config/omp/work-ledger/model-proxy.json
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+KillMode=control-group
+
+[Install]
+WantedBy=default.target

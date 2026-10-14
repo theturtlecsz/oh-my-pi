@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from uuid import uuid4
 
+import psycopg
 import pytest
+from psycopg.types.json import Jsonb
 from pydantic import ValidationError
 
 from omp_work.contracts.nsi.v1.models import (
@@ -17,7 +20,15 @@ from omp_work.contracts.nsi.v1.models import (
     OwnerRef,
     TypedNullValue,
 )
-from omp_work.intake_repository import EvidenceLinkRecord, IntakeRevisionBody
+from omp_work.intake_repository import (
+    EvidenceLinkRecord,
+    IntakeRevisionBody,
+    append_revision,
+    read_revision,
+    revision_hashes,
+)
+from test_nsi2_repository import connection, locked, revision_body, write_repository
+from test_workflow_service import service  # noqa: F401
 from omp_work.intake_support import (
     ClaimProjection,
     SupportReceipt,
@@ -562,3 +573,192 @@ def test_link_rejects_malformed_receipt(bad: dict[str, object]) -> None:
         EvidenceLinkRecord.model_validate(
             _link(relation="supports", support_receipt=_receipt(**bad))
         )
+
+
+# --- database integration: migration 0042 column metadata & legacy NULL ---
+
+
+@pytest.mark.skipif(
+    os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1",
+    reason="set OMP_WORK_POSTGRES_INTEGRATION=1",
+)
+def test_support_receipt_column_metadata(service) -> None:
+    with psycopg.connect(**service.config.connection_kwargs("omp_work_app")) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT data_type, udt_name, is_nullable, column_default
+                FROM information_schema.columns
+                WHERE table_schema = 'omp_work'
+                  AND table_name = 'intake_claim_evidence'
+                  AND column_name = 'support_receipt'
+                """
+            )
+            row = cur.fetchone()
+            assert row is not None
+            data_type, udt_name, is_nullable, column_default = row
+            assert data_type == "jsonb"
+            assert udt_name == "jsonb"
+            assert is_nullable == "YES"
+            assert column_default is None
+
+
+@pytest.mark.skipif(
+    os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1",
+    reason="set OMP_WORK_POSTGRES_INTEGRATION=1",
+)
+def test_legacy_insert_leaves_receipt_sql_null(service, write_repository) -> None:
+    workspace_id, _ = write_repository
+    body = revision_body(workspace_id)
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        head = locked(cur, write_repository)
+        revision = append_revision(cur, head, body, operation_id=uuid4())
+
+        # Direct SQL query verifies support_receipt column value is SQL NULL
+        cur.execute(
+            """
+            SELECT claim_id, artifact_id, start_byte, end_byte, support_receipt,
+                   support_receipt IS NULL
+            FROM omp_work.intake_claim_evidence
+            WHERE workspace_id = %s AND run_id = %s AND revision = %s
+            """,
+            (workspace_id, "run-1", revision),
+        )
+        rows = cur.fetchall()
+        assert len(rows) > 0
+        for row in rows:
+            assert row[4] is None
+            assert row[5] is True
+
+        # Raw legacy insert without specifying support_receipt
+        artifact_id = body["snapshot"]["artifacts"][0]["id"]
+        cur.execute(
+            """
+            INSERT INTO omp_work.intake_claim_evidence
+              (workspace_id, run_id, revision, claim_id, artifact_id, start_byte, end_byte, quote, relation, operation_id, nsi_version)
+            VALUES
+              (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (workspace_id, "run-1", revision, "prior", artifact_id, 20, 25, "quote", "neither", uuid4(), "nsi/v1"),
+        )
+        cur.execute(
+            """
+            SELECT support_receipt, support_receipt IS NULL
+            FROM omp_work.intake_claim_evidence
+            WHERE workspace_id = %s AND run_id = %s AND revision = %s AND claim_id = 'prior' AND start_byte = 20
+            """,
+            (workspace_id, "run-1", revision),
+        )
+        legacy_row = cur.fetchone()
+        assert legacy_row is not None
+        assert legacy_row[0] is None
+        assert legacy_row[1] is True
+
+        # Read revision reconstructs evidence links with support_receipt=None
+        view = read_revision(cur, workspace_id=workspace_id, run_id="run-1", revision=revision)
+        assert len(view.body.evidence_links) > 0
+        for link in view.body.evidence_links:
+            assert link.support_receipt is None
+            assert "support_receipt" not in link.model_dump()
+
+
+@pytest.mark.skipif(
+    os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1",
+    reason="set OMP_WORK_POSTGRES_INTEGRATION=1",
+)
+def test_append_read_preserves_receipts_by_claim_artifact_and_exact_span(service, write_repository) -> None:
+    workspace_id, _ = write_repository
+    body = revision_body(workspace_id)
+    body["assessments"] = []
+    artifacts = body["snapshot"]["artifacts"]
+    artifacts.append({**artifacts[0], "id": "other-source", "uri": "https://example.com/requirements-2"})
+    body["artifact_bytes"]["other-source"] = body["artifact_bytes"][artifacts[0]["id"]]
+    claim, prior = body["snapshot"]["claims"]
+    claim["value"] = {"type": "null", "value": None}
+    claim["evidence"] = []
+    prior["evidence"] = []
+    cases = [
+        (claim, artifacts[0], 0, 5, "supports", "neither"),
+        (claim, artifacts[0], 0, 6, "contradicts", "supports"),
+        (claim, artifacts[0], 1, 5, "neither", "contradicts"),
+        (claim, artifacts[1], 0, 5, "abstain", "supports"),
+        (prior, artifacts[0], 0, 5, "timeout", "supports"),
+        (prior, artifacts[1], 0, 5, "evidence-unavailable", "supports"),
+    ]
+    links = []
+    for index, (owner, artifact, start, end, verdict, relation) in enumerate(cases):
+        span = dict(artifact_id=artifact["id"], start_byte=start, end_byte=end,
+                    quote="hello" if index % 2 == 0 else None)
+        owner["evidence"].append({name: value for name, value in span.items() if value is not None})
+        receipt = _receipt(verdict=verdict, source_span=dict(start=start, end=end))
+        if index % 2:
+            receipt.update(measurement="unknown", input_tokens=None, output_tokens=None, usage_id=None)
+        links.append(dict(claim_id=owner["id"], **span, relation=relation, support_receipt=receipt))
+    legacy_span = dict(artifact_id=artifacts[0]["id"], start_byte=5, end_byte=6, quote=None)
+    unmatched_span = dict(artifact_id=artifacts[0]["id"], start_byte=6, end_byte=7, quote=None)
+    claim["evidence"].extend([{name: value for name, value in span.items() if value is not None}
+                              for span in (legacy_span, unmatched_span)])
+    links.append(dict(claim_id=claim["id"], **legacy_span, relation="contradicts", support_receipt=None))
+    # A caller link for a different span must neither leak into an unmatched span nor create evidence.
+    body["evidence_links"] = links + [dict(
+        claim_id=claim["id"], artifact_id=artifacts[0]["id"], start_byte=7, end_byte=8,
+        relation="supports", support_receipt=_receipt(source_span=dict(start=7, end=8)),
+    )]
+    for owner in (claim, prior):
+        owner["evidence"].sort(key=lambda span: (span["artifact_id"], span["start_byte"], span["end_byte"]))
+    original = IntakeRevisionBody.model_validate(body)
+    hashes = revision_hashes(original.snapshot, original.artifact_bytes)
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        revision = append_revision(cur, locked(cur, write_repository), body, operation_id=uuid4())
+    # Context exit commits; a fresh readonly connection proves persistence, not an in-memory echo.
+    with connection(service, workspace_id, "omp_work_readonly") as conn, conn.cursor() as cur:
+        view = read_revision(cur, workspace_id=workspace_id, run_id="run-1", revision=revision)
+        expected = [EvidenceLinkRecord.model_validate(link).model_dump(mode="json") for link in links]
+        expected.append(dict(claim_id=claim["id"], **unmatched_span, relation="neither"))
+        key = lambda link: (link["claim_id"], link["artifact_id"], link["start_byte"], link["end_byte"])
+        assert sorted(view.body.model_dump(mode="json", include={"evidence_links"})["evidence_links"], key=key) == sorted(expected, key=key)
+        assert {link.support_receipt.verdict for link in view.body.evidence_links
+                if link.support_receipt is not None} == {case[4] for case in cases}
+        assert {item.id: item for item in view.snapshot.artifacts} == {
+            item.id: item for item in original.snapshot.artifacts
+        }
+        assert {item.id: item for item in view.snapshot.claims} == {item.id: item for item in original.snapshot.claims}
+        assert view.artifact_bytes == original.artifact_bytes
+        assert view.body.binding == original.binding
+        assert (view.claim_set_hash, view.source_hash) == hashes
+        restored_claim = next(item for item in view.snapshot.claims if item.id == claim["id"])
+        assert restored_claim.model_dump()["value"] == {"type": "null", "value": None}
+        assert view.body.criteria[0].expected_result == original.criteria[0].expected_result
+        cur.execute(
+            "SELECT start_byte, relation, support_receipt IS NULL FROM omp_work.intake_claim_evidence "
+            "WHERE workspace_id=%s AND run_id=%s AND revision=%s AND claim_id=%s AND start_byte IN (5,6) "
+            "ORDER BY start_byte", (workspace_id, "run-1", revision, claim["id"]),
+        )
+        assert cur.fetchall() == [(5, "contradicts", True), (6, "neither", True)]
+
+
+@pytest.mark.skipif(
+    os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1",
+    reason="set OMP_WORK_POSTGRES_INTEGRATION=1",
+)
+@pytest.mark.parametrize("bad", [
+    {"verdict": "maybe"}, {"passage_sha256": "invalid"},
+    {"measurement": "unknown", "input_tokens": 0},
+])
+def test_read_revision_rejects_malformed_stored_receipt(service, write_repository, bad) -> None:
+    workspace_id, _ = write_repository
+    body = revision_body(workspace_id)
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        revision = append_revision(cur, locked(cur, write_repository), body, operation_id=uuid4())
+    # Simulate corrupt historical data only in this disposable workspace and privileged transaction.
+    with connection(service, workspace_id, "postgres") as conn:
+        conn.execute("SET LOCAL session_replication_role = replica")
+        result = conn.execute(
+            "UPDATE omp_work.intake_claim_evidence SET support_receipt=%s "
+            "WHERE workspace_id=%s AND run_id=%s AND revision=%s",
+            (Jsonb(_receipt(**bad)), workspace_id, "run-1", revision),
+        )
+        assert result.rowcount == 1
+    with connection(service, workspace_id, "omp_work_readonly") as conn, conn.cursor() as cur:
+        with pytest.raises(ValidationError, match="support_receipt"):
+            read_revision(cur, workspace_id=workspace_id, run_id="run-1", revision=revision)

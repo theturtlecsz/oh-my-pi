@@ -7,6 +7,7 @@ import json
 import math
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -21,6 +22,10 @@ from omp_work.jobs.campaign_definition import (
     score_metrics,
     search_steps,
 )
+from omp_work.jobs import campaign_setup
+from omp_work.jobs.campaign_setup import prepare_campaign
+from omp_work.research.search import next_step, run_policy
+from omp_work.v1.canonical import sha256
 from omp_work.v1.models import ResearchDomain
 
 
@@ -291,3 +296,228 @@ def test_commitment_binds_every_field_and_ignores_presentation(tmp_path: Path) -
     steps["a"]["metric"] = 1.5
     steps["a"]["infra_error"] = "boom"
     assert definition_commitment(loaded) == base
+
+
+@pytest.fixture
+def offline_setup(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        campaign_setup, "_register",
+        lambda client, workspace, kind, name, artifact, **kw: sha256([str(kind), name, artifact]),
+    )
+    monkeypatch.setattr(campaign_setup, "code_fingerprint", lambda: "f" * 64)
+
+
+def _prepare(definition: CampaignDefinition, tmp_path: Path):
+    return prepare_campaign(None, None, definition, harness_dir=tmp_path / "cache")  # type: ignore[arg-type]
+
+
+_SHARED_HARNESS = b"cached harness\n"
+_UNOPENED_HARNESS = b"unopened harness\n"
+
+
+def _explicit_campaign() -> dict[str, Any]:
+    """Explicit ids and budget so a cost or id edit does not move another field.
+
+    ``root-a`` and ``root-b`` are independent roots. ``u.sh`` is a separate
+    harness so one unopened digest can change without touching the shared bytes.
+    Search keeps selecting ``score``.
+    """
+    return {
+        "objective": "improve score",
+        "domain": "engineering",
+        "timeout_seconds": 60,
+        "criteria": [
+            {"metric": "score", "op": "gte", "threshold": 1},
+            {"metric": "loss", "op": "lt", "threshold": 0},
+        ],
+        "search": {"policy": "greedy", "budget": 4, "width": 2, "seed": 3, "metric": "score"},
+        "trials": [
+            {"harness": "h.sh", "id": "root-a", "cost": 1},
+            {"harness": "h.sh", "id": "root-b", "cost": 1},
+            {"harness": "u.sh", "id": "leaf", "parent": "root-a", "cost": 1},
+        ],
+    }
+
+
+def _load_explicit(
+    directory: Path, document: dict[str, Any], *, unopened: bytes = _UNOPENED_HARNESS
+) -> CampaignDefinition:
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "h.sh").write_bytes(_SHARED_HARNESS)
+    (directory / "u.sh").write_bytes(unopened)
+    path = directory / "campaign.json"
+    path.write_text(json.dumps(document))
+    return load_definition(path)
+
+
+def _assert_loader_invariants(definition: CampaignDefinition) -> None:
+    search = definition.search
+    assert search is not None
+    assert search.metric in {criterion.metric for criterion in definition.criteria}
+    seen: set[str] = set()
+    for trial in definition.trials:
+        assert trial.id is not None and trial.id not in seen
+        if trial.parent is not None:
+            assert trial.parent in seen
+        assert trial.candidate_digest == hashlib.sha256(trial.harness_bytes).hexdigest()
+        seen.add(trial.id)
+
+
+def _valid_prepared_mutations() -> list[tuple[str, dict[str, Any], bytes]]:
+    def doc() -> dict[str, Any]:
+        return _explicit_campaign()
+
+    objective = doc()
+    objective["objective"] = "other objective"
+    domain = doc()
+    domain["domain"] = "literature"
+    timeout = doc()
+    timeout["timeout_seconds"] = 61
+    # Rename the criterion search does not select, so ``score`` stays declared.
+    criterion_metric = doc()
+    criterion_metric["criteria"][1]["metric"] = "error"
+    criterion_op = doc()
+    criterion_op["criteria"][0]["op"] = "gt"
+    criterion_threshold = doc()
+    criterion_threshold["criteria"][0]["threshold"] = 2
+    criteria_order = doc()
+    criteria_order["criteria"].reverse()
+    policy = doc()
+    policy["search"]["policy"] = "fixed"
+    budget = doc()
+    budget["search"]["budget"] = 5
+    width = doc()
+    width["search"]["width"] = 3
+    seed = doc()
+    seed["search"]["seed"] = 4
+    metric = doc()
+    metric["search"]["metric"] = "loss"
+    pool_size = doc()
+    pool_size["trials"].append({"harness": "h.sh", "id": "root-c", "cost": 1})
+    pool_order = doc()
+    root_a, root_b, leaf = pool_order["trials"]
+    pool_order["trials"] = [root_b, root_a, leaf]
+    trial_id = doc()
+    trial_id["trials"][1]["id"] = "root-b2"
+    trial_parent = doc()
+    trial_parent["trials"][2]["parent"] = "root-b"
+    trial_cost = doc()
+    trial_cost["trials"][2]["cost"] = 9
+    same = doc()
+    rewritten = b"rewritten unopened harness\n"
+    return [
+        ("objective", objective, _UNOPENED_HARNESS),
+        ("domain", domain, _UNOPENED_HARNESS),
+        ("timeout", timeout, _UNOPENED_HARNESS),
+        ("criterion-metric", criterion_metric, _UNOPENED_HARNESS),
+        ("criterion-op", criterion_op, _UNOPENED_HARNESS),
+        ("criterion-threshold", criterion_threshold, _UNOPENED_HARNESS),
+        ("criteria-order", criteria_order, _UNOPENED_HARNESS),
+        ("policy", policy, _UNOPENED_HARNESS),
+        ("budget", budget, _UNOPENED_HARNESS),
+        ("width", width, _UNOPENED_HARNESS),
+        ("seed", seed, _UNOPENED_HARNESS),
+        ("metric", metric, _UNOPENED_HARNESS),
+        ("pool-size", pool_size, _UNOPENED_HARNESS),
+        ("pool-order", pool_order, _UNOPENED_HARNESS),
+        ("trial-id", trial_id, _UNOPENED_HARNESS),
+        ("trial-parent", trial_parent, _UNOPENED_HARNESS),
+        ("trial-cost", trial_cost, _UNOPENED_HARNESS),
+        ("unopened-digest", same, rewritten),
+    ]
+
+
+def test_prepared_spec_binds_commitment_and_every_mutation(offline_setup: None, tmp_path: Path) -> None:
+    loaded = _load_explicit(tmp_path / "base", _explicit_campaign())
+    _assert_loader_invariants(loaded)
+    assert loaded.search == SearchConfig("greedy", 4, 2, 3, "score")
+    assert [(trial.id, trial.parent, trial.cost) for trial in loaded.trials] == [
+        ("root-a", None, 1), ("root-b", None, 1), ("leaf", "root-a", 1),
+    ]
+    base = _prepare(loaded, tmp_path)
+    assert base.spec.evaluation_protocol_sha256 == definition_commitment(loaded)
+    assert base.spec_sha256 == _prepare(loaded, tmp_path).spec_sha256
+    for name, document, unopened in _valid_prepared_mutations():
+        mutated = _load_explicit(tmp_path / name, document, unopened=unopened)
+        _assert_loader_invariants(mutated)
+        if name == "criterion-metric":
+            assert mutated.search is not None and mutated.search.metric == "score"
+            assert [criterion.metric for criterion in mutated.criteria] == ["score", "error"]
+        if name == "pool-order":
+            assert [(trial.id, trial.parent) for trial in mutated.trials] == [
+                ("root-b", None), ("root-a", None), ("leaf", "root-a"),
+            ]
+        if name == "unopened-digest":
+            assert mutated.trials[2].harness_bytes != loaded.trials[2].harness_bytes
+            assert mutated.trials[2].candidate_digest != loaded.trials[2].candidate_digest
+            assert mutated.trials[0].harness_bytes == loaded.trials[0].harness_bytes
+            assert mutated.trials[0].candidate_digest == loaded.trials[0].candidate_digest
+        changed = _prepare(mutated, tmp_path)
+        assert changed.spec.evaluation_protocol_sha256 == definition_commitment(mutated), name
+        assert changed.spec.evaluation_protocol_sha256 != base.spec.evaluation_protocol_sha256, name
+        assert changed.spec_sha256 != base.spec_sha256, name
+
+    # Key order, formatting, and a relocated path with the same cached bytes.
+    moved = tmp_path / "moved"
+    moved.mkdir()
+    (moved / "h.sh").write_bytes(_SHARED_HARNESS)
+    (moved / "u.sh").write_bytes(_UNOPENED_HARNESS)
+    (moved / "d.json").write_text(json.dumps({
+        "trials": [
+            {"cost": 1, "id": "root-a", "harness": "h.sh"},
+            {"harness": "h.sh", "cost": 1, "id": "root-b"},
+            {"parent": "root-a", "harness": "u.sh", "id": "leaf", "cost": 1},
+        ],
+        "search": {"metric": "score", "seed": 3, "width": 2, "budget": 4, "policy": "greedy"},
+        "criteria": [
+            {"threshold": 1, "op": "gte", "metric": "score"},
+            {"threshold": 0, "metric": "loss", "op": "lt"},
+        ],
+        "domain": "engineering",
+        "timeout_seconds": 60,
+        "objective": "improve score",
+    }, indent=7))
+    relocated_definition = load_definition(moved / "d.json")
+    _assert_loader_invariants(relocated_definition)
+    relocated = _prepare(relocated_definition, moved)
+    assert relocated.spec.evaluation_protocol_sha256 == base.spec.evaluation_protocol_sha256
+    assert relocated.spec_sha256 == base.spec_sha256
+
+
+def test_absent_search_keeps_criteria_only_evaluation_hash(offline_setup: None, tmp_path: Path) -> None:
+    loaded = _load(tmp_path)
+    setup = _prepare(loaded, tmp_path)
+    expected = sha256([{"metric": "score", "op": "gte", "threshold": 1},
+                       {"metric": "loss", "op": "lt", "threshold": 0}])
+    assert setup.spec.evaluation_protocol_sha256 == expected
+    assert score_metrics({"score": 1, "loss": -1}, loaded.criteria, "completed")[0] == "supported"
+
+
+def test_loaded_default_budget_opens_fixed_trials_and_smaller_budget_stops(tmp_path: Path) -> None:
+    two = _load(tmp_path, search={}, trials=[{"harness": "h.sh", "cost": 1}, {"harness": "h.sh", "cost": 2}])
+    assert two.search.budget == 3
+    assert run_policy(two.search.policy, search_steps(two), budget=two.search.budget) == ["t000", "t001"]
+    assert run_policy("fixed", search_steps(two), budget=2.5) == ["t000"]
+    assert run_policy("fixed", search_steps(two), budget=0.5) == []
+    frac = _load(tmp_path, search={}, trials=[{"harness": "h.sh", "cost": c} for c in (0.1, 0.2, 0.1)])
+    assert run_policy("fixed", search_steps(frac), budget=frac.search.budget) == ["t000", "t001", "t002"]
+
+
+def test_fixed_follows_definition_order_not_lexical(tmp_path: Path) -> None:
+    loaded = _load(tmp_path, search={}, trials=[
+        {"harness": "h.sh", "id": "z"}, {"harness": "h.sh", "id": "a"}, {"harness": "h.sh", "id": "m", "parent": "z"},
+    ])
+    assert run_policy("fixed", search_steps(loaded), budget=loaded.search.budget) == ["z", "a", "m"]
+
+
+def test_greedy_child_follows_swapped_parent_metrics(tmp_path: Path) -> None:
+    loaded = _load(tmp_path, search={"policy": "greedy"}, trials=[
+        {"harness": "h.sh", "id": "p1"}, {"harness": "h.sh", "id": "p2"},
+        {"harness": "h.sh", "id": "c1", "parent": "p1"}, {"harness": "h.sh", "id": "c2", "parent": "p2"},
+    ])
+    picks = []
+    for first, second in ((1, 2), (2, 1)):
+        steps = search_steps(loaded)
+        steps["p1"]["metric"], steps["p2"]["metric"] = first, second
+        picks.append(next_step(loaded.search.policy, steps, {"p1", "p2"})[0])
+    assert picks == ["c2", "c1"]

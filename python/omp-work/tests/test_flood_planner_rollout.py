@@ -1,9 +1,9 @@
 """Execute the composed planner rollout candidate, never the selected external source.
 
-Set OMP584_FLOOD_SOURCE explicitly. A missing source skips every node; rollout
-qualification must supply it and run them all. The preflight and the staging
+Set OMP584_FLOOD_SOURCE explicitly. A missing source skips source-dependent
+nodes; rollout qualification must supply it and run them all. The preflight and the staging
 functions install nothing on their own: the owner rollout script stages and
-qualifies only in its own temp dir until OMP-584-s03 wires installation.
+qualifies in its own temp dir before target-scoped installation.
 """
 from __future__ import annotations
 
@@ -36,6 +36,11 @@ def command(argv: list[str], cwd: Path):
 
 def compose(directory: Path, patches: list[Path]) -> None:
     """Reverse only fully reverse-applicable patches, then check and apply each forward."""
+    path = directory / "flood.py"
+    canonical = b'with_name("planner-independence.md")' in path.read_bytes()
+    if canonical:
+        path.write_bytes(path.read_bytes().replace(b'with_name("planner-independence.md")',
+                                                  b'with_name("omp584-planner-rules.md")'))
     for patch in reversed(patches):
         reverse = ["git", "apply", "--reverse", str(patch)]
         if command([*reverse, "--check"], directory).returncode == 0:
@@ -46,6 +51,9 @@ def compose(directory: Path, patches: list[Path]) -> None:
         assert result.returncode == 0, f"{patch.name}: {result.stderr}"
         result = command(["git", "apply", str(patch)], directory)
         assert result.returncode == 0, result.stderr
+    if canonical:
+        path.write_bytes(path.read_bytes().replace(b'with_name("omp584-planner-rules.md")',
+                                                  b'with_name("planner-independence.md")'))
 
 
 def snapshot(directory: Path):
@@ -87,7 +95,8 @@ def candidate(tmp_path, monkeypatch):
     for name in (RULES, SPEC_RULES):
         shutil.copyfile(ASSETS / RULES, directory / name)
     init_repo(directory)
-    compose(directory, PATCHES)
+    if os.environ.get("OMP584_TEST_EXACT") != "1":
+        compose(directory, PATCHES)
     path = directory / "flood.py"
     compile(path.read_bytes(), str(path), "exec")
     try:
@@ -161,7 +170,8 @@ def test_combined_candidate_compiles_and_requalifies(candidate):
 def test_combined_continuation_prompts_keep_loaded_rules(candidate, tmp_path, continuation):
     """Disk replacement must not change planner or reviewer rules during a retry."""
     marker = f"Loaded marker: {uuid.uuid4().hex}"
-    rules = candidate.with_name(RULES)
+    rules_name = SPEC_RULES if b"planner-independence.md" in candidate.read_bytes() else RULES
+    rules = candidate.with_name(rules_name)
     loaded = rules.read_bytes() + f"\n{marker}\n".encode()
     rules.write_bytes(loaded)
     spec = importlib.util.spec_from_file_location(f"flood_combined_{uuid.uuid4().hex}", candidate)
@@ -417,3 +427,436 @@ def test_rollout_verification_failure_cannot_install(tmp_path, failure):
     assert snapshot(source) == before
     assert (source / ".git" / "index").read_bytes() == index
     assert command(["git", "rev-parse", "HEAD"], source).stdout.strip() == head
+
+
+@pytest.fixture
+def install_repo(tmp_path, monkeypatch):
+    """Only temporary repos are installation targets; no host service is callable."""
+    monkeypatch.delenv("GIT_INDEX_FILE", raising=False)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "no-config"))
+    source = tmp_path / "checkout"
+    source.mkdir()
+    (source / "flood.py").write_bytes(b"# original flood\n")
+    (source / "flood.py").chmod(0o755)
+    (source / "staged.txt").write_text("base staged\n")
+    (source / "unstaged.txt").write_text("base unstaged\n")
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    service_log = tmp_path / "services"
+    for name in ("systemctl", "service", "supervisorctl"):
+        tool = tools / name
+        tool.write_text(f'#!/bin/sh\necho "$0 $*" >> "{service_log}"\nexit 99\n')
+        tool.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tools) + os.pathsep + os.environ["PATH"])
+    yield source
+    assert not service_log.exists(), "rollout must rely on in-place reload, never service commands"
+
+
+def prepare_install_repo(source: Path, rules_present: bool) -> None:
+    if rules_present:
+        (source / SPEC_RULES).write_bytes(b"Tracked old planner rules\n")
+        (source / SPEC_RULES).chmod(0o640)
+    init_repo(source)
+    for key, value in (("user.name", "Test"), ("user.email", "test@example.com"),
+                       ("commit.gpgsign", "false")):
+        assert command(["git", "config", key, value], source).returncode == 0
+    (source / "staged.txt").write_text("unrelated staged\n")
+    assert command(["git", "add", "staged.txt"], source).returncode == 0
+    (source / "staged.txt").write_text("unrelated staged plus unstaged\n")
+    (source / "unstaged.txt").write_text("unrelated unstaged\n")
+    (source / "untracked.txt").write_text("unrelated untracked\n")
+    (source / "flood.py.omp584-new").write_bytes(b"preexisting scratch\n")
+    (source / "planner-independence.md.omp584-new.OLD").write_bytes(b"another user's scratch\n")
+
+
+def transaction_state(source: Path):
+    return {
+        "head": command(["git", "rev-parse", "HEAD"], source).stdout,
+        "index": (source / ".git" / "index").read_bytes(),
+        "entries": command(["git", "ls-files", "--stage"], source).stdout,
+        "files": {p.name: (p.read_bytes(), p.stat().st_mode & 0o777)
+                  for p in source.iterdir() if p.is_file()},
+    }
+
+
+def run_install(source: Path, evidence: Path, seam: str = "", *, main: bool = False):
+    """Known tested bytes isolate transaction tests from external Flood availability."""
+    driver = r'''source "$1"
+omp584_stage() {
+    OMP584_STAGE=$(mktemp -d)
+    cp -p "$OMP584_FLOOD_DIR/flood.py" "$OMP584_STAGE/original-flood.py"
+    printf '# qualified flood\n' > "$OMP584_STAGE/flood.py"
+    cp "$OMP584_ASSETS/omp584-planner-rules.md" "$OMP584_STAGE/planner-independence.md"
+}
+omp584_verify() {
+    mkdir -p "$OMP584_EVIDENCE_DIR"
+    cp "$OMP584_STAGE/flood.py" "$OMP584_EVIDENCE_DIR/tested-flood.py"
+    cp "$OMP584_STAGE/planner-independence.md" "$OMP584_EVIDENCE_DIR/tested-rules.md"
+    echo "compiled" > "$OMP584_EVIDENCE_DIR/compile.log"
+    echo "tested" > "$OMP584_EVIDENCE_DIR/pytest.log"
+}
+'''
+    driver += seam + "\n"
+    if main:
+        driver += 'omp584_main --flood-dir "$2" --evidence-dir "$3"\n'
+    else:
+        driver += r'''trap 'rm -rf -- "${OMP584_STAGE:-}"' EXIT
+omp584_preflight --flood-dir "$2" --evidence-dir "$3"
+omp584_stage
+omp584_verify
+omp584_install
+'''
+    return subprocess.run(["bash", "-c", driver, "test", str(SCRIPT), str(source), str(evidence)],
+                          capture_output=True, text=True, timeout=30)
+
+
+@pytest.mark.parametrize("rules_present", [True, False])
+@pytest.mark.parametrize("failure", ["first-replace", "second-replace", "commit"])
+def test_rollout_transaction_failure_restores_targets_and_preserves_dirt(
+        install_repo, tmp_path, rules_present, failure):
+    """Failed install/commit preserves HEAD, exact index, old rules/modes and unrelated dirt."""
+    source = install_repo
+    prepare_install_repo(source, rules_present)
+    seam = ""
+    if failure == "commit":
+        hook = source / ".git" / "hooks" / "pre-commit"
+        hook.write_text("#!/bin/sh\nexit 47\n")
+        hook.chmod(0o755)
+    elif failure == "first-replace":
+        seam = 'omp584_replace() { return 48; }'
+    else:
+        # New rules must be visible while flood.py still holds old bytes.
+        seam = r'''omp584_replace() {
+    if [[ "$2" == */flood.py ]]; then
+        cmp "$OMP584_STAGE/planner-independence.md" "$OMP584_FLOOD_DIR/planner-independence.md" || exit 91
+        cmp "$OMP584_STAGE/original-flood.py" "$OMP584_FLOOD_DIR/flood.py" || exit 92
+        echo 'rules replaced first' >&2
+        return 49
+    fi
+    mv -f -- "$1" "$2"
+}'''
+    before = transaction_state(source)
+    result = run_install(source, tmp_path / "evidence", seam)
+    assert result.returncode == {"first-replace": 48, "second-replace": 49, "commit": 1}[failure], result.stderr
+    if failure == "second-replace":
+        assert "rules replaced first" in result.stderr
+    assert transaction_state(source) == before
+    assert (source / SPEC_RULES).exists() == rules_present
+
+
+@pytest.mark.parametrize("target", ["flood.py", SPEC_RULES])
+@pytest.mark.parametrize("dirt", ["staged", "unstaged", "untracked"])
+def test_rollout_dirty_target_fails_before_writes(install_repo, tmp_path, target, dirt):
+    """Target dirt is never overwritten or staged, including untracked rules."""
+    source = install_repo
+    prepare_install_repo(source, target == SPEC_RULES and dirt != "untracked")
+    if dirt == "untracked" and target == "flood.py":
+        assert command(["git", "rm", "--cached", "flood.py"], source).returncode == 0
+    else:
+        (source / target).write_bytes(b"operator edits\n")
+        if dirt == "staged":
+            assert command(["git", "add", target], source).returncode == 0
+    before = transaction_state(source)
+    evidence = tmp_path / "evidence"
+    result = run_install(source, evidence, main=True)
+    assert result.returncode != 0
+    assert not evidence.exists()
+    assert transaction_state(source) == before
+
+
+def test_rollout_rechecks_target_dirt_after_qualification(install_repo, tmp_path):
+    """Edits made during tests survive and block installation before replacements."""
+    source = install_repo
+    prepare_install_repo(source, True)
+    seam = r'''omp584_verify() {
+    printf 'operator edit during qualification\n' > "$OMP584_FLOOD_DIR/planner-independence.md"
+}'''
+    before = transaction_state(source)
+    result = run_install(source, tmp_path / "evidence", seam, main=True)
+    assert result.returncode != 0
+    before["files"][SPEC_RULES] = (b"operator edit during qualification\n", 0o640)
+    assert transaction_state(source) == before
+
+
+@pytest.mark.parametrize("rules_present", [True, False])
+def test_rollout_commits_only_tested_targets_without_claiming_activation(install_repo, tmp_path, rules_present):
+    """Target commit keeps unrelated staging; CLI fails until activation verification exists."""
+    source = install_repo
+    prepare_install_repo(source, rules_present)
+    before = transaction_state(source)
+    evidence = tmp_path / "evidence"
+    result = run_install(source, evidence, main=True)
+    assert result.returncode == 1, result.stderr
+    assert "activation verification pending" in result.stderr
+    assert not (evidence / "rollout.json").exists()
+    changed = command(["git", "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"], source)
+    assert set(changed.stdout.splitlines()) == {"flood.py", SPEC_RULES}
+    for target, tested in (("flood.py", "tested-flood.py"), (SPEC_RULES, "tested-rules.md")):
+        committed = subprocess.run(["git", "show", f"HEAD:{target}"], cwd=source, capture_output=True, check=True)
+        assert committed.stdout == (evidence / tested).read_bytes() == (source / target).read_bytes()
+    after = transaction_state(source)
+    assert after["head"] != before["head"]
+    for name, state in before["files"].items():
+        if name not in ("flood.py", SPEC_RULES):
+            assert after["files"][name] == state
+    assert set(after["files"]) == set(before["files"]) | {SPEC_RULES}
+    assert (source / "flood.py").stat().st_mode & 0o777 == 0o755
+    assert (source / SPEC_RULES).stat().st_mode & 0o777 == (0o640 if rules_present else 0o644)
+    assert command(["git", "diff", "--cached", "--name-only"], source).stdout.splitlines() == ["staged.txt"]
+    assert command(["git", "show", ":staged.txt"], source).stdout == "unrelated staged\n"
+    assert not command(["git", "diff", "HEAD", "--", "flood.py", SPEC_RULES], source).stdout
+
+
+@pytest.mark.parametrize("flag", ["--assume-unchanged", "--skip-worktree"])
+def test_rollout_hidden_target_edits_are_rejected(install_repo, tmp_path, flag):
+    """Index flags cannot let status conceal target bytes that would be overwritten."""
+    source = install_repo
+    prepare_install_repo(source, True)
+    assert command(["git", "update-index", flag, "flood.py"], source).returncode == 0
+    (source / "flood.py").write_bytes(b"hidden operator edit\n")
+    before = transaction_state(source)
+    evidence = tmp_path / "evidence"
+    result = run_install(source, evidence, main=True)
+    assert result.returncode != 0
+    assert not evidence.exists()
+    assert transaction_state(source) == before
+
+
+def test_rollout_ignored_untracked_rules_are_rejected(install_repo, tmp_path):
+    """Ignored rules are still existing operator data, never an absent target."""
+    source = install_repo
+    prepare_install_repo(source, False)
+    (source / ".git" / "info" / "exclude").write_text(SPEC_RULES + "\n")
+    (source / SPEC_RULES).write_bytes(b"ignored rules\n")
+    before = transaction_state(source)
+    evidence = tmp_path / "evidence"
+    result = run_install(source, evidence, main=True)
+    assert result.returncode != 0
+    assert not evidence.exists()
+    assert transaction_state(source) == before
+
+
+def test_rollout_requires_git_checkout_root(install_repo, tmp_path):
+    """Non-Git directory and nested source directory fail before staging or evidence writes."""
+    source = install_repo
+    evidence = tmp_path / "evidence"
+    before = {p.name: p.read_bytes() for p in source.iterdir()}
+    result = run_install(source, evidence, main=True)
+    assert result.returncode != 0
+    assert not evidence.exists()
+    assert {p.name: p.read_bytes() for p in source.iterdir()} == before
+    prepare_install_repo(source, False)
+    nested = source / "nested"
+    nested.mkdir()
+    (nested / "flood.py").write_bytes(b"nested source\n")
+    before_repo = transaction_state(source)
+    result = run_install(nested, evidence, main=True)
+    assert result.returncode != 0
+    assert not evidence.exists()
+    assert transaction_state(source) == before_repo
+    assert list(nested.iterdir()) == [nested / "flood.py"]
+    assert (nested / "flood.py").read_bytes() == b"nested source\n"
+
+
+def test_rollout_post_commit_failure_does_not_undo_deployment(install_repo, tmp_path):
+    """Index synchronization failure after commit must not revert deployed files or HEAD."""
+    source = install_repo
+    prepare_install_repo(source, True)
+    before = transaction_state(source)
+    seam = r'''git() {
+    for arg in "$@"; do
+        if [[ "$arg" == reset ]]; then return 53; fi
+    done
+    command git "$@"
+}'''
+    evidence = tmp_path / "evidence"
+    result = run_install(source, evidence, seam, main=True)
+    assert result.returncode == 53, result.stderr
+    after = transaction_state(source)
+    assert after["head"] != before["head"]
+    assert after["index"] == before["index"]
+    assert set(after["files"]) == set(before["files"])
+    for target, tested in (("flood.py", "tested-flood.py"), (SPEC_RULES, "tested-rules.md")):
+        committed = subprocess.run(["git", "show", f"HEAD:{target}"], cwd=source, capture_output=True, check=True)
+        assert committed.stdout == (source / target).read_bytes() == (evidence / tested).read_bytes()
+    assert not (evidence / "rollout.json").exists()
+
+
+def test_rollout_git_filter_cannot_commit_untested_bytes(install_repo, tmp_path):
+    """A clean filter that changes candidate bytes fails and restores the transaction."""
+    source = install_repo
+    prepare_install_repo(source, True)
+    (source / ".git" / "info" / "attributes").write_text("flood.py filter=rollout-test\n")
+    assert command(["git", "config", "filter.rollout-test.clean", "sed s/qualified/untested/"], source).returncode == 0
+    before = transaction_state(source)
+    result = run_install(source, tmp_path / "evidence", main=True)
+    assert result.returncode == 2, result.stderr
+    assert "Git filtering changed tested bytes" in result.stderr
+    assert transaction_state(source) == before
+
+
+def install_reload_hook(source: Path, *, code_sha: str | None = None,
+                        rules_sha: str | None = None, commit: str | None = None,
+                        at: str = "2026-10-14T12:00:00Z", pid: int = 1234,
+                        mutate_after: str | None = None) -> None:
+    """Foreground git post-commit hook simulating in-place reload and loaded record."""
+    hooks = source / ".git" / "hooks"
+    hooks.mkdir(parents=True, exist_ok=True)
+    post_commit = hooks / "post-commit"
+    script = ['#!/bin/sh', 'set -e', 'head_commit=$(git rev-parse HEAD)']
+    if code_sha is not None:
+        script.append(f'code_sha="{code_sha}"')
+    else:
+        script.append('code_sha=$(sha256sum flood.py | awk \'{print $1}\')')
+    if rules_sha is not None:
+        script.append(f'rules_sha="{rules_sha}"')
+    else:
+        script.append(f'rules_sha=$(sha256sum {SPEC_RULES} | awk \'{{print $1}}\')')
+    if commit is not None:
+        script.append(f'record_head="{commit}"')
+    else:
+        script.append('record_head="$head_commit"')
+
+    script.append(f'echo "{at} [reload] flood.py or flood.json changed: exec in place (running jobs continue)" >> flood.log')
+    script.append(f'echo "{at} loaded {{\\"event\\": \\"loaded\\", \\"at\\": \\"{at}\\", \\"pid\\": {pid}, \\"code_sha256\\": \\"$code_sha\\", \\"rules_sha256\\": \\"$rules_sha\\", \\"external_head\\": \\"$record_head\\"}}" >> flood.log')
+    if mutate_after == "flood.py":
+        script.append('echo "# drifted after activation" >> flood.py')
+    elif mutate_after == SPEC_RULES:
+        script.append('echo "drifted rules after activation" >> ' + SPEC_RULES)
+    post_commit.write_text("\n".join(script) + "\n")
+    post_commit.chmod(0o755)
+
+
+def test_rollout_fast_reload_creates_rollout_json_with_proof(install_repo, tmp_path):
+    """Fast reload captured from pre-install snapshot proves activation and writes rollout.json."""
+    source = install_repo
+    prepare_install_repo(source, True)
+    (source / "flood.log").write_text("2026-10-14T09:00:00Z flood: old log line 1\n2026-10-14T09:00:01Z flood: old log line 2\n")
+
+    timestamp = "2026-10-14T12:00:00Z"
+    install_reload_hook(source, at=timestamp, pid=54321)
+
+    evidence = tmp_path / "evidence"
+    result = run_install(source, evidence, main=True)
+    assert result.returncode == 0, result.stderr
+    assert "Rollout completed successfully" in result.stdout
+    assert "activation verification pending" in result.stderr
+
+    rollout_path = evidence / "rollout.json"
+    assert rollout_path.is_file()
+    rollout = json.loads(rollout_path.read_text())
+
+    head_commit = command(["git", "rev-parse", "HEAD"], source).stdout.strip()
+    repo_commit = command(["git", "rev-parse", "HEAD"], SCRIPT.parents[2]).stdout.strip()
+    code_bytes = (source / "flood.py").read_bytes()
+    rules_bytes = (source / SPEC_RULES).read_bytes()
+    expected_code_sha = hashlib.sha256(code_bytes).hexdigest()
+    expected_rules_sha = hashlib.sha256(rules_bytes).hexdigest()
+
+    assert rollout["activated_at"] == timestamp
+    assert rollout["flood_sha256"] == expected_code_sha
+    assert rollout["external_commit"] == head_commit
+    assert rollout["repo_commit"] == repo_commit
+    assert rollout["matched_record"] == {
+        "event": "loaded", "at": timestamp, "pid": 54321,
+        "code_sha256": expected_code_sha, "rules_sha256": expected_rules_sha,
+        "external_head": head_commit
+    }
+    assert rollout["installed_file_hashes"]["flood.py"] == expected_code_sha
+    assert rollout["installed_file_hashes"][SPEC_RULES] == expected_rules_sha
+
+    for name, sha in rollout["artifact_hashes"].items():
+        assert hashlib.sha256((ASSETS / name).read_bytes()).hexdigest() == sha
+
+    assert Path(rollout["compile_log"]).is_file()
+    assert Path(rollout["pytest_log"]).is_file()
+    assert Path(rollout["reload_log"]).is_file()
+
+    reload_text = (evidence / "reload.log").read_text()
+    assert "[reload] flood.py or flood.json changed: exec in place" in reload_text
+    assert "loaded" in reload_text
+
+    assert code_bytes == (evidence / "tested-flood.py").read_bytes()
+    assert rules_bytes == (evidence / "tested-rules.md").read_bytes()
+    blob_flood = command(["git", "show", "HEAD:flood.py"], source).stdout.encode()
+    blob_rules = command(["git", "show", f"HEAD:{SPEC_RULES}"], source).stdout.encode()
+    assert blob_flood == code_bytes
+    assert blob_rules == rules_bytes
+
+
+def test_rollout_stale_config_reload_between_preparation_and_commit_fails(install_repo, tmp_path, monkeypatch):
+    """A config-only reload that occurred before commit cannot prove candidate activation."""
+    source = install_repo
+    prepare_install_repo(source, True)
+    monkeypatch.setenv("OMP584_POLL_TIMEOUT", "1")
+
+    old_head = command(["git", "rev-parse", "HEAD"], source).stdout.strip()
+    seam = f'''omp584_replace() {{
+    mv -f -- "$1" "$2"
+    if [[ "$2" == */flood.py ]]; then
+        printf "%s\\n%s\\n" \
+            "2026-10-14T11:00:00Z [reload] flood.py or flood.json changed: exec in place (running jobs continue)" \
+            "2026-10-14T11:00:00Z loaded {{\\"event\\": \\"loaded\\", \\"at\\": \\"2026-10-14T11:00:00Z\\", \\"pid\\": 1111, \\"code_sha256\\": \\"stale_code\\", \\"rules_sha256\\": \\"stale_rules\\", \\"external_head\\": \\"{old_head}\\"}}" \
+            >> "$OMP584_FLOOD_DIR/flood.log"
+    fi
+}}'''
+    evidence = tmp_path / "evidence"
+    result = run_install(source, evidence, seam=seam, main=True)
+    assert result.returncode != 0
+    assert not (evidence / "rollout.json").exists()
+
+
+@pytest.mark.parametrize("mismatch", ["code_sha", "rules_sha", "commit"])
+def test_rollout_wrong_hashes_or_commit_rejected(install_repo, tmp_path, mismatch, monkeypatch):
+    """Reload record with wrong code hash, rules hash, or commit cannot prove activation."""
+    source = install_repo
+    prepare_install_repo(source, True)
+    monkeypatch.setenv("OMP584_POLL_TIMEOUT", "1")
+
+    kwargs = {}
+    if mismatch == "code_sha":
+        kwargs["code_sha"] = "0" * 64
+    elif mismatch == "rules_sha":
+        kwargs["rules_sha"] = "1" * 64
+    else:
+        kwargs["commit"] = "2" * 40
+
+    install_reload_hook(source, **kwargs)
+    evidence = tmp_path / "evidence"
+    result = run_install(source, evidence, main=True)
+    assert result.returncode != 0
+    assert not (evidence / "rollout.json").exists()
+
+
+def test_rollout_activation_timeout_fails_without_rollout_json(install_repo, tmp_path, monkeypatch):
+    """Timeout waiting for activation fails without creating rollout.json."""
+    source = install_repo
+    prepare_install_repo(source, True)
+    monkeypatch.setenv("OMP584_POLL_TIMEOUT", "1")
+
+    hooks = source / ".git" / "hooks"
+    hooks.mkdir(parents=True, exist_ok=True)
+    (hooks / "post-commit").write_text("#!/bin/sh\necho 'flood: standard tick' >> flood.log\n")
+    (hooks / "post-commit").chmod(0o755)
+
+    evidence = tmp_path / "evidence"
+    result = run_install(source, evidence, main=True)
+    assert result.returncode != 0
+    assert "Activation timeout" in result.stderr
+    assert not (evidence / "rollout.json").exists()
+
+
+@pytest.mark.parametrize("target", ["flood.py", SPEC_RULES])
+def test_rollout_mutation_during_wait_fails_without_rollout_json(install_repo, tmp_path, target):
+    """Disk mutation of code or rules during wait invalidates activation proof."""
+    source = install_repo
+    prepare_install_repo(source, True)
+
+    install_reload_hook(source, mutate_after=target)
+
+    evidence = tmp_path / "evidence"
+    result = run_install(source, evidence, main=True)
+    assert result.returncode != 0
+    assert "drifted after activation wait" in result.stderr
+    assert not (evidence / "rollout.json").exists()

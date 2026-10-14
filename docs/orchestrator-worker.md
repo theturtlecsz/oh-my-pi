@@ -213,6 +213,41 @@ ReadOnlyPaths=/etc/omp
 WantedBy=multi-user.target
 ```
 
+### Arch-dev owner user service
+
+The runnable arch-dev assets are `python/omp-work/deploy/model-proxy.json`
+and `python/omp-work/deploy/omp-model-proxy.service`. The gateway refreshes
+the deployment venv at
+`/home/thetu/flood-repos/oh-my-pi-deploy/python/omp-work/.venv`; the user unit
+runs its installed `omp_work.model_proxy` with `python -I -B` and requires
+`omp-work-postgres.service`.
+
+Install the JSON as `/home/thetu/.config/omp/work-ledger/model-proxy.json`
+with mode `0600`, and the unit as
+`/home/thetu/.config/systemd/user/omp-model-proxy.service`. As the owner,
+reload user units and enable/start `omp-model-proxy.service` with
+`systemctl --user`. It listens on `127.0.0.1:8091` and uses the existing
+owner service directories:
+
+- Config: `/home/thetu/.config/omp/work-ledger`.
+- State: `/home/thetu/.local/state/omp/work-ledger`.
+- Data: `/home/thetu/.local/share/omp/work-ledger`.
+- Capability: `/home/thetu/.config/omp/work-ledger/capabilities/automation.json`.
+
+The `gemini-key` reference resolves in the existing
+`/home/thetu/.config/omp/work-ledger/credentials` directory. Both `gemini-key`
+and the database credential `omp_work_app` stay there; never copy credentials
+into the deployment tree or worker sandbox. Credential and capability files
+must be owner-owned regular files with mode `0600`.
+
+This deployment keeps the example's Gemini route, prices, and limits, with
+no Ollama transport. Overflow queues on the primary provider pending owner
+approval of an alternate; saturation waits only until the call deadline.
+The premium list is `claude-opus-5-5` and `gpt-6-sol`. Its reserve is zero
+USD with no authorized models, so both premium models are refused while
+ordinary Gemini calls remain eligible under task budgets. These assets do
+not record a live service deployment or a settled worker receipt.
+
 ### Stop Semantics
 
 - **Graceful Termination**: On `systemctl stop`, systemd sends `SIGTERM`. Uvicorn finishes processing in-flight requests within `TimeoutStopSec=30s` before closing listeners.

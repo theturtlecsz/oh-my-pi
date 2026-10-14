@@ -743,6 +743,16 @@ here. Until then the gate tests skip by default on a machine with no staged
 source, and no live plan is affected. Synthetic tests do not satisfy rollout
 acceptance; the acceptance evidence must come from real plans after activation.
 
+Pending owner/operator execution commands:
+```bash
+infra/automation-user/omp584-rollout.sh --flood-dir DIR --evidence-dir DIR
+python3 infra/automation-user/omp584-report.py --flood-dir DIR --rollout DIR/rollout.json --output DIR/measurement.json
+```
+
+These notes confer no authority (E0060; Markdown authority boundary). All evidence
+remains bound to explicit command arguments without relying on ambient host paths
+(E0054; host-path evidence).
+
 ## Unchanged external test conflict: `tests/test_planner.py`
 
 The live external suite `/home/ompbot/flood/tests/test_planner.py` currently
@@ -755,13 +765,15 @@ gate now refuses. The same holds for the `plan_item`-based promotion tests:
 `test_invalid_plan_is_continued_with_the_violations_then_promoted_by_hand` both
 write that order-only pair through `plan_item`, and
 `test_check_plan_cli_reports_gate_violations_then_ok` relies on the old
-acceptance. After the gate deploys these become invalid.
+acceptance. Note that the current external copy of `tests/test_planner.py` uses
+`consumer_text`, unchanged here. After the gate deploys these become invalid.
 
 Per the OMP-584 plan this conflict is recorded, not resolved here: existing
 tests must not be rewritten and no gate exemption may be added. Resolving it is
 the owner/operator's decision when the patch lands (the correct fix is to give
 the second slice a real consumed path or make both roots independent, not to
-weaken the gate). This session changed no external file.
+weaken the gate). No exemptions or external test repairs are made here. This
+session changed no external file.
 
 
 ## OMP-319 — M5 bounded recursive study; owner work pending

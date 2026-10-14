@@ -625,7 +625,7 @@ def test_revocation_after_success_failure_timeout(
     )
 
     # Allow compiled CLI startup while keeping the blocked-provider lease short.
-    lease_seconds = 2 if scenario == "timeout" else 180
+    lease_seconds = 8 if scenario == "timeout" else 180
     status_code = 500 if scenario == "provider_500" else 200
     block_all = scenario == "timeout"
 

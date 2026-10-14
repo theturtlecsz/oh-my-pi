@@ -20,6 +20,9 @@ class SupplyRecord(StrictModel):
     work_key: str
     context: dict[str, Any]
     supplied_at: str
+    worker_job_id: str | None = None
+    compiled_context_hash: str | None = None
+    prompt_hash: str | None = None
 
 
 class UseRecord(StrictModel):
@@ -48,6 +51,7 @@ class OutcomeRecord(StrictModel):
 class SupplyResult(StrictModel):
     supply_ids: tuple[str, ...] = ()
     lines: tuple[str, ...] = ()
+    records: tuple[SupplyRecord, ...] = ()
 
     def __len__(self) -> int:
         return len(self.lines)
@@ -160,10 +164,12 @@ def supply(
     context: dict[str, str] | None = None,
     limit: int = 3,
     allowed: set[tuple[str, int]] | Collection[tuple[str, int]] | None = None,
+    record: bool = True,
 ) -> SupplyResult:
     """Reads procedures live from SQLite (status active, current_version).
     A version applies when every eq precondition matches the context and no ne precondition does.
     Writes one supplies row per supplied (procedure_id, version, work_key, context).
+    With record=False, returns proposed records only; compilation is not delivery.
     Returns supply ids and render lines 'PROCEDURE <id>@v<n> supply=<supply_id>: <title> - <steps>'.
     """
     ctx = dict(context or {})
@@ -227,27 +233,23 @@ def supply(
 
         supply_ids: list[str] = []
         lines: list[str] = []
+        records: list[SupplyRecord] = []
         now = datetime.now(timezone.utc).isoformat()
-        ctx_json = json.dumps(ctx, sort_keys=True)
 
         for item in matching:
             supply_id = str(uuid4())
-            conn.execute(
-                """
-                INSERT INTO supplies (
-                    supply_id, procedure_id, version, workspace_id, work_key, context_json, supplied_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    supply_id,
-                    item["procedure_id"],
-                    item["current_version"],
-                    ws_id_str,
-                    work_key,
-                    ctx_json,
-                    now,
-                ),
+            proposed = SupplyRecord(
+                supply_id=supply_id,
+                procedure_id=item["procedure_id"],
+                version=item["current_version"],
+                workspace_id=ws_id_str,
+                work_key=work_key,
+                context=ctx,
+                supplied_at=now,
             )
+            records.append(proposed)
+            if record:
+                record_supply(store, proposed)
             supply_ids.append(supply_id)
             line = (
                 f"PROCEDURE {item['procedure_id']}@v{item['current_version']} "
@@ -258,6 +260,33 @@ def supply(
         return SupplyResult(
             supply_ids=tuple(supply_ids),
             lines=tuple(lines),
+            records=tuple(records),
+        )
+
+
+def record_supply(store: LearningStore, record: SupplyRecord) -> None:
+    """Persist delivery, independently of use or outcome evidence."""
+    with store.transaction() as conn:
+        conn.execute(
+            """
+            INSERT INTO supplies (
+                supply_id, procedure_id, version, workspace_id,
+                work_key, context_json, supplied_at,
+                worker_job_id, compiled_context_hash, prompt_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record.supply_id,
+                record.procedure_id,
+                record.version,
+                record.workspace_id,
+                record.work_key,
+                json.dumps(record.context, sort_keys=True),
+                record.supplied_at,
+                record.worker_job_id,
+                record.compiled_context_hash,
+                record.prompt_hash,
+            ),
         )
 
 
@@ -411,7 +440,8 @@ def procedure_history(
     with store.transaction() as conn:
         supplies_rows = conn.execute(
             """
-            SELECT supply_id, procedure_id, version, workspace_id, work_key, context_json, supplied_at
+            SELECT supply_id, procedure_id, version, workspace_id, work_key, context_json, supplied_at,
+                   worker_job_id, compiled_context_hash, prompt_hash
             FROM supplies
             WHERE procedure_id = ?
             ORDER BY supplied_at ASC, supply_id ASC
@@ -435,6 +465,9 @@ def procedure_history(
                     work_key=r["work_key"],
                     context=ctx,
                     supplied_at=r["supplied_at"],
+                    worker_job_id=r["worker_job_id"],
+                    compiled_context_hash=r["compiled_context_hash"],
+                    prompt_hash=r["prompt_hash"],
                 )
             )
             supply_ids.append(r["supply_id"])
@@ -551,6 +584,7 @@ __all__ = [
     "UseRecord",
     "procedure_history",
     "record_outcome",
+    "record_supply",
     "record_use",
     "supply",
 ]

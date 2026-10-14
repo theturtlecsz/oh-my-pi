@@ -42,6 +42,92 @@
         "ecc-eval-harness",
         "ecc-scholar-evaluation"
       ]
+    },
+    {
+      "id": "ecc-domain-rust",
+      "lane": "domain",
+      "selection": {
+        "profileId": null,
+        "moduleIds": []
+      },
+      "assetIds": [
+        "ecc-common-coding-style",
+        "ecc-rust-coding-style",
+        "ecc-rust-hooks-rule",
+        "ecc-rust-patterns-rule",
+        "ecc-rust-security-rule",
+        "ecc-rust-testing-rule",
+        "ecc-rust-patterns",
+        "ecc-rust-testing",
+        "ecc-rust-reviewer"
+      ]
+    },
+    {
+      "id": "ecc-domain-typescript",
+      "lane": "domain",
+      "selection": {
+        "profileId": null,
+        "moduleIds": []
+      },
+      "assetIds": [
+        "ecc-typescript-coding-style-rule",
+        "ecc-typescript-hooks-rule",
+        "ecc-typescript-patterns-rule",
+        "ecc-typescript-security-rule",
+        "ecc-typescript-testing-rule",
+        "ecc-coding-standards",
+        "ecc-hexagonal-architecture",
+        "ecc-architecture-decision-records",
+        "ecc-api-design"
+      ]
+    },
+    {
+      "id": "ecc-domain-python",
+      "lane": "domain",
+      "selection": {
+        "profileId": null,
+        "moduleIds": []
+      },
+      "assetIds": [
+        "ecc-python-coding-style-rule",
+        "ecc-python-fastapi-rule",
+        "ecc-python-hooks-rule",
+        "ecc-python-patterns-rule",
+        "ecc-python-security-rule",
+        "ecc-python-testing-rule",
+        "ecc-python-patterns",
+        "ecc-python-testing",
+        "ecc-python-reviewer"
+      ]
+    },
+    {
+      "id": "ecc-domain-postgresql",
+      "lane": "domain",
+      "selection": {
+        "profileId": null,
+        "moduleIds": []
+      },
+      "assetIds": [
+        "ecc-postgres-patterns",
+        "ecc-database-migrations",
+        "ecc-database-reviewer"
+      ]
+    },
+    {
+      "id": "ecc-domain-security",
+      "lane": "domain",
+      "selection": {
+        "profileId": null,
+        "moduleIds": []
+      },
+      "assetIds": [
+        "ecc-common-security-rule",
+        "ecc-rust-security-rule",
+        "ecc-typescript-security-rule",
+        "ecc-python-security-rule",
+        "ecc-security-reviewer",
+        "ecc-security-scan"
+      ]
     }
   ],
   "nativeCommandNames": ["intake", "plan", "execute", "summary", "done"],
@@ -431,16 +517,1149 @@
         "qualifiedRelease": null
       },
       "rollback": { "removeOwnedArtifactOnly": true }
+    },
+    {
+      "id": "ecc-rust-hooks-rule",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "rules/rust/hooks.md",
+        "sha256": "a7494896f1c8838f31cd72846f435e6388f91bf94e0d91eb226dd9b5b684ca55"
+      },
+      "target": {
+        "path": ".omp/rules/ecc-rust-hooks-rule.md",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "rule-metadata",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "rulebook"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-rust-patterns-rule",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "rules/rust/patterns.md",
+        "sha256": "08a09f7cf61991f4bdb69e388a9df546ea490c5c822aebcdd066e227cb06e16b"
+      },
+      "target": {
+        "path": ".omp/rules/ecc-rust-patterns-rule.md",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "rule-metadata",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "rulebook"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-rust-security-rule",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "rules/rust/security.md",
+        "sha256": "09c5225869c09fc605f8495ae2c3728093e3b652dcc0ab55a9186946f5c67995"
+      },
+      "target": {
+        "path": ".omp/rules/ecc-rust-security-rule.md",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "rule-metadata",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "rulebook"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-rust-testing-rule",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "rules/rust/testing.md",
+        "sha256": "54987d858918a433aea954c272c519d7ccb113834013fb79cc77ef7e6d571c8e"
+      },
+      "target": {
+        "path": ".omp/rules/ecc-rust-testing-rule.md",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "rule-metadata",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "rulebook"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-rust-patterns",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "skills/rust-patterns",
+        "sha256": "51379df2bd92a482309e109e5a210210842594f660cceeb2d68d18e995108edf"
+      },
+      "target": {
+        "path": ".omp/skills/ecc-rust-patterns",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "skill-namespaced",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "skill-discovery"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-rust-testing",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "skills/rust-testing",
+        "sha256": "02a9a40dcc42dd21d14730d29b13ee0a8b274694360585dc0fadb2602eb56ddf"
+      },
+      "target": {
+        "path": ".omp/skills/ecc-rust-testing",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "skill-namespaced",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "skill-discovery"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-rust-reviewer",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "agents/rust-reviewer.md",
+        "sha256": "10af67c5764677596d43f32a952d8ec28662bb353fd986d726daefd3382ebeca"
+      },
+      "target": {
+        "path": ".omp/agents/ecc-rust-reviewer.md",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "agent-metadata",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "task-agent"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-typescript-coding-style-rule",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "rules/typescript/coding-style.md",
+        "sha256": "cb6fbe555d700a65d466fc27377fbb66d6da0e2bcf4411656918f6a45402af1a"
+      },
+      "target": {
+        "path": ".omp/rules/ecc-typescript-coding-style-rule.md",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "rule-metadata",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "rulebook"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-typescript-hooks-rule",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "rules/typescript/hooks.md",
+        "sha256": "930bbe5d5a66e0022a55c87d5a17765d1633669620f9a3be6815f3ab4ddcd6b4"
+      },
+      "target": {
+        "path": ".omp/rules/ecc-typescript-hooks-rule.md",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "rule-metadata",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "rulebook"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-typescript-patterns-rule",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "rules/typescript/patterns.md",
+        "sha256": "20870f78aa32429fe13f35b415e9f6f8f7809e39c460cf8146d181b7306159fd"
+      },
+      "target": {
+        "path": ".omp/rules/ecc-typescript-patterns-rule.md",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "rule-metadata",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "rulebook"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-typescript-security-rule",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "rules/typescript/security.md",
+        "sha256": "86b14a5a56f4e61750ab30ca50bd264f52f90f5358303f3028d41030a4c50f18"
+      },
+      "target": {
+        "path": ".omp/rules/ecc-typescript-security-rule.md",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "rule-metadata",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "rulebook"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-typescript-testing-rule",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "rules/typescript/testing.md",
+        "sha256": "92e3d02b4fff30899bc1a2af043d74941adbf3b2c0e972d2fcd2c68c9c2ea70b"
+      },
+      "target": {
+        "path": ".omp/rules/ecc-typescript-testing-rule.md",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "rule-metadata",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "rulebook"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-coding-standards",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "skills/coding-standards",
+        "sha256": "e80544c3d1eac5b14f22022146bd91a6b0ecc30e099cf5181894853aeb81dee1"
+      },
+      "target": {
+        "path": ".omp/skills/ecc-coding-standards",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "skill-namespaced",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "skill-discovery"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-hexagonal-architecture",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "skills/hexagonal-architecture",
+        "sha256": "1579f70e4cd5a2dde39d29a2055d18b39f06b063a308d3b43a498900c99495b7"
+      },
+      "target": {
+        "path": ".omp/skills/ecc-hexagonal-architecture",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "skill-namespaced",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "skill-discovery"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-architecture-decision-records",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "skills/architecture-decision-records",
+        "sha256": "525e51b4ed98222cd49ea7d2e42b51a010ecab391b25022a86164258c14b8bb0"
+      },
+      "target": {
+        "path": ".omp/skills/ecc-architecture-decision-records",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "skill-namespaced",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "skill-discovery"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-api-design",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "skills/api-design",
+        "sha256": "bfae53167acc91caff0ff9ab73a80ee3fd92caccdfa445c88302c3bf95255156"
+      },
+      "target": {
+        "path": ".omp/skills/ecc-api-design",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "skill-namespaced",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "skill-discovery"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-python-coding-style-rule",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "rules/python/coding-style.md",
+        "sha256": "f9d6d7a39c5f5ea809579fecac591f390fa9264c088c7e209d464d5244747003"
+      },
+      "target": {
+        "path": ".omp/rules/ecc-python-coding-style-rule.md",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "rule-metadata",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "rulebook"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-python-fastapi-rule",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "rules/python/fastapi.md",
+        "sha256": "e796ecbe93c4d50de6ab34ab1d8fc35db5e6bac03144cbaef09939ae5c3b6e2a"
+      },
+      "target": {
+        "path": ".omp/rules/ecc-python-fastapi-rule.md",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "rule-metadata",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "rulebook"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-python-hooks-rule",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "rules/python/hooks.md",
+        "sha256": "7ebd12233f6917905d5653a63afe2361450ed732fd965de55055ed5ffd3c14a7"
+      },
+      "target": {
+        "path": ".omp/rules/ecc-python-hooks-rule.md",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "rule-metadata",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "rulebook"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-python-patterns-rule",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "rules/python/patterns.md",
+        "sha256": "d9cab9b536321ea7efc6180668fd48820deaf571400db732f0ca17bdda92b7d0"
+      },
+      "target": {
+        "path": ".omp/rules/ecc-python-patterns-rule.md",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "rule-metadata",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "rulebook"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-python-security-rule",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "rules/python/security.md",
+        "sha256": "6bbbb6c800cdfef23c3f9a5055ce31096a7724b51f0d528935f6c32970639453"
+      },
+      "target": {
+        "path": ".omp/rules/ecc-python-security-rule.md",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "rule-metadata",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "rulebook"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-python-testing-rule",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "rules/python/testing.md",
+        "sha256": "92655aa5047ee456501ad6605c428680bac6433965f89ce531fe79627004e8c6"
+      },
+      "target": {
+        "path": ".omp/rules/ecc-python-testing-rule.md",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "rule-metadata",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "rulebook"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-python-patterns",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "skills/python-patterns",
+        "sha256": "103e0130dac33a49d26705fc5a2df804980fcab6a0138d65bc7f370a987d49f6"
+      },
+      "target": {
+        "path": ".omp/skills/ecc-python-patterns",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "skill-namespaced",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "skill-discovery"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-python-testing",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "skills/python-testing",
+        "sha256": "b9f7a158dae3b6c06c9c75ffe84e27a1edc86092d2afdcb39e96fc2569902eb7"
+      },
+      "target": {
+        "path": ".omp/skills/ecc-python-testing",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "skill-namespaced",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "skill-discovery"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-python-reviewer",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "agents/python-reviewer.md",
+        "sha256": "d2180b115f5840383268c13d5d075b0541fe7ef2a1ac8ecd5d835266ca1b27ce"
+      },
+      "target": {
+        "path": ".omp/agents/ecc-python-reviewer.md",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "agent-metadata",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "task-agent"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-postgres-patterns",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "skills/postgres-patterns",
+        "sha256": "9c8c391ae9e9aa87faa7ca091e1d395c97766df14080d0bfbea8a97721776163"
+      },
+      "target": {
+        "path": ".omp/skills/ecc-postgres-patterns",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "skill-namespaced",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "skill-discovery"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-database-migrations",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "skills/database-migrations",
+        "sha256": "ad7f2f04ca03e592a16e2a539d8c6e90bf4e08892408820ce99a53e9d07775de"
+      },
+      "target": {
+        "path": ".omp/skills/ecc-database-migrations",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "skill-namespaced",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "skill-discovery"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-common-security-rule",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "rules/common/security.md",
+        "sha256": "58f0acc56331b8d554dd036b8a1d5b2305a908e3960ff1e2d7e55223d5918bc3"
+      },
+      "target": {
+        "path": ".omp/rules/ecc-common-security-rule.md",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "rule-metadata",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "rulebook"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-security-reviewer",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "agents/security-reviewer.md",
+        "sha256": "813e4062bed5f42ab25dd02a0070f682058ffe9508198fcfdbb2c31296f93b7b"
+      },
+      "target": {
+        "path": ".omp/agents/ecc-security-reviewer.md",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "agent-metadata",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "task-agent"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-security-scan",
+      "pack": "domain",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "skills/security-scan",
+        "sha256": "74bc3006fb15eef9cea6bf70a4e9cc45ec118ef00733d1c8226c9dc428f8d658"
+      },
+      "target": {
+        "path": ".omp/skills/ecc-security-scan",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "skill-namespaced",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "skill-discovery"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-domain-packs.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
     }
   ],
   "dispositionRules": [
-    { "prefix": ".kiro/", "disposition": "reference-only", "reason": "Kiro harness material" },
-    { "prefix": ".github/", "disposition": "reference-only", "reason": "CI workflows and automation" },
-    { "prefix": "docs/", "disposition": "reference-only", "reason": "Upstream documentation" },
-    { "prefix": "tests/", "disposition": "reference-only", "reason": "Upstream test suites" },
-    { "prefix": "scripts/", "disposition": "reference-only", "reason": "Upstream installer and maintenance scripts" },
-    { "prefix": "ecc2/", "disposition": "reference-only", "reason": "ECC2 incubation material" },
+    { "prefix": ".adal/", "disposition": "reference-only", "reason": "Upstream .adal family" },
+    { "prefix": ".agents/", "disposition": "reference-only", "reason": "Upstream .agents family" },
     { "prefix": ".claude/", "disposition": "reference-only", "reason": "Claude harness configuration" },
-    { "prefix": "", "disposition": "reference-only", "reason": "Repository root files and metadata" }
+    { "prefix": ".claude-plugin/", "disposition": "excluded", "reason": "Claude plugin family excluded (§5/§8)" },
+    { "prefix": ".codebuddy/", "disposition": "reference-only", "reason": "Upstream .codebuddy family" },
+    { "prefix": ".coderabbit.yaml", "disposition": "reference-only", "reason": "Upstream .coderabbit.yaml metadata/documentation family" },
+    { "prefix": ".codex/", "disposition": "reference-only", "reason": "Upstream .codex family" },
+    { "prefix": ".codex-plugin/", "disposition": "excluded", "reason": "Codex plugin family excluded (§5/§8)" },
+    { "prefix": ".cursor/", "disposition": "reference-only", "reason": "Upstream .cursor family" },
+    { "prefix": ".env.example", "disposition": "reference-only", "reason": "Upstream .env.example metadata/documentation family" },
+    { "prefix": ".gemini/", "disposition": "reference-only", "reason": "Upstream .gemini family" },
+    { "prefix": ".gitattributes", "disposition": "reference-only", "reason": "Upstream .gitattributes metadata/documentation family" },
+    { "prefix": ".github/", "disposition": "reference-only", "reason": "CI workflows and automation" },
+    { "prefix": ".gitignore", "disposition": "reference-only", "reason": "Upstream .gitignore metadata/documentation family" },
+    { "prefix": ".gitleaksignore", "disposition": "reference-only", "reason": "Upstream .gitleaksignore metadata/documentation family" },
+    { "prefix": ".hermes/", "disposition": "reference-only", "reason": "Upstream .hermes family" },
+    { "prefix": ".kimi/", "disposition": "reference-only", "reason": "Upstream .kimi family" },
+    { "prefix": ".kiro/", "disposition": "reference-only", "reason": "Kiro harness material" },
+    { "prefix": ".markdownlint.json", "disposition": "reference-only", "reason": "Upstream .markdownlint.json metadata/documentation family" },
+    { "prefix": ".mcp.json", "disposition": "reference-only", "reason": "Upstream .mcp.json metadata/documentation family" },
+    { "prefix": ".npmignore", "disposition": "reference-only", "reason": "Upstream .npmignore metadata/documentation family" },
+    { "prefix": ".openclaw/", "disposition": "reference-only", "reason": "Upstream .openclaw family" },
+    { "prefix": ".opencode/", "disposition": "reference-only", "reason": "Upstream .opencode family" },
+    { "prefix": ".pi/", "disposition": "reference-only", "reason": "Upstream .pi family" },
+    { "prefix": ".prettierrc", "disposition": "reference-only", "reason": "Upstream .prettierrc metadata/documentation family" },
+    { "prefix": ".qwen/", "disposition": "reference-only", "reason": "Upstream .qwen family" },
+    { "prefix": ".tool-versions", "disposition": "reference-only", "reason": "Upstream .tool-versions metadata/documentation family" },
+    { "prefix": ".trae/", "disposition": "reference-only", "reason": "Upstream .trae family" },
+    { "prefix": ".vscode/", "disposition": "reference-only", "reason": "Upstream .vscode family" },
+    { "prefix": ".yarnrc.yml", "disposition": "reference-only", "reason": "Upstream .yarnrc.yml metadata/documentation family" },
+    { "prefix": ".zed/", "disposition": "reference-only", "reason": "Upstream .zed family" },
+    { "prefix": "AGENTS.md", "disposition": "reference-only", "reason": "Upstream AGENTS.md metadata/documentation family" },
+    { "prefix": "CHANGELOG.md", "disposition": "reference-only", "reason": "Upstream CHANGELOG.md metadata/documentation family" },
+    { "prefix": "CLAUDE.md", "disposition": "reference-only", "reason": "Upstream CLAUDE.md metadata/documentation family" },
+    { "prefix": "CODE_OF_CONDUCT.md", "disposition": "reference-only", "reason": "Upstream CODE_OF_CONDUCT.md metadata/documentation family" },
+    { "prefix": "COMMANDS-QUICK-REF.md", "disposition": "reference-only", "reason": "Upstream COMMANDS-QUICK-REF.md metadata/documentation family" },
+    { "prefix": "CONTRIBUTING.md", "disposition": "reference-only", "reason": "Upstream CONTRIBUTING.md metadata/documentation family" },
+    { "prefix": "LICENSE", "disposition": "reference-only", "reason": "Upstream LICENSE metadata/documentation family" },
+    { "prefix": "README.md", "disposition": "reference-only", "reason": "Upstream README.md metadata/documentation family" },
+    { "prefix": "README.zh-CN.md", "disposition": "reference-only", "reason": "Upstream README.zh-CN.md metadata/documentation family" },
+    { "prefix": "SECURITY.md", "disposition": "reference-only", "reason": "Upstream SECURITY.md metadata/documentation family" },
+    { "prefix": "SOUL.md", "disposition": "reference-only", "reason": "Upstream SOUL.md metadata/documentation family" },
+    { "prefix": "SPONSORING.md", "disposition": "reference-only", "reason": "Upstream SPONSORING.md metadata/documentation family" },
+    { "prefix": "SPONSORS.md", "disposition": "reference-only", "reason": "Upstream SPONSORS.md metadata/documentation family" },
+    { "prefix": "TROUBLESHOOTING.md", "disposition": "reference-only", "reason": "Upstream TROUBLESHOOTING.md metadata/documentation family" },
+    { "prefix": "VERSION", "disposition": "reference-only", "reason": "Upstream VERSION metadata/documentation family" },
+    { "prefix": "agent.yaml", "disposition": "reference-only", "reason": "Upstream agent.yaml metadata/documentation family" },
+    { "prefix": "agents/", "disposition": "reference-only", "reason": "Upstream agents family" },
+    { "prefix": "assets/", "disposition": "reference-only", "reason": "Upstream assets family" },
+    { "prefix": "commands/", "disposition": "reference-only", "reason": "Upstream commands family" },
+    { "prefix": "commitlint.config.js", "disposition": "reference-only", "reason": "Upstream commitlint.config.js metadata/documentation family" },
+    { "prefix": "config/", "disposition": "reference-only", "reason": "Upstream config family" },
+    { "prefix": "contexts/", "disposition": "reference-only", "reason": "Upstream contexts family" },
+    { "prefix": "docker/", "disposition": "reference-only", "reason": "Upstream docker family" },
+    { "prefix": "docs/", "disposition": "reference-only", "reason": "Upstream documentation" },
+    { "prefix": "ecc2/", "disposition": "excluded", "reason": "ECC2 incubation family excluded (§5/§8)" },
+    { "prefix": "ecc_dashboard.py", "disposition": "reference-only", "reason": "Upstream ecc_dashboard.py metadata/documentation family" },
+    { "prefix": "eslint.config.js", "disposition": "reference-only", "reason": "Upstream eslint.config.js metadata/documentation family" },
+    { "prefix": "examples/", "disposition": "reference-only", "reason": "Upstream examples family" },
+    { "prefix": "greptile.json", "disposition": "reference-only", "reason": "Upstream greptile.json metadata/documentation family" },
+    { "prefix": "hooks/", "disposition": "deferred", "reason": "Hook runtime family deferred to WP7B" },
+    { "prefix": "install.ps1", "disposition": "excluded", "reason": "Upstream PowerShell installer excluded (§5/§8)" },
+    { "prefix": "install.sh", "disposition": "excluded", "reason": "Upstream shell installer excluded (§5/§8)" },
+    { "prefix": "integrations/", "disposition": "reference-only", "reason": "Upstream integrations family" },
+    { "prefix": "legacy-command-shims/", "disposition": "excluded", "reason": "Legacy command shim family excluded (§5/§8)" },
+    { "prefix": "manifests/", "disposition": "reference-only", "reason": "Upstream manifests family" },
+    { "prefix": "mcp-configs/", "disposition": "reference-only", "reason": "Upstream mcp-configs family" },
+    { "prefix": "package-lock.json", "disposition": "reference-only", "reason": "Upstream package-lock.json metadata/documentation family" },
+    { "prefix": "package.json", "disposition": "reference-only", "reason": "Upstream package.json metadata/documentation family" },
+    { "prefix": "plugins/", "disposition": "excluded", "reason": "Plugin runtime family excluded (§5/§8)" },
+    { "prefix": "pyproject.toml", "disposition": "reference-only", "reason": "Upstream pyproject.toml metadata/documentation family" },
+    { "prefix": "rules/", "disposition": "reference-only", "reason": "Upstream rules family" },
+    { "prefix": "scaffolds/", "disposition": "reference-only", "reason": "Upstream scaffolds family" },
+    { "prefix": "schemas/", "disposition": "reference-only", "reason": "Upstream schemas family" },
+    { "prefix": "scripts/", "disposition": "reference-only", "reason": "Upstream installer and maintenance scripts" },
+    { "prefix": "skills/", "disposition": "reference-only", "reason": "Upstream skills family" },
+    { "prefix": "src/", "disposition": "reference-only", "reason": "Upstream src family" },
+    { "prefix": "tests/", "disposition": "reference-only", "reason": "Upstream test suites" },
+    { "prefix": "the-longform-guide.md", "disposition": "reference-only", "reason": "Upstream the-longform-guide.md metadata/documentation family" },
+    { "prefix": "the-security-guide.md", "disposition": "reference-only", "reason": "Upstream the-security-guide.md metadata/documentation family" },
+    { "prefix": "the-shortform-guide.md", "disposition": "reference-only", "reason": "Upstream the-shortform-guide.md metadata/documentation family" },
+    { "prefix": "workflows/", "disposition": "reference-only", "reason": "Upstream workflows family" },
+    { "prefix": "yarn.lock", "disposition": "reference-only", "reason": "Upstream yarn.lock metadata/documentation family" },
+    { "prefix": "skills/continuous-learning", "disposition": "deferred", "reason": "Continuous-learning family deferred to WP7A" },
+    { "prefix": "skills/intent-driven-development/", "disposition": "deferred", "reason": "intent-driven-development workflow family deferred to WP3" },
+    { "prefix": "skills/contract-first/", "disposition": "deferred", "reason": "contract-first workflow family deferred to WP3" },
+    { "prefix": "skills/iterative-retrieval/", "disposition": "deferred", "reason": "iterative-retrieval workflow family deferred to WP3" },
+    { "prefix": "skills/dynamic-workflow-mode/", "disposition": "deferred", "reason": "dynamic-workflow-mode workflow family deferred to WP3" },
+    { "prefix": "skills/agentic-engineering/", "disposition": "deferred", "reason": "agentic-engineering workflow family deferred to WP3" },
+    { "prefix": "skills/product-capability/", "disposition": "deferred", "reason": "product-capability workflow family deferred to WP3" },
+    { "prefix": "skills/tdd-workflow/", "disposition": "deferred", "reason": "tdd-workflow workflow family deferred to WP3" }
   ]
 }

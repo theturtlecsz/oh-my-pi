@@ -1,0 +1,31 @@
+{
+  "operations": {
+    "config_dir": "/home/thetu/.config/omp/work-ledger",
+    "state_dir": "/home/thetu/.local/state/omp/work-ledger",
+    "data_dir": "/home/thetu/.local/share/omp/work-ledger"
+  },
+  "control_capability": "/home/thetu/.config/omp/work-ledger/capabilities/automation.json",
+  "host": "127.0.0.1",
+  "port": 8091,
+  "max_request_bytes": 1048576,
+  "max_response_bytes": 4194304,
+  "timeout_s": 120.0,
+  "overflow": "queue",
+  "premium_models": ["claude-opus-5-5", "gpt-6-sol"],
+  "premium_reserve": {"usd": "0", "models": []},
+  "transports": {
+    "gemini_flash": {
+      "api": "google-generative-ai",
+      "model": "gemini-3.8-flash-high",
+      "origin": "https://generativelanguage.googleapis.com",
+      "key_file": "gemini-key",
+      "context_tokens": 1000000,
+      "max_output_tokens": 8192,
+      "input_usd": 0.30,
+      "output_usd": 2.50,
+      "cache_usd": 0.03,
+      "price_version": "p1",
+      "thinking_tokens": 500
+    }
+  }
+}

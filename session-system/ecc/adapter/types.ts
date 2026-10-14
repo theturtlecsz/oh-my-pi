@@ -38,8 +38,8 @@ export interface PackSelection {
 
 export interface ManifestPack {
 	id: string;
-	/** Which of the two deliverables (R01) this pack belongs to. */
-	lane: "engineering" | "research";
+	/** Adoption lane this pack belongs to. */
+	lane: "engineering" | "research" | "domain" | "maintenance";
 	selection: PackSelection;
 	assetIds: string[];
 }
@@ -82,7 +82,7 @@ export interface AssetQualification {
 
 export interface ManifestAsset {
 	id: string;
-	pack: "engineering" | "research";
+	pack: "engineering" | "research" | "domain" | "maintenance";
 	upstream: AssetUpstream;
 	target: AssetTarget;
 	adaptation: AssetAdaptation;
