@@ -66,6 +66,10 @@ class PremiumReserve:
             raise ValueError("invalid_premium_reserve")
 
 
+OverflowMode = Literal["alternate", "queue"]
+OVERFLOW_MODES: tuple[str, ...] = ("alternate", "queue")
+
+
 @dataclass(frozen=True)
 class ProxyConfig:
     operations: OperationsConfig
@@ -78,17 +82,27 @@ class ProxyConfig:
     timeout_s: float = 120
     premium_models: tuple[str, ...] = ()
     premium_reserve: PremiumReserve = PremiumReserve()
+    overflow: OverflowMode = "alternate"
 
     def __post_init__(self) -> None:
         if self.host != "127.0.0.1":
             raise ValueError("loopback_required")
+        if self.overflow not in OVERFLOW_MODES:
+            raise ValueError("invalid_overflow")
         if not 0 < self.port < 65536 or min(self.max_request_bytes, self.max_response_bytes, self.timeout_s) <= 0 or not math.isfinite(self.timeout_s):
             raise ValueError("invalid_limits")
         policy = load_policy()
         primary = route_stage(policy, "implement")
-        routes = [primary, route_stage(policy, "implement", provider_in_flight={primary.provider: policy.concurrency.providers[primary.provider]})]
+        # Queue overflow never selects the alternate: only the primary
+        # implement route needs a transport. Alternate overflow can route to
+        # it at any time, so its transport must be present up front.
+        routes = [primary]
+        if self.overflow == "alternate":
+            routes.append(route_stage(policy, "implement", provider_in_flight={primary.provider: policy.concurrency.providers[primary.provider]}))
         for selected in routes:
-            route = self.transports[selected.provider]
+            route = self.transports.get(selected.provider)
+            if route is None:
+                raise ValueError("invalid_transport_map")
             validate_route(route)
             if route.model != selected.model or route.api != (GEMINI if selected.provider == "gemini_flash" else OLLAMA):
                 raise ValueError("invalid_transport_map")
@@ -142,7 +156,33 @@ def create_app(config: ProxyConfig, *, transport: Transport | None = None) -> Fa
     upstream = ModelProxyUpstream(config.operations, transport)
     grants: dict[str, Grant] = {}
     registry_lock = threading.RLock()
+    # In-flight counts are guarded by registry_lock; queue overflow waits on
+    # this condition for provider or total capacity, then rechecks under the
+    # same lock so a slot is acquired atomically.
+    capacity = threading.Condition(registry_lock)
     counts: dict[str, int] = {}
+
+    def saturated(provider: str) -> bool:
+        return counts.get(provider, 0) >= policy.concurrency.providers[provider] or sum(counts.values()) >= policy.concurrency.in_flight_max
+
+    def acquire_capacity(grant: Grant, provider: str, deadline: float) -> None:
+        """Take one in-flight slot, or refuse ``provider_saturated``.
+
+        Alternate overflow refuses at once so the router's chosen route is
+        never queued. Queue overflow waits on ``capacity`` for the provider and
+        total caps until the call deadline, then refuses. The slot is counted
+        under the same lock it waits on, so no two callers over-admit.
+        """
+        with capacity:
+            if config.overflow == "queue":
+                while saturated(provider):
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        refuse(grant, "provider_saturated")
+                    capacity.wait(remaining)
+            elif saturated(provider):
+                refuse(grant, "provider_saturated")
+            counts[provider] = counts.get(provider, 0) + 1
 
     @app.exception_handler(Exception)
     async def internal_error(request, error):
@@ -253,7 +293,10 @@ def create_app(config: ProxyConfig, *, transport: Transport | None = None) -> Fa
             for key, old in list(grants.items()):
                 if old.task.expires_at <= now and not old.lock.locked():
                     del grants[key]
-            selected = route_stage(policy, "implement", provider_in_flight=counts)
+            # Queue overflow waits for capacity at invoke time and therefore
+            # always keeps the primary implement route. Alternate overflow
+            # picks the overflow route up front from the live in-flight counts.
+            selected = route_stage(policy, "implement", provider_in_flight=None if config.overflow == "queue" else counts)
             refusal = config.premium_refusal(selected.model)
             if refusal is not None:
                 raise HTTPException(403, refusal)
@@ -308,10 +351,7 @@ def create_app(config: ProxyConfig, *, transport: Transport | None = None) -> Fa
                 expected_query = ("",)
             if path not in allowed or query not in expected_query:
                 refuse(grant, "route_mismatch")
-            with registry_lock:
-                if counts.get(grant.provider, 0) >= policy.concurrency.providers[grant.provider] or sum(counts.values()) >= policy.concurrency.in_flight_max:
-                    refuse(grant, "provider_saturated")
-                counts[grant.provider] = counts.get(grant.provider, 0) + 1
+            acquire_capacity(grant, grant.provider, deadline)
             try:
                 prepared = prepare(route, payload)
                 task = grant.task
@@ -365,8 +405,9 @@ def create_app(config: ProxyConfig, *, transport: Transport | None = None) -> Fa
             except Exception:
                 refuse(grant, "proxy_refused")
             finally:
-                with registry_lock:
+                with capacity:
                     counts[grant.provider] -= 1
+                    capacity.notify_all()
 
     @app.post("/{path:path}")
     async def native(path: str, request: Request):
