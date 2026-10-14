@@ -4,6 +4,7 @@
 
 ### Added
 
+- `omp-work qualification count` prints the read-only qualification gate counter: with no frozen O9 protocol or release baseline it reports each gate as `not started` with a null count, names the missing proof, and never claims a passed gate or invents allocations ([#620](https://github.com/can1357/oh-my-pi/issues/620)).
 - Documented orchestrator worker launch contract, model proxy configuration (`model-proxy.json`), and systemd unit; enforced loopback bind and mode 0600 file permissions for model proxy keys and capability files; and added loopback launch integration tests verifying authority boundaries.
 - An NSI-2 intake built through the API, including owner decisions, criteria, and supersessions, certifies `READY_FOR_RATIFICATION` for that revision ([#522](https://github.com/can1357/oh-my-pi/issues/522)).
 - Audit integration launches `/usr/bin/python3 -P -m omp_work.orchestrator.verify_main`; a signed PASS settles only for the frozen digest and attempt; failing tests, an out-of-envelope candidate, a drifted checkout, a wrong-attempt replay, and a key-theft or forge command do not settle a PASS.
