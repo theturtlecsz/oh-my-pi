@@ -23270,6 +23270,11 @@
               "title": "Claim Text Sha256",
               "type": "string"
             },
+            "context_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Context Sha256",
+              "type": "string"
+            },
             "disagreement": {
               "title": "Disagreement",
               "type": "boolean"
@@ -23284,9 +23289,29 @@
               "title": "Model Id",
               "type": "string"
             },
+            "model_version": {
+              "minLength": 1,
+              "title": "Model Version",
+              "type": "string"
+            },
             "passage_sha256": {
               "pattern": "^[0-9a-f]{64}$",
               "title": "Passage Sha256",
+              "type": "string"
+            },
+            "prompt_version": {
+              "minLength": 1,
+              "title": "Prompt Version",
+              "type": "string"
+            },
+            "rule_version": {
+              "minLength": 1,
+              "title": "Rule Version",
+              "type": "string"
+            },
+            "source_revision": {
+              "minLength": 1,
+              "title": "Source Revision",
               "type": "string"
             },
             "start_byte": {
@@ -23298,7 +23323,10 @@
               "enum": [
                 "supports",
                 "contradicts",
-                "neither"
+                "neither",
+                "abstain",
+                "timeout",
+                "evidence-unavailable"
               ],
               "title": "Verdict",
               "type": "string"
@@ -23312,8 +23340,13 @@
             "end_byte",
             "caller_relation",
             "verdict",
+            "source_revision",
+            "model_version",
+            "prompt_version",
+            "rule_version",
             "passage_sha256",
             "claim_text_sha256",
+            "context_sha256",
             "disagreement"
           ],
           "title": "IntakeSupportJudgment",
@@ -24379,6 +24412,11 @@
           "title": "Claim Text Sha256",
           "type": "string"
         },
+        "context_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Context Sha256",
+          "type": "string"
+        },
         "disagreement": {
           "title": "Disagreement",
           "type": "boolean"
@@ -24393,9 +24431,29 @@
           "title": "Model Id",
           "type": "string"
         },
+        "model_version": {
+          "minLength": 1,
+          "title": "Model Version",
+          "type": "string"
+        },
         "passage_sha256": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Passage Sha256",
+          "type": "string"
+        },
+        "prompt_version": {
+          "minLength": 1,
+          "title": "Prompt Version",
+          "type": "string"
+        },
+        "rule_version": {
+          "minLength": 1,
+          "title": "Rule Version",
+          "type": "string"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
           "type": "string"
         },
         "start_byte": {
@@ -24407,7 +24465,10 @@
           "enum": [
             "supports",
             "contradicts",
-            "neither"
+            "neither",
+            "abstain",
+            "timeout",
+            "evidence-unavailable"
           ],
           "title": "Verdict",
           "type": "string"
@@ -24421,8 +24482,13 @@
         "end_byte",
         "caller_relation",
         "verdict",
+        "source_revision",
+        "model_version",
+        "prompt_version",
+        "rule_version",
         "passage_sha256",
         "claim_text_sha256",
+        "context_sha256",
         "disagreement"
       ],
       "title": "IntakeSupportJudgment",
@@ -35294,6 +35360,27 @@
         "reason"
       ],
       "title": "SkipActiveItemResult",
+      "type": "object"
+    },
+    "SourceSpan": {
+      "additionalProperties": false,
+      "properties": {
+        "end": {
+          "minimum": 0,
+          "title": "End",
+          "type": "integer"
+        },
+        "start": {
+          "minimum": 0,
+          "title": "Start",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "title": "SourceSpan",
       "type": "object"
     },
     "StampExecutionPlanResult": {

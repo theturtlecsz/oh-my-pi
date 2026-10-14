@@ -22,6 +22,7 @@ from ..contracts.nsi.v1.models import (
     RequirementClause as NSIRequirementClause,
     RuleEngineRef as NSIRuleEngineRef,
 )
+from ..intake_support import SourceSpan, Verdict
 from .models import (
     AuditManifest,
     AuditorLaunch,
@@ -943,10 +944,22 @@ class IntakeSupportJudgment(StrictModel):
     start_byte: int = Field(ge=0, strict=True)
     end_byte: int = Field(ge=0, strict=True)
     caller_relation: Literal["supports", "contradicts", "neither"]
-    verdict: Literal["supports", "contradicts", "neither"]
+    verdict: Verdict
+    source_revision: str = Field(min_length=1)
+    model_version: str = Field(min_length=1)
+    prompt_version: str = Field(min_length=1)
+    rule_version: str = Field(min_length=1)
     passage_sha256: hex64
     claim_text_sha256: hex64
+    context_sha256: hex64
     disagreement: bool = Field(strict=True)
+
+    @model_validator(mode="after")
+    def _check_receipt(self) -> IntakeSupportJudgment:
+        SourceSpan(start=self.start_byte, end=self.end_byte)
+        if self.disagreement != (self.verdict != self.caller_relation):
+            raise ValueError("disagreement must reflect verdict and caller relation")
+        return self
 
 
 class IntakeRecordView(StrictModel):

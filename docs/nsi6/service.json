@@ -9,19 +9,19 @@
       "version": 1,
       "mode": "typed",
       "report": {
-        "path": "/tmp/pytest-of-ompbot/pytest-646/test_capture_real_service_rehe0/report.json",
-        "sha256": "12046ddf8a742008347e2f5b9763a64c36dd64061bf9a2841ebf73243b8cb385"
+        "path": "/tmp/pytest-of-ompbot/pytest-671/test_capture_real_service_rehe0/report.json",
+        "sha256": "5e06dcc4c8a9385c6bdacfd5751d11bc16a154178a5eba080e58e6ca7a9ec489"
       },
       "review": {
-        "path": "/tmp/pytest-of-ompbot/pytest-646/test_capture_real_service_rehe0/review.json",
-        "sha256": "01ac6d45d423980f6f325ebbe6f1fa382862004220f641b66efa91072cc5acd4"
+        "path": "/tmp/pytest-of-ompbot/pytest-671/test_capture_real_service_rehe0/review.json",
+        "sha256": "a65df07375498f5207f51e11d7d1dd7d51941efccf8603597ff3a85e6087bfd2"
       },
       "implementation": {
         "packages/work-client/src/index.ts": "78bc187419b5f24eba152ade1cebe7ab39b194a8b7b88e6f7f67b83a9d748fbb",
         "packages/work-client/src/intake-evaluation.ts": "5b4cb37e154aee125d7449c5f7ce2f1baf1d0a031d17e128f7e0e35c1ba6ca92",
         "packages/work-client/src/intake-nsi.ts": "4b6515e13bfedc140c4d17898c5b33fa7679c42264868e224257b92925e73e17",
         "packages/work-client/src/intake-records-hash.ts": "68c79671dd5a755e8dd3cca258077d10fe26a544ff52d76a1353ef2d9681ab96",
-        "packages/work-client/src/intake-records.ts": "7602393e0814d2c8da138af3d0113257f756087bf2a718b510ae700680ea5ff6",
+        "packages/work-client/src/intake-records.ts": "1cfb303ac3f46bd23079ce166c30948e99f1aa7a76087a9d19d57af42027ef68",
         "python/omp-work/src/omp_work/contracts/nsi/v1/__init__.py": "6e29cd0b8cfca8df4afc0c816fa47e33b2b5fdebfbfc36f49be8656362ef1b45",
         "python/omp-work/src/omp_work/contracts/nsi/v1/authority.py": "7c862b6d2576e523cf2f2442dc9e956d6e7031fc9591c42517c65456ab3e4f56",
         "python/omp-work/src/omp_work/contracts/nsi/v1/authority.schema.json": "abbf2c4f6b3d8c80926bd317dcc24cd8fd083952820c2864a9a7d638e0547087",
@@ -44,7 +44,7 @@
         "python/omp-work/src/omp_work/operations/database.py": "4a240100a5aadec5a4b980f29b34c93026dca5e858649bd8683e1d7256a2dde6",
         "python/omp-work/src/omp_work/v1/__init__.py": "6dd51c5a7ea2031734842daefd14e0980c5ab4c4f19696428502586ea3176f58",
         "python/omp-work/src/omp_work/v1/agent_stop.py": "185906e79af305858dfd43b90b18fe937d283a7521d4b728031fe4e45db90221",
-        "python/omp-work/src/omp_work/v1/api_models.py": "cb0c967bd4fda605278e655da7948495647321c2e6d79be225d5456e959e7f9c",
+        "python/omp-work/src/omp_work/v1/api_models.py": "56203fcbe7cb76202340be4bdcd1824881b654bee941ee7370e8ca28026ce107",
         "python/omp-work/src/omp_work/v1/audit_result.py": "353ac879c66e5797004d8c9549534d1f8dffad32533bbececabbb52c948ee64d",
         "python/omp-work/src/omp_work/v1/canonical.py": "15512e58dd4444fc7f880fe2cd39275892a454817060a2b75f7bbb7c54477d63",
         "python/omp-work/src/omp_work/v1/client.py": "ce061751f15015772ec902a160cd51c984d8579fe968d71bdd8b47251e59d084",
@@ -60,7 +60,7 @@
         "python/omp-work/src/omp_work/v1/mission_intake.py": "eb23e6e80d56ae2ac4f2e11cbd83105408a4c1430190543a659831ca62699d0b",
         "python/omp-work/src/omp_work/v1/mission_standing.py": "f1cd1106a7ae94f4b3506a38429ad9c0f1bde9a05538b0e9d5a0ac4e9b5a13bc",
         "python/omp-work/src/omp_work/v1/missions.py": "ded306bc8c812b714201e4128bccbd46700da8e1200925068042e896d72072fc",
-        "python/omp-work/src/omp_work/v1/models.py": "3c973ed518aed634ef54a9220acbbe982fbafaa381204f46d72474a7ee6ff870",
+        "python/omp-work/src/omp_work/v1/models.py": "71f66c645079b463ee4d80c1b048adf132380d8d343fbb6c11e2a0a135954d64",
         "python/omp-work/src/omp_work/v1/owner_controller.py": "acd03b58c9aa7dd0deb9abf0c5bc98bc87989cb7740988e2693b4a793351b5f1",
         "python/omp-work/src/omp_work/v1/owner_relay.py": "b6a2822280dafdad5c425979a3667cc10430afa94a6212b3396a4048f571119d",
         "python/omp-work/src/omp_work/v1/owner_signature.py": "4c0365a652dd21df6e2142e3a39d7965bd774bb52397012f0e93a112cbea39e5",
@@ -89,7 +89,7 @@
         "prior_binding": null,
         "state_sha256": "04c0a87d02a07970141d6217285573567254c2659f79a5044563cc0b212371c1"
       },
-      "state_sha256": "f1b11e4daf5d9dc005c6a31d519f6962a3a10109ec9294165848323e422f5460"
+      "state_sha256": "fd4936cd6115a05d6cc5b6c1bd479b729011589945c7ba9aab74bc03b8437949"
     },
     {
       "kind": "nsi6-route-state",
@@ -104,19 +104,19 @@
         "version": 1,
         "mode": "typed",
         "report": {
-          "path": "/tmp/pytest-of-ompbot/pytest-646/test_capture_real_service_rehe0/report.json",
-          "sha256": "12046ddf8a742008347e2f5b9763a64c36dd64061bf9a2841ebf73243b8cb385"
+          "path": "/tmp/pytest-of-ompbot/pytest-671/test_capture_real_service_rehe0/report.json",
+          "sha256": "5e06dcc4c8a9385c6bdacfd5751d11bc16a154178a5eba080e58e6ca7a9ec489"
         },
         "review": {
-          "path": "/tmp/pytest-of-ompbot/pytest-646/test_capture_real_service_rehe0/review.json",
-          "sha256": "01ac6d45d423980f6f325ebbe6f1fa382862004220f641b66efa91072cc5acd4"
+          "path": "/tmp/pytest-of-ompbot/pytest-671/test_capture_real_service_rehe0/review.json",
+          "sha256": "a65df07375498f5207f51e11d7d1dd7d51941efccf8603597ff3a85e6087bfd2"
         },
         "implementation": {
           "packages/work-client/src/index.ts": "78bc187419b5f24eba152ade1cebe7ab39b194a8b7b88e6f7f67b83a9d748fbb",
           "packages/work-client/src/intake-evaluation.ts": "5b4cb37e154aee125d7449c5f7ce2f1baf1d0a031d17e128f7e0e35c1ba6ca92",
           "packages/work-client/src/intake-nsi.ts": "4b6515e13bfedc140c4d17898c5b33fa7679c42264868e224257b92925e73e17",
           "packages/work-client/src/intake-records-hash.ts": "68c79671dd5a755e8dd3cca258077d10fe26a544ff52d76a1353ef2d9681ab96",
-          "packages/work-client/src/intake-records.ts": "7602393e0814d2c8da138af3d0113257f756087bf2a718b510ae700680ea5ff6",
+          "packages/work-client/src/intake-records.ts": "1cfb303ac3f46bd23079ce166c30948e99f1aa7a76087a9d19d57af42027ef68",
           "python/omp-work/src/omp_work/contracts/nsi/v1/__init__.py": "6e29cd0b8cfca8df4afc0c816fa47e33b2b5fdebfbfc36f49be8656362ef1b45",
           "python/omp-work/src/omp_work/contracts/nsi/v1/authority.py": "7c862b6d2576e523cf2f2442dc9e956d6e7031fc9591c42517c65456ab3e4f56",
           "python/omp-work/src/omp_work/contracts/nsi/v1/authority.schema.json": "abbf2c4f6b3d8c80926bd317dcc24cd8fd083952820c2864a9a7d638e0547087",
@@ -139,7 +139,7 @@
           "python/omp-work/src/omp_work/operations/database.py": "4a240100a5aadec5a4b980f29b34c93026dca5e858649bd8683e1d7256a2dde6",
           "python/omp-work/src/omp_work/v1/__init__.py": "6dd51c5a7ea2031734842daefd14e0980c5ab4c4f19696428502586ea3176f58",
           "python/omp-work/src/omp_work/v1/agent_stop.py": "185906e79af305858dfd43b90b18fe937d283a7521d4b728031fe4e45db90221",
-          "python/omp-work/src/omp_work/v1/api_models.py": "cb0c967bd4fda605278e655da7948495647321c2e6d79be225d5456e959e7f9c",
+          "python/omp-work/src/omp_work/v1/api_models.py": "56203fcbe7cb76202340be4bdcd1824881b654bee941ee7370e8ca28026ce107",
           "python/omp-work/src/omp_work/v1/audit_result.py": "353ac879c66e5797004d8c9549534d1f8dffad32533bbececabbb52c948ee64d",
           "python/omp-work/src/omp_work/v1/canonical.py": "15512e58dd4444fc7f880fe2cd39275892a454817060a2b75f7bbb7c54477d63",
           "python/omp-work/src/omp_work/v1/client.py": "ce061751f15015772ec902a160cd51c984d8579fe968d71bdd8b47251e59d084",
@@ -155,7 +155,7 @@
           "python/omp-work/src/omp_work/v1/mission_intake.py": "eb23e6e80d56ae2ac4f2e11cbd83105408a4c1430190543a659831ca62699d0b",
           "python/omp-work/src/omp_work/v1/mission_standing.py": "f1cd1106a7ae94f4b3506a38429ad9c0f1bde9a05538b0e9d5a0ac4e9b5a13bc",
           "python/omp-work/src/omp_work/v1/missions.py": "ded306bc8c812b714201e4128bccbd46700da8e1200925068042e896d72072fc",
-          "python/omp-work/src/omp_work/v1/models.py": "3c973ed518aed634ef54a9220acbbe982fbafaa381204f46d72474a7ee6ff870",
+          "python/omp-work/src/omp_work/v1/models.py": "71f66c645079b463ee4d80c1b048adf132380d8d343fbb6c11e2a0a135954d64",
           "python/omp-work/src/omp_work/v1/owner_controller.py": "acd03b58c9aa7dd0deb9abf0c5bc98bc87989cb7740988e2693b4a793351b5f1",
           "python/omp-work/src/omp_work/v1/owner_relay.py": "b6a2822280dafdad5c425979a3667cc10430afa94a6212b3396a4048f571119d",
           "python/omp-work/src/omp_work/v1/owner_signature.py": "4c0365a652dd21df6e2142e3a39d7965bd774bb52397012f0e93a112cbea39e5",
@@ -184,9 +184,9 @@
           "prior_binding": null,
           "state_sha256": "04c0a87d02a07970141d6217285573567254c2659f79a5044563cc0b212371c1"
         },
-        "state_sha256": "f1b11e4daf5d9dc005c6a31d519f6962a3a10109ec9294165848323e422f5460"
+        "state_sha256": "fd4936cd6115a05d6cc5b6c1bd479b729011589945c7ba9aab74bc03b8437949"
       },
-      "state_sha256": "d75c688e03fc1a77ccb6ad6086bf20d30994250e71664b6369229bea9554fd33"
+      "state_sha256": "edd99dbf5da47c7458119a68dedff69b7394507acba07d587b594e343a6f4b2c"
     }
   ],
   "requests": [
@@ -196,10 +196,10 @@
       "http_status": 200,
       "body": {
         "receipt": {
-          "operation_id": "2e349615-a18a-434b-b19d-a2983bacc77c",
-          "request_id": "49264890-a2ff-402a-8609-82c3cfb0c479",
+          "operation_id": "a9e5b1f9-1a23-49b4-9ee1-4e5e94caae5b",
+          "request_id": "0cf40407-a6b1-4b63-b96b-d99c4dd85dc2",
           "state": "applied",
-          "request_sha256": "aa3ad04c5eca6d8f0d92500e38928f98361eda457e862c789d8e8b9e2fb82624",
+          "request_sha256": "876481bca768c94ecfcc2c3949daff5398208160adb09e708d780189c4c725e9",
           "result_sha256": "657512a72c41e397fdac6b96f3775c3a9192d36003b8a4419ef53015fc2caafb",
           "diagnostics": []
         },
@@ -219,37 +219,37 @@
       "http_status": 200,
       "body": {
         "receipt": {
-          "operation_id": "dbf47684-728f-4122-8101-2ef87936e4da",
-          "request_id": "c46ecf1a-f633-4c61-a3a4-6222e763ba20",
+          "operation_id": "fd2c5afe-c91c-4a4e-b3b3-b06818979df8",
+          "request_id": "17d63f1c-479c-47cb-99f6-5a9ab9519944",
           "state": "applied",
-          "request_sha256": "a824a05ab05ca948bb97645467882c19457a8b18db348ae59fd587f33d98c260",
-          "result_sha256": "d2ad56743af9523a67fc61c044049b93c026e370affb9ff76af5aec2fdc605c6",
+          "request_sha256": "615910673773cb5cd090ea4bf1780a25ce4807164d356cf17f72ba63e04bd514",
+          "result_sha256": "3d1231cfecb73af9129490978172da151e1b5e1005c77a2b8dd371c9038b641c",
           "diagnostics": []
         },
         "result": {
           "type": "attest_intake_admission",
           "receipt": {
-            "receipt_id": "81340331-907c-4928-9ba2-fcce74db1321",
-            "work_id": "99a5927a-63bc-4f22-ab5d-80a9baf11377",
-            "revision_id": "9f7450fd-cbab-4496-91a7-43507bfc4538",
-            "candidate_id": "095394b6-588f-4184-b339-4bb8f54b71e1",
+            "receipt_id": "637acfeb-3119-4169-b9eb-1f2c8f69a77e",
+            "work_id": "173bbc93-375e-46eb-84fc-1eac86ebb964",
+            "revision_id": "70ef80b2-056d-49cb-accc-1e953ae0d208",
+            "candidate_id": "dacb0784-3fb6-4247-8c83-73c5f3ad75c3",
             "kind": "intake_admission",
             "payload": {
-              "work_id": "99a5927a-63bc-4f22-ab5d-80a9baf11377",
-              "revision_id": "9f7450fd-cbab-4496-91a7-43507bfc4538",
-              "plan_receipt_id": "4a788da9-029d-4ecd-b3aa-1391da63546a",
-              "fable_advice_receipt_id": "0da7db43-704a-42e0-8a55-d6cd519a8053",
-              "native_acceptance_receipt_id": "227c5219-3821-4d17-9ce1-0769b503613d",
+              "work_id": "173bbc93-375e-46eb-84fc-1eac86ebb964",
+              "revision_id": "70ef80b2-056d-49cb-accc-1e953ae0d208",
+              "plan_receipt_id": "2e6a105b-a252-4074-851c-bb37182c2ddd",
+              "fable_advice_receipt_id": "41929c43-ddd4-46c3-b7e0-950b086985aa",
+              "native_acceptance_receipt_id": "e90c012c-b556-48a1-a5ce-2c0c63d624b5",
               "qualified": true,
               "natively_accepted": true,
               "deterministic_floor_passed": true,
               "rule_bundle_sha256": "92d55ccb8c95c7bd77c166540218a7ebd72792b1f44c07b95152ae49c228102e",
               "operator_actor_id": "00000000-0000-7000-8000-0000000000a1"
             },
-            "payload_sha256": "05dd7b66d51f896957dec31bc2234433348fbf827f1f96cf34bbd09c51b9e4a2",
+            "payload_sha256": "9a6cd1a04d0a5b0481f8d9cb52b1112e3c461e9b72114b8ac474b811d41f3805",
             "artifact_sha256": null,
             "issuer": "work-service/intake-admission",
-            "issued_at": "2026-10-13T18:47:56.559266Z",
+            "issued_at": "2026-10-13T20:41:44.349989Z",
             "candidate_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             "candidate_commit": "cccccccccccccccccccccccccccccccccccccccc",
             "verdict": null,
@@ -267,10 +267,10 @@
       "http_status": 200,
       "body": {
         "receipt": {
-          "operation_id": "70db00a7-e1f8-4c67-a179-777a8071b0a6",
-          "request_id": "1393801f-f28b-4f20-839a-289fecc145a8",
+          "operation_id": "b7907b4f-a204-4cbf-8cd5-d5fe0184de9f",
+          "request_id": "4e5b86a5-b351-41b8-8612-ccc495b9b686",
           "state": "applied",
-          "request_sha256": "9f2309fdd588ad839477b96dba9e65c39389a512648f406c2ac6845f4ebbd2ac",
+          "request_sha256": "a00ff4120ebc287ff268b176e8493724556ef652ccdf3f5ca4c6545fe7ad6b14",
           "result_sha256": "657512a72c41e397fdac6b96f3775c3a9192d36003b8a4419ef53015fc2caafb",
           "diagnostics": []
         },
@@ -290,37 +290,37 @@
       "http_status": 200,
       "body": {
         "receipt": {
-          "operation_id": "42decf0e-337a-4128-85bc-4d20ee3920a5",
-          "request_id": "98d1e9c7-632f-411d-83a7-6db169214dd8",
+          "operation_id": "ecf62929-38cb-4e1f-9c7e-42317149b60c",
+          "request_id": "93284db4-6226-4eda-aa59-504ff2bfbcb0",
           "state": "applied",
-          "request_sha256": "f9e8b786f246e2cca84ac36e4384f3ea66c93845f908063d2ac1e9ff092a759c",
-          "result_sha256": "1062194452fc062f642f46d59d6914e4ff8cbefaca02433b1abbdc10003c0fdc",
+          "request_sha256": "22c8485b4dc323c013eb7d0ce2f1783861e3b5d8214a9e25d6c83648934a6d51",
+          "result_sha256": "b7956222ed23a5c7fa2aedfa642d81119d79bae539308efa39145bf610f476ad",
           "diagnostics": []
         },
         "result": {
           "type": "attest_intake_admission",
           "receipt": {
-            "receipt_id": "fd354bd3-9aa1-46d7-ae31-c424af2e7b91",
-            "work_id": "93d7cd30-3a9a-4bfd-9a3e-a55f1417d7f1",
-            "revision_id": "d75edb40-7af7-40e9-b8d9-29d4235773da",
-            "candidate_id": "c0592a81-d306-425f-aaa8-5f2eaf990c87",
+            "receipt_id": "b5ceaa76-cc87-4ade-bb04-22e5522540f7",
+            "work_id": "7f0cc567-5c27-4f61-9a7d-a4d9a7331bde",
+            "revision_id": "8cc98208-9c67-47ae-9c13-bc5fca832b72",
+            "candidate_id": "13cac5ab-1024-454c-a563-4944994fd012",
             "kind": "intake_admission",
             "payload": {
-              "work_id": "93d7cd30-3a9a-4bfd-9a3e-a55f1417d7f1",
-              "revision_id": "d75edb40-7af7-40e9-b8d9-29d4235773da",
-              "plan_receipt_id": "87d66beb-d55f-49cb-b1dc-3c260bf449b9",
-              "fable_advice_receipt_id": "19c84054-ce37-4049-95bb-6306a67eb0b7",
-              "native_acceptance_receipt_id": "1205805c-f2f6-4d35-bdee-a901e8f5f220",
+              "work_id": "7f0cc567-5c27-4f61-9a7d-a4d9a7331bde",
+              "revision_id": "8cc98208-9c67-47ae-9c13-bc5fca832b72",
+              "plan_receipt_id": "880f8c97-2903-4e54-850e-b9c825ef45c4",
+              "fable_advice_receipt_id": "0557b57b-8f45-4023-86e7-6063c29dbfb1",
+              "native_acceptance_receipt_id": "177f08b0-1d36-42d1-8950-9cdc0cbb1d53",
               "qualified": true,
               "natively_accepted": true,
               "deterministic_floor_passed": true,
               "rule_bundle_sha256": "92d55ccb8c95c7bd77c166540218a7ebd72792b1f44c07b95152ae49c228102e",
               "operator_actor_id": "00000000-0000-7000-8000-0000000000a1"
             },
-            "payload_sha256": "9a4106bc136071b0179306608fdb2102edd5ba0dd7d6c5d4740c2b6ab5d03498",
+            "payload_sha256": "fada88e6050e7cdb142d4a2fd1d0234738784882810c050f22285721e75aa028",
             "artifact_sha256": null,
             "issuer": "work-service/intake-admission",
-            "issued_at": "2026-10-13T18:47:56.635334Z",
+            "issued_at": "2026-10-13T20:41:44.425027Z",
             "candidate_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             "candidate_commit": "cccccccccccccccccccccccccccccccccccccccc",
             "verdict": null,
@@ -338,10 +338,10 @@
       "http_status": 200,
       "body": {
         "receipt": {
-          "operation_id": "75ca5551-1e61-430c-8dc0-6a9ca1cb55c7",
-          "request_id": "304dbb96-1875-400c-89f6-361c23523c7c",
+          "operation_id": "53594a64-2b89-444e-90e5-2d37b8ab69f6",
+          "request_id": "0189c049-4065-467f-b788-bc59a179e2fe",
           "state": "applied",
-          "request_sha256": "e77e014b4ce4d8d2af1ee68cd85281b44968464339b676118dde74d4530b9c63",
+          "request_sha256": "d7dc0efb7f76404407c1a5ff5e2df9121e19cd99cd9ceb36c4f723db9af096b6",
           "result_sha256": "657512a72c41e397fdac6b96f3775c3a9192d36003b8a4419ef53015fc2caafb",
           "diagnostics": []
         },
@@ -361,37 +361,37 @@
       "http_status": 200,
       "body": {
         "receipt": {
-          "operation_id": "bb7c5e57-a0e3-4a16-b78d-b057f4291d33",
-          "request_id": "5992800a-0057-4b07-833f-290ba4848572",
+          "operation_id": "8b3986f2-5bf0-4926-b851-42408e6c9683",
+          "request_id": "f9c62363-7cb9-4991-a883-dff58187e669",
           "state": "applied",
-          "request_sha256": "c51595ec595c0cc67c18552fb5b054bb55b10560029224199d03a73df907d4e9",
-          "result_sha256": "f12dc63dde77f845f25c7868b32948f845c4e01f917b7d3f05a8c6d8e07b9844",
+          "request_sha256": "c6ec7cdb4d3a51e5bd2c104a997b159ec73d1425c4e98a2342cec6aa51513030",
+          "result_sha256": "4abe124ca7c8946ebbcb9a79a39a3c77d67067c648adbaec67ce4290711f7279",
           "diagnostics": []
         },
         "result": {
           "type": "attest_intake_admission",
           "receipt": {
-            "receipt_id": "4cebec8a-d2cf-471d-98c1-4163d7971ffe",
-            "work_id": "75bf64a7-9147-4226-9565-a434179980ed",
-            "revision_id": "ab4cf01a-fac2-4032-9c86-13f037c9433f",
-            "candidate_id": "7348e484-0452-45ed-ae10-71534ada99a2",
+            "receipt_id": "7b1a0557-d3df-4982-ab56-5835a386121b",
+            "work_id": "ba38fb81-e9d2-456f-abe8-83c81e9ca0cc",
+            "revision_id": "1c41b9bf-ed65-4491-b549-1f5931a1e39d",
+            "candidate_id": "def2b735-9083-4d43-8701-aa8ace9dd195",
             "kind": "intake_admission",
             "payload": {
-              "work_id": "75bf64a7-9147-4226-9565-a434179980ed",
-              "revision_id": "ab4cf01a-fac2-4032-9c86-13f037c9433f",
-              "plan_receipt_id": "b939263c-bee3-4e9c-9251-ba001dcbb685",
-              "fable_advice_receipt_id": "1489a82c-c7ef-4a6e-becc-13d186b48964",
-              "native_acceptance_receipt_id": "73848c18-28c3-4dd0-86e1-8cb818a8babf",
+              "work_id": "ba38fb81-e9d2-456f-abe8-83c81e9ca0cc",
+              "revision_id": "1c41b9bf-ed65-4491-b549-1f5931a1e39d",
+              "plan_receipt_id": "3c767903-c581-42da-b590-e064d8c5bc6a",
+              "fable_advice_receipt_id": "19142cce-8328-4688-b483-9812c11091fc",
+              "native_acceptance_receipt_id": "307e6353-71be-456d-bdc7-e7ef2f02982d",
               "qualified": true,
               "natively_accepted": true,
               "deterministic_floor_passed": true,
               "rule_bundle_sha256": "92d55ccb8c95c7bd77c166540218a7ebd72792b1f44c07b95152ae49c228102e",
               "operator_actor_id": "00000000-0000-7000-8000-0000000000a1"
             },
-            "payload_sha256": "c7997721bb354505a9e0b208dd8b1056879b0d35f22bd491403b911efb31eff7",
+            "payload_sha256": "cbc251510a5fd1f21ea38d00f5f92deb10bb141e5a8019f0dd11c07e3fe8f443",
             "artifact_sha256": null,
             "issuer": "work-service/intake-admission",
-            "issued_at": "2026-10-13T18:47:56.710017Z",
+            "issued_at": "2026-10-13T20:41:44.498866Z",
             "candidate_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             "candidate_commit": "cccccccccccccccccccccccccccccccccccccccc",
             "verdict": null,
@@ -409,10 +409,10 @@
       "http_status": 200,
       "body": {
         "receipt": {
-          "operation_id": "2e349615-a18a-434b-b19d-a2983bacc77c",
-          "request_id": "4b71830c-cce0-4ab0-a7e1-0e00d0ee6dda",
+          "operation_id": "a9e5b1f9-1a23-49b4-9ee1-4e5e94caae5b",
+          "request_id": "2d5c4ee6-01ce-48c9-bc4b-b4f4ccf30524",
           "state": "replayed",
-          "request_sha256": "aa3ad04c5eca6d8f0d92500e38928f98361eda457e862c789d8e8b9e2fb82624",
+          "request_sha256": "876481bca768c94ecfcc2c3949daff5398208160adb09e708d780189c4c725e9",
           "result_sha256": "657512a72c41e397fdac6b96f3775c3a9192d36003b8a4419ef53015fc2caafb",
           "diagnostics": []
         },
@@ -432,10 +432,10 @@
       "http_status": 200,
       "body": {
         "receipt": {
-          "operation_id": "f3011603-2c3b-4f5f-b033-95c9665ff1c1",
-          "request_id": "c734e5ee-f161-42ea-b299-0fc8700474eb",
+          "operation_id": "84c8a47f-ebd2-462a-9364-28f6bc951d68",
+          "request_id": "909bae14-eafe-4773-8a65-07544133e7d8",
           "state": "applied",
-          "request_sha256": "a38a50e88d8d6881d819aba73d032b61066107e311fc611a669e6d2d1c5cdbb1",
+          "request_sha256": "0e9f91bfe455aca471ac800fa4d51ebb29c61dbf02844256d6d1710697ef29c7",
           "result_sha256": "e62e1f56271447842906f2a308b6041b74f6f2f2e29f770aa80aa40f0cd53802",
           "diagnostics": []
         },
@@ -474,16 +474,16 @@
       "http_status": 200,
       "body": {
         "receipt": {
-          "operation_id": "ac7309fd-5586-4fcc-83f4-62fc89db18fb",
-          "request_id": "955c7933-0725-4b03-b2d2-850943e95fa7",
+          "operation_id": "645a694d-329b-4627-9734-897a741acdb8",
+          "request_id": "07995c94-39c5-4730-8b1a-f8f414fc1ee8",
           "state": "applied",
-          "request_sha256": "ee74be31a9a49bc7f6581b8767140d238e5c3a49513525495fdfb4b783322307",
-          "result_sha256": "8e1724008dcc6b8bba620c1a053aa81193aa516030ebee5ca92be01abb7b3408",
+          "request_sha256": "db62b570c0d6ac6b0e7f23819b92f5945d54311df618d8adc5397e7f14bb1dc4",
+          "result_sha256": "a0e6e8f479b053c67e4dd33e516611d369e76b76daff0afee0b9d9aeea3160f0",
           "diagnostics": []
         },
         "result": {
           "type": "draft_mission_intake",
-          "mission_id": "0cb4ce2c-2a4a-4f10-83da-68e80f0706f8",
+          "mission_id": "f4c2c483-4d75-4ba3-a487-695c59a63635",
           "outcome": "clarify",
           "questions": [
             {
@@ -518,8 +518,8 @@
       "body": {
         "error": {
           "code": "intake_not_ready",
-          "request_id": "c47d671b-afb0-409e-8fb1-8c1b11c31906",
-          "correlation_id": "77770e75-2333-41c1-8950-bf40cc66789a",
+          "request_id": "5be1fb36-6377-4782-b0e6-c9726c3cf69e",
+          "correlation_id": "42a83f84-0178-4d2b-8aa7-f699f3110496",
           "diagnostics": [
             "missing_verification_oracle:oracle:ac-export",
             "missing_verification_oracle:oracle:ac-failure"
@@ -534,8 +534,8 @@
       "body": {
         "error": {
           "code": "stale_intake",
-          "request_id": "48663ba4-4a15-403c-978e-d5f5f9507cf9",
-          "correlation_id": "66e9ef2e-aa4a-4a1f-a07d-128d1fe218e4",
+          "request_id": "d88d90c8-1053-4ddc-adc7-76980fc4f2b4",
+          "correlation_id": "fe357ae5-1419-42ae-bc6e-1cf238e0587b",
           "diagnostics": [
             "current positive intake assessment is required"
           ]
@@ -549,8 +549,8 @@
       "body": {
         "error": {
           "code": "stale_intake",
-          "request_id": "269790e8-eef3-494f-ab72-f2ee649060bd",
-          "correlation_id": "5bd43687-ccbe-45a9-86ba-ca6c85bc1c29",
+          "request_id": "771a0e7b-cfd6-4a73-bfaa-e244b5639078",
+          "correlation_id": "0dd7aacf-56b2-48c5-8a4a-3d43040e9f68",
           "diagnostics": [
             "owner ratification does not match current typed semantics"
           ]
@@ -564,8 +564,8 @@
       "body": {
         "error": {
           "code": "intake_admission_blocked",
-          "request_id": "2ae81251-29ff-47e2-ae09-7c306b43114f",
-          "correlation_id": "25d48741-9c3b-472a-bc26-d30e16b242c2",
+          "request_id": "60e7c7d1-776d-4a76-a7c3-4b0006ae3ebe",
+          "correlation_id": "1c627e10-d6cf-4900-bcf2-8b716133b868",
           "diagnostics": [
             "admission receipt is not on the lineage"
           ]
@@ -578,28 +578,28 @@
       "http_status": 200,
       "body": {
         "receipt": {
-          "operation_id": "e767fb58-0491-456e-8d69-c21f637138a0",
-          "request_id": "028340a8-4303-47ba-86ca-405ccda392c0",
+          "operation_id": "b172948a-0756-4686-8634-0333506e95d1",
+          "request_id": "f55aac2d-2f97-43d4-bb38-1a069e510f81",
           "state": "applied",
-          "request_sha256": "bd1c1755a4034b12279ce5da89532091e56857e243db096ddc4ae01df7b433ad",
-          "result_sha256": "3798f6196a1f01bfdf0dbc190c14812bc714e4c576855667c75628140a1d6902",
+          "request_sha256": "cc804dae27906f6404c4f20e54659bcea402e674ffbdec155868c5ac0deade00",
+          "result_sha256": "a78b55e9afd35675ce8359b7249b4150446fe626aef6ebd9669a5bc47984e949",
           "diagnostics": []
         },
         "result": {
           "type": "publish_bounded_intake",
           "item": {
             "client_ref": "bounded-intake",
-            "work_id": "61cfc533-b814-4cd7-9fdc-44b96155f809",
-            "revision_id": "faafb43c-0a59-4c9d-8e8a-0e1ec80b0737",
+            "work_id": "4915ec15-ae83-48cd-98cf-27716acf79dd",
+            "revision_id": "bbecff4e-bdd3-4ffe-a034-ec03d9f76d2e",
             "key": "OMP-1",
             "state": "BACKLOG",
             "row_version": 1
           },
           "receipt": {
-            "receipt_id": "f89921fc-a104-4a48-860c-d133b79474e8",
-            "work_id": "61cfc533-b814-4cd7-9fdc-44b96155f809",
-            "revision_id": "faafb43c-0a59-4c9d-8e8a-0e1ec80b0737",
-            "candidate_id": "472c1c3f-bd49-4316-9b15-a1cc1bdef448",
+            "receipt_id": "09de44c5-907e-41db-b243-04b38dfa86ef",
+            "work_id": "4915ec15-ae83-48cd-98cf-27716acf79dd",
+            "revision_id": "bbecff4e-bdd3-4ffe-a034-ec03d9f76d2e",
+            "candidate_id": "5e5196b7-1778-45da-9153-be8be3df5f8e",
             "kind": "intake_publication",
             "payload": {
               "draft": {
@@ -646,13 +646,13 @@
               "semantic_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
               "rule_bundle_sha256": "92d55ccb8c95c7bd77c166540218a7ebd72792b1f44c07b95152ae49c228102e",
               "ratified_by": "00000000-0000-7000-8000-0000000000a1",
-              "assessment_operation_id": "2e349615-a18a-434b-b19d-a2983bacc77c",
-              "admission_receipt_id": "81340331-907c-4928-9ba2-fcce74db1321"
+              "assessment_operation_id": "a9e5b1f9-1a23-49b4-9ee1-4e5e94caae5b",
+              "admission_receipt_id": "637acfeb-3119-4169-b9eb-1f2c8f69a77e"
             },
-            "payload_sha256": "3ea20e59ead0f09704f1535936a40ca8d16f9358363913b0ec89807e1c32b53c",
+            "payload_sha256": "f809bb02b5b1af09cfb8b2d78a64f58b5e91f6cfe82c49e52f5b0e6460d261d3",
             "artifact_sha256": "5dbcbfab8ea810b30ae63e5c600dbf878a629f813d5f110b1ee091a1e0ae6dd9",
             "issuer": "work-service/bounded-intake",
-            "issued_at": "2026-10-13T18:47:56.925369Z",
+            "issued_at": "2026-10-13T20:41:44.694576Z",
             "candidate_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
             "candidate_commit": null,
             "verdict": null,
@@ -669,28 +669,28 @@
       "http_status": 200,
       "body": {
         "receipt": {
-          "operation_id": "e767fb58-0491-456e-8d69-c21f637138a0",
-          "request_id": "e4dbca8c-ecad-4a48-a83b-6a0d94713ba4",
+          "operation_id": "b172948a-0756-4686-8634-0333506e95d1",
+          "request_id": "809a268f-b223-43b0-9278-aaf3cd3f9dd3",
           "state": "replayed",
-          "request_sha256": "bd1c1755a4034b12279ce5da89532091e56857e243db096ddc4ae01df7b433ad",
-          "result_sha256": "3798f6196a1f01bfdf0dbc190c14812bc714e4c576855667c75628140a1d6902",
+          "request_sha256": "cc804dae27906f6404c4f20e54659bcea402e674ffbdec155868c5ac0deade00",
+          "result_sha256": "a78b55e9afd35675ce8359b7249b4150446fe626aef6ebd9669a5bc47984e949",
           "diagnostics": []
         },
         "result": {
           "type": "publish_bounded_intake",
           "item": {
             "client_ref": "bounded-intake",
-            "work_id": "61cfc533-b814-4cd7-9fdc-44b96155f809",
-            "revision_id": "faafb43c-0a59-4c9d-8e8a-0e1ec80b0737",
+            "work_id": "4915ec15-ae83-48cd-98cf-27716acf79dd",
+            "revision_id": "bbecff4e-bdd3-4ffe-a034-ec03d9f76d2e",
             "key": "OMP-1",
             "state": "BACKLOG",
             "row_version": 1
           },
           "receipt": {
-            "receipt_id": "f89921fc-a104-4a48-860c-d133b79474e8",
-            "work_id": "61cfc533-b814-4cd7-9fdc-44b96155f809",
-            "revision_id": "faafb43c-0a59-4c9d-8e8a-0e1ec80b0737",
-            "candidate_id": "472c1c3f-bd49-4316-9b15-a1cc1bdef448",
+            "receipt_id": "09de44c5-907e-41db-b243-04b38dfa86ef",
+            "work_id": "4915ec15-ae83-48cd-98cf-27716acf79dd",
+            "revision_id": "bbecff4e-bdd3-4ffe-a034-ec03d9f76d2e",
+            "candidate_id": "5e5196b7-1778-45da-9153-be8be3df5f8e",
             "kind": "intake_publication",
             "payload": {
               "draft": {
@@ -737,13 +737,13 @@
               "ratified_by": "00000000-0000-7000-8000-0000000000a1",
               "semantic_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
               "rule_bundle_sha256": "92d55ccb8c95c7bd77c166540218a7ebd72792b1f44c07b95152ae49c228102e",
-              "admission_receipt_id": "81340331-907c-4928-9ba2-fcce74db1321",
-              "assessment_operation_id": "2e349615-a18a-434b-b19d-a2983bacc77c"
+              "admission_receipt_id": "637acfeb-3119-4169-b9eb-1f2c8f69a77e",
+              "assessment_operation_id": "a9e5b1f9-1a23-49b4-9ee1-4e5e94caae5b"
             },
-            "payload_sha256": "3ea20e59ead0f09704f1535936a40ca8d16f9358363913b0ec89807e1c32b53c",
+            "payload_sha256": "f809bb02b5b1af09cfb8b2d78a64f58b5e91f6cfe82c49e52f5b0e6460d261d3",
             "artifact_sha256": "5dbcbfab8ea810b30ae63e5c600dbf878a629f813d5f110b1ee091a1e0ae6dd9",
             "issuer": "work-service/bounded-intake",
-            "issued_at": "2026-10-13T18:47:56.925369Z",
+            "issued_at": "2026-10-13T20:41:44.694576Z",
             "candidate_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
             "candidate_commit": null,
             "verdict": null,
@@ -760,10 +760,10 @@
       "http_status": 200,
       "body": {
         "receipt": {
-          "operation_id": "70db00a7-e1f8-4c67-a179-777a8071b0a6",
-          "request_id": "37ee4c47-cc94-4a12-8fd4-3b76d236fc9a",
+          "operation_id": "b7907b4f-a204-4cbf-8cd5-d5fe0184de9f",
+          "request_id": "ffb1f343-79ba-46f8-88b8-053444c85a26",
           "state": "replayed",
-          "request_sha256": "9f2309fdd588ad839477b96dba9e65c39389a512648f406c2ac6845f4ebbd2ac",
+          "request_sha256": "a00ff4120ebc287ff268b176e8493724556ef652ccdf3f5ca4c6545fe7ad6b14",
           "result_sha256": "657512a72c41e397fdac6b96f3775c3a9192d36003b8a4419ef53015fc2caafb",
           "diagnostics": []
         },
@@ -783,10 +783,10 @@
       "http_status": 200,
       "body": {
         "receipt": {
-          "operation_id": "2e0c0e3d-b602-4fc5-92b6-9a09922428fa",
-          "request_id": "6cc38369-d2c9-419b-8301-ad63adb70031",
+          "operation_id": "878a74ed-c682-4b5a-9601-145fa5cf55a3",
+          "request_id": "b30fec3d-e01c-46e0-813d-4a5b99ea4a71",
           "state": "applied",
-          "request_sha256": "3673791f68cda623c566b85a774f6696ad1ae3a4f661e04358de9ec919383ca4",
+          "request_sha256": "2aea46480c906693c73a5541d2f45de0dce687b42f1136672db8ebecd39939c6",
           "result_sha256": "e62e1f56271447842906f2a308b6041b74f6f2f2e29f770aa80aa40f0cd53802",
           "diagnostics": []
         },
@@ -825,16 +825,16 @@
       "http_status": 200,
       "body": {
         "receipt": {
-          "operation_id": "df132b30-1ac6-4514-8377-dd11ce69a122",
-          "request_id": "682f151b-58e1-4126-8ec9-f451a9d0c70c",
+          "operation_id": "75cba47e-6bca-4c41-b464-4d4dbfbba415",
+          "request_id": "edddd710-b79e-47c0-bbf8-45bd783d4eaa",
           "state": "applied",
-          "request_sha256": "34f52e4eb5f8b4d8c02d8cdec1d50d2b51589c473e18e21625ced54dbfdbefc7",
-          "result_sha256": "135636bacd6a5e4ba778a0cbfc57cf19e8b7ce674a4f6d4e2f0451e964c3ec6a",
+          "request_sha256": "4993340ee7a8523264d743727393c42b02d03f03c2383bc97b6f26bfb56d0ddb",
+          "result_sha256": "e1dd1c17305d4c52fc28bd54feff096e06e9f5806e6ef153fffd340692dd62f5",
           "diagnostics": []
         },
         "result": {
           "type": "draft_mission_intake",
-          "mission_id": "6997ea52-d2f8-475d-83b2-15578cb2d310",
+          "mission_id": "ca1fbc78-87c3-436c-9686-4c9c5fb818a4",
           "outcome": "clarify",
           "questions": [
             {
@@ -869,8 +869,8 @@
       "body": {
         "error": {
           "code": "intake_not_ready",
-          "request_id": "332f5f2b-4034-4ef6-bd4c-563dd664f776",
-          "correlation_id": "f010952f-adff-40be-800c-2679acc62596",
+          "request_id": "75e0c7b7-c9a0-4e5e-9038-957a8ac44576",
+          "correlation_id": "b0b5623c-aa42-431d-ab6e-35ce39805b8a",
           "diagnostics": [
             "missing_verification_oracle:oracle:ac-export",
             "missing_verification_oracle:oracle:ac-failure"
@@ -885,8 +885,8 @@
       "body": {
         "error": {
           "code": "stale_intake",
-          "request_id": "b7326290-4aae-4454-b41b-13ee09085b92",
-          "correlation_id": "907caaa4-5bda-4a8f-bd2a-e1b7fe72c211",
+          "request_id": "36e40351-fa72-40f4-bd8e-d81a712ded70",
+          "correlation_id": "6a934cc8-5446-4740-9159-896d3ba9d5c3",
           "diagnostics": [
             "current positive intake assessment is required"
           ]
@@ -900,8 +900,8 @@
       "body": {
         "error": {
           "code": "stale_intake",
-          "request_id": "a82c27e6-193e-4bba-9e0d-7e1183a66bc7",
-          "correlation_id": "d66c6166-30f0-4ce6-8801-19ff4650c267",
+          "request_id": "891d883c-2a48-45fd-a4db-205c78bb79f4",
+          "correlation_id": "6ad0ca6a-2163-4f72-9bd7-caef7608c374",
           "diagnostics": [
             "owner ratification does not match current typed semantics"
           ]
@@ -915,8 +915,8 @@
       "body": {
         "error": {
           "code": "intake_admission_blocked",
-          "request_id": "08aa71f6-5bc3-41e1-8a71-57b81bda096b",
-          "correlation_id": "99804253-149e-4533-99f2-0eec98e3ce16",
+          "request_id": "adab717e-393a-4dbb-8091-1a8f65cfd3b4",
+          "correlation_id": "f7c53983-3ad6-4fa9-83d5-6b07f602c890",
           "diagnostics": [
             "admission receipt is not on the lineage"
           ]
@@ -929,28 +929,28 @@
       "http_status": 200,
       "body": {
         "receipt": {
-          "operation_id": "0298e5a8-86e8-44b6-9a1e-3b0e9fe23693",
-          "request_id": "84bc2f66-3c25-405e-b5f4-4be3e5bf7dee",
+          "operation_id": "d47248e6-0dfa-4425-8dbf-4ee7bb0a9772",
+          "request_id": "d096affd-2543-498b-9228-61637c03b149",
           "state": "applied",
-          "request_sha256": "ce60686adf674711ec2c055589665ed8a12be68e7d08b29f959631e78d3c074f",
-          "result_sha256": "123cab5123bc4ce5d7486caf8af2143fe4c99cd19b0b0253433211799b032283",
+          "request_sha256": "ca127d2afd5b3fc69cc5a4a294d9a711d29b5610ea24fd7ff49a7a5b6ee814c7",
+          "result_sha256": "9ee97cb08e486aba8d957888c56cb021c7fd23d218da52585fa17057ad0b7b3b",
           "diagnostics": []
         },
         "result": {
           "type": "publish_bounded_intake",
           "item": {
             "client_ref": "bounded-intake",
-            "work_id": "aeaa659f-42e1-4b7a-8679-87858d81646c",
-            "revision_id": "6717dc73-d90e-4a2f-85c4-a7f9f51efc52",
+            "work_id": "2fd387d1-77c3-48ce-b915-3f9d0bf384b8",
+            "revision_id": "08d73f1f-4854-4322-858d-a21e9e8983fd",
             "key": "OMP-1",
             "state": "BACKLOG",
             "row_version": 1
           },
           "receipt": {
-            "receipt_id": "b7348b91-596f-41b1-b04d-4f4c7bf52993",
-            "work_id": "aeaa659f-42e1-4b7a-8679-87858d81646c",
-            "revision_id": "6717dc73-d90e-4a2f-85c4-a7f9f51efc52",
-            "candidate_id": "aeea2484-9aaf-4ad1-bd77-acedf38ab10b",
+            "receipt_id": "63277d60-8c56-462c-a9af-bd3d6dcf474c",
+            "work_id": "2fd387d1-77c3-48ce-b915-3f9d0bf384b8",
+            "revision_id": "08d73f1f-4854-4322-858d-a21e9e8983fd",
+            "candidate_id": "a03de95e-1f4b-4cba-ae85-5b3f72682080",
             "kind": "intake_publication",
             "payload": {
               "draft": {
@@ -997,13 +997,13 @@
               "semantic_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
               "rule_bundle_sha256": "92d55ccb8c95c7bd77c166540218a7ebd72792b1f44c07b95152ae49c228102e",
               "ratified_by": "00000000-0000-7000-8000-0000000000a1",
-              "assessment_operation_id": "70db00a7-e1f8-4c67-a179-777a8071b0a6",
-              "admission_receipt_id": "fd354bd3-9aa1-46d7-ae31-c424af2e7b91"
+              "assessment_operation_id": "b7907b4f-a204-4cbf-8cd5-d5fe0184de9f",
+              "admission_receipt_id": "b5ceaa76-cc87-4ade-bb04-22e5522540f7"
             },
-            "payload_sha256": "cc8e6993e92d841f5edbe6ee5e6e3148c32abd0432e2d7c1d5f1d858cf01bd96",
+            "payload_sha256": "7c7223eec935976e49e291c5d3a55ef74d78171d9946dcb2caa2c9a1dc6082f4",
             "artifact_sha256": "5dbcbfab8ea810b30ae63e5c600dbf878a629f813d5f110b1ee091a1e0ae6dd9",
             "issuer": "work-service/bounded-intake",
-            "issued_at": "2026-10-13T18:47:59.127753Z",
+            "issued_at": "2026-10-13T20:41:46.861561Z",
             "candidate_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
             "candidate_commit": null,
             "verdict": null,
@@ -1020,28 +1020,28 @@
       "http_status": 200,
       "body": {
         "receipt": {
-          "operation_id": "0298e5a8-86e8-44b6-9a1e-3b0e9fe23693",
-          "request_id": "b95b1af7-79f2-46d1-9dc3-64ce23da2a38",
+          "operation_id": "d47248e6-0dfa-4425-8dbf-4ee7bb0a9772",
+          "request_id": "173d61a9-03b4-4aea-a0ae-277d4a01fad2",
           "state": "replayed",
-          "request_sha256": "ce60686adf674711ec2c055589665ed8a12be68e7d08b29f959631e78d3c074f",
-          "result_sha256": "123cab5123bc4ce5d7486caf8af2143fe4c99cd19b0b0253433211799b032283",
+          "request_sha256": "ca127d2afd5b3fc69cc5a4a294d9a711d29b5610ea24fd7ff49a7a5b6ee814c7",
+          "result_sha256": "9ee97cb08e486aba8d957888c56cb021c7fd23d218da52585fa17057ad0b7b3b",
           "diagnostics": []
         },
         "result": {
           "type": "publish_bounded_intake",
           "item": {
             "client_ref": "bounded-intake",
-            "work_id": "aeaa659f-42e1-4b7a-8679-87858d81646c",
-            "revision_id": "6717dc73-d90e-4a2f-85c4-a7f9f51efc52",
+            "work_id": "2fd387d1-77c3-48ce-b915-3f9d0bf384b8",
+            "revision_id": "08d73f1f-4854-4322-858d-a21e9e8983fd",
             "key": "OMP-1",
             "state": "BACKLOG",
             "row_version": 1
           },
           "receipt": {
-            "receipt_id": "b7348b91-596f-41b1-b04d-4f4c7bf52993",
-            "work_id": "aeaa659f-42e1-4b7a-8679-87858d81646c",
-            "revision_id": "6717dc73-d90e-4a2f-85c4-a7f9f51efc52",
-            "candidate_id": "aeea2484-9aaf-4ad1-bd77-acedf38ab10b",
+            "receipt_id": "63277d60-8c56-462c-a9af-bd3d6dcf474c",
+            "work_id": "2fd387d1-77c3-48ce-b915-3f9d0bf384b8",
+            "revision_id": "08d73f1f-4854-4322-858d-a21e9e8983fd",
+            "candidate_id": "a03de95e-1f4b-4cba-ae85-5b3f72682080",
             "kind": "intake_publication",
             "payload": {
               "draft": {
@@ -1088,13 +1088,13 @@
               "ratified_by": "00000000-0000-7000-8000-0000000000a1",
               "semantic_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
               "rule_bundle_sha256": "92d55ccb8c95c7bd77c166540218a7ebd72792b1f44c07b95152ae49c228102e",
-              "admission_receipt_id": "fd354bd3-9aa1-46d7-ae31-c424af2e7b91",
-              "assessment_operation_id": "70db00a7-e1f8-4c67-a179-777a8071b0a6"
+              "admission_receipt_id": "b5ceaa76-cc87-4ade-bb04-22e5522540f7",
+              "assessment_operation_id": "b7907b4f-a204-4cbf-8cd5-d5fe0184de9f"
             },
-            "payload_sha256": "cc8e6993e92d841f5edbe6ee5e6e3148c32abd0432e2d7c1d5f1d858cf01bd96",
+            "payload_sha256": "7c7223eec935976e49e291c5d3a55ef74d78171d9946dcb2caa2c9a1dc6082f4",
             "artifact_sha256": "5dbcbfab8ea810b30ae63e5c600dbf878a629f813d5f110b1ee091a1e0ae6dd9",
             "issuer": "work-service/bounded-intake",
-            "issued_at": "2026-10-13T18:47:59.127753Z",
+            "issued_at": "2026-10-13T20:41:46.861561Z",
             "candidate_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
             "candidate_commit": null,
             "verdict": null,
@@ -1111,10 +1111,10 @@
       "http_status": 200,
       "body": {
         "receipt": {
-          "operation_id": "75ca5551-1e61-430c-8dc0-6a9ca1cb55c7",
-          "request_id": "af636d37-5d76-41bd-ab8a-c2ca0c465b34",
+          "operation_id": "53594a64-2b89-444e-90e5-2d37b8ab69f6",
+          "request_id": "21b566c8-e087-4a36-b681-b1a85f8bb2f8",
           "state": "replayed",
-          "request_sha256": "e77e014b4ce4d8d2af1ee68cd85281b44968464339b676118dde74d4530b9c63",
+          "request_sha256": "d7dc0efb7f76404407c1a5ff5e2df9121e19cd99cd9ceb36c4f723db9af096b6",
           "result_sha256": "657512a72c41e397fdac6b96f3775c3a9192d36003b8a4419ef53015fc2caafb",
           "diagnostics": []
         },
@@ -1134,10 +1134,10 @@
       "http_status": 200,
       "body": {
         "receipt": {
-          "operation_id": "5a16e30d-51c6-4d4d-820f-7ed71f03e0ef",
-          "request_id": "3e3143aa-bc22-4d26-b158-f9258a0d8165",
+          "operation_id": "e2dee432-916b-4e29-8a44-abeb04caeeac",
+          "request_id": "1b63c5fb-2d43-4857-9730-25201b1e2f99",
           "state": "applied",
-          "request_sha256": "13e3f537efa5c82d23650b85cb9c612f30834c92b00da8c2a993185bdac607f0",
+          "request_sha256": "cfe4b311faa78e337be42927658e257412c54c8a8455ad01847e153f97dd7ba0",
           "result_sha256": "e62e1f56271447842906f2a308b6041b74f6f2f2e29f770aa80aa40f0cd53802",
           "diagnostics": []
         },
@@ -1176,16 +1176,16 @@
       "http_status": 200,
       "body": {
         "receipt": {
-          "operation_id": "1101ed49-201e-4fd9-8ba8-b8cacea13d9b",
-          "request_id": "663532c7-0973-4bd4-be36-34ad199c9dfd",
+          "operation_id": "558cde16-5cf2-4e34-b6f2-e5ede64ed553",
+          "request_id": "ea80b2f9-fadf-4d3b-827b-3c6e46eeeb50",
           "state": "applied",
-          "request_sha256": "faf5669f1001ddbb36cf6fb67fa9579e2703efbf1a9f2c9f40d13456c8934d4d",
-          "result_sha256": "2553baaec82d3b5611aec827ce3b657c493067a94dbd2ee6fa0330fef9f9c59f",
+          "request_sha256": "4c9fc8e7a8a71cde7e2d606493a417b0a7d099ba89f0bff3308945254e27a4b0",
+          "result_sha256": "3c40a5f9ddba5f3636dcf8c87161baa9581884d3d86eb4358d132a6ea5ab669d",
           "diagnostics": []
         },
         "result": {
           "type": "draft_mission_intake",
-          "mission_id": "63a3478f-6f7e-4601-ad67-f6b9fe276986",
+          "mission_id": "c336fb64-2aa9-4e1c-b6a7-caa9e648012e",
           "outcome": "clarify",
           "questions": [
             {
@@ -1220,8 +1220,8 @@
       "body": {
         "error": {
           "code": "intake_not_ready",
-          "request_id": "ce67b64f-3ab5-49a7-9996-6a9c6134b107",
-          "correlation_id": "770ec7ee-56d4-41a5-96de-28f94f53e5bf",
+          "request_id": "6235ef94-dd05-46ec-9cf0-df13eb953cb4",
+          "correlation_id": "392c5084-0ae5-4c99-8962-afa063fafcb6",
           "diagnostics": [
             "missing_verification_oracle:oracle:ac-export",
             "missing_verification_oracle:oracle:ac-failure"
@@ -1236,8 +1236,8 @@
       "body": {
         "error": {
           "code": "stale_intake",
-          "request_id": "e687707e-d81a-4ad8-a6af-5e363cb3bd4f",
-          "correlation_id": "94ce9fb1-130a-4bff-b0c4-ae3cbdb218d9",
+          "request_id": "7c6d2883-adce-40c7-8024-4305cec44926",
+          "correlation_id": "c5b29bf6-77da-48d0-9a97-9ecebe91724e",
           "diagnostics": [
             "current positive intake assessment is required"
           ]
@@ -1251,8 +1251,8 @@
       "body": {
         "error": {
           "code": "stale_intake",
-          "request_id": "abc31df2-40a3-4766-ac02-dc4fd5c2f8e0",
-          "correlation_id": "d4354422-a8ce-47b9-870e-c6bf26dd4f90",
+          "request_id": "0024a31a-9ada-4576-aed6-27fd74aeb78f",
+          "correlation_id": "1090a6c2-16af-4046-a77d-a85a310e979e",
           "diagnostics": [
             "owner ratification does not match current typed semantics"
           ]
@@ -1266,8 +1266,8 @@
       "body": {
         "error": {
           "code": "intake_admission_blocked",
-          "request_id": "8bc9e43d-93d0-414a-94ab-f7bc3f61613f",
-          "correlation_id": "a64fae8e-b772-4ee5-8869-9730446fe337",
+          "request_id": "893c1068-2bb9-4124-8dc9-27fa98012a2d",
+          "correlation_id": "538bd62b-a033-4c40-a373-a54dc676b399",
           "diagnostics": [
             "admission receipt is not on the lineage"
           ]
@@ -1280,28 +1280,28 @@
       "http_status": 200,
       "body": {
         "receipt": {
-          "operation_id": "db485f35-84b0-4f98-88cf-ba6e6ad005de",
-          "request_id": "1305364c-b417-42bf-881e-18f7c760a9a2",
+          "operation_id": "4a4c3d2a-4d41-4d19-a92a-9c1e5d6d9ec5",
+          "request_id": "fedf6d89-e9d9-4008-9636-8c32337d96eb",
           "state": "applied",
-          "request_sha256": "500c94371785ed52347282d09f1668b862365b30d77e106d32943c061dc28ab0",
-          "result_sha256": "0723efeccec9544773cf918607cb90126e7edd0173f04c8ea2c471547a479635",
+          "request_sha256": "1a9f1e90329a0950ab5b8ee545d8e6a2f583cc6442cdac3be8e4a87c7166fd9b",
+          "result_sha256": "9b09ed00ae5af0bed12b0741449c5f0468b9457df98e0ab2f4a23f3f978fa8f8",
           "diagnostics": []
         },
         "result": {
           "type": "publish_bounded_intake",
           "item": {
             "client_ref": "bounded-intake",
-            "work_id": "db65e25b-55dc-4854-925f-41b07ca8594d",
-            "revision_id": "2055673c-8137-4802-8195-99bff59b03c5",
+            "work_id": "d437c940-b35a-4bc6-ab5a-b02fcdff3617",
+            "revision_id": "e829a8e1-be9b-4790-8109-132962111961",
             "key": "OMP-1",
             "state": "BACKLOG",
             "row_version": 1
           },
           "receipt": {
-            "receipt_id": "aa52374b-b4f9-497f-9f94-6a98eff55634",
-            "work_id": "db65e25b-55dc-4854-925f-41b07ca8594d",
-            "revision_id": "2055673c-8137-4802-8195-99bff59b03c5",
-            "candidate_id": "16ec8036-754d-4e02-b51a-26efd474359d",
+            "receipt_id": "c7485a4a-d7cb-4e7c-bcc3-e93f04dae0f0",
+            "work_id": "d437c940-b35a-4bc6-ab5a-b02fcdff3617",
+            "revision_id": "e829a8e1-be9b-4790-8109-132962111961",
+            "candidate_id": "68fd3975-5594-4b92-b67e-cd14fd94cd1e",
             "kind": "intake_publication",
             "payload": {
               "draft": {
@@ -1348,13 +1348,13 @@
               "semantic_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
               "rule_bundle_sha256": "92d55ccb8c95c7bd77c166540218a7ebd72792b1f44c07b95152ae49c228102e",
               "ratified_by": "00000000-0000-7000-8000-0000000000a1",
-              "assessment_operation_id": "75ca5551-1e61-430c-8dc0-6a9ca1cb55c7",
-              "admission_receipt_id": "4cebec8a-d2cf-471d-98c1-4163d7971ffe"
+              "assessment_operation_id": "53594a64-2b89-444e-90e5-2d37b8ab69f6",
+              "admission_receipt_id": "7b1a0557-d3df-4982-ab56-5835a386121b"
             },
-            "payload_sha256": "9fa06f9a79bc311d4933dabd0053da69c84833e0d61890d82913f11274431814",
+            "payload_sha256": "c512018bff86db2299112e38d4aff7adcbca0f281b55119ddaad568101b8d3d8",
             "artifact_sha256": "5dbcbfab8ea810b30ae63e5c600dbf878a629f813d5f110b1ee091a1e0ae6dd9",
             "issuer": "work-service/bounded-intake",
-            "issued_at": "2026-10-13T18:47:59.408082Z",
+            "issued_at": "2026-10-13T20:41:47.124768Z",
             "candidate_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
             "candidate_commit": null,
             "verdict": null,
@@ -1371,28 +1371,28 @@
       "http_status": 200,
       "body": {
         "receipt": {
-          "operation_id": "db485f35-84b0-4f98-88cf-ba6e6ad005de",
-          "request_id": "43b1ee38-1f2c-457c-9cba-bca2412b3feb",
+          "operation_id": "4a4c3d2a-4d41-4d19-a92a-9c1e5d6d9ec5",
+          "request_id": "e0a711fa-b17b-437c-881e-15dabf887465",
           "state": "replayed",
-          "request_sha256": "500c94371785ed52347282d09f1668b862365b30d77e106d32943c061dc28ab0",
-          "result_sha256": "0723efeccec9544773cf918607cb90126e7edd0173f04c8ea2c471547a479635",
+          "request_sha256": "1a9f1e90329a0950ab5b8ee545d8e6a2f583cc6442cdac3be8e4a87c7166fd9b",
+          "result_sha256": "9b09ed00ae5af0bed12b0741449c5f0468b9457df98e0ab2f4a23f3f978fa8f8",
           "diagnostics": []
         },
         "result": {
           "type": "publish_bounded_intake",
           "item": {
             "client_ref": "bounded-intake",
-            "work_id": "db65e25b-55dc-4854-925f-41b07ca8594d",
-            "revision_id": "2055673c-8137-4802-8195-99bff59b03c5",
+            "work_id": "d437c940-b35a-4bc6-ab5a-b02fcdff3617",
+            "revision_id": "e829a8e1-be9b-4790-8109-132962111961",
             "key": "OMP-1",
             "state": "BACKLOG",
             "row_version": 1
           },
           "receipt": {
-            "receipt_id": "aa52374b-b4f9-497f-9f94-6a98eff55634",
-            "work_id": "db65e25b-55dc-4854-925f-41b07ca8594d",
-            "revision_id": "2055673c-8137-4802-8195-99bff59b03c5",
-            "candidate_id": "16ec8036-754d-4e02-b51a-26efd474359d",
+            "receipt_id": "c7485a4a-d7cb-4e7c-bcc3-e93f04dae0f0",
+            "work_id": "d437c940-b35a-4bc6-ab5a-b02fcdff3617",
+            "revision_id": "e829a8e1-be9b-4790-8109-132962111961",
+            "candidate_id": "68fd3975-5594-4b92-b67e-cd14fd94cd1e",
             "kind": "intake_publication",
             "payload": {
               "draft": {
@@ -1439,13 +1439,13 @@
               "ratified_by": "00000000-0000-7000-8000-0000000000a1",
               "semantic_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
               "rule_bundle_sha256": "92d55ccb8c95c7bd77c166540218a7ebd72792b1f44c07b95152ae49c228102e",
-              "admission_receipt_id": "4cebec8a-d2cf-471d-98c1-4163d7971ffe",
-              "assessment_operation_id": "75ca5551-1e61-430c-8dc0-6a9ca1cb55c7"
+              "admission_receipt_id": "7b1a0557-d3df-4982-ab56-5835a386121b",
+              "assessment_operation_id": "53594a64-2b89-444e-90e5-2d37b8ab69f6"
             },
-            "payload_sha256": "9fa06f9a79bc311d4933dabd0053da69c84833e0d61890d82913f11274431814",
+            "payload_sha256": "c512018bff86db2299112e38d4aff7adcbca0f281b55119ddaad568101b8d3d8",
             "artifact_sha256": "5dbcbfab8ea810b30ae63e5c600dbf878a629f813d5f110b1ee091a1e0ae6dd9",
             "issuer": "work-service/bounded-intake",
-            "issued_at": "2026-10-13T18:47:59.408082Z",
+            "issued_at": "2026-10-13T20:41:47.124768Z",
             "candidate_sha256": "90bd62264e107c456698bcf57bfe34e505999ec42f38584cbf53ca33cbac92e8",
             "candidate_commit": null,
             "verdict": null,

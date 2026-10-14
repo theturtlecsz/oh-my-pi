@@ -37,6 +37,7 @@ from omp_work.operations import database, fingerprints
 from omp_work.operations.capabilities import provision_task_capability
 from omp_work.orchestrator import (
     candidate_git,
+    lesson_context,
     merge_gate,
     model_proxy_client,
     service,
@@ -720,6 +721,7 @@ def _sandbox(
     model_token: str | None = None,
     manifest_path: Path | None = None,
     deadline: datetime | None = None,
+    candidate_id: UUID | None = None,
 ) -> int | None:
     """Run ``argv`` in the worker jail until the task deadline or the lease is lost.
 
@@ -736,7 +738,7 @@ def _sandbox(
     remaining = (deadline - datetime.now(UTC)).total_seconds()
     if remaining <= 0:
         return None
-    planned = service._ids(ctx.mission_id, "plan-candidate")
+    planned = candidate_id or service._ids(ctx.mission_id, "plan-candidate")
     capability = provision_task_capability(
         ctx.config.ops,
         workspace_id=ctx.workspace_id,
@@ -826,7 +828,9 @@ def _worker_approach(ctx: StageContext) -> list[str]:
         )]
 
 
-def _run_model_worker(ctx: StageContext, argv: Sequence[str], worktree: Path) -> int | None:
+def _run_model_worker(
+    ctx: StageContext, argv: Sequence[str], worktree: Path, data: dict[str, Any]
+) -> int | None:
     if not ctx.config.model_proxy_url or not Path(argv[0]).is_absolute():
         raise WorkError("invalid_request")
     expires_at = ctx.lease_expires_at()
@@ -836,6 +840,15 @@ def _run_model_worker(ctx: StageContext, argv: Sequence[str], worktree: Path) ->
     if deadline is None:
         return None
     expires_at = min(expires_at, deadline)
+    context = lesson_context.compile_context(ctx, worktree, _work_key(ctx)) if ctx.config.context_command else None
+    candidate_id = str(service._ids(ctx.mission_id, "plan-candidate"))
+    if context is not None:
+        candidate_id, compiled = context
+        data.update({key: compiled[key] for key in (
+            "bundle_id", "bundle_sha256", "tokens", "token_budget", "exclusions", "routes", "lesson_supply_ids", "lesson_versions"
+        ) if key in compiled})
+        if "bundle_sha256" in compiled:
+            data["compiled_context_hash"] = compiled["bundle_sha256"]
     ceiling = _worker_ceiling(ctx)
     base_url = ctx.config.model_proxy_url.rstrip("/")
     try:
@@ -862,7 +875,7 @@ def _run_model_worker(ctx: StageContext, argv: Sequence[str], worktree: Path) ->
             "version": 1, "instruction": ctx.request["instruction"]["text"],
             "approach": _worker_approach(ctx),
             "allowed_paths": list(ctx.request.get("allowed_paths") or ()),
-            "candidate_id": str(service._ids(ctx.mission_id, "plan-candidate")),
+            "candidate_id": candidate_id,
             "lease_expires_at": expires_at.isoformat(),
             "model": {
                 "api": descriptor["api"], "id": descriptor["id"],
@@ -873,6 +886,8 @@ def _run_model_worker(ctx: StageContext, argv: Sequence[str], worktree: Path) ->
                 "proxy": {"baseUrl": base_url},
             },
         }
+        if context is not None:
+            manifest["context"] = compiled["text"]
         fd, name = tempfile.mkstemp(prefix="omp-worker-", suffix=".json")
         manifest_path = Path(name)
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
@@ -882,6 +897,7 @@ def _run_model_worker(ctx: StageContext, argv: Sequence[str], worktree: Path) ->
             ctx, argv, worktree, ro_binds=(Path(argv[0]), manifest_path),
             model_proxy=(endpoint.hostname, endpoint.port or (443 if endpoint.scheme == "https" else 80)),
             model_token=grant["model_token"], manifest_path=manifest_path,
+            candidate_id=UUID(candidate_id),
         )
         # The grant ends with the lease this launch saw. A failure after that
         # moment is the model being cut off, not a worker verdict: lease_dead.
@@ -926,7 +942,7 @@ def run_implement(ctx: StageContext) -> Outcome:
     )
     try:
         code = (
-            _run_model_worker(ctx, argv, worktree)
+            _run_model_worker(ctx, argv, worktree, data)
             if model_worker
             else _sandbox(ctx, argv, worktree)
         )
