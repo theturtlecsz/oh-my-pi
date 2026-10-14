@@ -35,7 +35,7 @@
   - `c12fe6fb9b`: `OMP-321: pin ECC mirror with deterministic engineering and research packs`
   - `ad9e01a01a`: `OMP-321: reconcile derived rows after rebase (flood merge_check_repair)`
 - **What It Delivered**:
-  - Pinned subset: 18 files under `session-system/ecc/mirror/` ([manifest](../../session-system/ecc/manifest.json)); not the complete mirror WP1 requires.
+  - Pinned subset: 3716 files under `session-system/ecc/mirror/` ([manifest](../../session-system/ecc/manifest.json)).
   - Deterministic OMP adaptation engine (`session-system/ecc/adapter/`).
   - Pack manifests defining engineering and research packs (`session-system/ecc/manifest.json`).
   - Pinned lock file with source and transformed SHA-256 hashes (`session-system/ecc/adapted.lock.json`).

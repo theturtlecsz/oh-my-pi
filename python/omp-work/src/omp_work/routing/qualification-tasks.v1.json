@@ -1,0 +1,190 @@
+{
+  "version": "qualification-tasks.v1",
+  "tasks": [
+    {
+      "id": "qual-plan-01",
+      "role": "plan",
+      "task_type": "bounded plan",
+      "description": "Produce a bounded plan for adding qualification runner to routing policy",
+      "input": {
+        "objective": "Integrate offline qualification runner before routing activation",
+        "scope": "python/omp-work routing package",
+        "requirements": [
+          "Define qualification task set version 1",
+          "Add model_review qualification grader",
+          "Ensure supervisor remains deterministic code outside model offerings"
+        ],
+        "instructions": "Return a plan bounded to the routing package: name deliverables, testing, and no runtime routing edits."
+      },
+      "checks": [
+        {
+          "check": "contains_all",
+          "expected": [
+            "qualification-tasks.v1.json",
+            "model_review.py",
+            "test_model_review_qualification.py",
+            "no runtime routing edits"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "qual-implement-01",
+      "role": "implement",
+      "task_type": "patch+behavior",
+      "description": "Correct discount calculation and report boundary behavior",
+      "input": {
+        "original_code": "def discounted_price(price, percent):\n    return price * percent / 100",
+        "instructions": "Return corrected two-line Python function with four-space indentation, then a blank line and behavior results for price=80 at percent=0, 25, 100. Use format: results: x, y, z. No markdown."
+      },
+      "checks": [
+        {
+          "check": "exact_text",
+          "expected": "def discounted_price(price, percent):\n    return price * (1 - percent / 100)\n\nresults: 80, 60, 0"
+        }
+      ]
+    },
+    {
+      "id": "qual-verify-01",
+      "role": "verify",
+      "task_type": "synthesis",
+      "description": "Synthesize qualification test suite run status",
+      "input": {
+        "test_suite": "test_model_review_qualification",
+        "checks_tested": [
+          "exact_text",
+          "contains_all",
+          "verdict_equals"
+        ],
+        "outcomes": {
+          "passed": 3,
+          "failed": 0
+        },
+        "instructions": "If failed is zero, return exactly VERIFICATION_SUCCESSFUL; otherwise VERIFICATION_FAILED. No whitespace or commentary."
+      },
+      "checks": [
+        {
+          "check": "exact_text",
+          "expected": "VERIFICATION_SUCCESSFUL"
+        }
+      ]
+    },
+    {
+      "id": "qual-research-01",
+      "role": "research",
+      "task_type": "synthesis",
+      "description": "Synthesize provider cost and latency comparison",
+      "input": {
+        "sources": [
+          {
+            "id": "A",
+            "input_usd_m": 1,
+            "output_usd_m": 4,
+            "median_ms": 600,
+            "p95_ms": 1800
+          },
+          {
+            "id": "B",
+            "input_usd_m": 2,
+            "output_usd_m": 6,
+            "median_ms": 400,
+            "p95_ms": 2400
+          }
+        ],
+        "instructions": "Synthesize only these sources: compare cost in USD/M input/output and latency (median and p95). Name cheaper offering and lower median/p95 separately, citing source IDs. Do not invent quota data. Use phrases \"A costs x/y USD/M\", \"B costs x/y USD/M\", \"X has lower median\", \"X has lower p95\", and \"quota unknown\"."
+      },
+      "checks": [
+        {
+          "check": "contains_all",
+          "expected": [
+            "A costs 1/4 USD/M",
+            "B costs 2/6 USD/M",
+            "B has lower median",
+            "A has lower p95",
+            "quota unknown"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "qual-judge-01",
+      "role": "intake_support_judge",
+      "task_type": "support verdicts",
+      "description": "Intake support claim evaluation for pair p001",
+      "input": {
+        "id": "p001",
+        "claim_text": "The nightly backup job runs at 02:00 UTC.",
+        "passage": "Nightly backups start at 02:00 UTC and finish within forty minutes.",
+        "context": "Operations runbook, section 4: scheduled jobs."
+      },
+      "checks": [
+        {
+          "check": "verdict_equals",
+          "expected": "supports"
+        }
+      ]
+    },
+    {
+      "id": "qual-judge-02",
+      "role": "intake_support_judge",
+      "task_type": "support verdicts",
+      "description": "Intake support claim evaluation for pair p002",
+      "input": {
+        "id": "p002",
+        "claim_text": "Backups are retained for 90 days.",
+        "passage": "Nightly backups start at 02:00 UTC and finish within forty minutes.",
+        "context": "Operations runbook, section 4: scheduled jobs."
+      },
+      "checks": [
+        {
+          "check": "verdict_equals",
+          "expected": "neither"
+        }
+      ]
+    },
+    {
+      "id": "qual-review-01",
+      "role": "review",
+      "task_type": "defect identification",
+      "description": "Identify code review defect in auth token validation bypass",
+      "input": {
+        "code_diff": "--- a/auth.py\n+++ b/auth.py\n@@ -10,2 +10,2 @@\n-    if not verify_token(token):\n-        raise PermissionError('invalid token')\n+    # bypass auth check for faster throughput\n+    pass",
+        "query": "Identify defects in the proposed change; use terms bypass and PermissionError, explain unauthorized access, recommend restoring verification."
+      },
+      "checks": [
+        {
+          "check": "contains_all",
+          "expected": [
+            "bypass",
+            "PermissionError",
+            "unauthorized access",
+            "restore verification"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "qual-operator-01",
+      "role": "operator_session",
+      "task_type": "operator instructions",
+      "description": "Formulate safe node drain instructions for operator maintenance session",
+      "input": {
+        "operation": "node_drain",
+        "target_node": "arch-worker-02",
+        "safety_requirement": "Ensure active worker jobs complete before node shutdown",
+        "instructions": "Give ordered instructions using phrases: stop new jobs, drain, wait for active jobs, shutdown. If active jobs remain, say do not shutdown."
+      },
+      "checks": [
+        {
+          "check": "contains_all",
+          "expected": [
+            "stop new jobs",
+            "drain",
+            "wait for active jobs",
+            "do not shutdown"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -3,6 +3,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 DOC = Path(__file__).resolve().parents[3] / "docs" / "programme" / "OMP-313-BEHAVIOUR.md"
 
 
@@ -93,3 +95,80 @@ def test_oracle_programme_thresholds():
     oracle = _oracle_text()
     for threshold in ("20", "72", "30", "100"):
         assert threshold in oracle
+
+
+def classify(record):
+    """Apply the documented Oracle to an observation, without runtime services."""
+    trusted = record.get("trusted", True)
+    repeated = record.get("equivalent_repeat", False)
+    if not trusted or repeated:
+        adaptivity = "fail"
+    elif all(record.get(key, False) for key in (
+        "arm_b2", "arm_b3", "same_budget", "observation_changes_next"
+    )):
+        adaptivity = "pass"
+    else:
+        adaptivity = "inconclusive"
+
+    outside = [delta for domain, delta in record.get("deltas", {}).items()
+               if domain not in record.get("development", [])]
+    if not record.get("disjoint", True) or any(delta <= 0 for delta in outside):
+        transfer = "fail"
+    elif outside:
+        transfer = "pass"
+    else:
+        transfer = "inconclusive"
+
+    costs_known = record.get("costs_known", True)
+    lo, hi = record.get("lo"), record.get("hi")
+    if (not trusted or repeated or record.get("unknown_as_zero", False)
+            or (costs_known and hi is not None and hi < 0)):
+        improvement = "fail"
+    elif ((record.get("drift", False) and not record.get("new_window", True))
+          or not costs_known or lo is None or hi is None or lo <= 0 <= hi):
+        improvement = "inconclusive"
+    elif lo > 0:
+        improvement = "pass"
+    else:
+        improvement = "inconclusive"
+
+    decisions = [adaptivity, transfer, improvement]
+    if any(record.get(key, False) for key in ("code_presence", "fixture_only", "self_score")):
+        decisions = ["fail", "fail", "fail"]
+    programme = all(record.get(key, 0) >= threshold for key, threshold in (
+        ("seeds", 20), ("hours", 72), ("items", 30), ("attempts", 100)
+    ))
+    return decisions, programme
+
+
+EXAMPLE_DECISIONS = {
+    "matched-gain": ["pass", "pass", "pass"],
+    "null-interval": ["pass", "pass", "inconclusive"],
+    "transfer-loss": ["pass", "fail", "fail"],
+    "unknown-cost": ["pass", "pass", "inconclusive"],
+    "code-presence": ["fail", "fail", "fail"],
+    "untrusted": ["fail", "pass", "fail"],
+    "cycle": ["fail", "pass", "fail"],
+    "drift": ["pass", "pass", "inconclusive"],
+    "same-domain": ["pass", "fail", "pass"],
+    "unknown-as-zero": ["pass", "pass", "fail"],
+    "self-score": ["fail", "fail", "fail"],
+}
+
+
+def test_examples_cover_the_eleven_comparisons():
+    assert [example["id"] for example in _spec()["examples"]] == list(EXAMPLE_DECISIONS)
+
+
+@pytest.mark.parametrize("example", _spec()["examples"], ids=lambda example: example["id"])
+def test_examples_classify_outcomes_not_presence(example):
+    expected = EXAMPLE_DECISIONS[example["id"]]
+    assert example["decisions"] == expected
+    assert example["programme"] is False
+    assert classify(example["record"]) == (expected, False)
+
+
+@pytest.mark.parametrize("seeds, qualified", [(19, False), (20, True)])
+def test_programme_requires_twenty_seeds_at_matched_thresholds(seeds, qualified):
+    _, programme = classify({"seeds": seeds, "hours": 72, "items": 30, "attempts": 100})
+    assert programme is qualified

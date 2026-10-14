@@ -31,6 +31,7 @@ pathIgnorePatterns = [
   "python/robomp/data/**",
   ".wt/**",
   ".worktrees/**",
+  "session-system/ecc/mirror/**",
   "bazel-*/**",
   "**/bazel-out/**",
 ]

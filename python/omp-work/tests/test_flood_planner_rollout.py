@@ -208,3 +208,54 @@ def test_combined_continuation_prompts_keep_loaded_rules(candidate, tmp_path, co
             if child.poll() is None:
                 child.kill()
             child.wait(timeout=10)
+
+
+def test_combined_real_spawn_persists_start_hashes_and_attempts(candidate, tmp_path):
+    """Real spawns record the loaded code hash and per-spawn attempts, not the edited file's."""
+    loaded = hashlib.sha256(candidate.read_bytes()).hexdigest()
+    spec = importlib.util.spec_from_file_location(f"flood_combined_{uuid.uuid4().hex}", candidate)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    candidate.write_bytes(candidate.read_bytes() + b"\n# edited after import\n")
+
+    flood = module.Flood.__new__(module.Flood)
+    flood.cfg = {"start_gap_sec": 0}
+    flood.cfg_dir = tmp_path
+    flood.logs_dir = tmp_path / "logs"
+    flood.logs_dir.mkdir()
+    flood.wt_dir = tmp_path / "wt"
+    flood.slots, flood.test_slots, flood.test_lock = 2, 1, None
+    flood.providers = {"alpha": {"role": "implement", "max_parallel": 2}}
+    flood.fence, flood.control_globs, flood.procs = {}, [], {}
+    flood.state = module.State(tmp_path / "state.json")
+    flood.proposed_dir = lambda tid: tmp_path / "proposed" / tid
+    argv = [sys.executable, "-c", "pass"]
+    children = []
+    try:
+        assert flood.spawn({"id": "P"}, "plan", "alpha", argv, tmp_path, 1)
+        children.append(flood.procs["P"])
+        children[-1].wait(timeout=10)
+        for n in (1, 2):
+            assert flood.spawn({"id": "I"}, "implement", "alpha", argv, tmp_path, 1)
+            children.append(flood.procs["I"])
+            children[-1].wait(timeout=10)
+            if n == 1:
+                task = flood.state.task("I")
+                task["history"].append({"phase": "implement", "rc": 1, "attempt": 1})
+                task.update(status="pending", job=None)
+    finally:
+        for child in children:
+            child.wait(timeout=10)
+
+    tasks = json.loads((tmp_path / "state.json").read_text())["tasks"]
+    plans = [e for e in tasks["P"]["history"] if e["phase"] == "plan-start"]
+    assert [(e["attempt"], e["code_sha256"]) for e in plans] == [(1, loaded)]
+    starts = [e for e in tasks["I"]["history"] if e["phase"] == "implement-start"]
+    assert [e["attempt"] for e in starts] == [1, 2]
+    for event in starts:
+        assert event["code_sha256"] == loaded
+        for key in ("slots", "running_implementers", "occupied_slots"):
+            assert isinstance(event[key], int)
+    assert module.CODE_SHA256 == loaded
+    assert module.CODE_SHA256 != hashlib.sha256(candidate.read_bytes()).hexdigest()

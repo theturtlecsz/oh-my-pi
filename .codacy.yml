@@ -7,3 +7,4 @@ exclude_paths:
   - "**/fixtures/**"
   - "**/*.test.*"
   - "**/*.spec.*"
+  - "session-system/ecc/mirror/**"

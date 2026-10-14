@@ -1,0 +1,107 @@
+{
+  "version": "routing-substitutions.v1",
+  "stages": [
+    {
+      "stage": "plan",
+      "rule": "omp-241-plan",
+      "provider": "openai_codex",
+      "model": "gpt-5.6-sol",
+      "historical_role": "planning: Fable 5.1 (Claude CLI)",
+      "caller": null,
+      "reviewers": [],
+      "evidence": ["routing-policy.v1.json stages.plan", "docs/programme/ORIGINAL-OBLIGATIONS.md O2", "docs/programme/CONTINUATION-GOAL.md"],
+      "reason": "Packaged plan route is gpt-5.6-sol; O2 historical planning role is Fable 5.1. The orchestrator plan stage is deterministic and invokes no model; pending governing-file verification (s08).",
+      "authority": "pending governing-file verification (s08)",
+      "disposition": "pending_owner",
+      "approval": null
+    },
+    {
+      "stage": "implement",
+      "rule": "omp-241-implement",
+      "provider": "gemini_flash",
+      "model": "gemini-3.8-flash-high",
+      "historical_role": "mechanical/stateful implementation: Gemini 3.8 Flash high (agy CLI economy-worker)",
+      "caller": "omp_work.model_proxy",
+      "reviewers": [],
+      "evidence": ["routing-policy.v1.json stages.implement", "docs/programme/ORIGINAL-OBLIGATIONS.md O2", "python/omp-work/src/omp_work/model_proxy.py"],
+      "reason": "Route matches the historical implementation role; model_proxy.py executes the call.",
+      "authority": "pending governing-file verification (s08)",
+      "disposition": "kept",
+      "approval": null
+    },
+    {
+      "stage": "verify",
+      "rule": "omp-241-verify",
+      "provider": "gemini_flash",
+      "model": "gemini-3.8-flash-high",
+      "historical_role": "none recorded in O2",
+      "caller": null,
+      "reviewers": [],
+      "evidence": ["routing-policy.v1.json stages.verify"],
+      "reason": "Route is declared; no model call is made for verify.",
+      "authority": "pending governing-file verification (s08)",
+      "disposition": "kept",
+      "approval": null
+    },
+    {
+      "stage": "research",
+      "rule": "research",
+      "provider": "ollama_cloud",
+      "model": "deepseek-v4.1-flash:cloud",
+      "historical_role": "none recorded in O2",
+      "caller": null,
+      "admission": "omp_work.intake_support_admission",
+      "execution": "unverified",
+      "reviewers": [],
+      "evidence": ["routing-policy.v1.json stages.research", "python/omp-work/src/omp_work/intake_support_admission.py"],
+      "reason": "intake_support_admission.py selects the research route, returns the admission and records supplied usage; no production caller of it is found, so the model call and its caller are unverified. Pending governing-file verification (s08).",
+      "authority": "pending governing-file verification (s08)",
+      "disposition": "kept",
+      "approval": null
+    },
+    {
+      "stage": "audit",
+      "rule": "audit",
+      "provider": "kimi",
+      "model": "kimi-code/k3-256k",
+      "historical_role": "auditor: openai-codex/gpt-5.6-sol:medium; independent review: Kimi K3 256K",
+      "caller": null,
+      "reviewers": ["openai-codex/gpt-5.6-sol:medium"],
+      "evidence": ["routing-policy.v1.json stages.audit", "docs/programme/GOAL-PROMPT.md"],
+      "reason": "Route declared; reviewer is the preserved Sol medium auditor. No model call is made by this package.",
+      "authority": "pending governing-file verification (s08)",
+      "disposition": "kept",
+      "approval": null
+    },
+    {
+      "stage": "acceptance_review",
+      "rule": "acceptance_review",
+      "provider": "kimi",
+      "model": "kimi-code/k3-256k",
+      "historical_role": "fresh independent reviewer: Kimi K3 256K (Kimi CLI economy-reviewer)",
+      "caller": null,
+      "reviewers": ["kimi-code/k3-256k"],
+      "evidence": ["routing-policy.v1.json stages.acceptance_review", "docs/programme/ORIGINAL-OBLIGATIONS.md O2"],
+      "reason": "Route matches the historical reviewer role; no model call is made by this package.",
+      "authority": "pending governing-file verification (s08)",
+      "disposition": "kept",
+      "approval": null
+    }
+  ],
+  "overflow": [
+    {
+      "rule": "gemini-flash-overflow",
+      "kind": "substitution",
+      "from_provider": "gemini_flash",
+      "provider": "ollama_cloud",
+      "model": "deepseek-v4.1-flash:cloud",
+      "historical_role": "mechanical/stateful implementation: Gemini 3.8 Flash high (agy CLI economy-worker)",
+      "caller": "omp_work.model_proxy",
+      "evidence": ["routing-policy.v1.json alternates", "python/omp-work/src/omp_work/model_proxy.py"],
+      "reason": "Shipped overflow behavior queue replaces gemini_flash with ollama_cloud/deepseek-v4.1-flash:cloud when gemini_flash is at its concurrency cap. Substitution pending Chris approval; not owner-approved; pending governing-file verification (s08).",
+      "authority": "pending governing-file verification (s08)",
+      "disposition": "pending_owner",
+      "approval": null
+    }
+  ]
+}
