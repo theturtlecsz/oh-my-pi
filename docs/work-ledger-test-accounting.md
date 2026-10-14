@@ -23,7 +23,7 @@ Observed counts come from the receipts:
 - `unit_skipped`: selected unit nodes with at least one skipped phase
 - `integration_passed`: passed unskipped calls in accepted alternates whose check is `postgres`, `integration`, `pg`, `work-ledger integration`, or `work-ledger-integration`. The value is null when no such alternate was supplied.
 
-Deltas are observed minus 4054, 5156, and 858. The source fingerprint is `skip_accounting.fingerprint` of the checkout, computed before the report files are written. That hash ignores directories named `reports` or `generated`, files ending in `.skip-receipt.json`, changelogs, and the inventory. A difference between the source fingerprint and the unit run fingerprint is recorded and is not, by itself, a `--check` failure. Stale evidence is an alternate whose fingerprint differs from the unit receipt.
+Deltas are observed minus 4054, 5156, and 858. The source fingerprint is `skip_accounting.fingerprint` of the checkout, computed before the report files are written. That hash ignores directories named `reports` or `generated`, files ending in `.skip-receipt.json`, changelogs, and the inventory. A difference between the source fingerprint and the unit run fingerprint is recorded as stale evidence; `--check` treats any difference between the run fingerprint and current source fingerprint as stale evidence and exits nonzero. Alternate receipts whose fingerprint differs from the source or unit receipt are also rejected as stale.
 
 ## Execution rules
 

@@ -106,8 +106,12 @@ _WAITING = {
 }
 
 
-def repo_root() -> Path:
+def repo_root(root_override: str | os.PathLike[str] | None = None) -> Path:
     """Checkout that holds package.json and the accounting plugin."""
+    if root_override is not None:
+        return Path(root_override).resolve()
+    if os.environ.get("OMP_ACCOUNTING_ROOT"):
+        return Path(os.environ["OMP_ACCOUNTING_ROOT"]).resolve()
     here = Path(__file__).resolve()
     for parent in here.parents:
         if (parent / "package.json").is_file() and (parent / "python/omp-work/src/omp_work/skip_accounting.py").is_file():
@@ -157,6 +161,10 @@ def _passed_count(receipt: Receipt) -> int:
 
 def _integration_script(root: Path) -> tuple[str, list[str]]:
     path = root / "package.json"
+    if not path.is_file():
+        fallback = repo_root() / "package.json"
+        if fallback.is_file():
+            path = fallback
     try:
         script = json.loads(path.read_text(encoding="utf-8"))["scripts"]["test:py:work-ledger:integration"]
     except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
@@ -371,7 +379,14 @@ def _skipped_ids(receipt: Receipt) -> list[str]:
     return sorted(node for node in receipt.selected if _skipped_phases(receipt.nodes.get(node, {})))
 
 
-def _alternate_view(path: Path, receipt: Receipt | None, digest: str | None, error: str | None, unit: Receipt | None) -> dict[str, Any]:
+def _alternate_view(
+    path: Path,
+    receipt: Receipt | None,
+    digest: str | None,
+    error: str | None,
+    unit: Receipt | None,
+    source: str | None = None,
+) -> dict[str, Any]:
     if receipt is None:
         return {
             "accepted": False,
@@ -386,6 +401,8 @@ def _alternate_view(path: Path, receipt: Receipt | None, digest: str | None, err
             "subset_only": False,
         }
     reason = None if unit is None or not unit.complete else _rejection(receipt, unit)
+    if reason is None and source is not None and receipt.fingerprint != source:
+        reason = "stale fingerprint"
     if error is not None:
         reason = error
     selected = set(receipt.selected)
@@ -414,7 +431,8 @@ def _covering(node: str, usable: Sequence[tuple[Path, Receipt, str]]) -> tuple[P
 def build_report(unit_path: Path, alternate_paths: Sequence[Path], root: Path) -> dict[str, Any]:
     """Build the JSON-ready report. Caller writes it after this returns."""
     root = Path(root)
-    unit, _unit_digest, unit_error = _load(Path(unit_path))
+    source = source_fingerprint(root)
+    unit, unit_digest, unit_error = _load(Path(unit_path))
     loaded: list[tuple[Path, Receipt | None, str | None, str | None]] = []
     for path in alternate_paths:
         receipt, digest, error = _load(Path(path))
@@ -426,7 +444,7 @@ def build_report(unit_path: Path, alternate_paths: Sequence[Path], root: Path) -
         report["rejected"] = [{"check": "", "digest": None, "path": str(unit_path), "reason": unit_error}]
         views = []
         for path, receipt, digest, error in loaded:
-            view = _alternate_view(path, receipt, digest, error, None)
+            view = _alternate_view(path, receipt, digest, error, None, source=source)
             if view["rejection"] is None:
                 view["accepted"] = False
                 view["rejection"] = "unit receipt is malformed"
@@ -448,26 +466,32 @@ def build_report(unit_path: Path, alternate_paths: Sequence[Path], root: Path) -
         "unit_skipped": observed_unit_skipped if unit.complete or unit.nodes else None,
     }
     report = _shell(root, run_id=unit.run_id, run_fingerprint=unit.fingerprint, observed=base_observed)
-    if report["run_fingerprint"] != report["source_fingerprint"]:
-        report["notes"].append(
-            "source fingerprint differs from the unit run fingerprint; --check does not treat that difference as stale evidence"
-        )
+    unit_stale = unit.fingerprint != source
 
     rejected: list[dict[str, Any]] = []
     if not unit.complete:
         rejected.append(
             {
                 "check": unit.check,
-                "digest": _digest(Path(unit_path)) if Path(unit_path).is_file() else None,
+                "digest": unit_digest,
                 "path": str(unit_path),
                 "reason": f"incomplete (exitstatus {unit.exitstatus})",
+            }
+        )
+    if unit_stale:
+        rejected.append(
+            {
+                "check": unit.check,
+                "digest": unit_digest,
+                "path": str(unit_path),
+                "reason": "stale fingerprint",
             }
         )
 
     usable: list[tuple[Path, Receipt, str]] = []
     views = []
     for path, receipt, digest, error in loaded:
-        view = _alternate_view(path, receipt, digest, error, unit if unit.complete else None)
+        view = _alternate_view(path, receipt, digest, error, unit if unit.complete else None, source=source)
         if error is not None or receipt is None:
             rejected.append({"check": "", "digest": None, "path": str(path), "reason": error or "malformed"})
             views.append(view)
@@ -476,9 +500,11 @@ def build_report(unit_path: Path, alternate_paths: Sequence[Path], root: Path) -
             views.append(view)
             continue
         reason = _rejection(receipt, unit)
+        if reason is None and receipt.fingerprint != source:
+            reason = "stale fingerprint"
         if reason is not None:
             rejected.append({"check": receipt.check, "digest": digest, "path": str(path), "reason": reason})
-        else:
+        elif not unit_stale:
             usable.append((path, receipt, digest or ""))
         views.append(view)
     report["alternates"] = views
@@ -498,7 +524,7 @@ def build_report(unit_path: Path, alternate_paths: Sequence[Path], root: Path) -
             alternate_skips[node] = sorted(rows, key=lambda row: (row["check"], row["phase"], row["reason"]))
         covered = set(result.covered)
         for node in _skipped_ids(unit):
-            for _path, receipt, _digest in usable:
+            for _path, receipt, _dig in usable:
                 if _executed_unskipped(receipt, node) is not None:
                     continue
                 failed = {name: phase.reason for name, phase in receipt.nodes.get(node, {}).items() if phase.outcome == "failed"}
@@ -513,7 +539,7 @@ def build_report(unit_path: Path, alternate_paths: Sequence[Path], root: Path) -
 
     integration_ids: set[str] = set()
     saw_integration = False
-    for _path, receipt, _digest in usable:
+    for _path, receipt, _dig in usable:
         if receipt.check not in INTEGRATION_CHECKS:
             continue
         saw_integration = True
@@ -545,7 +571,7 @@ def build_report(unit_path: Path, alternate_paths: Sequence[Path], root: Path) -
         if not is_covered:
             diagnostics.append("no executed unskipped call covers this node")
         if unit.complete:
-            for path, receipt, _digest in usable:
+            for path, receipt, _dig in usable:
                 if node in receipt.selected:
                     continue
                 if node in receipt.collected and set(receipt.selected) != set(receipt.collected):
@@ -591,6 +617,8 @@ def build_report(unit_path: Path, alternate_paths: Sequence[Path], root: Path) -
     report["failures"] = sorted(failures, key=lambda row: (row["id"], row["check"], row["phase"], row["reason"]))
     skipped_ids = {node["id"] for node in nodes}
     problems: list[str] = []
+    if not report["source_matches_run"]:
+        problems.append("stale: run fingerprint does not match source fingerprint")
     for node in nodes:
         if not node["covered"]:
             problems.append(f"uncovered: {node['id']}")
@@ -743,15 +771,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--json", required=True)
     parser.add_argument("--markdown", required=True)
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--root", default=None, help=argparse.SUPPRESS)
     args = parser.parse_args(list(argv) if argv is not None else None)
     json_path = Path(args.json)
     markdown_path = Path(args.markdown)
+    root = repo_root(args.root)
     try:
         # Hash before either report file exists, so this run's outputs cannot enter the fingerprint.
-        report = build_report(Path(args.unit), [Path(path) for path in args.alternate], repo_root())
+        report = build_report(Path(args.unit), [Path(path) for path in args.alternate], root)
     except Exception as exc:
         report = _shell(
-            repo_root(),
+            root,
             run_id=None,
             run_fingerprint=None,
             observed={"integration_passed": None, "unit_passed": None, "unit_skipped": None},

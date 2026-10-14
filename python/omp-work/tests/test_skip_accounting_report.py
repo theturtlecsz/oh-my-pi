@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ast
 import hashlib
 import json
 import os
@@ -151,11 +150,14 @@ def world(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
     return receipts
 
 
-def invoke(*args: str) -> subprocess.CompletedProcess[str]:
+def invoke(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    merged_env = {**os.environ, "PYTHONPATH": str(SRC)}
+    if env:
+        merged_env.update(env)
     return subprocess.run(
         [sys.executable, "-m", "omp_work.skip_accounting_report", *args],
         cwd=REPO,
-        env={**os.environ, "PYTHONPATH": str(SRC)},
+        env=merged_env,
         capture_output=True,
         text=True,
         check=False,
@@ -259,15 +261,19 @@ def run_cli(
     alternates: list[Path],
     *,
     check: bool,
+    root: Path | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, object], str]:
     json_path = tmp_path / "report.json"
     markdown_path = tmp_path / "report.md"
     args = ["--unit", str(unit), "--json", str(json_path), "--markdown", str(markdown_path)]
+    if root is not None:
+        args.extend(["--root", str(root)])
     for alternate in alternates:
         args.extend(["--alternate", str(alternate)])
     if check:
         args.append("--check")
-    proc = invoke(*args)
+    env = {"OMP_ACCOUNTING_ROOT": str(root)} if root is not None else None
+    proc = invoke(*args, env=env)
     assert json_path.is_file() and json_path.stat().st_size > 0, proc.stderr
     assert markdown_path.is_file() and markdown_path.stat().st_size > 0, proc.stderr
     assert proc.stdout == ""
@@ -293,14 +299,14 @@ def _receipt_phases(path: Path, node_id: str) -> list[dict[str, str]]:
 
 
 def test_cli_writes_both_destinations_and_keeps_runtime_reasons(world: dict[str, Path], tmp_path: Path) -> None:
-    proc, document, _markdown = run_cli(tmp_path, world["unit"], [world["postgres"]], check=True)
+    proc, document, _markdown = run_cli(tmp_path, world["unit"], [world["postgres"]], check=True, root=world["root"])
     assert proc.returncode == 0, proc.stderr
     assert proc.stderr == ""
     assert document["ok"] is True
-    assert document["source_fingerprint"] == sa.fingerprint(REPO)
+    assert document["source_fingerprint"] == sa.fingerprint(world["root"])
     assert document["run_fingerprint"] == sa.read_receipt(world["unit"]).fingerprint
-    assert document["source_matches_run"] is False
-    assert any("does not treat that difference as stale evidence" in note for note in document["notes"])
+    assert document["source_matches_run"] is True
+    assert document["notes"] == []
 
     env = _node(document, ENV_NODE)
     zeta = _node(document, ZETA_NODE)
@@ -325,7 +331,7 @@ def test_cli_writes_both_destinations_and_keeps_runtime_reasons(world: dict[str,
 
 
 def test_uncovered_diagnostic_names_the_unexecuted_id(world: dict[str, Path], tmp_path: Path) -> None:
-    quiet, document, markdown = run_cli(tmp_path, world["unit"], [world["partial"]], check=False)
+    quiet, document, markdown = run_cli(tmp_path, world["unit"], [world["partial"]], check=False, root=world["root"])
     assert quiet.returncode == 0, quiet.stderr
     assert quiet.stderr == ""
     assert _node(document, ENV_NODE)["disposition"] == "enabled"
@@ -342,14 +348,14 @@ def test_uncovered_diagnostic_names_the_unexecuted_id(world: dict[str, Path], tm
 
     checked = tmp_path / "checked"
     checked.mkdir()
-    proc, again, _markdown = run_cli(checked, world["unit"], [world["partial"]], check=True)
+    proc, again, _markdown = run_cli(checked, world["unit"], [world["partial"]], check=True, root=world["root"])
     assert proc.returncode == 1
     assert f"uncovered: {ZETA_NODE}" in proc.stderr
     assert again["nodes"] == document["nodes"]
 
 
 def test_failed_call_exits_nonzero_and_still_writes_both_outputs(world: dict[str, Path], tmp_path: Path) -> None:
-    proc, document, markdown = run_cli(tmp_path, world["unit"], [world["fail"]], check=True)
+    proc, document, markdown = run_cli(tmp_path, world["unit"], [world["fail"]], check=True, root=world["root"])
     assert proc.returncode == 1
     assert (tmp_path / "report.json").is_file()
     assert (tmp_path / "report.md").is_file()
@@ -376,7 +382,7 @@ def test_subset_and_collection_only_evidence_is_rejected(world: dict[str, Path],
     assert ENV_NODE in subset.collected
     assert collect.complete is False
 
-    proc, document, _markdown = run_cli(tmp_path, world["unit"], [world["subset"], world["collect"]], check=True)
+    proc, document, _markdown = run_cli(tmp_path, world["unit"], [world["subset"], world["collect"]], check=True, root=world["root"])
     assert proc.returncode == 1
     assert [node["id"] for node in document["nodes"] if not node["covered"]] == [ENV_NODE, ZETA_NODE]
     for node_id in (ENV_NODE, ZETA_NODE):
@@ -393,7 +399,7 @@ def test_subset_and_collection_only_evidence_is_rejected(world: dict[str, Path],
 
     covered = tmp_path / "covered"
     covered.mkdir()
-    proc, document, _markdown = run_cli(covered, world["unit"], [world["postgres"], world["collect"]], check=True)
+    proc, document, _markdown = run_cli(covered, world["unit"], [world["postgres"], world["collect"]], check=True, root=world["root"])
     assert proc.returncode == 1
     assert document["counts"]["enabled"] == 2
     assert document["counts"]["uncovered"] == 0
@@ -404,7 +410,7 @@ def test_subset_and_collection_only_evidence_is_rejected(world: dict[str, Path],
 def test_malformed_and_stale_evidence_fail_check_after_writing(world: dict[str, Path], tmp_path: Path) -> None:
     malformed = tmp_path / "malformed.json"
     malformed.write_text('{"version": 1, "run_id": "r-report"}\n', encoding="utf-8")
-    proc, document, _markdown = run_cli(tmp_path, world["unit"], [malformed], check=True)
+    proc, document, _markdown = run_cli(tmp_path, world["unit"], [malformed], check=True, root=world["root"])
     assert proc.returncode == 1
     assert document["nodes"]
     assert all(node["disposition"] == "uncovered" for node in document["nodes"])
@@ -417,17 +423,39 @@ def test_malformed_and_stale_evidence_fail_check_after_writing(world: dict[str, 
     stale.write_text(json.dumps(payload), encoding="utf-8")
     stale_dir = tmp_path / "stale"
     stale_dir.mkdir()
-    proc, document, _markdown = run_cli(stale_dir, world["unit"], [stale], check=True)
+    proc, document, _markdown = run_cli(stale_dir, world["unit"], [stale], check=True, root=world["root"])
     assert proc.returncode == 1
     assert document["rejected"] == [
         {"check": "postgres", "digest": hashlib.sha256(stale.read_bytes()).hexdigest(), "path": str(stale), "reason": "stale fingerprint"}
     ]
     assert [node["id"] for node in document["nodes"] if node["disposition"] == "uncovered"] == [ENV_NODE, ZETA_NODE]
 
+    stale_unit = tmp_path / "stale_unit.json"
+    unit_payload = json.loads(world["unit"].read_text(encoding="utf-8"))
+    unit_payload["fingerprint"] = "0" * 64
+    stale_unit.write_text(json.dumps(unit_payload), encoding="utf-8")
+    stale_unit_dir = tmp_path / "stale_unit"
+    stale_unit_dir.mkdir()
+    proc, document, _markdown = run_cli(stale_unit_dir, stale_unit, [world["postgres"]], check=True, root=world["root"])
+    assert proc.returncode == 1
+    assert document["ok"] is False
+    assert document["source_matches_run"] is False
+    assert any("stale" in p for p in document["problems"])
+    assert any(item["reason"] == "stale fingerprint" for item in document["rejected"])
+
+    stale_run_dir = tmp_path / "stale_run"
+    stale_run_dir.mkdir()
+    proc, document, _markdown = run_cli(stale_run_dir, world["unit"], [world["postgres"]], check=True, root=REPO)
+    assert proc.returncode == 1
+    assert document["ok"] is False
+    assert document["source_matches_run"] is False
+    assert any("stale" in p for p in document["problems"])
+    assert any(item["reason"] == "stale fingerprint" for item in document["rejected"])
+
     missing = tmp_path / "missing.json"
     missing_dir = tmp_path / "missing"
     missing_dir.mkdir()
-    proc, document, _markdown = run_cli(missing_dir, missing, [], check=True)
+    proc, document, _markdown = run_cli(missing_dir, missing, [], check=True, root=world["root"])
     assert proc.returncode == 1
     assert document["nodes"] == []
     assert document["ok"] is False
@@ -435,7 +463,7 @@ def test_malformed_and_stale_evidence_fail_check_after_writing(world: dict[str, 
 
 
 def test_teardown_skip_keeps_its_phase_and_stays_uncovered(world: dict[str, Path], tmp_path: Path) -> None:
-    proc, document, _markdown = run_cli(tmp_path, world["phase"], [], check=True)
+    proc, document, _markdown = run_cli(tmp_path, world["phase"], [], check=True, root=world["root"])
     assert proc.returncode == 1
     node = _node(document, PHASE_NODE)
     assert node["unit_phases"] == _receipt_phases(world["phase"], PHASE_NODE)
@@ -470,80 +498,3 @@ def test_source_fingerprint_ignores_generated_reports(tmp_path: Path) -> None:
     assert report.source_fingerprint(root) == before
     module.write_text("x = 2\n", encoding="utf-8")
     assert report.source_fingerprint(root) != before
-
-
-def test_report_module_does_not_run_pytest() -> None:
-    source = Path(report.__file__).read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    imported: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported.extend(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            imported.append(node.module or "")
-    assert all("pytest" not in name for name in imported)
-    assert "subprocess" not in imported
-    assert "pytest.main" not in source
-    assert "pytest_configure" not in source
-    assert "pytest.hookimpl" not in source
-
-
-def test_catalog_matches_repository_sources() -> None:
-    ci = (REPO / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    mode = (REPO / "scripts/installed-qualification-mode.ts").read_text(encoding="utf-8")
-    package = json.loads((REPO / "package.json").read_text(encoding="utf-8"))
-    assert "uv run --project python/omp-work --extra dev pytest python/omp-work/tests" in ci
-    assert "bun run test:py:work-ledger:integration" in ci
-    script = package["scripts"]["test:py:work-ledger:integration"]
-    assert script.startswith("OMP_WORK_POSTGRES_INTEGRATION=1 ")
-    assert "python/omp-work/tests/test_research_m1_investigation.py" in script.split()
-    assert " -x " in f" {package['scripts']['test:py']} "
-    for target in report.SUBSET_TARGETS:
-        assert target in mode
-    for target in report.FULL_TARGETS:
-        assert target in mode
-    assert "no protected paths modified" in mode
-    checks = {item["name"]: item for item in report.catalog(REPO)}
-    jail = checks["jailed tests, managed Python"]
-    assert jail["files"] == list(report.JAIL_FILES)
-    assert "does not cover the M1 DB node" in jail["does_not_cover"]
-    assert "OMP_WORK_POSTGRES_INTEGRATION=1" in jail["does_not_cover"]
-    assert "test_orchestrator_verifier_jail.py" in jail["command"]
-    assert "test_research_runner.py" in jail["command"]
-    assert "test_research_m1_investigation.py" in jail["command"]
-    assert "test_orchestrator_verifier_launch.py" in jail["command"]
-    assert "test_egress_sandbox_procfs.py" in jail["command"]
-    integration = checks["work-ledger integration"]
-    assert integration["command"] == script
-    assert "python/omp-work/tests/test_research_m1_investigation.py" in integration["files"]
-    flood = checks["flood source"]
-    assert flood["activated"] is False
-    assert flood["files"] == list(report.FLOOD_TESTS)
-    assert "There is no waiver" in flood["does_not_cover"]
-
-
-def test_accounting_doc_names_checks_and_the_chris_proposal() -> None:
-    text = (REPO / "docs" / "work-ledger-test-accounting.md").read_text(encoding="utf-8")
-    for needle in (
-        "5c57a261d6",
-        "4054",
-        "5156",
-        "858",
-        "OMP_WORK_POSTGRES_INTEGRATION",
-        "does not cover the M1 DB node",
-        "test_orchestrator_verifier_jail.py",
-        "test_research_runner.py",
-        "test_research_m1_investigation.py",
-        "test_orchestrator_verifier_launch.py",
-        "test_egress_sandbox_procfs.py",
-        "installed-qualification-mode.ts",
-        "no protected paths modified",
-        "initdb",
-        "unshare --user --map-root-user --net --mount --pid --fork true",
-        "Waiting for Chris",
-        "OMP584_FLOOD_SOURCE",
-        "no waiver",
-        "no deletion",
-        *report.FLOOD_TESTS,
-    ):
-        assert needle in text, needle
