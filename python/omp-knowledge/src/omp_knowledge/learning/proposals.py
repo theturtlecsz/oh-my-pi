@@ -78,7 +78,8 @@ def create_proposal(
     reader: NativeReceipts,
     created_at: str | datetime | None = None,
 ) -> ProposalRecord:
-    decision: PolicyDecision = evaluate(lesson, reader)
+    # Binding always sees this attribution's source. There is no opt-out.
+    decision: PolicyDecision = evaluate(lesson, reader, source=attribution.source)
 
     if created_at is None:
         now = datetime.now(timezone.utc).isoformat()
@@ -94,6 +95,7 @@ def create_proposal(
 
     with store.transaction() as conn:
         if not decision.accepted:
+            # A rejection stores the proposal row only: no procedure, version, or support.
             conn.execute(
                 """
                 INSERT INTO proposals (

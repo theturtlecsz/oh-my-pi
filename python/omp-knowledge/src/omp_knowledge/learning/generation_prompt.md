@@ -21,7 +21,15 @@ Answer with one JSON object and nothing else:
       "title": "short imperative title",
       "steps": ["ordered, concrete step"],
       "preconditions": [{"key": "project_id", "op": "eq", "value": "..."}],
-      "claims": [{"text": "what the evidence shows", "receipt_ids": ["<receipt id>"]}],
+      "claims": [
+        {
+          "text": "what the evidence shows",
+          "receipt_ids": ["<receipt id>"],
+          "source_span": {"start": 8, "end": 27},
+          "evaluator": "<receipt issuer>",
+          "outcome": "PASS"
+        }
+      ],
       "research_campaign_ids": ["<campaign id from research_record>"]
     }
   ],
@@ -34,6 +42,12 @@ Constraints:
 - "preconditions" and "claims" may be empty arrays.
 - Each precondition key is "project_id" or "repository"; each op is "eq" or "ne".
 - "claims[].receipt_ids" reference identifiers that appear in the trace.
+- Include "claims[].source_span" only when that receipt's "payload_truncated"
+  is false. "source_span" is {"start", "end"}: character offsets into that
+  receipt's "payload_text" such that payload_text[start:end] equals the claim
+  text. When "payload_truncated" is not false, omit "source_span".
+- "claims[].evaluator" is that receipt's "issuer".
+- "claims[].outcome" is "PASS".
 - When a campaign's outcome, outcome_reason, or deliverable_refs in
   "research_record" ground a lesson, cite its campaign_id in
   "research_campaign_ids". Use only campaign IDs present in "research_record";
