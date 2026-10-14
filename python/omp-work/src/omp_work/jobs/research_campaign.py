@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import UUID, uuid4
 
+from omp_work.jobs.campaign_completion import read_trial_completion
 from omp_work.jobs.campaign_definition import (
     CampaignDefinition,
     score_campaign,
@@ -112,35 +113,28 @@ def run_research_campaign(
         job_id = trial_job_id(trial_id)
         if worker.tick(job_id=job_id) != job_id:
             raise RuntimeError(f"research worker did not execute target job {job_id}")
-        with store.transaction(workspace_id, actor_id) as cur:
-            job = store.job_view(cur, workspace_id, job_id)
-        if (
-            job is None
-            or job["status"] not in {"sealed", "failed"}
-            or not job["settlement"]
-        ):
-            raise RuntimeError(f"research job {job_id} is unsettled")
-        observations = [
-            observation for observation in client.research(key).observations
-            if observation.campaign_id == campaign_id
-            and observation.trial_id == trial_id
-            and observation.source_ref == f"job:{job_id}"
-        ]
-        if len(observations) != 1:
-            raise RuntimeError(
-                f"research job {job_id} has no unique matching persisted observation"
-            )
-        observation = observations[0]
-        metrics = observation.payload.get("metrics")
-        if not isinstance(metrics, dict):
-            raise RuntimeError(f"research job {job_id} observation has no metrics object")
+        persisted = next(
+            (
+                candidate for candidate in client.research(key).trials
+                if candidate.trial_id == trial_id
+            ),
+            None,
+        )
+        if persisted is None:
+            raise RuntimeError(f"research trial {trial_id} is not persisted")
+        completion = read_trial_completion(
+            client, store, key, campaign_id, persisted, actor_id,
+            definition.criteria[0].metric,
+        )
         verdicts.append(score_metrics(
-            metrics, definition.criteria, observation.execution_status,
+            completion.metrics, definition.criteria, completion.execution_status,
         ))
         trials.append({
             "trial_id": str(trial_id),
-            "execution_status": observation.execution_status,
-            "metrics": {name: float(value) for name, value in metrics.items()},
+            "execution_status": completion.execution_status,
+            "metrics": {
+                name: float(value) for name, value in completion.metrics.items()
+            },
         })
     outcome, reason = score_campaign(verdicts)
     client.execute(_envelope(workspace_id, SetResearchCampaignStateCommand(

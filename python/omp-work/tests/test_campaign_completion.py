@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import os
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
+import omp_work.jobs.research_campaign as runner
 from omp_work.jobs.campaign_completion import read_trial_completion
 from omp_work.jobs.campaign_definition import load_definition
 from test_research_campaign_runner import _definition, _run, campaign  # noqa: F401
@@ -200,3 +201,64 @@ def test_unsettled_job_is_refused(campaign, monkeypatch) -> None:
     monkeypatch.setattr(campaign.store, "job_view", job_view)
     with pytest.raises(RuntimeError, match="is unsettled"):
         _read(campaign)
+
+
+def test_runner_reads_completion_for_each_trial(campaign, monkeypatch) -> None:
+    calls = []
+    original = runner.read_trial_completion
+
+    def read(client, store, key, campaign_id, trial, actor_id, metric):
+        completion = original(client, store, key, campaign_id, trial, actor_id, metric)
+        calls.append((trial.trial_id, metric, completion))
+        return completion
+
+    monkeypatch.setattr(runner, "read_trial_completion", read)
+    result = _run(campaign, _definition(campaign, (1, 0)))
+
+    assert result["outcome"] == "refuted"
+    assert [metric for _, metric, _ in calls] == ["score", "score"]
+    for trial, (trial_id, _, completion) in zip(result["trials"], calls, strict=True):
+        assert trial_id == UUID(trial["trial_id"])
+        assert trial["execution_status"] == completion.execution_status == "completed"
+        assert trial["metrics"] == completion.metrics
+
+
+def test_runner_scores_from_receipt_metrics_not_observation_payload(
+    campaign, monkeypatch,
+) -> None:
+    original = campaign.client.research
+
+    def read(key):
+        view = original(key)
+        return view.model_copy(update={"observations": tuple(
+            o.model_copy(update={"payload": {"metrics": {"score": 99.0}}})
+            for o in view.observations
+        )})
+
+    monkeypatch.setattr(campaign.client, "research", read)
+    result = _run(campaign, _definition(campaign, (1,)))
+
+    assert result["outcome"] == "supported"
+    assert result["trials"][0]["metrics"] == {"score": 1.0}
+
+
+@pytest.mark.parametrize("change", [_unverified, _unbound])
+def test_runner_rejects_unverified_or_unbound_receipt(
+    campaign, monkeypatch, change,
+) -> None:
+    original = campaign.store.job_view
+
+    def job_view(cur, workspace_id, job_id):
+        job = original(cur, workspace_id, job_id)
+        settlement = job.get("settlement") if job is not None else None
+        receipts = settlement.get("receipts") if isinstance(settlement, dict) else None
+        if receipts:
+            change(receipts[0])
+        return job
+
+    monkeypatch.setattr(campaign.store, "job_view", job_view)
+    with pytest.raises(RuntimeError, match="not bound to its observation"):
+        _run(campaign, _definition(campaign, (1,)))
+    view = campaign.client.research(campaign.key)
+    assert view.campaigns[0].state == "running"
+    assert view.campaigns[0].outcome is None
