@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path
-import shutil
 import subprocess
 from typing import Any
 
@@ -66,9 +65,10 @@ def create_checkout(tmp_path: Path, env: dict[str, str] | None = None) -> tuple[
     git_run(["add", "flood.py"])
     git_run(["commit", "-q", "-m", "initial fixture flood.py"])
 
+    flood_path.write_bytes(flood_path.read_bytes() + b"\n# Unrelated operator edit after OMP-584 dependencies and start metrics.\n")
     unrelated = checkout / "unrelated.txt"
     unrelated.write_text("committed unrelated edit\n")
-    git_run(["add", "unrelated.txt"])
+    git_run(["add", "flood.py", "unrelated.txt"])
     git_run(["commit", "-q", "-m", "committed unrelated edit"])
 
     return checkout, isolated_env

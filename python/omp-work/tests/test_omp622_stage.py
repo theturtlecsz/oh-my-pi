@@ -55,8 +55,9 @@ def test_stage_incremental_adds_exactly_planner_lines(tmp_path):
         assert original_flood.is_file()
         assert staged_flood.is_file()
 
-        orig_lines = original_flood.read_text(encoding="utf-8").splitlines(keepends=True)
-        staged_lines = staged_flood.read_text(encoding="utf-8").splitlines(keepends=True)
+        assert original_flood.read_bytes() == (source / "flood.py").read_bytes()
+        orig_lines = original_flood.read_bytes().decode("utf-8").splitlines(keepends=True)
+        staged_lines = staged_flood.read_bytes().decode("utf-8").splitlines(keepends=True)
         diff = list(difflib.unified_diff(orig_lines, staged_lines, fromfile="original-flood.py", tofile="flood.py"))
 
         deletions = [line for line in diff if line.startswith("-") and not line.startswith("---")]
@@ -72,9 +73,17 @@ def test_stage_incremental_adds_exactly_planner_lines(tmp_path):
         ]
         assert added_diff == expected_added
 
-        orig_iter = iter(staged_lines)
-        for line in orig_lines:
-            assert any(line == staged_line for staged_line in orig_iter), "Original line missing from staged file"
+        # Reconstruct exact original bytes by removing only inserted planner lines.
+        matcher = difflib.SequenceMatcher(a=orig_lines, b=staged_lines, autojunk=False)
+        preserved = []
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            assert tag in ("equal", "insert"), "Installed code changed"
+            if tag == "equal":
+                preserved.extend(staged_lines[j1:j2])
+        assert "".join(preserved).encode("utf-8") == original_flood.read_bytes()
+        assert "part dependencies: present" in result.stderr
+        assert "part start-metrics: present" in result.stderr
+        assert "part planner-prompt: applied" in result.stderr
     finally:
         if result.stage_dir and result.stage_dir.exists():
             shutil.rmtree(result.stage_dir, ignore_errors=True)
@@ -103,8 +112,8 @@ def test_full_script_planner_partial_fails_naming_planner_prompt(tmp_path):
     before = checkout_snapshot(source, env=env)
 
     result = run_script(source, evidence, env=env)
-    assert result.returncode != 0
-    assert "planner-prompt" in result.stderr
+    assert result.returncode == 2
+    assert "planner-prompt: absent markers:" in result.stderr
     assert not evidence.exists(), "Evidence directory must not be created on failure"
     assert checkout_snapshot(source, env=env) == before, "Checkout was modified on failure"
 
@@ -132,8 +141,7 @@ def test_full_script_planner_hunk_context_altered_fails_naming_planner_prompt(tm
     before = checkout_snapshot(source, env=env)
 
     result = run_script(source, evidence, env=env)
-    assert result.returncode != 0
-    assert "planner-prompt" in result.stderr
+    assert result.returncode == 2
     assert "error: part planner-prompt is missing and its patch does not apply" in result.stderr
     assert not evidence.exists(), "Evidence directory must not be created on failure"
     assert checkout_snapshot(source, env=env) == before, "Checkout was modified on failure"

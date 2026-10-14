@@ -87,14 +87,9 @@ PYCODE
     # The planner prompt patch loads the sibling rules under their legacy filename.
     ln -s planner-independence.md "$OMP584_STAGE/omp584-planner-rules.md" || return
 
-    local parts_out rc
-    if ! parts_out=$(python3 "$OMP584_ASSETS/omp584-parts.py" "$OMP584_STAGE/flood.py"); then
-        rc=$?
-        if (( rc == 3 )); then
-            return 2
-        fi
-        return 2
-    fi
+    local parts_out
+    # Classifier diagnostics pass through stderr; conflicts (exit 3) fail staging.
+    parts_out=$(python3 "$OMP584_ASSETS/omp584-parts.py" "$OMP584_STAGE/flood.py") || return 2
 
     local prompt_patch=${OMP584_PROMPT_PATCH:-omp584-planner-prompt.patch}
     [[ -s "$OMP584_ASSETS/$prompt_patch" ]] || prompt_patch=omp584-prompt.patch
@@ -139,32 +134,25 @@ PYCODE
         echo "$part" >> "$OMP584_STAGE/applied-parts"
     done
 
-    if ! parts_out=$(python3 "$OMP584_ASSETS/omp584-parts.py" "$OMP584_STAGE/flood.py"); then
-        return 2
-    fi
-    local reclass_count=0
+    parts_out=$(python3 "$OMP584_ASSETS/omp584-parts.py" "$OMP584_STAGE/flood.py") || return 2
+    states=()
     while read -r part state; do
         [[ -n "$part" ]] || continue
-        if [[ "$state" != "installed" ]]; then
-            return 2
-        fi
-        reclass_count=$(( reclass_count + 1 ))
+        states["$part"]="$state"
     done <<< "$parts_out"
-    if [[ "$reclass_count" -ne 3 ]]; then
-        return 2
-    fi
+    for part in "${part_order[@]}"; do
+        [[ "${states["$part"]:-missing}" == installed ]] || return 2
+    done
 
     local scratch_dir="$OMP584_STAGE/legacy-scratch"
-    mkdir -p -- "$scratch_dir"
-    cp -p -- "$OMP584_STAGE/original-flood.py" "$scratch_dir/flood.py"
-    python3 - "$scratch_dir/flood.py" <<'PYCODE' 2>/dev/null || true
+    mkdir -- "$scratch_dir" || return
+    cp -p -- "$OMP584_STAGE/original-flood.py" "$scratch_dir/flood.py" || return
+    python3 - "$scratch_dir/flood.py" <<'PYCODE' || return
 import pathlib, sys
 p = pathlib.Path(sys.argv[1])
 p.write_bytes(p.read_bytes().replace(b'with_name("planner-independence.md")',
                                     b'with_name("omp584-planner-rules.md")'))
 PYCODE
-    cp -- "$OMP584_ASSETS/omp584-planner-rules.md" "$scratch_dir/planner-independence.md" 2>/dev/null || true
-    ln -s planner-independence.md "$scratch_dir/omp584-planner-rules.md" 2>/dev/null || true
 
     local legacy_ok=1
     local legacy_patches=(omp584-dependencies.patch omp584-start-metrics.patch "$prompt_patch")
