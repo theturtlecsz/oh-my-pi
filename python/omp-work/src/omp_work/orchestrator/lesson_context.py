@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import re
-import subprocess
+import subprocess  # nosec B404 - runs the operator-configured context CLI
 from typing import Any
 
 from omp_work.orchestrator.service import StageContext
@@ -32,7 +32,7 @@ def compile_context(ctx: StageContext, worktree: Path, work_key: str) -> tuple[s
     if ctx.config.learning_state_dir is not None:
         argv.extend(["--learning-state-dir", str(ctx.config.learning_state_dir)])
     try:
-        result = subprocess.run(
+        result = subprocess.run(  # nosec B603 - argv list, no shell; command comes from operator config
             argv, input=canonical_json({
                 "workflow": workflow, "stage": "implement",
                 "attempt_id": str(ctx.lease.job_id), "cwd": str(worktree),
