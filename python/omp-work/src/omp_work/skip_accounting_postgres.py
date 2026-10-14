@@ -7,28 +7,43 @@ unprivileged user/net/mount/pid namespaces. There is no fallback and no skip.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
 import ctypes
 import ctypes.util
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
+from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import Any
 
 __all__ = [
     "COMMAND_TIMEOUT_SECONDS",
     "NAMESPACE_PROBES",
     "PG_MAJOR",
-    "PrerequisiteError",
+    "PROBE_NAME",
     "REQUIRED_TOOLS",
+    "ROOT_PREFIX",
+    "STORAGE_MODE",
+    "OwnedTemp",
+    "PrerequisiteError",
     "check_prerequisites",
 ]
+
+
 
 PG_MAJOR = 18
 COMMAND_TIMEOUT_SECONDS = 5.0
 EXIT_CODE = 2
+
+ROOT_PREFIX = "omp-skip-pg-"
+STORAGE_MODE = 0o755
+PROBE_NAME = ".omp-storage-probe"
+
+_OWNER_SENTINEL = object()
 
 REQUIRED_TOOLS: tuple[str, ...] = (
     "initdb",
@@ -193,3 +208,189 @@ def check_prerequisites(
 
     for index, argv in enumerate(NAMESPACE_PROBES, start=1):
         _run(argv, f"namespace_probe_{index}", run, timeout)
+
+
+def _stat_mode(path: Path) -> int:
+    """Mode bits of ``path``. The default ancestor-searchability probe."""
+    return path.stat().st_mode
+
+
+def _resolve_path(path: Path) -> Path:
+    """Resolve symlinks in ``path``."""
+    return path.resolve()
+
+
+def _storage_probe(
+    directory: Path,
+    *,
+    write_bytes: Callable[[int, bytes], int] = os.write,
+    remove_path: Callable[[Path], None] = os.remove,
+) -> None:
+    """Create, write, then remove ``PROBE_NAME`` inside ``directory`` to prove it stores."""
+    probe = directory / PROBE_NAME
+    fd = os.open(probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        write_bytes(fd, b"omp-storage-probe\n")
+    finally:
+        os.close(fd)
+    remove_path(probe)
+
+
+def _remove_tree(path: Path) -> None:
+    """Remove an owned root. A seam so rollback failures can be exercised."""
+    shutil.rmtree(path)
+
+
+def _operation_error(operation: str, path: Path, exc: OSError) -> PrerequisiteError:
+    return PrerequisiteError(
+        f"owned_temp_{operation}_failed",
+        f"{operation} {path}: {exc}",
+        stderr=str(exc),
+    )
+
+
+def _require_searchable(root: Path, searchable: Callable[[Path], int]) -> None:
+    """Raise unless every resolved ancestor of ``root`` grants other-search (o+x).
+
+    Ancestors are never chmod'd; a private ancestor is reported with its mode so the
+    caller fixes the host instead of this code silently widening permissions.
+    """
+    for ancestor in root.parents:
+        try:
+            mode = searchable(ancestor)
+        except OSError as exc:
+            raise PrerequisiteError(
+                "owned_temp_ancestor_stat_failed",
+                f"stat ancestor {ancestor}: {exc}",
+                stderr=str(exc),
+            ) from exc
+        if not mode & stat.S_IXOTH:
+            raise PrerequisiteError(
+                "owned_temp_ancestor_not_searchable",
+                f"ancestor {ancestor} is not other-searchable (mode 0o{stat.S_IMODE(mode):o})",
+            )
+
+
+def _rollback(path: Path, rmtree: Callable[[Path], None]) -> OSError | None:
+    """Remove an allocated root during creation failure; return the error, if any."""
+    try:
+        rmtree(path)
+    except OSError as exc:
+        return exc
+    return None
+
+
+class OwnedTemp:
+    """One storage root, owned only by the :meth:`create` that allocated it.
+
+    ``tmpdir`` is exposed as ``TMPDIR`` through :meth:`env`; ``basetemp`` is the storage
+    a later pytest invocation passes as ``--basetemp``. Factory alone grants ownership
+    bound to the allocated root.
+    """
+
+    def __init__(
+        self,
+        root: Path,
+        tmpdir: Path,
+        basetemp: Path,
+        *,
+        _owner_token: object = None,
+    ) -> None:
+        self._root = Path(root)
+        self._tmpdir = Path(tmpdir)
+        self._basetemp = Path(basetemp)
+        self._owner_token = _owner_token
+
+    @property
+    def root(self) -> Path:
+        return self._root
+
+    @property
+    def tmpdir(self) -> Path:
+        return self._tmpdir
+
+    @property
+    def basetemp(self) -> Path:
+        return self._basetemp
+
+    @property
+    def is_owned(self) -> bool:
+        return self._owner_token is _OWNER_SENTINEL
+
+    def __repr__(self) -> str:
+        return f"OwnedTemp(root={self._root!r}, tmpdir={self._tmpdir!r}, basetemp={self._basetemp!r})"
+
+    def __copy__(self) -> OwnedTemp:
+        return OwnedTemp(self._root, self._tmpdir, self._basetemp)
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> OwnedTemp:
+        return OwnedTemp(self._root, self._tmpdir, self._basetemp)
+
+    @classmethod
+    def create(
+        cls,
+        base: str | os.PathLike[str] = "/tmp",
+        *,
+        searchable: Callable[[Path], int] | None = None,
+        resolve: Callable[[Path], Path] = _resolve_path,
+        mkdtemp: Callable[..., str] = tempfile.mkdtemp,
+        chmod: Callable[[os.PathLike[str], int], None] = os.chmod,
+        mkdir: Callable[[os.PathLike[str], int], None] = os.mkdir,
+        probe: Callable[[Path], None] = _storage_probe,
+        rmtree: Callable[[Path], None] = _remove_tree,
+    ) -> OwnedTemp:
+        """Allocate and prepare owned storage, or raise ``PrerequisiteError``.
+
+        The unique root is created under ``base``, chmod'd to 0755, and verified to sit
+        below other-searchable ancestors. ``tmpdir`` and ``basetemp`` are created under it
+        and a storage probe proves it writable. Any failure after allocation removes the
+        root again, preserving the original cause and surfacing a rollback failure.
+        """
+        resolve_searchable = _stat_mode if searchable is None else searchable
+        base_path = Path(base)
+        try:
+            raw_root_str = mkdtemp(prefix=ROOT_PREFIX, dir=str(base_path))
+        except OSError as exc:
+            raise _operation_error("mkdtemp", base_path, exc) from exc
+
+        raw_root = Path(raw_root_str)
+        try:
+            try:
+                root = resolve(raw_root)
+            except OSError as exc:
+                raise _operation_error("resolve", raw_root, exc) from exc
+            try:
+                chmod(root, STORAGE_MODE)
+            except OSError as exc:
+                raise _operation_error("chmod", root, exc) from exc
+            _require_searchable(root, resolve_searchable)
+            tmpdir = root / "tmp"
+            basetemp = root / "basetemp"
+            for target in (tmpdir, basetemp):
+                try:
+                    mkdir(target, STORAGE_MODE)
+                except OSError as exc:
+                    raise _operation_error("mkdir", target, exc) from exc
+            try:
+                probe(root)
+            except OSError as exc:
+                raise _operation_error("probe", root, exc) from exc
+        except BaseException as exc:
+            failure = _rollback(raw_root, rmtree)
+            if failure is not None:
+                raise PrerequisiteError(
+                    "owned_temp_rollback_failed",
+                    f"{exc}; rollback of {raw_root} failed: {failure}",
+                    stderr=str(failure),
+                ) from exc
+            raise
+        return cls(
+            root=root,
+            tmpdir=tmpdir,
+            basetemp=basetemp,
+            _owner_token=_OWNER_SENTINEL,
+        )
+
+    def env(self) -> dict[str, str]:
+        """Environment exposing this root's ``TMPDIR``; merge into a spawned child's env."""
+        return {"TMPDIR": str(self._tmpdir)}
