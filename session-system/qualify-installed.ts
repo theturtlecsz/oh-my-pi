@@ -63,7 +63,10 @@ function summarize(text: string, max = 400): string {
 }
 
 /** Real command runner: every command observes the CI core-dump guard. */
-async function spawnWithCoreDumpGuard(command: readonly string[], options: CommandOptions): Promise<CommandResult> {
+export async function spawnWithCoreDumpGuard(
+	command: readonly string[],
+	options: CommandOptions,
+): Promise<CommandResult> {
 	const proc = Bun.spawn(["bash", "-c", CORE_DUMP_GUARD, "omp-qualify-installed", ...command], {
 		cwd: options.cwd,
 		env: options.env,
