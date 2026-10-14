@@ -1,0 +1,102 @@
+{
+  "version": "model-review-baseline.v1",
+  "frozen": "2026-10-14",
+  "decision": "Chris decision 5: current grandfathered recipes retained as baseline; no live qualification claimed.",
+  "recipes": {
+    "stage:plan": {
+      "effort": "E2",
+      "provider": "openai_codex",
+      "model": "gpt-5.6-sol",
+      "role": "plan"
+    },
+    "stage:implement": {
+      "effort": "E1",
+      "provider": "gemini_flash",
+      "model": "gemini-3.8-flash-high",
+      "role": "implement"
+    },
+    "stage:verify": {
+      "effort": "E1",
+      "provider": "gemini_flash",
+      "model": "gemini-3.8-flash-high",
+      "role": "verify"
+    },
+    "stage:research": {
+      "effort": "E1",
+      "provider": "ollama_cloud",
+      "model": "deepseek-v4.1-flash:cloud",
+      "role": "research"
+    },
+    "stage:audit": {
+      "effort": "E3",
+      "provider": "kimi",
+      "model": "kimi-code/k3-256k",
+      "role": "review"
+    },
+    "reviewer:audit:0": {
+      "stage": "audit",
+      "identity": "openai-codex/gpt-5.6-sol:medium",
+      "role": "review"
+    },
+    "stage:acceptance_review": {
+      "effort": "E3",
+      "provider": "kimi",
+      "model": "kimi-code/k3-256k",
+      "role": "review"
+    },
+    "reviewer:acceptance_review:0": {
+      "stage": "acceptance_review",
+      "identity": "kimi-code/k3-256k",
+      "role": "review"
+    },
+    "tier:E1": {
+      "effort": "E1",
+      "provider": "gemini_flash",
+      "model": "gemini-3.8-flash-high"
+    },
+    "tier:E2": {
+      "effort": "E2",
+      "provider": "anthropic_fable",
+      "model": "claude-opus-5-5"
+    },
+    "tier:E3": {
+      "effort": "E3",
+      "provider": "kimi",
+      "model": "kimi-code/k3-256k"
+    },
+    "tier:E4": {
+      "effort": "E4",
+      "provider": "chatgpt_astra",
+      "model": "gpt-6-sol"
+    },
+    "alternate:gemini-flash-overflow": {
+      "from": "gemini_flash",
+      "provider": "ollama_cloud",
+      "model": "deepseek-v4.1-flash:cloud"
+    },
+    "binding:lane:gemini_flash": {
+      "wire": "google-generative-ai",
+      "status": "test_verified"
+    },
+    "binding:lane:ollama_cloud": {
+      "wire": "ollama-chat",
+      "status": "test_verified"
+    },
+    "binding:role:implement": {
+      "caller": "omp_work.model_proxy",
+      "status": "test_verified"
+    }
+  },
+  "pending": [
+    "binding:lane:anthropic_fable",
+    "binding:lane:chatgpt_astra",
+    "binding:lane:kimi",
+    "binding:lane:openai_codex",
+    "binding:role:judge",
+    "binding:role:operator",
+    "binding:role:plan",
+    "binding:role:research",
+    "binding:role:review",
+    "binding:role:verify"
+  ]
+}

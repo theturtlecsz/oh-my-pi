@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import hashlib
 import json
 from pathlib import Path
 from typing import Any, Literal
+
+from .policy import RoutingPolicy
 
 CLOSED_CHECKS: frozenset[str] = frozenset({"exact_text", "contains_all", "verdict_equals"})
 
@@ -36,6 +38,10 @@ ROLE_ALIASES: dict[str, str] = {
 }
 
 DEFAULT_TASK_SET_PATH = Path(__file__).with_name("qualification-tasks.v1.json")
+DEFAULT_BASELINE_PATH = Path(__file__).with_name("model-review-baseline.v1.json")
+# Canonical SHA256 of the frozen baseline snapshot. Changing the baseline file
+# without a reviewed change to this pin fails the gate.
+BASELINE_SHA256 = "fae318c62cdd2c44ea5b9fe78838d2592a1d0e2bd979ed57fa103a05a20e5cff"
 
 
 def normalize_role(role: str) -> str:
@@ -343,3 +349,263 @@ def qualify(
         candidate_outputs=outputs,
         recorded_at=recorded_at,
     )
+
+
+# --- governing-policy review check --------------------------------------------------
+
+RUBRIC_PATH = "docs/model-review.md"
+SCHEDULE_KEYS: tuple[str, ...] = ("daily_check", "weekly_qualification", "urgent_review")
+RUBRIC_AXES: tuple[str, ...] = ("capability", "cost", "quota", "latency", "role_fit")
+LAST_REVIEW_OUTCOMES: frozenset[str] = frozenset({"baseline_retained", "pass", "fail"})
+
+
+class PolicyReviewError(ValueError):
+    """Governing policy holds a recipe that is neither baseline nor qualified."""
+
+    def __init__(self, findings: list[str]) -> None:
+        self.findings = findings
+        super().__init__("; ".join(findings))
+
+
+def baseline_sha256(baseline: dict[str, Any]) -> str:
+    raw = json.dumps(baseline, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def load_baseline(path: str | Path | None = None) -> dict[str, Any]:
+    target = Path(path) if path is not None else DEFAULT_BASELINE_PATH
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"failed to read model review baseline from {target}: {exc}") from exc
+    if not isinstance(data, dict) or not isinstance(data.get("recipes"), dict) or not isinstance(
+        data.get("pending"), list
+    ):
+        raise ValueError("model review baseline must contain 'recipes' object and 'pending' list")
+    return data
+
+
+def _stage_roles(governance: dict[str, Any]) -> tuple[dict[str, str], dict[tuple[str, int], str]]:
+    stage_role: dict[str, str] = {}
+    reviewer_role: dict[tuple[str, int], str] = {}
+    for name, role in (governance.get("roles") or {}).items():
+        for selector in role.get("selectors", []):
+            if "reviewer_index" in selector:
+                reviewer_role[(selector["stage"], selector["reviewer_index"])] = name
+            else:
+                stage_role[selector["stage"]] = name
+    return stage_role, reviewer_role
+
+
+def policy_recipes(policy: RoutingPolicy) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    """Derive (recipes, pending bindings) from the policy, keyed by stable recipe id.
+
+    Recipes cover stages, tiers, alternates, every reviewer identity (verbatim,
+    suffix included) and concrete governed execution bindings. Bindings with no
+    resolved wire or unverified caller are pending, never recipes.
+    """
+    governance = policy.raw.get("governance") or {}
+    stage_role, reviewer_role = _stage_roles(governance)
+    recipes: dict[str, dict[str, Any]] = {}
+    pending: dict[str, dict[str, Any]] = {}
+    for name, stage in policy.stages.items():
+        recipes[f"stage:{name}"] = {
+            "effort": stage.effort, "provider": stage.provider, "model": stage.model,
+            "role": stage_role.get(name),
+        }
+        for index, identity in enumerate(stage.reviewers):
+            recipes[f"reviewer:{name}:{index}"] = {
+                "stage": name, "identity": identity, "role": reviewer_role.get((name, index)),
+            }
+    for effort, tier in policy.tiers.items():
+        recipes[f"tier:{effort}"] = {"effort": effort, "provider": tier.provider, "model": tier.model}
+    for alt in policy.alternates:
+        recipes[f"alternate:{alt.rule}"] = {
+            "from": alt.from_provider, "provider": alt.to.provider, "model": alt.to.model,
+        }
+    for lane, record in (governance.get("lanes") or {}).items():
+        binding = {"wire": record.get("wire"), "status": record.get("status")}
+        if record.get("wire") and record.get("status") == "test_verified":
+            recipes[f"binding:lane:{lane}"] = binding
+        else:
+            pending[f"binding:lane:{lane}"] = binding
+    for name, role in (governance.get("roles") or {}).items():
+        invocation = role.get("invocation") or {}
+        binding = {"caller": invocation.get("caller"), "status": invocation.get("status")}
+        if invocation.get("caller") and invocation.get("status") == "test_verified":
+            recipes[f"binding:role:{name}"] = binding
+        else:
+            pending[f"binding:role:{name}"] = binding
+    return recipes, pending
+
+
+def _required_roles(policy: RoutingPolicy, key: str, recipe: dict[str, Any]) -> set[str]:
+    """Roles whose outputs must be graded before this recipe may enter routing."""
+    stage_role, _ = _stage_roles(policy.raw.get("governance") or {})
+    if recipe.get("role"):
+        return {normalize_role(recipe["role"])}
+    kind, _, rest = key.partition(":")
+    if kind == "binding" and rest.startswith("role:"):
+        return {normalize_role(rest.removeprefix("role:"))}
+    if kind == "tier":
+        stages = [n for n, s in policy.stages.items() if s.effort == recipe["effort"]]
+    elif kind == "alternate":
+        stages = [n for n, s in policy.stages.items() if s.provider == recipe["from"]]
+    else:
+        lane = rest.removeprefix("lane:")
+        stages = [n for n, s in policy.stages.items() if s.provider == lane]
+    return {normalize_role(stage_role[n]) for n in stages if n in stage_role}
+
+
+def _is_date(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _check_qualification(
+    policy: RoutingPolicy,
+    key: str,
+    recipe: dict[str, Any],
+    entry: dict[str, Any],
+    task_set: TaskSet,
+    digest: str,
+    last_review: str,
+) -> list[str]:
+    found: list[str] = []
+    qual = entry.get("qualification")
+    if not isinstance(qual, dict):
+        return [f"missing_qualification:{key}"]
+    if not _is_date(qual.get("date")):
+        found.append(f"qualification_date:{key}")
+    elif _is_date(last_review) and qual["date"] > last_review:
+        found.append(f"qualification_after_last_review:{key}")
+    if qual.get("recipe") != recipe:
+        found.append(f"qualification_recipe_mismatch:{key}")
+    if qual.get("task_digest") != digest:
+        found.append(f"qualification_stale_digest:{key}")
+    evidence = qual.get("evidence")
+    evidence = evidence if isinstance(evidence, dict) else {}
+    for axis in RUBRIC_AXES:
+        item = evidence.get(axis)
+        if not (isinstance(item, dict) and _text(item.get("source")) and _text(item.get("finding"))
+                and _is_date(item.get("observed"))):
+            found.append(f"missing_rubric_evidence:{key}:{axis}")
+    rubric = qual.get("rubric")
+    if not (isinstance(rubric, dict) and rubric.get("outcome") == "pass" and _text(rubric.get("reviewer"))
+            and _text(rubric.get("reason"))):
+        found.append(f"missing_rubric_verdict:{key}")
+    required = _required_roles(policy, key, recipe)
+    outputs = qual.get("outputs")
+    outputs = outputs if isinstance(outputs, dict) else {}
+    graded = {normalize_role(r): o for r, o in outputs.items() if isinstance(r, str)}
+    if not required:
+        found.append(f"no_role_to_qualify:{key}")
+    claimed = qual.get("results")
+    claimed = claimed if isinstance(claimed, dict) else {}
+    for role in sorted(required):
+        if not isinstance(graded.get(role), dict):
+            found.append(f"missing_role_outputs:{key}:{role}")
+            continue
+        result = qualify(role, graded[role], task_set=task_set)
+        if not result.passed:
+            found.append(f"qualification_outputs_fail:{key}:{role}")
+        record = claimed.get(role)
+        if not (isinstance(record, dict) and record.get("outcome") == result.outcome
+                and record.get("digest") == result.digest):
+            found.append(f"forged_result:{key}:{role}")
+    return found
+
+
+def check_policy_review(
+    policy: RoutingPolicy,
+    *,
+    baseline: dict[str, Any] | None = None,
+    task_set: TaskSet | None = None,
+    repo_root: Path | None = None,
+) -> dict[str, list[str]]:
+    """Refuse a governing policy holding recipes that are neither baseline nor qualified.
+
+    A ``baseline`` entry is valid only while the derived recipe equals the frozen
+    snapshot exactly; additions or changes need a dated qualification whose
+    outputs are re-graded here. Unresolved bindings stay ``pending`` and can
+    never count as execution verified. Raises PolicyReviewError listing findings;
+    returns recipe keys grouped by status otherwise.
+    """
+    found: list[str] = []
+    frozen = load_baseline() if baseline is None else baseline
+    if baseline_sha256(frozen) != BASELINE_SHA256:
+        found.append("baseline_snapshot_tampered")
+    ts = task_set if task_set is not None else load_task_set()
+    digest = task_set_sha256(ts)
+
+    review = policy.raw.get("review")
+    if not isinstance(review, dict):
+        raise PolicyReviewError([*found, "missing_review_metadata"])
+    if review.get("rubric") != RUBRIC_PATH:
+        found.append("rubric_path")
+    elif repo_root is not None and not (repo_root / RUBRIC_PATH).is_file():
+        found.append("rubric_missing")
+    schedule = review.get("schedule")
+    for name in SCHEDULE_KEYS:
+        if not (isinstance(schedule, dict) and _text(schedule.get(name))):
+            found.append(f"schedule_missing:{name}")
+    if review.get("task_set_digest") != digest:
+        found.append("stale_task_set_digest")
+    last = review.get("last_review")
+    last_date = last.get("date") if isinstance(last, dict) else None
+    if not (isinstance(last, dict) and _is_date(last_date) and last.get("outcome") in LAST_REVIEW_OUTCOMES):
+        found.append("last_review_missing")
+        last_date = ""
+
+    entries = review.get("recipes")
+    entries = entries if isinstance(entries, dict) else {}
+    recipes, pending = policy_recipes(policy)
+    summary: dict[str, list[str]] = {"baseline": [], "qualified": [], "pending": []}
+    frozen_recipes = frozen["recipes"]
+    for key in sorted(recipes.keys() | pending.keys() | entries.keys()):
+        entry = entries.get(key)
+        if key not in recipes and key not in pending:
+            found.append(f"unknown_recipe_entry:{key}")
+            continue
+        if not isinstance(entry, dict):
+            found.append(f"unreviewed_recipe:{key}")
+            continue
+        status = entry.get("status")
+        if key in pending:
+            if status != "pending":
+                found.append(f"pending_counted_verified:{key}")
+            elif key not in frozen["pending"]:
+                found.append(f"unlisted_pending:{key}")
+            else:
+                summary["pending"].append(key)
+            continue
+        if status == "pending":
+            found.append(f"resolved_but_marked_pending:{key}")
+        elif status == "baseline":
+            if not _is_date(entry.get("since")):
+                found.append(f"baseline_since:{key}")
+            if frozen_recipes.get(key) != recipes[key]:
+                found.append(f"baseline_recipe_mismatch:{key}")
+            else:
+                summary["baseline"].append(key)
+        elif status == "qualified":
+            if not _is_date(entry.get("since")):
+                found.append(f"qualified_since:{key}")
+            problems = _check_qualification(policy, key, recipes[key], entry, ts, digest, last_date)
+            found.extend(problems)
+            if not problems:
+                summary["qualified"].append(key)
+        else:
+            found.append(f"unknown_status:{key}")
+    if found:
+        raise PolicyReviewError(found)
+    return summary

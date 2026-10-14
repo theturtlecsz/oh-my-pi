@@ -353,5 +353,117 @@
       }
     },
     "lane_semantics": "Lane is a concurrency.providers key, not a wire prefix. Resolved wires require evidence of the exact lane/wire association; reviewer prefixes, matching names and API availability alone do not qualify. Pending Chris records ownership, not an approval step."
+  },
+  "review": {
+    "rubric": "docs/model-review.md",
+    "baseline": "python/omp-work/src/omp_work/routing/model-review-baseline.v1.json",
+    "schedule": {
+      "daily_check": "Read-only comparison of every provider in use, reviewer providers included, against this policy: new, changed, retired and failing offerings reported with evidence; never edits routing.",
+      "weekly_qualification": "Relevant changes are qualified weekly on the fixed task set with the written rubric (capability, cost, quota, latency, role fit) before entering routing.",
+      "urgent_review": "Retirement, deprecation notice or service failure of a model in use is reviewed immediately."
+    },
+    "task_set_digest": "39dad14a0576103a5abd2b5729d789a123d30ec88a89b92fc73060b863a5902f",
+    "last_review": {
+      "date": "2026-10-14",
+      "outcome": "baseline_retained",
+      "decision": "Chris decision 5",
+      "live_qualification": false
+    },
+    "recipes": {
+      "stage:plan": {
+        "status": "baseline",
+        "since": "2026-10-14"
+      },
+      "stage:implement": {
+        "status": "baseline",
+        "since": "2026-10-14"
+      },
+      "stage:verify": {
+        "status": "baseline",
+        "since": "2026-10-14"
+      },
+      "stage:research": {
+        "status": "baseline",
+        "since": "2026-10-14"
+      },
+      "stage:audit": {
+        "status": "baseline",
+        "since": "2026-10-14"
+      },
+      "reviewer:audit:0": {
+        "status": "baseline",
+        "since": "2026-10-14"
+      },
+      "stage:acceptance_review": {
+        "status": "baseline",
+        "since": "2026-10-14"
+      },
+      "reviewer:acceptance_review:0": {
+        "status": "baseline",
+        "since": "2026-10-14"
+      },
+      "tier:E1": {
+        "status": "baseline",
+        "since": "2026-10-14"
+      },
+      "tier:E2": {
+        "status": "baseline",
+        "since": "2026-10-14"
+      },
+      "tier:E3": {
+        "status": "baseline",
+        "since": "2026-10-14"
+      },
+      "tier:E4": {
+        "status": "baseline",
+        "since": "2026-10-14"
+      },
+      "alternate:gemini-flash-overflow": {
+        "status": "baseline",
+        "since": "2026-10-14"
+      },
+      "binding:lane:gemini_flash": {
+        "status": "baseline",
+        "since": "2026-10-14"
+      },
+      "binding:lane:ollama_cloud": {
+        "status": "baseline",
+        "since": "2026-10-14"
+      },
+      "binding:role:implement": {
+        "status": "baseline",
+        "since": "2026-10-14"
+      },
+      "binding:lane:anthropic_fable": {
+        "status": "pending"
+      },
+      "binding:lane:kimi": {
+        "status": "pending"
+      },
+      "binding:lane:chatgpt_astra": {
+        "status": "pending"
+      },
+      "binding:lane:openai_codex": {
+        "status": "pending"
+      },
+      "binding:role:plan": {
+        "status": "pending"
+      },
+      "binding:role:review": {
+        "status": "pending"
+      },
+      "binding:role:research": {
+        "status": "pending"
+      },
+      "binding:role:judge": {
+        "status": "pending"
+      },
+      "binding:role:operator": {
+        "status": "pending"
+      },
+      "binding:role:verify": {
+        "status": "pending"
+      }
+    }
   }
 }
