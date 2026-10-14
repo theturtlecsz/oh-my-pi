@@ -248,7 +248,6 @@ def ordinary_gate_reports(snapshot: OrdinarySnapshot | Snapshot) -> OrdinaryGate
         strata_status=strata,
         allocations=allocations,
         missing_proof=missing,
-        repair_disqualified=walk.repair_disqualified,
     )
     return OrdinaryGateReports(
         _finish(CONSECUTIVE_GATE, base, walk.streak),
@@ -275,7 +274,6 @@ class _Measured:
     strata_status: StrataStatus
     allocations: tuple[tuple[str, int], ...]
     missing_proof: tuple[str, ...]
-    repair_disqualified: bool
 
 
 @dataclass
@@ -292,8 +290,6 @@ class _Walk:
     outcomes: OutcomeTotals
     categories: CategoryTotals
     streak: int = 0
-    repair_disqualified: bool = False
-    gap: bool = False
     scope_end: ScopeEnd | None = None
     elapsed: timedelta = timedelta(0)
 
@@ -316,7 +312,6 @@ def _walk(snapshot: OrdinarySnapshot, protocol: FrozenProtocol) -> _Walk:
             # accepts on either side, and do not label the id as a failure.
             _add(walk.exclusions, Exclusion(task_id, "frozen task absent from snapshot"))
             walk.streak = 0
-            walk.gap = True
             continue
         if walk.scope_end is not None:
             _add(walk.exclusions, Exclusion(
@@ -331,7 +326,6 @@ def _walk(snapshot: OrdinarySnapshot, protocol: FrozenProtocol) -> _Walk:
         if task.outcome not in OUTCOMES:
             _add(walk.exclusions, Exclusion(task.record_id or task.task_id, "unknown outcome"))
             walk.streak = 0
-            walk.gap = True
             continue
         _count_task(walk, task)
 
@@ -364,7 +358,6 @@ def _count_task(walk: _Walk, task: OrdinaryTask) -> None:
             if repair not in walk.unplanned_repairs:
                 walk.unplanned_repairs.append(repair)
         _reset(walk, "unplanned workflow repair", task)
-        walk.repair_disqualified = True
         _remember(walk.run_failures, "unplanned workflow repair")
     for flag in task.integrity:
         _remember(walk.run_failures, flag)
@@ -380,7 +373,7 @@ def _count_task(walk: _Walk, task: OrdinaryTask) -> None:
             for flag in task.integrity:
                 _reset(walk, flag, task)
         return
-    if walk.repair_disqualified or walk.unresolved or walk.gap:
+    if walk.unresolved:
         return
     walk.streak += 1
 
@@ -394,7 +387,6 @@ def _end_scope(walk: _Walk, task: OrdinaryTask, mismatches: tuple[str, ...]) -> 
             if repair not in walk.unplanned_repairs:
                 walk.unplanned_repairs.append(repair)
             _reset(walk, "unplanned workflow repair", task)
-            walk.repair_disqualified = True
             _remember(walk.run_failures, "unplanned workflow repair")
     for flag in task.integrity:
         _remember(walk.run_failures, flag)
@@ -415,24 +407,31 @@ def _reset(walk: _Walk, cause: str, task: OrdinaryTask) -> None:
 
 def _finish(gate: Gate, measured: _Measured, count: int) -> OrdinaryGateReport:
     open_scope = measured.scope_end is None
-    clean = open_scope and not measured.run_failures and not measured.repair_disqualified
     if gate == CONSECUTIVE_GATE:
-        reached = clean and count >= STREAK_LENGTH and not measured.unresolved_failure_ids
+        reached = (
+            open_scope
+            and count >= STREAK_LENGTH
+            and not measured.unresolved_failure_ids
+        )
+        status: GateStatus = "count reached" if reached else "incomplete"
+        run_failures: tuple[str, ...] = ()
     else:
         coverage = measured.coverage
         reached = (
-            clean
+            open_scope
+            and not measured.run_failures
             and measured.duration_met
             and count >= DISTINCT_TASKS
             and not coverage.missing_repositories
             and coverage.multiple_families
         )
-    if measured.run_failures or measured.repair_disqualified:
-        status: GateStatus = "failed"
-    elif reached:
-        status = "count reached"
-    else:
-        status = "incomplete"
+        if measured.run_failures:
+            status = "failed"
+        elif reached:
+            status = "count reached"
+        else:
+            status = "incomplete"
+        run_failures = measured.run_failures
     return OrdinaryGateReport(
         gate=gate,
         status=status,
@@ -446,7 +445,7 @@ def _finish(gate: Gate, measured: _Measured, count: int) -> OrdinaryGateReport:
         elapsed=measured.elapsed,
         duration_met=measured.duration_met,
         coverage=measured.coverage,
-        run_failures=measured.run_failures,
+        run_failures=run_failures,
         categories=measured.categories,
         unresolved_failure_ids=measured.unresolved_failure_ids,
         unplanned_repairs=measured.unplanned_repairs,

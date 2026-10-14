@@ -159,21 +159,24 @@ def test_frozen_order_keeps_the_failure_and_does_not_select_successes():
 
 
 @pytest.mark.parametrize("cause,mutate", [
-    ("counted non-accepted", lambda item: replace(item, outcome="failed")),
+    ("counted non-accepted", lambda item: replace(item, outcome="failed", regression_id="reg-1")),
     ("unplanned workflow repair", lambda item: replace(item, repairs=("unplanned workflow repair",))),
     ("recipe", lambda item: replace(item, scope=replace(item.scope, recipe="other-recipe"))),
     ("release", lambda item: replace(item, scope=replace(item.scope, release="other-release"))),
     ("evaluator", lambda item: replace(item, scope=replace(item.scope, evaluator="other-evaluator"))),
 ])
 def test_each_reset_cause_returns_the_streak_to_zero(cause, mutate):
+    at_reset = evaluate([task("a1"), task("a2"), mutate(task("break"))]).consecutive
+    assert any(reset.cause == cause and reset.task_id == "break" for reset in at_reset.resets)
+    assert at_reset.count == 0
+
     tasks = [task("a1"), task("a2"), mutate(task("break")), task("a3")]
     reports = evaluate(tasks)
     gate = reports.consecutive
     assert any(reset.cause == cause and reset.task_id == "break" for reset in gate.resets)
-    assert gate.count == 0
-    assert gate.outcomes.accepted >= 2
     assert gate.release_qualified is False
     if cause in RESET_FIELDS:
+        assert gate.count == 0
         assert gate.scope_end is not None
         assert cause in gate.scope_end.fields
         assert "src-a3" not in gate.contributing_source_ids
@@ -183,12 +186,15 @@ def test_each_reset_cause_returns_the_streak_to_zero(cause, mutate):
         )
         assert reports.sustained.status == "incomplete"
     elif cause == "unplanned workflow repair":
+        assert gate.count == 1
         assert gate.scope_end is None
         assert "src-a3" in gate.contributing_source_ids
-        assert gate.status == "failed"
+        assert gate.status == "incomplete"
+        assert gate.run_failures == ()
         assert reports.sustained.status == "failed"
-        assert "unplanned workflow repair" in gate.run_failures
+        assert "unplanned workflow repair" in reports.sustained.run_failures
     else:
+        assert gate.count == 1
         assert gate.scope_end is None
         assert gate.outcomes.failed == 1
         assert gate.status == "incomplete"
@@ -207,10 +213,11 @@ def test_reconstructing_grants_or_runtime_is_unplanned_repair(repair):
         task("a3"),
     ])
     gate = reports.consecutive
-    assert gate.count == 0
-    assert gate.status == "failed"
+    assert gate.count == 1
+    assert gate.status == "incomplete"
+    assert gate.run_failures == ()
     assert reports.sustained.status == "failed"
-    assert "unplanned workflow repair" in gate.run_failures
+    assert "unplanned workflow repair" in reports.sustained.run_failures
     assert repair in gate.unplanned_repairs
     assert gate.outcomes.accepted == 3
 
@@ -408,15 +415,58 @@ def test_run_failures_are_reported_failed_not_incomplete(flag):
     else:
         item = task("t", integrity=(flag,))
     reports = evaluate([item], elapsed=timedelta(hours=71))
-    for gate in (reports.consecutive, reports.sustained):
-        assert gate.status == "failed"
-        assert gate.duration_met is False
-        assert flag in gate.run_failures
-        assert gate.release_qualified is False
-    assert reports.sustained.total_instances == 1
-    assert reports.sustained.count == 1
-    assert reports.consecutive.count == 0
-    assert reports.consecutive.outcomes.accepted == 1
+    sustained = reports.sustained
+    assert sustained.status == "failed"
+    assert sustained.duration_met is False
+    assert flag in sustained.run_failures
+    assert sustained.release_qualified is False
+    assert sustained.total_instances == 1
+    assert sustained.count == 1
+
+    consecutive = reports.consecutive
+    assert consecutive.status == "incomplete"
+    assert consecutive.count == 0
+    assert consecutive.run_failures == ()
+    assert consecutive.release_qualified is False
+    assert consecutive.outcomes.accepted == 1
+
+
+def test_clean_streak_of_20_after_unplanned_repair_reaches_consecutive_gate():
+    tasks = [
+        task("bad", repairs=("patching the runtime",)),
+        *(task(f"a{index}") for index in range(20)),
+    ]
+    reports = evaluate(tasks, elapsed=timedelta(hours=1))
+    assert reports.consecutive.count == 20
+    assert reports.consecutive.status == "count reached"
+    assert reports.consecutive.run_failures == ()
+    assert any(reset.cause == "unplanned workflow repair" for reset in reports.consecutive.resets)
+    assert reports.sustained.status == "failed"
+    assert "unplanned workflow repair" in reports.sustained.run_failures
+
+
+def test_clean_streak_of_20_after_integrity_flag_reaches_consecutive_gate():
+    tasks = [
+        task("bad", integrity=("duplicate effect",)),
+        *(task(f"a{index}") for index in range(20)),
+    ]
+    reports = evaluate(tasks, elapsed=timedelta(hours=1))
+    assert reports.consecutive.count == 20
+    assert reports.consecutive.status == "count reached"
+    assert reports.consecutive.run_failures == ()
+    assert reports.sustained.status == "failed"
+    assert "duplicate effect" in reports.sustained.run_failures
+
+
+def test_clean_streak_of_20_after_absent_frozen_task_reaches_consecutive_gate():
+    tasks = [task(f"a{index}") for index in range(20)]
+    reports = evaluate(tasks, order=("missing", *(f"a{index}" for index in range(20))))
+    assert reports.consecutive.count == 20
+    assert reports.consecutive.status == "count reached"
+    assert any(
+        exclusion.record_id == "missing" and exclusion.reason == "frozen task absent from snapshot"
+        for exclusion in reports.consecutive.exclusions
+    )
 
 
 def test_negative_science_debugging_infrastructure_and_planned_recovery_are_separate():
@@ -534,7 +584,8 @@ def test_frozen_protocol_without_tasks_is_started_at_zero():
 def test_absent_frozen_task_does_not_join_accepts_around_the_hole():
     reports = evaluate([task("a"), task("b")], order=("a", "missing", "b"))
     gate = reports.consecutive
-    assert gate.count == 0
+    assert gate.count == 1
+    assert gate.count != 2
     assert gate.outcomes.accepted == 2
     assert gate.unresolved_failure_ids == ()
     assert gate.total_instances == 2
