@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from omp_work.v1.models import EvidenceKind, EvidenceReceipt
+from support.bound_evidence import ReceiptRecords, assert_work_record_bound, bound_claim, bound_receipt
 from support.stub_events import FakeEvents, make_event
 from support.stub_generator import StubGenerator
 
@@ -116,21 +117,25 @@ def test_full_learning_journey(tmp_path: Path, capsys: pytest.CaptureFixture[str
     reader = DictReceiptReader()
 
     # --- Step 1: Task A complete_work event -> drain -> accepted procedure with model/profile/source ---
-    receipt_a = make_receipt(kind=EvidenceKind.VERIFICATION, verdict="PASS")
+    claim_text = "Verification proves clean worker shutdown"
+    receipt_a = bound_receipt(claim_text)
+    records_a = ReceiptRecords(receipt_a)
     reader.add(receipt_a)
 
     lesson_a = Lesson(
         title="Safe Worker Migration",
         steps=("graceful drain", "commit offset", "stop worker"),
         claims=(
-            Claim(
-                text="Verification proves clean worker shutdown",
-                receipt_ids=(receipt_a.receipt_id,),
-            ),
+            bound_claim(claim_text, receipt_a),
         ),
     )
 
-    event_a = make_event(sequence=1, event_type="complete_work", workspace_id=UUID(WORKSPACE))
+    event_a = make_event(
+        sequence=1,
+        event_type="complete_work",
+        workspace_id=UUID(WORKSPACE),
+        aggregate_id=receipt_a.work_id,
+    )
     generator_a = StubGenerator(
         [
             GenerationResult(
@@ -145,11 +150,20 @@ def test_full_learning_journey(tmp_path: Path, capsys: pytest.CaptureFixture[str
         profile="profile-task-a",
     )
 
-    run_a = drain(store, FakeEvents([event_a]), reader, generator_a, workspace_id=WORKSPACE)
+    run_a = drain(
+        store,
+        FakeEvents([event_a]),
+        reader,
+        generator_a,
+        workspace_id=WORKSPACE,
+        records=records_a,
+    )
     assert run_a.status == "succeeded"
     assert run_a.units_total == 1
     assert run_a.proposals_accepted == 1
     assert run_a.proposals_rejected == 0
+    unit_a = store.execute("SELECT trace_json FROM units WHERE event_id = ?", (str(event_a.event_id),)).fetchone()
+    assert_work_record_bound(json.loads(unit_a["trace_json"]), receipt_a)
 
     proc_row = store.execute("SELECT * FROM procedures WHERE status = 'active'").fetchone()
     assert proc_row is not None

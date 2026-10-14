@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -15,6 +16,8 @@ from omp_work.knowledge_publication import (
     SnapshotInvisibleError,
     StructuralPublicationStore,
 )
+from omp_work.v1.api_models import WorkItemsPage, WorkItemSummary
+from omp_work.v1.canonical import canonical_json
 from omp_work.v1.models import EvidenceKind, EvidenceReceipt
 from support.stub_events import FakeEvents, make_event
 from support.stub_generator import StubGenerator
@@ -30,6 +33,7 @@ from omp_knowledge.learning.models import (
     Lesson,
     Precondition,
     SourceIdentity,
+    SourceSpan,
 )
 from omp_knowledge.learning.policy import REASON_INVALID_CITATION, NativeReceipts
 from omp_knowledge.learning.store import LearningStore
@@ -64,20 +68,105 @@ class DictReceiptReader:
         return self._receipts[key]
 
 
+class BoundWorkRecords:
+    """NativeRecords double for tests requiring bound evidence."""
+
+    def __init__(
+        self,
+        key: str,
+        receipt: EvidenceReceipt,
+        *,
+        receipts: tuple[EvidenceReceipt, ...] = (),
+    ) -> None:
+        self.key = key
+        self.receipt = receipt
+        self._all_receipts = [receipt] if not receipts else list(receipts)
+        self._summary = WorkItemSummary(
+            work_id=receipt.work_id,
+            key=key,
+            state="DONE",
+            created_at=datetime(2026, 9, 12, tzinfo=timezone.utc),
+        )
+
+    def work_items(
+        self,
+        *,
+        after: tuple[datetime, UUID] | None = None,
+        limit: int | None = None,
+    ) -> WorkItemsPage:
+        del limit
+        if after is not None:
+            return WorkItemsPage(items=(), next_created_at=None, next_work_id=None)
+        return WorkItemsPage(
+            items=(self._summary,),
+            next_created_at=None,
+            next_work_id=None,
+        )
+
+    def workflow(self, key: str) -> dict[str, Any]:
+        if key != self.key:
+            raise KeyError(key)
+        return {
+            "item": {
+                "work_id": str(self.receipt.work_id),
+                "alias": {"key": self.key},
+                "state": "DONE",
+                "revision": {
+                    "revision_id": str(self.receipt.revision_id),
+                    "revision_number": 1,
+                    "title": f"Revision for {self.key}",
+                    "created_at": "2026-09-12T00:00:00+00:00",
+                },
+                "candidate": {
+                    "candidate_id": str(self.receipt.candidate_id),
+                    "kind": "final",
+                },
+            },
+            "receipts": [
+                {
+                    "receipt_id": str(r.receipt_id),
+                    "kind": str(
+                        r.kind.value if hasattr(r.kind, "value") else r.kind
+                    ),
+                    "verdict": r.verdict,
+                    "issuer": r.issuer,
+                    "issued_at": (
+                        r.issued_at.isoformat()
+                        if hasattr(r.issued_at, "isoformat")
+                        else str(r.issued_at)
+                    ),
+                    "candidate_id": str(r.candidate_id) if r.candidate_id is not None else None,
+                    "payload": r.payload,
+                }
+                for r in self._all_receipts
+            ],
+        }
+
+
 def make_receipt(
     *,
     receipt_id: UUID | None = None,
+    work_id: UUID | None = None,
+    revision_id: UUID | None = None,
     candidate_id: UUID | None = None,
     kind: EvidenceKind = EvidenceKind.VERIFICATION,
     verdict: str | None = "PASS",
+    claim_text: str | None = None,
+    payload: dict[str, Any] | None = None,
 ) -> EvidenceReceipt:
+    if payload is None:
+        payload = {"exit_code": 0 if verdict == "PASS" else 1}
+        if claim_text:
+            payload["verified_text"] = claim_text
+    elif claim_text and "verified_text" not in payload:
+        payload["verified_text"] = claim_text
     return EvidenceReceipt(
         receipt_id=receipt_id or uuid4(),
-        work_id=uuid4(),
-        revision_id=uuid4(),
+        work_id=work_id or uuid4(),
+        revision_id=revision_id or uuid4(),
         candidate_id=candidate_id or uuid4(),
         kind=kind,
-        payload={"exit_code": 0 if verdict == "PASS" else 1},
+        payload=payload,
         payload_sha256=PAYLOAD_SHA256,
         issuer="test-runner",
         issued_at=datetime.now(timezone.utc),
@@ -189,17 +278,32 @@ def test_two_repository_journey(tmp_path: Path) -> None:
     sequence = 1
 
     for repo in repos:
-        support_receipt = make_receipt(kind=EvidenceKind.VERIFICATION, verdict="PASS")
+        claim_text = f"{repo.slug} verification passed"
+        support_receipt = make_receipt(
+            kind=EvidenceKind.VERIFICATION,
+            verdict="PASS",
+            claim_text=claim_text,
+        )
         reader.add(support_receipt)
         unknown_receipt_id = uuid4()
+        payload_text = canonical_json(support_receipt.payload)
+        start = payload_text.index(claim_text)
+        end = start + len(claim_text)
+        assert payload_text[start:end] == claim_text
+        source_span = SourceSpan(start=start, end=end)
+        evaluator = support_receipt.issuer
+        outcome = "PASS"
         accepted_lesson = Lesson(
             title=repo.title,
             steps=repo.steps,
             preconditions=(Precondition(key="repository", op="eq", value=repo.url),),
             claims=(
                 Claim(
-                    text=f"{repo.slug} verification passed",
+                    text=claim_text,
                     receipt_ids=(support_receipt.receipt_id,),
+                    source_span=source_span,
+                    evaluator=evaluator,
+                    outcome=outcome,
                 ),
             ),
         )
@@ -217,8 +321,10 @@ def test_two_repository_journey(tmp_path: Path) -> None:
             sequence=sequence,
             event_type="complete_work",
             workspace_id=workspace_id,
+            aggregate_id=support_receipt.work_id,
         )
         sequence += 1
+        records = BoundWorkRecords(f"key-{repo.slug}", support_receipt)
         generator = StubGenerator(
             [
                 GenerationResult(
@@ -240,6 +346,7 @@ def test_two_repository_journey(tmp_path: Path) -> None:
             reader,
             generator,
             workspace_id=workspace_id,
+            records=records,
         )
         assert run.status == "succeeded"
         assert run.units_failed == 0
@@ -249,6 +356,15 @@ def test_two_repository_journey(tmp_path: Path) -> None:
         assert unit.state == "succeeded"
         assert unit.retryable is False
         assert unit.error_code is None
+
+        unit_row = store.execute("SELECT trace_json, source_json FROM units WHERE unit_id = ?", (unit.unit_id,)).fetchone()
+        assert unit_row is not None
+        stored_work_record = json.loads(unit_row["trace_json"])["work_record"]
+        assert stored_work_record["candidate"]["candidate_id"] == str(support_receipt.candidate_id)
+        assert stored_work_record["revision"]["revision_id"] == str(support_receipt.revision_id)
+        source = SourceIdentity.model_validate_json(unit_row["source_json"])
+        assert source.candidate_id == str(support_receipt.candidate_id)
+        assert source.revision_id == str(support_receipt.revision_id)
 
         # 2. proposal + native acceptance
         assert run.proposals_accepted == 1
@@ -264,6 +380,20 @@ def test_two_repository_journey(tmp_path: Path) -> None:
         assert rejected["status"] == "rejected"
         assert rejected["reason"] == REASON_INVALID_CITATION
         assert rejected["procedure_id"] is None
+
+        prop_row = store.execute(
+            "SELECT source_json, lesson_json FROM proposals WHERE proposal_id = ?",
+            (accepted["proposal_id"],),
+        ).fetchone()
+        assert prop_row is not None
+        prop_source = SourceIdentity.model_validate_json(prop_row["source_json"])
+        assert prop_source.candidate_id == str(support_receipt.candidate_id)
+        assert prop_source.revision_id == str(support_receipt.revision_id)
+        prop_lesson = Lesson.model_validate_json(prop_row["lesson_json"])
+        assert prop_lesson.claims[0].source_span == source_span
+        assert canonical_json(support_receipt.payload)[prop_lesson.claims[0].source_span.start:prop_lesson.claims[0].source_span.end] == prop_lesson.claims[0].text
+        assert prop_lesson.claims[0].evaluator == support_receipt.issuer
+        assert prop_lesson.claims[0].outcome == "PASS"
         procedure_id = str(accepted["procedure_id"])
         procedures = {row["procedure_id"]: row for row in report.procedures}
         assert set(procedures) == {journey.procedure_id for journey in journeys} | {procedure_id}

@@ -149,7 +149,10 @@ def compile_stage(
     procedural items when ``learning_store`` is set and procedures are approved
     under journey-pass and promotion gates, and semantic items when an engine
     (or ``settings.engine == "cognee"``) and ``snapshots`` are set. The return
-    carries the same keys as the context CLI compile.
+    carries the same keys as the context CLI compile; a procedural compile also
+    carries ``lesson_supply_ids`` (the retained supply ids) and
+    ``lesson_supplies`` (their proposed records). Compilation proposes lessons
+    but does not record delivery, so it leaves no ``supplies`` rows.
     """
     if not settings.state_dir:
         raise ValueError("state_dir is required")
@@ -191,7 +194,7 @@ def compile_stage(
         if repository is not None:
             learning_context["repository"] = repository
 
-        with learning_store.transaction() as conn:
+        with learning_store.transaction():
             supply_result = supply(
                 learning_store,
                 workspace_id=str(workspace_id) if workspace_id is not None else "",
@@ -199,6 +202,7 @@ def compile_stage(
                 context=learning_context,
                 limit=0,
                 allowed=approved_pairs,
+                record=False,
             )
             for supply_id, line in zip(supply_result.supply_ids, supply_result.lines):
                 items.append(
@@ -241,17 +245,18 @@ def compile_stage(
                 for exclusion in result["exclusions"]
                 if (exclusion.get("section") if isinstance(exclusion, dict) else exclusion.section) == "procedural"
             }
-            if excluded_supply_ids:
-                placeholders = ",".join("?" for _ in excluded_supply_ids)
-                conn.execute(
-                    f"DELETE FROM supplies WHERE supply_id IN ({placeholders})",  # nosec B608
-                    list(excluded_supply_ids),
-                )
-            retained = [
+            retained_ids = [
                 sid for sid in supply_result.supply_ids
                 if sid not in excluded_supply_ids
             ]
-            result["lesson_supply_ids"] = retained
+            retained_records = [
+                record for record in supply_result.records
+                if record.supply_id not in excluded_supply_ids
+            ]
+            result["lesson_supply_ids"] = retained_ids
+            result["lesson_supplies"] = [
+                record.model_dump(mode="json") for record in retained_records
+            ]
             return result
 
     append_semantic_items(

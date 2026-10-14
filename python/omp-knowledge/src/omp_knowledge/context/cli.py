@@ -4,8 +4,10 @@
 procedural and semantic items, reranks the optional ones, compiles against
 ``omp tokens count``, and persists the bundle before it prints anything.
 ``stage`` runs an in-process stage compile from context settings.
-``reproduce`` replays a persisted bundle offline. A compile failure exits 2
-with a reason on stderr and an empty stdout; a reproduction failure exits 3.
+``deliver`` persists the supply records a stage compile proposed once a worker
+has been launched against the compiled context. ``reproduce`` replays a
+persisted bundle offline. A compile failure exits 2 with a reason on stderr and
+an empty stdout; a reproduction failure exits 3.
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ from omp_work.knowledge_publication import StructuralPublicationStore
 from omp_work.knowledge_source import normalize_remote_url
 from omp_work.v1.api_models import WorkflowView
 from omp_work.v1.models import StrictModel
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from omp_knowledge.context.compiler import compile_bundle
 from omp_knowledge.context.models import CompileRequest, ContextItem, Stage, StageIdentity
@@ -45,6 +47,8 @@ from omp_knowledge.engine.protocol import KnowledgeEngine
 from omp_knowledge.errors import KnowledgeError, SnapshotNotPublishedError
 from omp_knowledge.inference.embedding import Embedder, HttpEmbedder
 from omp_knowledge.inference.routes import RouteSet, load_routes, resolve
+from omp_knowledge.learning.store import LearningStore
+from omp_knowledge.learning.uses import SupplyRecord, record_supply
 from omp_knowledge.vectors.store import VectorProjectionStore
 
 EXIT_OK = 0
@@ -67,6 +71,28 @@ class _StageStdin(_CompileStdin):
     """The one JSON object ``stage`` reads from stdin."""
 
     project: ProjectContext | None = None
+
+
+class _DeliverStdin(StrictModel):
+    """The one JSON object ``deliver`` reads from stdin.
+
+    The delivery identity (worker job and the compiled-context and prompt
+    hashes that show the lesson reached the worker's prompt) is required and
+    stamped onto every proposed supply, so a delivery record never claims less
+    than the launch evidence it was built from.
+    """
+
+    worker_job_id: str
+    compiled_context_hash: str
+    prompt_hash: str
+    supplies: tuple[SupplyRecord, ...] = ()
+
+    @field_validator("worker_job_id", "compiled_context_hash", "prompt_hash")
+    @classmethod
+    def _non_blank(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("must be a non-empty string")
+        return value
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -94,6 +120,9 @@ def _build_parser() -> argparse.ArgumentParser:
     stage_parser = subcommands.add_parser("stage")
     stage_parser.add_argument("--settings")
     stage_parser.add_argument("--learning-state-dir")
+
+    deliver_parser = subcommands.add_parser("deliver")
+    deliver_parser.add_argument("--learning-state-dir", required=True)
 
     reproduce_parser = subcommands.add_parser("reproduce")
     reproduce_parser.add_argument("--state-dir", required=True)
@@ -177,6 +206,10 @@ def _read_compile_stdin(stdin: TextIO | None) -> _CompileStdin:
 
 def _read_stage_stdin(stdin: TextIO | None) -> _StageStdin:
     return _StageStdin.model_validate(_read_json_stdin(stdin, "stage"))
+
+
+def _read_deliver_stdin(stdin: TextIO | None) -> _DeliverStdin:
+    return _DeliverStdin.model_validate(_read_json_stdin(stdin, "deliver"))
 
 
 def _reranker(url: str | None, model: str | None) -> Reranker:
@@ -580,7 +613,6 @@ def _stage(
         default_settings_path,
         load_settings,
     )
-    from omp_knowledge.learning.store import LearningStore
 
     settings_path = args.settings
     if settings_path is None:
@@ -609,6 +641,35 @@ def _stage(
     finally:
         if learning_store is not None:
             learning_store.close()
+
+
+def _deliver(args: argparse.Namespace, *, stdin: TextIO | None) -> dict[str, Any]:
+    """Persist the proposed supply records once a worker has been launched.
+
+    The delivery identity is validated as a whole (non-empty worker job,
+    compiled-context hash and prompt hash) before any row is written, then
+    stamped onto each proposed record inside one ``LearningStore`` transaction,
+    so a partial delivery never lands.
+    """
+    body = _read_deliver_stdin(stdin)
+    store = LearningStore(args.learning_state_dir)
+    try:
+        supplied = [
+            proposed.model_copy(
+                update={
+                    "worker_job_id": body.worker_job_id,
+                    "compiled_context_hash": body.compiled_context_hash,
+                    "prompt_hash": body.prompt_hash,
+                }
+            )
+            for proposed in body.supplies
+        ]
+        with store.transaction():
+            for record in supplied:
+                record_supply(store, record)
+        return {"supply_ids": [record.supply_id for record in supplied]}
+    finally:
+        store.close()
 
 
 def _reproduce(args: argparse.Namespace) -> dict[str, Any]:
@@ -657,6 +718,8 @@ def main(
                 engine=engine,
                 reranker=reranker,
             )
+        elif args.command == "deliver":
+            payload = _deliver(args, stdin=stdin)
         else:
             raise RuntimeError(f"unknown command {args.command!r}")
         _emit(stdout, payload)

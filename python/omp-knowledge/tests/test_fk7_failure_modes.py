@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from omp_work.v1.canonical import sha256
+from omp_work.v1.api_models import WorkItemsPage, WorkItemSummary
+from omp_work.v1.canonical import canonical_json, sha256
 from omp_work.v1.models import EvidenceKind, EvidenceReceipt
 
 from omp_knowledge.context.compiler import compile_bundle
@@ -31,6 +33,7 @@ from omp_knowledge.learning.models import (
     Lesson,
     Precondition,
     SourceIdentity,
+    SourceSpan,
 )
 from omp_knowledge.learning.store import LearningStore
 from omp_knowledge.learning.uses import supply
@@ -57,6 +60,81 @@ class DictReceiptReader:
         return self._receipts[key]
 
 
+class BoundWorkRecords:
+    """NativeRecords double for tests requiring bound evidence."""
+
+    def __init__(
+        self,
+        key: str,
+        receipt: EvidenceReceipt,
+        *,
+        receipts: tuple[EvidenceReceipt, ...] = (),
+    ) -> None:
+        self.key = key
+        self.receipt = receipt
+        self._all_receipts = [receipt] if not receipts else list(receipts)
+        self._summary = WorkItemSummary(
+            work_id=receipt.work_id,
+            key=key,
+            state="DONE",
+            created_at=datetime(2026, 9, 12, tzinfo=timezone.utc),
+        )
+
+    def work_items(
+        self,
+        *,
+        after: tuple[datetime, UUID] | None = None,
+        limit: int | None = None,
+    ) -> WorkItemsPage:
+        del limit
+        if after is not None:
+            return WorkItemsPage(items=(), next_created_at=None, next_work_id=None)
+        return WorkItemsPage(
+            items=(self._summary,),
+            next_created_at=None,
+            next_work_id=None,
+        )
+
+    def workflow(self, key: str) -> dict[str, Any]:
+        if key != self.key:
+            raise KeyError(key)
+        return {
+            "item": {
+                "work_id": str(self.receipt.work_id),
+                "alias": {"key": self.key},
+                "state": "DONE",
+                "revision": {
+                    "revision_id": str(self.receipt.revision_id),
+                    "revision_number": 1,
+                    "title": f"Revision for {self.key}",
+                    "created_at": "2026-09-12T00:00:00+00:00",
+                },
+                "candidate": {
+                    "candidate_id": str(self.receipt.candidate_id),
+                    "kind": "final",
+                },
+            },
+            "receipts": [
+                {
+                    "receipt_id": str(r.receipt_id),
+                    "kind": str(
+                        r.kind.value if hasattr(r.kind, "value") else r.kind
+                    ),
+                    "verdict": r.verdict,
+                    "issuer": r.issuer,
+                    "issued_at": (
+                        r.issued_at.isoformat()
+                        if hasattr(r.issued_at, "isoformat")
+                        else str(r.issued_at)
+                    ),
+                    "candidate_id": str(r.candidate_id) if r.candidate_id is not None else None,
+                    "payload": r.payload,
+                }
+                for r in self._all_receipts
+            ],
+        }
+
+
 class WordCounter:
     """Deterministic in-memory token counter matching tests/test_context_store.py."""
 
@@ -69,16 +147,23 @@ class WordCounter:
 def make_receipt(
     *,
     receipt_id: UUID | None = None,
+    work_id: UUID | None = None,
+    revision_id: UUID | None = None,
+    candidate_id: UUID | None = None,
     kind: EvidenceKind = EvidenceKind.VERIFICATION,
     verdict: str | None = "PASS",
+    claim_text: str = "verified resolution",
 ) -> EvidenceReceipt:
+    payload: dict[str, Any] = {"exit_code": 0 if verdict == "PASS" else 1}
+    if claim_text:
+        payload["verified_text"] = claim_text
     return EvidenceReceipt(
         receipt_id=receipt_id or uuid4(),
-        work_id=uuid4(),
-        revision_id=uuid4(),
-        candidate_id=uuid4(),
+        work_id=work_id or uuid4(),
+        revision_id=revision_id or uuid4(),
+        candidate_id=candidate_id or uuid4(),
         kind=kind,
-        payload={"exit_code": 0 if verdict == "PASS" else 1},
+        payload=payload,
         payload_sha256="0" * 64,
         issuer="test-runner",
         issued_at=datetime.now(timezone.utc),
@@ -87,11 +172,44 @@ def make_receipt(
     )
 
 
-def make_lesson(title: str, receipt_id: UUID) -> Lesson:
+def make_lesson(
+    title: str,
+    receipt: EvidenceReceipt | UUID,
+    *,
+    claim_text: str = "verified resolution",
+    reader: DictReceiptReader | None = None,
+) -> Lesson:
+    rec: EvidenceReceipt | None = None
+    if isinstance(receipt, EvidenceReceipt):
+        rec = receipt
+    elif reader is not None:
+        rec = reader.receipt(receipt)
+    if rec is not None:
+        payload_text = canonical_json(rec.payload)
+        start = payload_text.index(claim_text)
+        end = start + len(claim_text)
+        assert payload_text[start:end] == claim_text
+        span = SourceSpan(start=start, end=end)
+        evaluator = rec.issuer
+        outcome = "PASS"
+        rid = rec.receipt_id
+    else:
+        span = None
+        evaluator = None
+        outcome = None
+        rid = receipt
     return Lesson(
         title=title,
         steps=("stop the worker", "clear the lease"),
-        claims=(Claim(text="verified resolution", receipt_ids=(receipt_id,)),),
+        claims=(
+            Claim(
+                text=claim_text,
+                receipt_ids=(rid,),
+                source_span=span,
+                evaluator=evaluator,
+                outcome=outcome,  # type: ignore[arg-type]
+            ),
+        ),
     )
 
 
@@ -138,8 +256,14 @@ def test_generator_outage(tmp_path: Path) -> None:
     workspace_id = str(uuid4())
     receipt = make_receipt(verdict="PASS")
     reader = DictReceiptReader({receipt.receipt_id: receipt})
-    event = make_event(sequence=1, event_type="complete_work", workspace_id=UUID(workspace_id))
+    event = make_event(
+        sequence=1,
+        event_type="complete_work",
+        workspace_id=UUID(workspace_id),
+        aggregate_id=receipt.work_id,
+    )
     events = FakeEvents([event])
+    records = BoundWorkRecords("key-outage", receipt)
 
     outage_generator = StubGenerator(
         [GeneratorUnavailable("llm service unavailable")],
@@ -147,7 +271,14 @@ def test_generator_outage(tmp_path: Path) -> None:
         profile="outage-profile",
     )
 
-    run = drain(store, events, reader, outage_generator, workspace_id=workspace_id)
+    run = drain(
+        store,
+        events,
+        reader,
+        outage_generator,
+        workspace_id=workspace_id,
+        records=records,
+    )
 
     assert run.status == "failed"
     assert run.units_failed == 1
@@ -158,16 +289,22 @@ def test_generator_outage(tmp_path: Path) -> None:
     assert unit.error_code == "generator_unavailable"
 
     unit_row = store.execute(
-        "SELECT state, retryable, error_code FROM units WHERE unit_id = ?",
+        "SELECT state, retryable, error_code, trace_json, source_json FROM units WHERE unit_id = ?",
         (unit.unit_id,),
     ).fetchone()
     assert unit_row is not None
     assert unit_row["state"] == "failed"
     assert unit_row["retryable"] == 1
     assert unit_row["error_code"] == "generator_unavailable"
+    stored_work_record = json.loads(unit_row["trace_json"])["work_record"]
+    assert stored_work_record["candidate"]["candidate_id"] == str(receipt.candidate_id)
+    assert stored_work_record["revision"]["revision_id"] == str(receipt.revision_id)
+    unit_source = SourceIdentity.model_validate_json(unit_row["source_json"])
+    assert unit_source.candidate_id == str(receipt.candidate_id)
+    assert unit_source.revision_id == str(receipt.revision_id)
     assert store.execute("SELECT COUNT(*) AS c FROM proposals").fetchone()["c"] == 0
 
-    healthy_lesson = make_lesson("Recovered procedure", receipt.receipt_id)
+    healthy_lesson = make_lesson("Recovered procedure", receipt)
     healthy_generator = StubGenerator(
         [make_result(healthy_lesson, model="healthy-model", profile="healthy-profile")],
         model="healthy-model",
@@ -181,17 +318,31 @@ def test_generator_outage(tmp_path: Path) -> None:
     assert retry_run.proposals_accepted == 1
 
     unit_row_after = store.execute(
-        "SELECT state, retryable, error_code FROM units WHERE unit_id = ?",
+        "SELECT state, retryable, error_code, trace_json, source_json FROM units WHERE unit_id = ?",
         (unit.unit_id,),
     ).fetchone()
     assert unit_row_after is not None
     assert unit_row_after["state"] == "succeeded"
     assert unit_row_after["retryable"] == 0
     assert unit_row_after["error_code"] is None
+    stored_work_record_after = json.loads(unit_row_after["trace_json"])["work_record"]
+    assert stored_work_record_after["candidate"]["candidate_id"] == str(receipt.candidate_id)
+    assert stored_work_record_after["revision"]["revision_id"] == str(receipt.revision_id)
+    unit_source_after = SourceIdentity.model_validate_json(unit_row_after["source_json"])
+    assert unit_source_after.candidate_id == str(receipt.candidate_id)
+    assert unit_source_after.revision_id == str(receipt.revision_id)
 
-    proposals = store.execute("SELECT proposal_id, status FROM proposals").fetchall()
+    proposals = store.execute("SELECT proposal_id, status, source_json, lesson_json FROM proposals").fetchall()
     assert len(proposals) == 1
     assert proposals[0]["status"] == "accepted"
+    prop_source = SourceIdentity.model_validate_json(proposals[0]["source_json"])
+    assert prop_source.candidate_id == str(receipt.candidate_id)
+    assert prop_source.revision_id == str(receipt.revision_id)
+    prop_lesson = Lesson.model_validate_json(proposals[0]["lesson_json"])
+    assert prop_lesson.claims[0].source_span is not None
+    assert canonical_json(receipt.payload)[prop_lesson.claims[0].source_span.start:prop_lesson.claims[0].source_span.end] == prop_lesson.claims[0].text
+    assert prop_lesson.claims[0].evaluator == receipt.issuer
+    assert prop_lesson.claims[0].outcome == "PASS"
 
     # Retrying again adds no additional proposals
     second_retry = retry(store, reader, healthy_generator)
@@ -248,13 +399,39 @@ def test_crash_between_store_writes(
     workspace_id = str(uuid4())
     pass_receipt = make_receipt(verdict="PASS")
     reader = DictReceiptReader({pass_receipt.receipt_id: pass_receipt})
-    event = make_event(sequence=1, event_type="complete_work", workspace_id=UUID(workspace_id))
-    lesson = make_lesson("Procedure to narrow", pass_receipt.receipt_id)
+    event = make_event(
+        sequence=1,
+        event_type="complete_work",
+        workspace_id=UUID(workspace_id),
+        aggregate_id=pass_receipt.work_id,
+    )
+    lesson = make_lesson("Procedure to narrow", pass_receipt)
     generator = StubGenerator([make_result(lesson)], model="seed-model", profile="seed-profile")
+    records = BoundWorkRecords("key-crash", pass_receipt)
 
     # Step 1: establish active procedure v1 via native capture
-    init_run = drain(store, FakeEvents([event]), reader, generator, workspace_id=workspace_id)
+    init_run = drain(store, FakeEvents([event]), reader, generator, workspace_id=workspace_id, records=records)
     assert init_run.proposals_accepted == 1
+
+    unit_row = store.execute("SELECT trace_json, source_json FROM units").fetchone()
+    assert unit_row is not None
+    stored_work_record = json.loads(unit_row["trace_json"])["work_record"]
+    assert stored_work_record["candidate"]["candidate_id"] == str(pass_receipt.candidate_id)
+    assert stored_work_record["revision"]["revision_id"] == str(pass_receipt.revision_id)
+    source = SourceIdentity.model_validate_json(unit_row["source_json"])
+    assert source.candidate_id == str(pass_receipt.candidate_id)
+    assert source.revision_id == str(pass_receipt.revision_id)
+
+    proposal = store.execute("SELECT source_json, lesson_json FROM proposals WHERE status = 'accepted'").fetchone()
+    assert proposal is not None
+    prop_source = SourceIdentity.model_validate_json(proposal["source_json"])
+    assert prop_source.candidate_id == str(pass_receipt.candidate_id)
+    assert prop_source.revision_id == str(pass_receipt.revision_id)
+    prop_lesson = Lesson.model_validate_json(proposal["lesson_json"])
+    assert prop_lesson.claims[0].source_span is not None
+    assert canonical_json(pass_receipt.payload)[prop_lesson.claims[0].source_span.start:prop_lesson.claims[0].source_span.end] == prop_lesson.claims[0].text
+    assert prop_lesson.claims[0].evaluator == pass_receipt.issuer
+    assert prop_lesson.claims[0].outcome == "PASS"
 
     proc = store.execute("SELECT procedure_id, current_version, status FROM procedures").fetchone()
     assert proc is not None
@@ -327,12 +504,39 @@ def test_stale_cache(tmp_path: Path) -> None:
     workspace_id = str(uuid4())
     pass_receipt = make_receipt(verdict="PASS")
     reader = DictReceiptReader({pass_receipt.receipt_id: pass_receipt})
-    event = make_event(sequence=1, event_type="complete_work", workspace_id=UUID(workspace_id))
-    lesson = make_lesson("Procedure for context cache", pass_receipt.receipt_id)
+    event = make_event(
+        sequence=1,
+        event_type="complete_work",
+        workspace_id=UUID(workspace_id),
+        aggregate_id=pass_receipt.work_id,
+    )
+    lesson = make_lesson("Procedure for context cache", pass_receipt)
     generator = StubGenerator([make_result(lesson)], model="m", profile="p")
+    records = BoundWorkRecords("key-stale", pass_receipt)
 
     # Step 1: establish active procedure v1 via capture
-    drain(store, FakeEvents([event]), reader, generator, workspace_id=workspace_id)
+    drain(store, FakeEvents([event]), reader, generator, workspace_id=workspace_id, records=records)
+
+    unit_row = store.execute("SELECT trace_json, source_json FROM units").fetchone()
+    assert unit_row is not None
+    stored_work_record = json.loads(unit_row["trace_json"])["work_record"]
+    assert stored_work_record["candidate"]["candidate_id"] == str(pass_receipt.candidate_id)
+    assert stored_work_record["revision"]["revision_id"] == str(pass_receipt.revision_id)
+    source = SourceIdentity.model_validate_json(unit_row["source_json"])
+    assert source.candidate_id == str(pass_receipt.candidate_id)
+    assert source.revision_id == str(pass_receipt.revision_id)
+
+    proposal = store.execute("SELECT source_json, lesson_json FROM proposals WHERE status = 'accepted'").fetchone()
+    assert proposal is not None
+    prop_source = SourceIdentity.model_validate_json(proposal["source_json"])
+    assert prop_source.candidate_id == str(pass_receipt.candidate_id)
+    assert prop_source.revision_id == str(pass_receipt.revision_id)
+    prop_lesson = Lesson.model_validate_json(proposal["lesson_json"])
+    assert prop_lesson.claims[0].source_span is not None
+    assert canonical_json(pass_receipt.payload)[prop_lesson.claims[0].source_span.start:prop_lesson.claims[0].source_span.end] == prop_lesson.claims[0].text
+    assert prop_lesson.claims[0].evaluator == pass_receipt.issuer
+    assert prop_lesson.claims[0].outcome == "PASS"
+
     proc = store.execute("SELECT procedure_id, current_version, status FROM procedures").fetchone()
     assert proc is not None
     procedure_id = str(proc["procedure_id"])
@@ -421,8 +625,14 @@ def test_restart_replay(tmp_path: Path) -> None:
     workspace_id = str(uuid4())
     receipt = make_receipt(verdict="PASS")
     reader = DictReceiptReader({receipt.receipt_id: receipt})
-    event = make_event(sequence=1, event_type="complete_work", workspace_id=UUID(workspace_id))
+    event = make_event(
+        sequence=1,
+        event_type="complete_work",
+        workspace_id=UUID(workspace_id),
+        aggregate_id=receipt.work_id,
+    )
     events = FakeEvents([event])
+    records = BoundWorkRecords("key-restart", receipt)
 
     crashing_generator = StubGenerator(
         [RuntimeError("simulated unhandled process crash")],
@@ -439,13 +649,20 @@ def test_restart_replay(tmp_path: Path) -> None:
             crashing_generator,
             workspace_id=workspace_id,
             lease_seconds=0,
+            records=records,
         )
 
-    unit_row = store.execute("SELECT state, attempts, error_code, lease_until FROM units").fetchone()
+    unit_row = store.execute("SELECT state, attempts, error_code, lease_until, trace_json, source_json FROM units").fetchone()
     assert unit_row is not None
     assert unit_row["state"] == "running"
     assert unit_row["attempts"] == 1
     assert unit_row["error_code"] is None
+    stored_work_record = json.loads(unit_row["trace_json"])["work_record"]
+    assert stored_work_record["candidate"]["candidate_id"] == str(receipt.candidate_id)
+    assert stored_work_record["revision"]["revision_id"] == str(receipt.revision_id)
+    source = SourceIdentity.model_validate_json(unit_row["source_json"])
+    assert source.candidate_id == str(receipt.candidate_id)
+    assert source.revision_id == str(receipt.revision_id)
 
     # Close and reopen store
     store.close()
@@ -485,7 +702,7 @@ def test_restart_replay(tmp_path: Path) -> None:
     assert unit_dropped["error_code"] == "dropped"
 
     # retry succeeds
-    healthy_lesson = make_lesson("Recovered post-crash", receipt.receipt_id)
+    healthy_lesson = make_lesson("Recovered post-crash", receipt)
     healthy_generator = StubGenerator(
         [make_result(healthy_lesson, model="recovery-model", profile="recovery-profile")],
         model="recovery-model",
@@ -497,11 +714,29 @@ def test_restart_replay(tmp_path: Path) -> None:
     assert retry_run.units_failed == 0
     assert retry_run.proposals_accepted == 1
 
-    unit_settled = reopened.execute("SELECT state, retryable, error_code FROM units").fetchone()
+    unit_settled = reopened.execute("SELECT state, retryable, error_code, trace_json, source_json FROM units").fetchone()
     assert unit_settled is not None
     assert unit_settled["state"] == "succeeded"
     assert unit_settled["retryable"] == 0
     assert unit_settled["error_code"] is None
+    stored_settled = json.loads(unit_settled["trace_json"])["work_record"]
+    assert stored_settled["candidate"]["candidate_id"] == str(receipt.candidate_id)
+    assert stored_settled["revision"]["revision_id"] == str(receipt.revision_id)
+    source_settled = SourceIdentity.model_validate_json(unit_settled["source_json"])
+    assert source_settled.candidate_id == str(receipt.candidate_id)
+    assert source_settled.revision_id == str(receipt.revision_id)
+
+    proposal = reopened.execute("SELECT source_json, lesson_json FROM proposals WHERE status = 'accepted'").fetchone()
+    assert proposal is not None
+    prop_source = SourceIdentity.model_validate_json(proposal["source_json"])
+    assert prop_source.candidate_id == str(receipt.candidate_id)
+    assert prop_source.revision_id == str(receipt.revision_id)
+    prop_lesson = Lesson.model_validate_json(proposal["lesson_json"])
+    assert prop_lesson.claims[0].source_span is not None
+    assert canonical_json(receipt.payload)[prop_lesson.claims[0].source_span.start:prop_lesson.claims[0].source_span.end] == prop_lesson.claims[0].text
+    assert prop_lesson.claims[0].evaluator == receipt.issuer
+    assert prop_lesson.claims[0].outcome == "PASS"
+
     assert reopened.execute("SELECT COUNT(*) AS c FROM proposals").fetchone()["c"] == 1
 
     # A further drain over the same events adds no units or proposals
@@ -524,12 +759,39 @@ def test_cleanup_failure_and_retry(tmp_path: Path) -> None:
     workspace_id = str(uuid4())
     pass_receipt = make_receipt(verdict="PASS")
     reader = DictReceiptReader({pass_receipt.receipt_id: pass_receipt})
-    event = make_event(sequence=1, event_type="complete_work", workspace_id=UUID(workspace_id))
-    lesson = make_lesson("Procedure to narrow and clean", pass_receipt.receipt_id)
+    event = make_event(
+        sequence=1,
+        event_type="complete_work",
+        workspace_id=UUID(workspace_id),
+        aggregate_id=pass_receipt.work_id,
+    )
+    lesson = make_lesson("Procedure to narrow and clean", pass_receipt)
     generator = StubGenerator([make_result(lesson)], model="seed-model", profile="seed-profile")
+    records = BoundWorkRecords("key-cleanup", pass_receipt)
 
     # Step 1: establish active procedure v1 via capture
-    drain(store, FakeEvents([event]), reader, generator, workspace_id=workspace_id)
+    drain(store, FakeEvents([event]), reader, generator, workspace_id=workspace_id, records=records)
+
+    unit_row = store.execute("SELECT trace_json, source_json FROM units").fetchone()
+    assert unit_row is not None
+    stored_work_record = json.loads(unit_row["trace_json"])["work_record"]
+    assert stored_work_record["candidate"]["candidate_id"] == str(pass_receipt.candidate_id)
+    assert stored_work_record["revision"]["revision_id"] == str(pass_receipt.revision_id)
+    source = SourceIdentity.model_validate_json(unit_row["source_json"])
+    assert source.candidate_id == str(pass_receipt.candidate_id)
+    assert source.revision_id == str(pass_receipt.revision_id)
+
+    proposal = store.execute("SELECT source_json, lesson_json FROM proposals WHERE status = 'accepted'").fetchone()
+    assert proposal is not None
+    prop_source = SourceIdentity.model_validate_json(proposal["source_json"])
+    assert prop_source.candidate_id == str(pass_receipt.candidate_id)
+    assert prop_source.revision_id == str(pass_receipt.revision_id)
+    prop_lesson = Lesson.model_validate_json(proposal["lesson_json"])
+    assert prop_lesson.claims[0].source_span is not None
+    assert canonical_json(pass_receipt.payload)[prop_lesson.claims[0].source_span.start:prop_lesson.claims[0].source_span.end] == prop_lesson.claims[0].text
+    assert prop_lesson.claims[0].evaluator == pass_receipt.issuer
+    assert prop_lesson.claims[0].outcome == "PASS"
+
     proc = store.execute("SELECT procedure_id, current_version, status FROM procedures").fetchone()
     assert proc is not None
     procedure_id = str(proc["procedure_id"])
