@@ -73,3 +73,23 @@ def test_packages():
         "improvement": ["R18"],
         "all_three": ["R19"],
     }
+
+
+def _oracle_text():
+    text = DOC.read_text(encoding="utf-8")
+    index = text.find("\n## Oracle\n")
+    assert index != -1
+    return text[index:]
+
+
+def test_oracle_states_the_decision_procedure():
+    oracle = _oracle_text()
+    for token in ("arm_b2", "outside", "equivalent_repeat", "unknown_as_zero", "costs_known"):
+        assert token in oracle
+    assert all(word in oracle for word in ("Adaptivity", "Transfer", "Improvement"))
+
+
+def test_oracle_programme_thresholds():
+    oracle = _oracle_text()
+    for threshold in ("20", "72", "30", "100"):
+        assert threshold in oracle
