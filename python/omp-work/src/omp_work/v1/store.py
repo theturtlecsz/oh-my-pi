@@ -13,6 +13,7 @@ from psycopg.rows import dict_row, tuple_row
 
 from omp_work import CONTRACT_VERSION, contract_sha256
 from omp_work.integration.importer import TRANSFORMATION_VERSION
+from omp_work.jobs.store import NativeJobStore
 from omp_work.operations.config import OperationsConfig
 from omp_work.nsi_route import evaluate_intake, route_mode
 from omp_work.operations.database import migration_set_sha256
@@ -42,7 +43,7 @@ from .intake_hold import (
     ScopeClass,
     classify_intake,
 )
-from .intake_commands import execute_intake, read_intake_view
+from .intake_commands import IntakeJudgeContext, execute_intake, read_intake_view
 from .models import (
     LIVE_CLOSE_ATTEMPT_STATES,
     MAX_ACCEPTED_REPORTS,
@@ -844,7 +845,10 @@ class PostgresWorkStore(ProjectStoreMixin, EgressStoreMixin, ResearchStoreMixin)
                         route_mode(self._config)
                     with cur.connection.cursor(row_factory=tuple_row) as intake_cur:
                         result, event = execute_intake(
-                            intake_cur, envelope, actor_id, actor_kind
+                            intake_cur, envelope, actor_id, actor_kind,
+                            judge=IntakeJudgeContext(
+                                self, cur, NativeJobStore(self._config),
+                            ),
                         )
                 elif command.type == "draft_mission_intake":
                     payload = command.payload
