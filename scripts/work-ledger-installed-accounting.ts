@@ -12,6 +12,8 @@
 // pending ids are executed by a supplement run in DIR/supplement, then the
 // pending call repeats with both receipts. The selected and supplement receipts
 // of this invocation are the only alternates the final judgement may see.
+// Finally merge those receipts into installed.json and record argv, ids and the
+// final pending JSON in installed.provenance.json, including failed verdicts.
 
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
@@ -335,6 +337,14 @@ export async function runInstalledAccounting(options: InstalledAccountingOptions
 	const resolvedUnit = path.resolve(unit);
 
 	const runs: InstalledAccountingRun[] = [];
+	const provenanceRuns: Array<{
+		role: "selected" | "supplement";
+		command: string[];
+		ids: readonly string[];
+		receipt: string | null;
+		exit_code: number;
+	}> = [];
+	let pendingJson: unknown = emptyPending();
 	const problems: string[] = [];
 	let exitCode = 0;
 	const fail = (code: number): void => {
@@ -351,11 +361,19 @@ export async function runInstalledAccounting(options: InstalledAccountingOptions
 
 	const runQualification = async (label: "selected" | "supplement", targets: readonly string[]): Promise<string[]> => {
 		const paths = accountingPaths(root, out, label);
-		const result = await spawn(pytestCommand(uv, targets, paths.basetemp), {
+		const command = pytestCommand(uv, targets, paths.basetemp);
+		const result = await spawn(command, {
 			...baseEnv,
 			OMP_ACCOUNTING_DIR: paths.envDir,
 		});
 		const written = await listReceipts(paths.dir);
+		provenanceRuns.push({
+			role: label,
+			command,
+			ids: [...targets],
+			receipt: "receipts" in written && written.receipts.length === 1 ? written.receipts[0]! : null,
+			exit_code: result.exitCode,
+		});
 		if ("error" in written) {
 			problems.push(written.error);
 			fail(1);
@@ -397,14 +415,64 @@ export async function runInstalledAccounting(options: InstalledAccountingOptions
 			fail(1);
 			return fallback;
 		}
+		pendingJson = JSON.parse(result.stdout.trim());
 		return parsed;
+	};
+
+	const finalize = async (pending: InstalledAccountingPending): Promise<InstalledAccountingResult> => {
+		const outputDir = path.resolve(root, out);
+		await fs.mkdir(outputDir, { recursive: true });
+		const merged = await spawn(
+			[
+				uv,
+				"run",
+				"--project",
+				"python/omp-work",
+				"--extra",
+				"dev",
+				"python",
+				"-m",
+				"omp_work.skip_accounting",
+				"merge",
+				"--out",
+				path.join(outputDir, "installed.json"),
+				...runs.flatMap(entry => entry.receipts),
+			],
+			baseEnv,
+		);
+		if (merged.exitCode !== 0) {
+			fail(merged.exitCode);
+			console.error(
+				`work-ledger-installed-accounting: merge exited ${merged.exitCode}: ${summarize(merged.stderr)}`,
+			);
+		}
+		await Bun.write(
+			path.join(outputDir, "installed.provenance.json"),
+			`${JSON.stringify(
+				{
+					version: 1,
+					check: "installed",
+					run_id: run,
+					mode,
+					release,
+					manifest_sha256: manifestSha,
+					unit: resolvedUnit,
+					runs: provenanceRuns,
+					pending: pendingJson,
+					exit_code: exitCode,
+				},
+				null,
+				2,
+			)}\n`,
+		);
+		return { exitCode, runs, pending };
 	};
 
 	// 1. Selected run on the mode's targets, exactly one skip receipt.
 	const selectedReceipts = await runQualification("selected", resolved.targets);
 	if (selectedReceipts.length !== 1) {
 		console.error(`work-ledger-installed-accounting: ${problems.join("; ")}`);
-		return { exitCode: exitCode === 0 ? 1 : exitCode, runs, pending: emptyPending() };
+		return finalize(emptyPending());
 	}
 
 	// 2. Pending after the selected run: this invocation's selected receipt is the only alternate.
@@ -436,7 +504,7 @@ export async function runInstalledAccounting(options: InstalledAccountingOptions
 			`work-ledger-installed-accounting: selected mode=${mode} runs=${runs.map(r => r.name).join("+")} receipt=${selectedReceipts[0]}`,
 		);
 	}
-	return { exitCode, runs, pending: judged };
+	return finalize(judged);
 }
 
 export async function runInstalledAccountingCli(argv: readonly string[]): Promise<InstalledAccountingResult> {

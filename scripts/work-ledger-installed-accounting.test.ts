@@ -90,6 +90,8 @@ interface SkipReceipt {
 	selected: string[];
 	collected: string[];
 	complete: boolean;
+	exitstatus: number;
+	nodes: Record<string, Record<string, { outcome: string; reason: string }>>;
 }
 
 function nodeName(target: string): string {
@@ -211,17 +213,24 @@ function input(fix: Fixture, overrides: Partial<InstalledAccountingOptions> = {}
 }
 
 /** Real runner: spawns the real command at the repository project and pins the fixture supplement mode. */
-function fixtureRunner(mode: SupplementMode = "pass"): { calls: RecordedCall[]; runner: CommandRunner } {
+function fixtureRunner(mode: SupplementMode = "pass"): {
+	calls: RecordedCall[];
+	results: CommandResult[];
+	runner: CommandRunner;
+} {
+	const results: CommandResult[] = [];
 	const calls: RecordedCall[] = [];
 	const runner: CommandRunner = async (command, options) => {
 		calls.push({ command: [...command], options });
 		const rewritten = command.map(part => (part === "python/omp-work" ? projectDir : part));
-		return spawnWithCoreDumpGuard(rewritten, {
+		const result = await spawnWithCoreDumpGuard(rewritten, {
 			cwd: options.cwd,
 			env: cleanEnv({ ...options.env, FIXTURE_SUPPLEMENT: mode }),
 		});
+		results.push(result);
+		return result;
 	};
-	return { calls, runner };
+	return { calls, results, runner };
 }
 
 async function readReceipt(file: string): Promise<SkipReceipt> {
@@ -232,7 +241,7 @@ describe("installed accounting subset supplement", () => {
 	test("selected receipt lacks test_supplement_only, the supplement executes it and the lifetime node", async () => {
 		const fix = await makeFixture();
 		await writeUnitReceipt(fix);
-		const { calls, runner } = fixtureRunner("pass");
+		const { calls, results, runner } = fixtureRunner("pass");
 
 		const result = await runInstalledAccounting(input(fix, { mode: "subset", runner }));
 
@@ -275,7 +284,55 @@ describe("installed accounting subset supplement", () => {
 		expect(supplementCall).toBeDefined();
 		expect([...supplementCall!.command]).toContain(SUPPLEMENT_NODE);
 		expect([...supplementCall!.command]).toContain(LIFETIME_NODE);
-	});
+		const merged = await readReceipt(path.join(fix.out, "installed.json"));
+		expect(merged.check).toBe("installed");
+		expect(merged.run_id).toBe(fix.run);
+		expect(merged.nodes[SUPPLEMENT_NODE]?.call?.outcome).toBe("passed");
+		const provenance = await Bun.file(path.join(fix.out, "installed.provenance.json")).json();
+		expect(provenance).toMatchObject({
+			version: 1,
+			check: "installed",
+			run_id: fix.run,
+			mode: "subset",
+			release: fix.release,
+			manifest_sha256: fix.manifestSha,
+			unit: fix.unit,
+			exit_code: 0,
+			pending: JSON.parse(results[3]!.stdout),
+		});
+		expect(provenance.runs).toEqual([
+			{
+				role: "selected",
+				command: calls[0]!.command,
+				ids: SUBSET_TARGETS,
+				receipt: result.runs[0]!.receipts[0],
+				exit_code: 0,
+			},
+			{
+				role: "supplement",
+				command: supplementCall!.command,
+				ids: JSON.parse(results[1]!.stdout).pending.map((entry: { id: string }) => entry.id),
+				receipt: result.runs[1]!.receipts[0],
+				exit_code: 0,
+			},
+		]);
+		expect(calls[4]!.options.cwd).toBe(fix.root);
+		expect(calls[4]!.command).toEqual([
+			"uv",
+			"run",
+			"--project",
+			"python/omp-work",
+			"--extra",
+			"dev",
+			"python",
+			"-m",
+			"omp_work.skip_accounting",
+			"merge",
+			"--out",
+			path.join(fix.out, "installed.json"),
+			...result.runs.flatMap(run => run.receipts),
+		]);
+	}, 30_000);
 
 	test("a supplement skip stays nonzero and leaves the id pending", async () => {
 		const fix = await makeFixture();
@@ -287,7 +344,7 @@ describe("installed accounting subset supplement", () => {
 		expect(result.exitCode).not.toBe(0);
 		expect(result.pending.pending.map(entry => entry.id)).toEqual([SUPPLEMENT_NODE]);
 		expect(result.pending.failed).toEqual([]);
-	});
+	}, 30_000);
 
 	test("a supplement failure stays nonzero and records the id as failed", async () => {
 		const fix = await makeFixture();
@@ -299,7 +356,12 @@ describe("installed accounting subset supplement", () => {
 		expect(result.exitCode).not.toBe(0);
 		expect(result.pending.pending).toEqual([]);
 		expect(result.pending.failed.map(entry => entry.id)).toEqual([SUPPLEMENT_NODE]);
-	});
+		const merged = await readReceipt(path.join(fix.out, "installed.json"));
+		expect(merged.exitstatus).not.toBe(0);
+		expect(merged.nodes[SUPPLEMENT_NODE]?.call?.outcome).toBe("failed");
+		const provenance = await Bun.file(path.join(fix.out, "installed.provenance.json")).json();
+		expect(provenance.exit_code).toBe(result.exitCode);
+	}, 30_000);
 });
 
 describe("installed accounting full run", () => {
@@ -320,7 +382,7 @@ describe("installed accounting full run", () => {
 		expect(selected.selected).toContain(LIFETIME_NODE);
 		expect(selected.selected).toHaveLength(7);
 		expect(calls.some(call => call.options.env.OMP_ACCOUNTING_DIR === path.join(fix.out, "supplement"))).toBe(false);
-	});
+	}, 30_000);
 });
 
 describe("pending output parsing", () => {
@@ -399,6 +461,20 @@ function expectedEnv(fix: Fixture, accountingRoot: string): NodeJS.ProcessEnv {
 const EMPTY_PENDING_JSON = JSON.stringify({ pending: [], covered: [], failed: [], rejected: [], absent: [] });
 
 describe("installed accounting selected run", () => {
+	test("merge failure turns an otherwise passing verdict nonzero", async () => {
+		const fix = await makeFixture();
+		const runner: CommandRunner = async (command, options) => {
+			if (command.includes("pytest")) await writeReceipts(options.env.OMP_ACCOUNTING_DIR, 1);
+			return command.includes("merge")
+				? { exitCode: 2, stdout: "", stderr: "cannot merge receipts" }
+				: { exitCode: 0, stdout: EMPTY_PENDING_JSON, stderr: "" };
+		};
+		const result = await runInstalledAccounting(input(fix, { runner }));
+		expect(result.exitCode).toBe(2);
+		const provenance = await Bun.file(path.join(fix.out, "installed.provenance.json")).json();
+		expect(provenance.exit_code).toBe(2);
+	});
+
 	test("full mode runs workflow_dispatch targets with the installed accounting environment", async () => {
 		const fix = await makeFixture();
 		await fs.writeFile(path.join(fix.out, "stray.skip-receipt.json"), "{}\n");
@@ -423,7 +499,7 @@ describe("installed accounting selected run", () => {
 				receipts: [path.join(fix.out, "selected", "installed-0.skip-receipt.json")],
 			},
 		]);
-		expect(calls).toHaveLength(2);
+		expect(calls).toHaveLength(3);
 		expect([...calls[0]!.command]).toEqual(expectedCommand("full", fix.out));
 		expect(calls[0]!.options.cwd).toBe(repoRoot);
 		expect(calls[0]!.options.env).toEqual({
@@ -497,7 +573,7 @@ describe("installed accounting selected run", () => {
 
 		const result = await runInstalledAccounting(input(fix, { runner }));
 
-		expect(calls).toHaveLength(1);
+		expect(calls).toHaveLength(2);
 		expect(result.exitCode).not.toBe(0);
 		expect(result.runs[0]?.receipts).toEqual([]);
 	});
@@ -511,7 +587,7 @@ describe("installed accounting selected run", () => {
 
 		const result = await runInstalledAccounting(input(fix, { runner }));
 
-		expect(calls).toHaveLength(1);
+		expect(calls).toHaveLength(2);
 		expect(result.exitCode).not.toBe(0);
 		expect(result.runs[0]?.receipts).toHaveLength(2);
 	});
