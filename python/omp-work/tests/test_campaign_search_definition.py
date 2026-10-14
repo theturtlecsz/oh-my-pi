@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -14,9 +15,11 @@ from omp_work.jobs.campaign_definition import (
     Criterion,
     PreparedTrial,
     SearchConfig,
+    definition_commitment,
     load_definition,
     score_campaign,
     score_metrics,
+    search_steps,
 )
 from omp_work.v1.models import ResearchDomain
 
@@ -178,3 +181,113 @@ def test_omitted_budget_overflow_raises_value_error(tmp_path: Path) -> None:
 def test_unit_cost_budget_resolves_to_trial_count(tmp_path: Path) -> None:
     loaded = _load(tmp_path, search={}, trials=[{"harness": "h.sh"}] * 2)
     assert loaded.search == SearchConfig("fixed", 2.0, 1, 0, "score")
+
+
+def test_search_steps_orders_tree_with_fresh_unset_nodes(tmp_path: Path) -> None:
+    loaded = _load(
+        tmp_path,
+        search={},
+        trials=[
+            {"harness": "h.sh", "cost": 2},
+            {"harness": "h.sh", "parent": "t000", "cost": 3},
+            {"harness": "h.sh", "id": "x"},
+            {"harness": "h.sh", "parent": "t000"},
+        ],
+    )
+    steps = search_steps(loaded)
+    digest = hashlib.sha256(b"cached harness\n").hexdigest()
+    assert list(steps) == ["t000", "t001", "x", "t003"]  # same digest, distinct nodes
+    assert steps["t000"] == {
+        "parent_id": None, "children": ["t001", "t003"], "cost": 2,
+        "candidate_digest": digest, "metric": None, "infra_error": None,
+    }
+    assert steps["t001"]["parent_id"] == "t000" and steps["t001"]["children"] == []
+    steps["t000"]["metric"] = 5
+    steps["t000"]["children"].append("zzz")
+    again = search_steps(loaded)
+    assert again["t000"]["metric"] is None and again["t000"]["children"] == ["t001", "t003"]
+    assert loaded.trials[0].harness_bytes == b"cached harness\n"
+
+
+def test_search_steps_resolves_default_ids_for_old_constructors() -> None:
+    digest = hashlib.sha256(b"h").hexdigest()
+    trials = (
+        PreparedTrial(Path("a"), b"h", digest),
+        PreparedTrial(Path("b"), b"h", digest, parent="t000"),
+    )
+    definition = CampaignDefinition(
+        "o", ResearchDomain.ENGINEERING, 60, (Criterion("score", "gte", 1),), trials
+    )
+    steps = search_steps(definition)
+    assert list(steps) == ["t000", "t001"]
+    assert steps["t000"]["children"] == ["t001"]
+
+
+def test_commitment_requires_explicit_search(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="search"):
+        definition_commitment(_load(tmp_path))
+
+
+def _mutations(loaded: CampaignDefinition) -> dict[str, CampaignDefinition]:
+    search = loaded.search
+    assert search is not None
+    first, second = loaded.trials
+
+    def swap(**kw: object) -> CampaignDefinition:
+        return replace(loaded, trials=(first, replace(second, **kw)))
+
+    def crit(index: int, value: Criterion) -> tuple[Criterion, ...]:
+        criteria = list(loaded.criteria)
+        criteria[index] = value
+        return tuple(criteria)
+
+    return {
+        "objective": replace(loaded, objective="other"),
+        "domain": replace(loaded, domain=ResearchDomain.LITERATURE),
+        "timeout": replace(loaded, timeout_seconds=61),
+        "criterion-metric": replace(loaded, criteria=crit(0, Criterion("loss", "gte", 1))),
+        "criterion-op": replace(loaded, criteria=crit(0, Criterion("score", "gt", 1))),
+        "criterion-threshold": replace(loaded, criteria=crit(0, Criterion("score", "gte", 2))),
+        "criteria-order": replace(loaded, criteria=loaded.criteria[::-1]),
+        "policy": replace(loaded, search=replace(search, policy="fixed")),
+        "budget": replace(loaded, search=replace(search, budget=search.budget + 1)),
+        "width": replace(loaded, search=replace(search, width=search.width + 1)),
+        "seed": replace(loaded, search=replace(search, seed=search.seed + 1)),
+        "metric": replace(loaded, search=replace(search, metric="loss")),
+        "trial-id": swap(id="renamed"),
+        "trial-parent": swap(parent=None),
+        "trial-cost": swap(cost=9),
+        "unopened-digest": swap(candidate_digest="0" * 64),
+        "trial-order": replace(loaded, trials=(second, first)),
+    }
+
+
+def test_commitment_binds_every_field_and_ignores_presentation(tmp_path: Path) -> None:
+    search = {"policy": "greedy", "budget": 4, "width": 2, "seed": 3, "metric": "score"}
+    trials = [{"harness": "h.sh", "id": "a"}, {"harness": "h.sh", "id": "b", "parent": "a"}]
+    loaded = _load(tmp_path, search=search, trials=trials)
+    base = definition_commitment(loaded)
+    assert base == definition_commitment(loaded)
+    for name, mutated in _mutations(loaded).items():
+        assert definition_commitment(mutated) != base, name
+
+    # Key order, formatting, and relocated paths with identical bytes keep the hash.
+    moved = tmp_path / "moved"
+    moved.mkdir()
+    document = {
+        "trials": trials,
+        "search": dict(reversed(list(search.items()))),
+        "criteria": [{"threshold": 1, "op": "gte", "metric": "score"},
+                     {"threshold": 0, "op": "lt", "metric": "loss"}],
+        "domain": "engineering",
+        "timeout_seconds": 60,
+        "objective": "improve score",
+    }
+    (moved / "h.sh").write_bytes(b"cached harness\n")
+    (moved / "d.json").write_text(json.dumps(document, indent=7))
+    assert definition_commitment(load_definition(moved / "d.json")) == base
+
+    steps = search_steps(loaded)
+    steps["a"]["metric"] = 1.5
+    steps["a"]["infra_error"] = "boom"
+    assert definition_commitment(loaded) == base
