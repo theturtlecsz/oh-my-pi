@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from omp_work.v1.api_models import WorkItemsPage, WorkItemSummary
+from omp_work.v1.canonical import canonical_json
 from omp_work.v1.models import EvidenceReceipt
 from support.stub_events import FakeEvents, make_event
 from support.stub_generator import StubGenerator
@@ -24,7 +25,13 @@ from omp_knowledge.learning.generation import (
     ensure_repository_precondition,
     extract_trace_repository,
 )
-from omp_knowledge.learning.models import Claim, Lesson, Precondition
+from omp_knowledge.learning.models import (
+    Claim,
+    Lesson,
+    Precondition,
+    SourceIdentity,
+    SourceSpan,
+)
 from omp_knowledge.learning.store import LearningStore
 from omp_knowledge.learning.uses import supply
 
@@ -54,13 +61,20 @@ class RepositoryRecords:
         after: tuple[datetime, UUID] | None = None,
         limit: int | None = None,
     ) -> WorkItemsPage:
+        del limit
+        if after is not None:
+            return WorkItemsPage(items=(), next_created_at=None, next_work_id=None)
         item = self.view["item"]
-        return WorkItemsPage(items=(WorkItemSummary(
-            work_id=item["work_id"],
-            key=self.key,
-            state=item["state"],
-            created_at=item["revision"]["created_at"],
-        ),))
+        return WorkItemsPage(
+            items=(WorkItemSummary(
+                work_id=item["work_id"],
+                key=self.key,
+                state=item["state"],
+                created_at=item["revision"]["created_at"],
+            ),),
+            next_created_at=None,
+            next_work_id=None,
+        )
 
     def workflow(self, key: str) -> Mapping[str, Any]:
         assert key == self.key
@@ -80,12 +94,19 @@ def drained_store() -> Iterator[LearningStore]:
         aggregate_id=UUID(records.view["item"]["work_id"]),
         payload={"work_id": records.view["item"]["work_id"]},
     )
+    payload_text = canonical_json(records.evidence.payload)
+    start, end = 0, 32
+    claim_text = payload_text[start:end]
+    source_span = SourceSpan(start=start, end=end)
     lesson = Lesson(
         title="Check candidate drift before closeout",
         steps=("compare candidate commit against HEAD",),
         claims=(Claim(
-            text="candidate drift check passed",
+            text=claim_text,
             receipt_ids=(records.evidence.receipt_id,),
+            source_span=source_span,
+            evaluator=records.evidence.issuer,
+            outcome="PASS",
         ),),
     )
     generator = StubGenerator([GenerationResult(
@@ -101,6 +122,27 @@ def drained_store() -> Iterator[LearningStore]:
             workspace_id=event.workspace_id, records=records,
         )
         assert run.proposals_accepted == 1
+
+        unit_row = store.execute("SELECT trace_json, source_json FROM units").fetchone()
+        assert unit_row is not None
+        stored_work_record = json.loads(unit_row["trace_json"])["work_record"]
+        assert stored_work_record["candidate"]["candidate_id"] == str(records.evidence.candidate_id)
+        assert stored_work_record["revision"]["revision_id"] == str(records.evidence.revision_id)
+        source = SourceIdentity.model_validate_json(unit_row["source_json"])
+        assert source.candidate_id == str(records.evidence.candidate_id)
+        assert source.revision_id == str(records.evidence.revision_id)
+
+        proposal_row = store.execute("SELECT source_json, lesson_json FROM proposals WHERE status = 'accepted'").fetchone()
+        assert proposal_row is not None
+        prop_source = SourceIdentity.model_validate_json(proposal_row["source_json"])
+        assert prop_source.candidate_id == str(records.evidence.candidate_id)
+        assert prop_source.revision_id == str(records.evidence.revision_id)
+        prop_lesson = Lesson.model_validate_json(proposal_row["lesson_json"])
+        assert prop_lesson.claims[0].source_span == source_span
+        assert canonical_json(records.evidence.payload)[prop_lesson.claims[0].source_span.start:prop_lesson.claims[0].source_span.end] == prop_lesson.claims[0].text
+        assert prop_lesson.claims[0].evaluator == records.evidence.issuer
+        assert prop_lesson.claims[0].outcome == "PASS"
+
         yield store
 
 
@@ -115,6 +157,16 @@ def test_drain_scopes_unscoped_generator_lesson_before_storage_and_supply(
     expected = [{"key": "repository", "op": "eq", "value": REPOSITORY}]
     assert json.loads(proposal["lesson_json"])["preconditions"] == expected
     assert json.loads(version["preconditions_json"]) == expected
+
+    unit_row = drained_store.execute("SELECT trace_json, source_json FROM units").fetchone()
+    assert unit_row is not None
+    stored_work_record = json.loads(unit_row["trace_json"])["work_record"]
+    source = SourceIdentity.model_validate_json(unit_row["source_json"])
+    assert stored_work_record["candidate"]["candidate_id"] == source.candidate_id
+    assert stored_work_record["revision"]["revision_id"] == source.revision_id
+    prop_source = SourceIdentity.model_validate_json(drained_store.execute("SELECT source_json FROM proposals").fetchone()["source_json"])
+    assert prop_source.candidate_id == source.candidate_id
+    assert prop_source.revision_id == source.revision_id
 
     for context, count in (
         ({"repository": REPOSITORY}, 1),
