@@ -125,26 +125,30 @@ def settle_judge_usage(
     request_id: str,
     input_tokens: int | None,
     output_tokens: int | None,
+    cache_tokens: int | None = None,
 ) -> str:
     """Record one judge usage event in its own transaction and return its usage id.
 
     ``work_id`` is the mission, there is no job, and the role is
-    ``intake_support_judge``. Both counts are integers: the measurement is
-    ``measured`` with a zero cache and no price. Both are ``None``: the
+    ``intake_support_judge``. Both input/output counts are integers: the measurement
+    is ``measured`` with the supplied cache count (unknown by default) and no
+    price. The total is null if the cache count is unknown. Both are ``None``: the
     measurement is ``unknown`` with every count and the price left null. One of
-    each is ``ValueError``. ``record_usage`` is called with ``cur=None`` so it
+    each, or a cache count without input/output counts, is ``ValueError``.
+    ``record_usage`` is called with ``cur=None`` so it
     commits on its own and the row outlives a rollback of the caller.
     """
-    if (input_tokens is None) != (output_tokens is None):
+    if (input_tokens is None) != (output_tokens is None) or (
+        input_tokens is None and cache_tokens is not None
+    ):
         raise ValueError(
-            "input_tokens and output_tokens must both be ints or both None"
+            "input_tokens and output_tokens must both be ints or both None;"
+            " cache_tokens must be None when input/output are None"
         )
     if input_tokens is None:
         measurement = _UNKNOWN
-        cache_tokens = None
     else:
         measurement = _MEASURED
-        cache_tokens = 0
     result = record_usage(
         jobs,
         operation_id=operation_id,

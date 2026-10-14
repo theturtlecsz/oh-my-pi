@@ -57,6 +57,16 @@ class TaskRequest(BaseModel):
 
 
 @dataclass(frozen=True)
+class PremiumReserve:
+    usd: Decimal = Decimal(0)
+    models: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.usd.is_finite() or self.usd < 0:
+            raise ValueError("invalid_premium_reserve")
+
+
+@dataclass(frozen=True)
 class ProxyConfig:
     operations: OperationsConfig
     control_capability: Path
@@ -66,6 +76,8 @@ class ProxyConfig:
     max_request_bytes: int = 1024 * 1024
     max_response_bytes: int = 4 * 1024 * 1024
     timeout_s: float = 120
+    premium_models: tuple[str, ...] = ()
+    premium_reserve: PremiumReserve = PremiumReserve()
 
     def __post_init__(self) -> None:
         if self.host != "127.0.0.1":
@@ -81,9 +93,17 @@ class ProxyConfig:
             if route.model != selected.model or route.api != (GEMINI if selected.provider == "gemini_flash" else OLLAMA):
                 raise ValueError("invalid_transport_map")
 
+    def premium_refusal(self, model: str) -> str | None:
+        if model in self.premium_models and (self.premium_reserve.usd == 0 or model not in self.premium_reserve.models):
+            return "premium_reserve"
+        return None
+
     @classmethod
     def load(cls, path: Path) -> ProxyConfig:
         data = json.loads(path.read_text())
+        data["premium_models"] = tuple(data.get("premium_models", ()))
+        reserve = data.get("premium_reserve", {})
+        data["premium_reserve"] = PremiumReserve(usd=Decimal(str(reserve.get("usd", "0"))), models=tuple(reserve.get("models", ())))
         operations = data.pop("operations")
         for name in ("config_dir", "state_dir", "data_dir"):
             operations[name] = Path(operations[name])
@@ -234,6 +254,9 @@ def create_app(config: ProxyConfig, *, transport: Transport | None = None) -> Fa
                 if old.task.expires_at <= now and not old.lock.locked():
                     del grants[key]
             selected = route_stage(policy, "implement", provider_in_flight=counts)
+            refusal = config.premium_refusal(selected.model)
+            if refusal is not None:
+                raise HTTPException(403, refusal)
             route = replace(config.transports[selected.provider], max_response_bytes=min(config.max_response_bytes, config.transports[selected.provider].max_response_bytes), timeout_s=min(config.timeout_s, config.transports[selected.provider].timeout_s))
             grant = Grant(task, selected.provider, actor, route)
             task_id = str(uuid4())
