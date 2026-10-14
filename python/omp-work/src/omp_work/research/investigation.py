@@ -239,14 +239,37 @@ def run_ml(directory: str | Path, literature_dir: str | Path) -> dict[str, Any]:
         {"name": "beam", "metrics": {"metric": beam_metric}, "receipt_sha256": receipt_sha},
     ]
 
-    # 10. Lessons: scientific staged with receipt, narrative rejected.
+    # 10. Lessons: scientific staged against resolved receipts, narrative rejected.
+    claim = "Mean gain can mislead when median gain is negative"
+    binding = {
+        "source_span": f"1:{1 + len(claim)}",
+        "revision": artifact_sha256(canonical_json(tree)),
+        "work_item": "ml-project",
+        "candidate": artifact_sha256(canonical_json({"budget": 3, "width": 2})),
+        "evaluator": "winner",
+    }
+    records: dict[str, dict[str, Any]] = {}
+    for experiment in experiments:
+        preimage = {"name": experiment["name"], "metrics": experiment["metrics"]}
+        digest = artifact_sha256(canonical_json(preimage))
+        records[digest] = {
+            **preimage,
+            "receipt_sha256": experiment["receipt_sha256"],
+            "project_id": "ml-project",
+            "claim": claim,
+            "outcome": "PASS",
+            "binding": dict(binding),
+        }
     scientific_draft = LessonDraft(
         lesson_id="lesson-scientific-1",
         project_id="ml-project",
         kind="scientific",
         title="Scientific Lesson on Aggregate Metrics",
-        claim="Mean gain can mislead when median gain is negative",
-        receipt_ids=[receipt_sha],
+        claim=claim,
+        receipt_ids=list(records),
+        binding=binding,
+        outcome="PASS",
+        behaviour={"metric": "metric", "op": "ge", "value": min(bon_metric, beam_metric)},
     )
     narrative_draft = LessonDraft(
         lesson_id="lesson-narrative-1",
@@ -257,7 +280,7 @@ def run_ml(directory: str | Path, literature_dir: str | Path) -> dict[str, Any]:
         receipt_ids=[receipt_sha],
     )
     lessons_dir = dir_path / "lessons"
-    staged_sci = stage(scientific_draft, lessons_dir)
+    staged_sci = stage(scientific_draft, lessons_dir, resolve=records.get)
     stage(narrative_draft, lessons_dir)
     staged_lessons = [staged_sci["lesson_id"]] if staged_sci.get("status") == "staged" else []
 

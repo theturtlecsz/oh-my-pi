@@ -26,6 +26,30 @@ from omp_work.research.lessons import (
 LESSONS_SOURCE = Path(__file__).parents[1] / "src/omp_work/research/lessons.py"
 
 
+_CLAIM = "Warming first avoids a cold read"
+_BINDING = {
+    "source_span": f"1:{1 + len(_CLAIM)}",
+    "revision": "rev-1",
+    "work_item": "item-1",
+    "candidate": "cand-1",
+    "evaluator": "eval-1",
+}
+_BEHAVIOUR = {"metric": "cold_reads", "op": "le", "value": 0}
+
+
+def _receipt() -> dict[str, object]:
+    return {
+        "binding": dict(_BINDING),
+        "outcome": "PASS",
+        "claim": _CLAIM,
+        "metrics": {"cold_reads": 0},
+    }
+
+
+def _resolve(receipt_id: str) -> dict[str, object] | None:
+    return {"receipt-1": _receipt()}.get(receipt_id)
+
+
 def _scientific(**overrides: object) -> LessonDraft:
     fields: dict[str, object] = {
         "lesson_id": "lesson-1",
@@ -33,8 +57,11 @@ def _scientific(**overrides: object) -> LessonDraft:
         "kind": "scientific",
         "title": "Cache warms before the read",
         "steps": ["Warm the cache", "Read the value"],
-        "claim": "Warming first avoids a cold read",
+        "claim": _CLAIM,
         "receipt_ids": ["receipt-1"],
+        "binding": dict(_BINDING),
+        "outcome": "PASS",
+        "behaviour": dict(_BEHAVIOUR),
     }
     fields.update(overrides)
     return LessonDraft(**fields)  # type: ignore[arg-type]
@@ -73,7 +100,7 @@ def test_scientific_draft_stages_skill_recipe_regression_and_manifest(
     tmp_path: Path,
 ) -> None:
     draft = _scientific()
-    result = stage(draft, tmp_path)
+    result = stage(draft, tmp_path, resolve=_resolve)
 
     assert result["status"] == "staged"
     assert result["revision"] == 1
@@ -99,7 +126,7 @@ def test_scientific_draft_stages_skill_recipe_regression_and_manifest(
 def test_narrow_records_receipt_bumps_revision_and_keeps_retrievable(
     tmp_path: Path,
 ) -> None:
-    staged = stage(_scientific(), tmp_path)
+    staged = stage(_scientific(), tmp_path, resolve=_resolve)
     narrowed = revise(
         staged,
         action="narrow",
@@ -120,7 +147,7 @@ def test_narrow_records_receipt_bumps_revision_and_keeps_retrievable(
 
 
 def test_withdraw_is_absent_from_retrieval(tmp_path: Path) -> None:
-    staged = stage(_scientific(), tmp_path)
+    staged = stage(_scientific(), tmp_path, resolve=_resolve)
     withdrawn = revise(
         staged, action="withdraw", contradicting_receipt="receipt-3"
     )
@@ -132,8 +159,8 @@ def test_withdraw_is_absent_from_retrieval(tmp_path: Path) -> None:
 def test_limit_zero_omits_lessons_but_returns_every_mandatory_string(
     tmp_path: Path,
 ) -> None:
-    first = stage(_scientific(lesson_id="lesson-1"), tmp_path)
-    second = stage(_scientific(lesson_id="lesson-2"), tmp_path)
+    first = stage(_scientific(lesson_id="lesson-1"), tmp_path, resolve=_resolve)
+    second = stage(_scientific(lesson_id="lesson-2"), tmp_path, resolve=_resolve)
     mandatory = ["always:pin-a", "always:pin-b"]
 
     capped = retrieve(
@@ -148,12 +175,12 @@ def test_limit_zero_omits_lessons_but_returns_every_mandatory_string(
 
 
 def test_other_project_returns_no_lessons(tmp_path: Path) -> None:
-    staged = stage(_scientific(lesson_id="lesson-1"), tmp_path)
+    staged = stage(_scientific(lesson_id="lesson-1"), tmp_path, resolve=_resolve)
     assert retrieve([staged], project_id="proj-b", limit=5, mandatory=[]) == []
 
 
 def test_invoke_and_outcome_change_only_the_counters(tmp_path: Path) -> None:
-    staged = stage(_scientific(), tmp_path)
+    staged = stage(_scientific(), tmp_path, resolve=_resolve)
     before = json.loads(json.dumps(staged))
 
     invoke(staged)

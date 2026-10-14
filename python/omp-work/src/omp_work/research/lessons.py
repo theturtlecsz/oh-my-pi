@@ -13,8 +13,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import math
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+import re
+from typing import Any, Callable, Mapping, Sequence
+
+from omp_work.v1.canonical import canonical_json
 
 __all__ = [
     "KINDS",
@@ -33,6 +37,16 @@ WITHDRAWN = "withdrawn"
 REJECTED = "rejected"
 _PRECONDITION_KEYS = frozenset({"project_id", "repository"})
 _PRECONDITION_OPS = frozenset({"eq", "ne"})
+_BINDING_KEYS = frozenset({"source_span", "revision", "work_item", "candidate", "evaluator"})
+_BEHAVIOUR_OPS = {
+    "eq": lambda a, b: a == b,
+    "ne": lambda a, b: a != b,
+    "gt": lambda a, b: a > b,
+    "ge": lambda a, b: a >= b,
+    "lt": lambda a, b: a < b,
+    "le": lambda a, b: a <= b,
+}
+_SPAN = re.compile(r"^(\d+):(\d+)$")
 
 
 @dataclass
@@ -47,6 +61,9 @@ class LessonDraft:
     claim: str = ""
     receipt_ids: list[str] = field(default_factory=list)
     preconditions: list[Mapping[str, Any]] = field(default_factory=list)
+    binding: dict[str, str] = field(default_factory=dict)
+    outcome: str = ""
+    behaviour: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.kind not in KINDS:
@@ -83,6 +100,9 @@ def _fk6_lesson(draft: LessonDraft) -> dict[str, Any]:
         "steps": list(draft.steps),
         "preconditions": [_precondition(item) for item in draft.preconditions],
         "claims": [{"text": draft.claim, "receipt_ids": list(draft.receipt_ids)}],
+        "binding": dict(draft.binding),
+        "outcome": draft.outcome,
+        "behaviour": dict(draft.behaviour),
     }
 
 
@@ -118,27 +138,92 @@ def _recipe_markdown(draft: LessonDraft) -> str:
     return "\n".join(lines)
 
 
-def _regression_source(draft: LessonDraft) -> str:
+def _regression_source(draft: LessonDraft, receipts: Mapping[str, Any]) -> str:
+    """Generated test: the lesson's preconditions and claimed behaviour hold.
+
+    It re-stages the draft against its embedded receipts and asserts admission,
+    then asserts a false claimed behaviour, a false precondition, and an
+    unresolved citation are each refused and write no directory.
+    """
+    fields = {
+        "lesson_id": draft.lesson_id,
+        "project_id": draft.project_id,
+        "kind": draft.kind,
+        "title": draft.title,
+        "steps": list(draft.steps),
+        "claim": draft.claim,
+        "receipt_ids": list(draft.receipt_ids),
+        "preconditions": [dict(item) for item in draft.preconditions],
+        "binding": dict(draft.binding),
+        "outcome": draft.outcome,
+        "behaviour": dict(draft.behaviour),
+    }
     return "\n".join(
         [
-            '"""Regression check for a staged lesson."""',
+            '"""Regression check for a staged lesson: preconditions and claimed behaviour."""',
             "",
-            f"LESSON_ID = {draft.lesson_id!r}",
-            f"STEPS = {list(draft.steps)!r}",
+            "import copy",
+            "",
+            "from omp_work.research.lessons import LessonDraft, stage",
+            "",
+            f"FIELDS = {fields!r}",
+            f"RECEIPTS = {dict(receipts)!r}",
             "",
             "",
-            "def test_lesson_has_a_recipe() -> None:",
-            "    assert STEPS or LESSON_ID",
+            "def _draft(**overrides):",
+            "    return LessonDraft(**{**copy.deepcopy(FIELDS), **overrides})",
+            "",
+            "",
+            "def test_preconditions_and_claimed_behaviour_hold(tmp_path):",
+            '    record = stage(_draft(), tmp_path, resolve=RECEIPTS.get)',
+            '    assert record["status"] == "staged"',
+            "",
+            "",
+            "def test_false_claimed_behaviour_is_refused(tmp_path):",
+            '    behaviour = FIELDS["behaviour"]',
+            '    value = behaviour["value"]',
+            '    wrong = {"eq": value + 1, "le": value + 1, "ge": value - 1}.get(',
+            '        behaviour["op"], value',
+            "    )",
+            "    receipts = copy.deepcopy(RECEIPTS)",
+            "    for receipt in receipts.values():",
+            '        receipt["metrics"][behaviour["metric"]] = wrong',
+            "    record = stage(_draft(), tmp_path / 'out', resolve=receipts.get)",
+            '    assert record["status"] == "rejected"',
+            "    assert not (tmp_path / 'out').exists()",
+            "",
+            "",
+            "def test_false_precondition_is_refused(tmp_path):",
+            '    false = {"key": "project_id", "op": "ne", "value": FIELDS["project_id"]}',
+            '    draft = _draft(preconditions=[*FIELDS["preconditions"], false])',
+            "    record = stage(draft, tmp_path / 'out', resolve=RECEIPTS.get)",
+            '    assert record["status"] == "rejected"',
+            "    assert not (tmp_path / 'out').exists()",
+            "",
+            "",
+            "def test_unresolved_citation_is_refused(tmp_path):",
+            '    missing = "missing"',
+            "    while missing in RECEIPTS:",
+            '        missing += "-x"',
+            '    draft = _draft(receipt_ids=[*FIELDS["receipt_ids"], missing])',
+            "    record = stage(draft, tmp_path / 'out', resolve=RECEIPTS.get)",
+            '    assert record["status"] == "rejected"',
+            "    assert not (tmp_path / 'out').exists()",
             "",
         ]
     )
 
 
-def _write_lesson(root: Path, draft: LessonDraft, record: dict[str, Any]) -> None:
+def _write_lesson(
+    root: Path,
+    draft: LessonDraft,
+    record: dict[str, Any],
+    receipts: Mapping[str, Any],
+) -> None:
     root.mkdir(parents=True, exist_ok=True)
     (root / "skill.md").write_text(_skill_markdown(draft), encoding="utf-8")
     (root / "recipe.md").write_text(_recipe_markdown(draft), encoding="utf-8")
-    (root / "regression_test.py").write_text(_regression_source(draft), encoding="utf-8")
+    (root / "regression_test.py").write_text(_regression_source(draft, receipts), encoding="utf-8")
     manifest = {
         "lesson_id": draft.lesson_id,
         "project_id": draft.project_id,
@@ -153,23 +238,111 @@ def _write_lesson(root: Path, draft: LessonDraft, record: dict[str, Any]) -> Non
     )
 
 
+def _text(value: object) -> bool:
+    return isinstance(value, str) and bool(value)
+
+
+def _number(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+def _load_receipt(resolve: Callable[[str], Any], receipt_id: str) -> Mapping[str, Any] | None:
+    try:
+        raw = resolve(receipt_id)
+    except LookupError:
+        return None
+    if isinstance(raw, (str, bytes)):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return None
+    return raw if isinstance(raw, Mapping) else None
+
+
+def _binding_ok(draft: LessonDraft, receipt: Mapping[str, Any]) -> bool:
+    binding = draft.binding
+    if not isinstance(binding, dict) or set(binding) != _BINDING_KEYS:
+        return False
+    if not all(_text(value) for value in binding.values()):
+        return False
+    if receipt.get("binding") != binding:
+        return False
+    if not _text(draft.outcome) or receipt.get("outcome") != draft.outcome:
+        return False
+    if not _text(draft.claim) or receipt.get("claim") != draft.claim:
+        return False
+    match = _SPAN.match(binding["source_span"])
+    if match is None:
+        return False
+    start, end = int(match.group(1)), int(match.group(2))
+    return canonical_json(receipt["claim"])[start:end] == draft.claim
+
+
+def _behaviour_ok(draft: LessonDraft, receipt: Mapping[str, Any]) -> bool:
+    behaviour = draft.behaviour
+    if not isinstance(behaviour, dict):
+        return False
+    metric, op, value = behaviour.get("metric"), behaviour.get("op"), behaviour.get("value")
+    if not _text(metric) or op not in _BEHAVIOUR_OPS or not _number(value):
+        return False
+    metrics = receipt.get("metrics")
+    if not isinstance(metrics, Mapping) or metric not in metrics:
+        return False
+    observed = metrics[metric]
+    return _number(observed) and _BEHAVIOUR_OPS[op](observed, value)
+
+
+def _preconditions_hold(draft: LessonDraft, fk6: Mapping[str, Any]) -> bool:
+    for item in fk6["preconditions"]:
+        if item["key"] != "project_id":
+            continue
+        equal = draft.project_id == item["value"]
+        if equal != (item["op"] == "eq"):
+            return False
+    return True
+
+
 def stage(
-    draft: LessonDraft, directory: Path | str, *, authorize: bool = False
+    draft: LessonDraft,
+    directory: Path | str,
+    *,
+    authorize: bool = False,
+    resolve: Callable[[str], Any] | None = None,
 ) -> dict[str, Any]:
     """Stage a lesson, or reject it.
 
     ``authorize=True`` never stages: a narrative lesson cannot carry action
-    authority, so the call raises :class:`ValueError` and writes nothing. With
-    ``authorize=False`` a narrative lesson or an empty receipt list is rejected
-    without writing anything. Every other lesson stages at revision 1 with zero
-    invocations and writes its skill, recipe, regression test, and manifest.
+    authority, so the call raises :class:`ValueError` and writes nothing. A
+    narrative lesson, an empty receipt list, a missing ``resolve``, or any cited
+    receipt that does not resolve to a mapping is rejected without writing.
+    Admission requires every cited receipt to carry the draft's binding,
+    outcome and claim (with the claim at the bound source span) and to satisfy
+    the claimed behaviour, and the draft's preconditions to hold. Admitted
+    lessons stage at revision 1 with zero invocations and write their skill,
+    recipe, regression test, and manifest.
     """
     if authorize:
         raise ValueError("narrative_cannot_authorize")
-    if draft.kind == "narrative" or not draft.receipt_ids:
+    if draft.kind == "narrative" or not draft.receipt_ids or resolve is None:
+        return _record(draft, status=REJECTED, revision=0)
+    receipts: dict[str, Mapping[str, Any]] = {}
+    for receipt_id in draft.receipt_ids:
+        receipt = _load_receipt(resolve, receipt_id)
+        if receipt is None:
+            return _record(draft, status=REJECTED, revision=0)
+        receipts[receipt_id] = receipt
+    fk6 = _fk6_lesson(draft)
+    if not all(
+        _binding_ok(draft, receipt) and _behaviour_ok(draft, receipt)
+        for receipt in receipts.values()
+    ) or not _preconditions_hold(draft, fk6):
         return _record(draft, status=REJECTED, revision=0)
     record = _record(draft, status=STAGED, revision=1)
-    _write_lesson(Path(directory) / draft.lesson_id, draft, record)
+    _write_lesson(Path(directory) / draft.lesson_id, draft, record, receipts)
     return record
 
 
