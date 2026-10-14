@@ -12,6 +12,7 @@ invariant below is verifiable offline with `bun test`.
 | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `mirror/`                  | The full upstream tree at the pinned revision (3716 files), inert: never installed or activated by mirroring. Its git tree id equals `upstream.tree`; the upstream sha256 pins read from here. |
 | `manifest.json`            | Upstream pin, the two packs, every asset record (target, adaptation kind, disposition, dependencies), reserved native command names, and disposition rules. |
+| `catalog.json`             | Every mirrored file, sorted by path, with sha256, classification, reason, and asset owner (or null). Rebuilt by `adapter/emit-catalog.ts`; `--check` names stale or unclassified files. |
 | `adapter/`                 | The deterministic transform, overlay engine, install plan, and install/update/remove lifecycle.                                          |
 | `adapter/emit-lock.ts`     | Build step: rebuilds `adapted.lock.json` from the mirror.                                                                                |
 | `adapter/upstream-check.ts` | Compares a candidate checkout with `mirror/` and prints one JSON report. Each file row has `status`. An overlay conflict clears when the candidate primary bytes equal the `mirror/` bytes. |
@@ -52,6 +53,12 @@ Every installable asset's mirror bytes must hash to its manifest pin, and the
 transform must reproduce the adapted sha256 recorded in `adapted.lock.json`.
 
 ## Dispositions
+
+Every mirror file is classified by its asset owner or the longest matching
+manifest disposition-rule prefix. Rules name each top-level family explicitly;
+there is no empty-prefix catch-all. Unclassified files and competing asset
+owners abort catalog generation. Hooks are deferred to WP7B, continuous-learning
+to WP7A, and the selected workflow skill families to WP3.
 
 `supported-without-changes` and `supported-with-adaptation` install.
 `reference-only`, `deferred`, and `excluded` are recorded but never install and
@@ -218,9 +225,12 @@ The drill in `session-system/tests/ecc-rollback.test.ts` re-pins, updates, rever
 ## Building
 
 ```bash
+bun session-system/ecc/adapter/emit-catalog.ts
+bun session-system/ecc/adapter/emit-catalog.ts --check
 bun session-system/ecc/adapter/emit-lock.ts
 ```
 
+Commit `catalog.json` whenever mirror bytes or manifest classifications change.
 Writes `session-system/ecc/adapted.lock.json`. Commit it whenever the mirror, a
 manifest record, an overlay, or a transform changes.
 

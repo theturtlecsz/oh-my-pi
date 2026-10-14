@@ -34,6 +34,7 @@ export function validateManifest(manifest: Manifest): void {
 	const ids = new Set<string>();
 	for (const asset of manifest.assets) {
 		if (ids.has(asset.id)) throw new ManifestError(`duplicate asset id '${asset.id}'`);
+		if (!asset.reason.trim()) throw new ManifestError(`asset '${asset.id}' reason must be non-empty`);
 		ids.add(asset.id);
 	}
 	// Targets must be unique across installable assets, so two packs can never
@@ -53,7 +54,12 @@ export function validateManifest(manifest: Manifest): void {
 			seen.add(assetId);
 		}
 	}
+	const prefixes = new Set<string>();
 	for (const rule of manifest.dispositionRules) {
+		if (!rule.prefix.trim()) throw new ManifestError("disposition rule prefix must be non-empty");
+		if (prefixes.has(rule.prefix)) throw new ManifestError(`duplicate disposition rule prefix '${rule.prefix}'`);
+		prefixes.add(rule.prefix);
+		if (!rule.reason.trim()) throw new ManifestError(`disposition rule '${rule.prefix}' reason must be non-empty`);
 		if (rule.prefix.includes("..") || rule.prefix.startsWith("/")) {
 			throw new ManifestError(`disposition rule prefix must be relative, got '${rule.prefix}'`);
 		}
