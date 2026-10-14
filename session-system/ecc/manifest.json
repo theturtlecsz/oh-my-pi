@@ -128,6 +128,22 @@
         "ecc-security-reviewer",
         "ecc-security-scan"
       ]
+    },
+    {
+      "id": "ecc-maintenance",
+      "lane": "maintenance",
+      "selection": {
+        "profileId": null,
+        "moduleIds": []
+      },
+      "assetIds": [
+        "ecc-benchmark-optimization-loop",
+        "ecc-agent-architecture-audit",
+        "ecc-loop-design-check",
+        "ecc-skill-stocktake",
+        "ecc-rules-distill",
+        "ecc-context-budget"
+      ]
     }
   ],
   "nativeCommandNames": ["intake", "plan", "execute", "summary", "done"],
@@ -1561,6 +1577,173 @@
         "mechanicalTests": [
           "session-system/tests/ecc-domain-packs.test.ts"
         ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-agent-architecture-audit",
+      "pack": "maintenance",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "skills/agent-architecture-audit",
+        "sha256": "64f57e232c3533877403703bc95b3c75df9de23f657899a306f13c703009ff57"
+      },
+      "target": {
+        "path": ".omp/skills/ecc-agent-architecture-audit",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "skill-namespaced",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "skill-discovery"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Maintenance pack member; helper paths pending WP3 adaptation; not installed",
+      "qualification": {
+        "mechanicalTests": [],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-loop-design-check",
+      "pack": "maintenance",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "skills/loop-design-check",
+        "sha256": "fc929d24cdbf2349deb56613d312f4731a911c2bf2d67c3834e9e45614aec658"
+      },
+      "target": {
+        "path": ".omp/skills/ecc-loop-design-check",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "skill-namespaced",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "skill-discovery"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Maintenance pack member; helper paths pending WP3 adaptation; not installed",
+      "qualification": {
+        "mechanicalTests": [],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-skill-stocktake",
+      "pack": "maintenance",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "skills/skill-stocktake",
+        "sha256": "aa8f287c48c5a33bf15094358ffccbe0d4faff9eee9fa2ffcd70c8e9f3d22cdd"
+      },
+      "target": {
+        "path": ".omp/skills/ecc-skill-stocktake",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "skill-namespaced",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "skill-discovery"
+      },
+      "dependencies": ["scripts/quick-diff.sh", "scripts/save-results.sh", "scripts/scan.sh"],
+      "runtimes": ["bash"],
+      "disposition": "deferred",
+      "reason": "Maintenance pack member; helper paths pending WP3 adaptation; not installed",
+      "qualification": {
+        "mechanicalTests": [],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-rules-distill",
+      "pack": "maintenance",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "skills/rules-distill",
+        "sha256": "c451a63f96077f92ef6b40c4310f5a470a5d05103a181af518b115c4e828292c"
+      },
+      "target": {
+        "path": ".omp/skills/ecc-rules-distill",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "skill-namespaced",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "skill-discovery"
+      },
+      "dependencies": ["scripts/scan-rules.sh", "scripts/scan-skills.sh"],
+      "runtimes": ["bash"],
+      "disposition": "deferred",
+      "reason": "Maintenance pack member; helper paths pending WP3 adaptation; not installed",
+      "qualification": {
+        "mechanicalTests": [],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": {
+        "removeOwnedArtifactOnly": true
+      }
+    },
+    {
+      "id": "ecc-context-budget",
+      "pack": "maintenance",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "skills/context-budget",
+        "sha256": "920c5edde48e495b267fb0d42d8411c8b75ce1d8ab76e793b2eb6d23da01b0f1"
+      },
+      "target": {
+        "path": ".omp/skills/ecc-context-budget",
+        "scope": "project"
+      },
+      "adaptation": {
+        "kind": "skill-namespaced",
+        "transformVersion": 1
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "skill-discovery"
+      },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Maintenance pack member; helper paths pending WP3 adaptation; not installed",
+      "qualification": {
+        "mechanicalTests": [],
         "behavioralTrial": null,
         "qualifiedRelease": null
       },
