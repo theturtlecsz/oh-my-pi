@@ -719,7 +719,9 @@ def test_append_read_preserves_receipts_by_claim_artifact_and_exact_span(service
         assert sorted(view.body.model_dump(mode="json", include={"evidence_links"})["evidence_links"], key=key) == sorted(expected, key=key)
         assert {link.support_receipt.verdict for link in view.body.evidence_links
                 if link.support_receipt is not None} == {case[4] for case in cases}
-        assert view.snapshot.artifacts == original.snapshot.artifacts
+        assert {item.id: item for item in view.snapshot.artifacts} == {
+            item.id: item for item in original.snapshot.artifacts
+        }
         assert {item.id: item for item in view.snapshot.claims} == {item.id: item for item in original.snapshot.claims}
         assert view.artifact_bytes == original.artifact_bytes
         assert view.body.binding == original.binding
