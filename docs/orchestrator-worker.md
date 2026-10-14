@@ -1,5 +1,7 @@
 # Orchestrator Worker Launch Contract
 
+Work routing authority: [routing-policy.v1.json](../python/omp-work/src/omp_work/routing/routing-policy.v1.json). [Governance inventory](model-policy-governance.md) distinguishes declared routes, session selection and invocation evidence. Worker configuration values below remain examples.
+
 This document defines the execution environment, invocation semantics, sandbox isolation, and model proxy configuration for orchestrator workers executing implementation turns (`implement` stage) and test evaluation (`evaluate` stage).
 
 ## Overview

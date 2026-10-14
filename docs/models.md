@@ -1,5 +1,7 @@
 # Model and Provider Configuration (`models.yml` / `models.yaml`)
 
+Work routing authority: [routing-policy.v1.json](../python/omp-work/src/omp_work/routing/routing-policy.v1.json). [Governance inventory](model-policy-governance.md) distinguishes declared routes, session selection and invocation evidence. This configuration guide is separate from Work stage routing.
+
 This document describes how the coding-agent currently loads models, applies overrides, resolves credentials, and chooses models at runtime.
 
 ## What controls model behavior
