@@ -17,6 +17,47 @@ from omp_work.nsi_route import (
 )
 from omp_work.v1.canonical import sha256
 
+RESEAL_COMMAND = (
+    'uv run --project python/omp-work --extra dev python -m omp_work.nsi6_reseal '
+    '--origin "$(git rev-parse HEAD)"'
+)
+
+
+def _differing_pins(actual: object, expected: object, prefix: str = "") -> list[str]:
+    if not isinstance(actual, dict) or not isinstance(expected, dict):
+        if actual != expected:
+            return [prefix] if prefix else []
+        return []
+    diffs: list[str] = []
+    for key in sorted(actual.keys() | expected.keys()):
+        path = f"{prefix}.{key}" if prefix else str(key)
+        if key not in actual:
+            val = expected[key]
+            if isinstance(val, dict) and val:
+                diffs.extend(_differing_pins({}, val, path))
+            else:
+                diffs.append(path)
+        elif key not in expected:
+            val = actual[key]
+            if isinstance(val, dict) and val:
+                diffs.extend(_differing_pins(val, {}, path))
+            else:
+                diffs.append(path)
+        else:
+            val_a = actual[key]
+            val_b = expected[key]
+            if isinstance(val_a, dict) or isinstance(val_b, dict):
+                diffs.extend(
+                    _differing_pins(
+                        val_a if isinstance(val_a, dict) else {},
+                        val_b if isinstance(val_b, dict) else {},
+                        path,
+                    )
+                )
+            elif val_a != val_b:
+                diffs.append(path)
+    return sorted(diffs)
+
 
 def qualification(report: dict) -> dict:
     """Re-execute both bounded arms, rescore labels, and rebuild every total."""
@@ -25,8 +66,17 @@ def qualification(report: dict) -> dict:
     body = {key: value for key, value in report.items() if key != "report_sha256"}
     if report.get("sealed") is not True or report.get("report_sha256") != sha256(body):
         raise ValueError("unsealed report or report digest drift")
-    if report.get("pins") != nsi_eval.report_pins():
-        raise ValueError("implementation/schema drift")
+    expected_pins = nsi_eval.report_pins()
+    if report.get("pins") != expected_pins:
+        differing = _differing_pins(
+            report.get("pins") if isinstance(report.get("pins"), dict) else {},
+            expected_pins,
+        )
+        pins_list = ", ".join(differing)
+        raise ValueError(
+            f"implementation/schema drift: {pins_list}; "
+            f"for an intended source change docs/nsi6 is resealed with exactly: {RESEAL_COMMAND}"
+        )
     corpus = nsi_route.CORPUS
     document = load_corpus(corpus / "inputs", corpus / "nsi6-manifest.json")
     if report.get("corpus") != verify(corpus / "inputs", corpus / "nsi6-manifest.json").model_dump(mode="json"):
