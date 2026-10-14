@@ -124,7 +124,8 @@ def _observations(snapshot: Snapshot, shared: Iterable[object]) -> dict[str, dic
 
 
 def _extend(target: object, items: list[object]) -> None:
-    assert isinstance(target, list)
+    if not isinstance(target, list):
+        raise AssertionError
     for item in items:
         if item not in target:
             target.append(item)
@@ -134,7 +135,8 @@ def _source(record: Receipt | Observation | None) -> dict[str, object] | None:
     if record is None:
         return None
     data = _plain(record)
-    assert isinstance(data, dict)
+    if not isinstance(data, dict):
+        raise AssertionError
     data["payload"] = json.loads(str(data.pop("payload_json")))
     data["kind"] = "observation" if isinstance(record, Observation) else "receipt"
     return data
