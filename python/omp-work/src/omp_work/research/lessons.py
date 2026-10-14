@@ -85,11 +85,13 @@ def _safe_segment(value: object) -> str:
 
 
 def _precondition(raw: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"unknown_precondition_key:{raw!r}")
     key = raw.get("key")
     op = raw.get("op")
-    if key not in _PRECONDITION_KEYS:
+    if not isinstance(key, str) or key not in _PRECONDITION_KEYS:
         raise ValueError(f"unknown_precondition_key:{key!r}")
-    if op not in _PRECONDITION_OPS:
+    if not isinstance(op, str) or op not in _PRECONDITION_OPS:
         raise ValueError(f"unknown_precondition_op:{op!r}")
     return {"key": key, "op": op, "value": raw.get("value")}
 
@@ -139,11 +141,13 @@ def _recipe_markdown(draft: LessonDraft) -> str:
 
 
 def _regression_source(draft: LessonDraft, receipts: Mapping[str, Any]) -> str:
-    """Generated test: the lesson's preconditions and claimed behaviour hold.
+    """Generated test: preconditions, claimed behaviour, and citation admission.
 
     It re-stages the draft against its embedded receipts and asserts admission,
-    then asserts a false claimed behaviour, a false precondition, and an
-    unresolved citation are each refused and write no directory.
+    then asserts a false claimed behaviour, a false project precondition, a
+    false repository precondition, an unresolved citation, an unrelated PASS,
+    and a receipt that proves a different claim are each refused and write no
+    directory.
     """
     fields = {
         "lesson_id": draft.lesson_id,
@@ -160,7 +164,7 @@ def _regression_source(draft: LessonDraft, receipts: Mapping[str, Any]) -> str:
     }
     return "\n".join(
         [
-            '"""Regression check for a staged lesson: preconditions and claimed behaviour."""',
+            '"""Regression check: preconditions, claimed behaviour, and citation admission."""',
             "",
             "import copy",
             "",
@@ -190,6 +194,8 @@ def _regression_source(draft: LessonDraft, receipts: Mapping[str, Any]) -> str:
             '        receipt["metrics"][behaviour["metric"]] = wrong',
             "    record = stage(_draft(), tmp_path / 'out', resolve=receipts.get)",
             '    assert record["status"] == "rejected"',
+            '    assert record["revision"] == 0',
+            '    assert record["fk6_lesson"] is None',
             "    assert not (tmp_path / 'out').exists()",
             "",
             "",
@@ -198,6 +204,21 @@ def _regression_source(draft: LessonDraft, receipts: Mapping[str, Any]) -> str:
             '    draft = _draft(preconditions=[*FIELDS["preconditions"], false])',
             "    record = stage(draft, tmp_path / 'out', resolve=RECEIPTS.get)",
             '    assert record["status"] == "rejected"',
+            '    assert record["revision"] == 0',
+            '    assert record["fk6_lesson"] is None',
+            "    assert not (tmp_path / 'out').exists()",
+            "",
+            "",
+            "def test_false_repository_precondition_is_refused(tmp_path):",
+            "    receipts = copy.deepcopy(RECEIPTS)",
+            "    for receipt in receipts.values():",
+            '        receipt["repository"] = "actual"',
+            '    false = {"key": "repository", "op": "eq", "value": "other"}',
+            '    draft = _draft(preconditions=[*FIELDS["preconditions"], false])',
+            "    record = stage(draft, tmp_path / 'out', resolve=receipts.get)",
+            '    assert record["status"] == "rejected"',
+            '    assert record["revision"] == 0',
+            '    assert record["fk6_lesson"] is None',
             "    assert not (tmp_path / 'out').exists()",
             "",
             "",
@@ -208,6 +229,33 @@ def _regression_source(draft: LessonDraft, receipts: Mapping[str, Any]) -> str:
             '    draft = _draft(receipt_ids=[*FIELDS["receipt_ids"], missing])',
             "    record = stage(draft, tmp_path / 'out', resolve=RECEIPTS.get)",
             '    assert record["status"] == "rejected"',
+            '    assert record["revision"] == 0',
+            '    assert record["fk6_lesson"] is None',
+            "    assert not (tmp_path / 'out').exists()",
+            "",
+            "",
+            "def test_unrelated_pass_is_refused(tmp_path):",
+            "    receipts = copy.deepcopy(RECEIPTS)",
+            "    for receipt in receipts.values():",
+            '        receipt["outcome"] = "PASS"',
+            '        binding = dict(receipt["binding"])',
+            '        binding["evaluator"] = str(binding["evaluator"]) + "-unrelated"',
+            '        receipt["binding"] = binding',
+            "    record = stage(_draft(), tmp_path / 'out', resolve=receipts.get)",
+            '    assert record["status"] == "rejected"',
+            '    assert record["revision"] == 0',
+            '    assert record["fk6_lesson"] is None',
+            "    assert not (tmp_path / 'out').exists()",
+            "",
+            "",
+            "def test_different_claim_is_refused(tmp_path):",
+            "    receipts = copy.deepcopy(RECEIPTS)",
+            "    for receipt in receipts.values():",
+            '        receipt["claim"] = str(receipt["claim"]) + " (different claim)"',
+            "    record = stage(_draft(), tmp_path / 'out', resolve=receipts.get)",
+            '    assert record["status"] == "rejected"',
+            '    assert record["revision"] == 0',
+            '    assert record["fk6_lesson"] is None',
             "    assert not (tmp_path / 'out').exists()",
             "",
         ]
@@ -286,8 +334,10 @@ def _behaviour_ok(draft: LessonDraft, receipt: Mapping[str, Any]) -> bool:
     behaviour = draft.behaviour
     if not isinstance(behaviour, dict):
         return False
-    metric, op, value = behaviour.get("metric"), behaviour.get("op"), behaviour.get("value")
-    if not _text(metric) or op not in _BEHAVIOUR_OPS or not _number(value):
+    metric = behaviour.get("metric")
+    op = behaviour.get("op")
+    value = behaviour.get("value")
+    if not _text(metric) or not isinstance(op, str) or op not in _BEHAVIOUR_OPS or not _number(value):
         return False
     metrics = receipt.get("metrics")
     if not isinstance(metrics, Mapping) or metric not in metrics:
@@ -296,14 +346,45 @@ def _behaviour_ok(draft: LessonDraft, receipt: Mapping[str, Any]) -> bool:
     return _number(observed) and _BEHAVIOUR_OPS[op](observed, value)
 
 
-def _preconditions_hold(draft: LessonDraft, fk6: Mapping[str, Any]) -> bool:
-    for item in fk6["preconditions"]:
-        if item["key"] != "project_id":
-            continue
-        equal = draft.project_id == item["value"]
-        if equal != (item["op"] == "eq"):
-            return False
+def _precondition_observed(
+    draft: LessonDraft, receipt: Mapping[str, Any], key: str
+) -> tuple[bool, Any]:
+    """Return whether ``key`` is present and the value admission compares.
+
+    ``project_id`` is the draft's project. ``repository`` is that field on the
+    receipt; a receipt that omits it does not satisfy the precondition.
+    """
+    if key == "project_id":
+        return True, draft.project_id
+    if key not in receipt:
+        return False, None
+    return True, receipt[key]
+
+
+def _preconditions_hold(
+    draft: LessonDraft,
+    preconditions: Sequence[Mapping[str, Any]],
+    receipts: Mapping[str, Mapping[str, Any]],
+) -> bool:
+    for item in preconditions:
+        for receipt in receipts.values():
+            present, actual = _precondition_observed(draft, receipt, item["key"])
+            if not present:
+                return False
+            equal = actual == item["value"]
+            if equal != (item["op"] == "eq"):
+                return False
     return True
+
+
+def _admitted(draft: LessonDraft, receipts: Mapping[str, Mapping[str, Any]]) -> bool:
+    """Binding, behaviour, and preconditions. A bad precondition key or op raises."""
+    if not all(
+        _binding_ok(draft, receipt) and _behaviour_ok(draft, receipt)
+        for receipt in receipts.values()
+    ):
+        return False
+    return _preconditions_hold(draft, [_precondition(item) for item in draft.preconditions], receipts)
 
 
 def stage(
@@ -321,9 +402,13 @@ def stage(
     receipt that does not resolve to a mapping is rejected without writing.
     Admission requires every cited receipt to carry the draft's binding,
     outcome and claim (with the claim at the bound source span) and to satisfy
-    the claimed behaviour, and the draft's preconditions to hold. Admitted
-    lessons stage at revision 1 with zero invocations and write their skill,
-    recipe, regression test, and manifest.
+    the claimed behaviour. ``project_id`` preconditions compare the draft;
+    ``repository`` preconditions compare each receipt and fail when the key is
+    absent. A bad precondition key or operator raises :class:`ValueError` and
+    writes nothing. Any other miss, including a malformed binding or behaviour,
+    rejects with revision 0, no FK-6 lesson, and no directory. Admitted lessons
+    stage at revision 1 with zero invocations and write their skill, recipe,
+    regression test, and manifest.
     """
     if authorize:
         raise ValueError("narrative_cannot_authorize")
@@ -335,11 +420,7 @@ def stage(
         if receipt is None:
             return _record(draft, status=REJECTED, revision=0)
         receipts[receipt_id] = receipt
-    fk6 = _fk6_lesson(draft)
-    if not all(
-        _binding_ok(draft, receipt) and _behaviour_ok(draft, receipt)
-        for receipt in receipts.values()
-    ) or not _preconditions_hold(draft, fk6):
+    if not _admitted(draft, receipts):
         return _record(draft, status=REJECTED, revision=0)
     record = _record(draft, status=STAGED, revision=1)
     _write_lesson(Path(directory) / draft.lesson_id, draft, record, receipts)
