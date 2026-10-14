@@ -1,0 +1,36 @@
+[
+	{
+		"client_ref": "omp-610-ecc-wp3",
+		"title": "ECC WP3: mirror ECC's development workflow through OMP",
+		"description": "Mirror ECC's development workflow through OMP's existing intake, plan, execute, summary and done path, as specified in docs/programme/ECC-IMPLEMENTATION-SPEC.md §6 (WP3), with the adoption map in §5 and the rollout order and stop conditions in §8.",
+		"acceptance_criteria": [
+			"With the pack installed, /intake, /plan, /execute, /summary and /done remain native OMP commands and are not replaced or shadowed",
+			"Workflow guidance is delivered as rulebook rules read via rule://, and no prompt carries a full rule body",
+			"Every tool and path named by an adopted skill resolves in OMP",
+			"The pack adds no mandatory reviewer, coverage rule, commit, push or approval step",
+			"Reuse records live in the existing intake and plan records; no second backlog exists",
+			"A trial of 5-10 tasks (Python/PostgreSQL, TypeScript, Rust, and one non-OMP repo; models fixed) records results, interventions, usage and workflow growth"
+		],
+		"project": "Session System",
+		"parent": "OMP-610"
+	},
+	{
+		"client_ref": "omp-610-ecc-wp7",
+		"title": "ECC WP7: adapt learning and lifecycle into existing OMP paths",
+		"description": "Adapt ECC's learning and lifecycle features into existing OMP paths, as specified in docs/programme/ECC-IMPLEMENTATION-SPEC.md §6 (WP7), with the adoption map in §5 and rollout and stop conditions in §8. 7A and 7B are qualified separately.",
+		"acceptance_criteria": [
+			"Lesson records are append-only and hold trigger, action, scope, source task, evidence, outcomes for and against, review state and provenance",
+			"Optional lessons are capped by count and by tokens; mandatory criteria are never counted against the caps",
+			"Rejected or contradicted lessons are never promoted, and promotion requires owner approval",
+			"No second memory authority and no observer daemon exists",
+			"Event contracts are inventoried before any helper is wired to them",
+			"Compaction and restart recovery keep scope and cancellation intact",
+			"Narrative memory authorizes nothing",
+			"When an optional helper fails, it yields a diagnosis and the native operation continues",
+			"No model loop runs unless requested",
+			"Compiled OMP never self-launches as a hook"
+		],
+		"project": "Session System",
+		"parent": "OMP-610"
+	}
+]

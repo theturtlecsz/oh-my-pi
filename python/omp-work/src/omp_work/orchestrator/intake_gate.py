@@ -87,7 +87,8 @@ def verify(
         return Refusal(INTAKE_RECEIPT_FORGED)
     body = read_revision(cur, workspace_id=workspace_id, run_id=head.run_id, revision=revision).body
     binding = evaluate_provenance(cur, body).binding
-    assert binding is not None
+    if binding is None:
+        raise AssertionError
     stored = row[0]["binding"]
     if any(stored[name] != getattr(binding, name) for name in (
         "contract_hash", "claim_set_hash", "source_hash", "rule_bundle_hash", "schema_hash",

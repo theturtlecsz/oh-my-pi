@@ -367,27 +367,31 @@ export function scan(source: string, path: string): ExternalReadHit[] {
 	return hits;
 }
 
-/** Tracked test sources: `*.test.ts[x]`, `test_*.py`, `*_test.py`, and ts/js/py under a `tests/` segment. */
+/** Tracked TS/JS test/spec sources, Python tests, and test(s)/ helpers. */
 export function isTestSource(filePath: string): boolean {
 	const p = filePath.replaceAll("\\", "/");
-	if (/\.test\.(ts|tsx)$/.test(p)) return true;
+	if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs|mts|cts)$/.test(p)) return true;
 	if (/(^|\/)test_[^/]*\.py$/.test(p)) return true;
 	if (/(^|\/)[^/]*_test\.py$/.test(p)) return true;
-	if (/(^|\/)tests\//.test(p) && /\.(ts|tsx|js|mjs|py)$/.test(p)) return true;
+	if (/(^|\/)tests?\//.test(p) && /\.(ts|tsx|js|jsx|mjs|cjs|mts|cts|py)$/.test(p)) return true;
 	return false;
+}
+
+/** Enumerate tracked test sources under the current directory, without native dependencies. */
+export async function listTestSources(): Promise<string[]> {
+	const result = await $`git ls-files -z`.quiet().nothrow();
+	if (result.exitCode !== 0) {
+		throw new Error(`git ls-files failed: ${result.stderr.toString().trim()}`);
+	}
+	return result
+		.text()
+		.split("\0")
+		.filter(line => line.length > 0 && isTestSource(line));
 }
 
 /** Scan every tracked test source under the current directory. */
 export async function scanRepository(): Promise<Array<ExternalReadHit & { file: string }>> {
-	const result = await $`git ls-files`.quiet().nothrow();
-	if (result.exitCode !== 0) {
-		throw new Error(`git ls-files failed: ${result.stderr.toString().trim()}`);
-	}
-	const files = result
-		.text()
-		.split("\n")
-		.map(line => line.trim())
-		.filter(line => line.length > 0 && isTestSource(line));
+	const files = await listTestSources();
 	const hits: Array<ExternalReadHit & { file: string }> = [];
 	for (const file of files) {
 		let source: string;
