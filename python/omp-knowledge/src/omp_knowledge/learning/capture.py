@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol, runtime_checkable
 from uuid import UUID, uuid4
@@ -156,11 +156,116 @@ def _event_trace(
     }
 
 
+def _present_identifier(value: Any) -> str | None:
+    """A non-empty id as text. Empty, null, and other false values are absent."""
+    if isinstance(value, str):
+        return value if value else None
+    if value:
+        return str(value)
+    return None
+
+
+def _trace_event_work_id(trace: Mapping[str, Any]) -> str | None:
+    """Payload ``work_id`` when that value is non-empty, else the aggregate id.
+
+    A payload work id that differs from ``aggregate_id`` is the event work id.
+    That difference is not a conflict.
+    """
+    payload = trace.get("payload")
+    if isinstance(payload, dict):
+        work_id = _present_identifier(payload.get("work_id"))
+        if work_id is not None:
+            return work_id
+    return _present_identifier(trace.get("aggregate_id"))
+
+
 def _event_work_id(event: Any) -> str:
     """The work item a captured event is about: payload ``work_id`` or the aggregate."""
-    payload = event.payload if isinstance(event.payload, dict) else {}
-    work_id = payload.get("work_id")
-    return str(work_id) if work_id else str(event.aggregate_id)
+    work_id = _trace_event_work_id(
+        {
+            "payload": event.payload if isinstance(event.payload, dict) else {},
+            "aggregate_id": str(event.aggregate_id),
+        }
+    )
+    return work_id if work_id is not None else str(event.aggregate_id)
+
+
+def _record_member_id(
+    work_record: Mapping[str, Any], group: str, key: str
+) -> str | None:
+    nested = work_record.get(group)
+    if not isinstance(nested, dict):
+        return None
+    return _present_identifier(nested.get(key))
+
+
+def _binding_ids(trace: Mapping[str, Any]) -> tuple[str | None, str | None, str | None]:
+    """``work_id``, ``candidate_id``, and ``revision_id`` copied from one trace.
+
+    Candidate and revision come only from ``work_record["candidate"]["candidate_id"]``
+    and ``work_record["revision"]["revision_id"]``, and only when ``work_record``
+    is a dict whose ``work_id`` equals the event work id. A cited receipt is
+    never a source for either id.
+
+    A conflict is both sides present and different: the record work id versus
+    the event work id, ``payload["candidate_id"]`` versus the record candidate,
+    or ``payload["revision_id"]`` versus the record revision. On conflict the
+    stored candidate and revision are null. A payload that omits ``candidate_id``
+    is not a conflict.
+    """
+    event_work_id = _trace_event_work_id(trace)
+    work_record = trace.get("work_record")
+    if not isinstance(work_record, dict):
+        return event_work_id, None, None
+    record_work_id = _present_identifier(work_record.get("work_id"))
+    if (
+        record_work_id is None
+        or event_work_id is None
+        or record_work_id != event_work_id
+    ):
+        return event_work_id, None, None
+    candidate_id = _record_member_id(work_record, "candidate", "candidate_id")
+    revision_id = _record_member_id(work_record, "revision", "revision_id")
+    payload = trace.get("payload")
+    payload_map = payload if isinstance(payload, dict) else {}
+    payload_candidate = (
+        _present_identifier(payload_map.get("candidate_id"))
+        if "candidate_id" in payload_map
+        else None
+    )
+    payload_revision = (
+        _present_identifier(payload_map.get("revision_id"))
+        if "revision_id" in payload_map
+        else None
+    )
+    candidate_conflict = (
+        payload_candidate is not None
+        and candidate_id is not None
+        and payload_candidate != candidate_id
+    )
+    revision_conflict = (
+        payload_revision is not None
+        and revision_id is not None
+        and payload_revision != revision_id
+    )
+    if candidate_conflict or revision_conflict:
+        return event_work_id, None, None
+    return event_work_id, candidate_id, revision_id
+
+
+def _source_with_binding(source: SourceIdentity, trace: Any) -> SourceIdentity:
+    """Keep the event identity and set the three binding ids from ``trace``."""
+    if not isinstance(trace, Mapping):
+        work_id, candidate_id, revision_id = None, None, None
+    else:
+        work_id, candidate_id, revision_id = _binding_ids(trace)
+    return source.model_copy(
+        update={
+            "work_id": work_id,
+            "candidate_id": candidate_id,
+            "revision_id": revision_id,
+        }
+    )
 
 
 def _queue_events(
@@ -173,7 +278,7 @@ def _queue_events(
     records: NativeRecords | None = None,
 ) -> None:
     now = _utcnow().isoformat()
-    enriched: list[tuple[Any, SourceIdentity, dict[str, Any]]] = []
+    enriched: list[tuple[Any, SourceIdentity, str]] = []
     for event in page.events:
         if event.event_type not in capture_types:
             continue
@@ -190,10 +295,12 @@ def _queue_events(
             work_record=work_record,
             research_record=research_record,
         )
-        enriched.append((event, source, trace))
+        trace_json = canonical_json(trace)
+        source = _source_with_binding(source, json.loads(trace_json))
+        enriched.append((event, source, trace_json))
 
     with store.transaction() as conn:
-        for event, source, trace in enriched:
+        for event, source, trace_json in enriched:
             conn.execute(
                 """
                 INSERT OR IGNORE INTO units (
@@ -206,7 +313,7 @@ def _queue_events(
                     compute_unit_id(workspace_id, event.event_id),
                     workspace_id,
                     str(event.event_id),
-                    canonical_json(trace),
+                    trace_json,
                     model,
                     profile,
                     source.model_dump_json(),
@@ -372,7 +479,21 @@ def _process_units(
             "SELECT * FROM units WHERE unit_id = ?", (unit_id,)
         ).fetchone()
         trace = json.loads(unit["trace_json"])
-        source = SourceIdentity.model_validate_json(unit["source_json"])
+        # The queued source can be overwritten before retry. Recompute the three
+        # ids from the stored trace; retry makes no NativeRecords call.
+        source = _source_with_binding(
+            SourceIdentity.model_validate_json(unit["source_json"]),
+            trace,
+        )
+        bound_source_json = source.model_dump_json()
+        if bound_source_json != unit["source_json"]:
+            store.execute(
+                """
+                UPDATE units SET source_json = ?, updated_at = ?
+                WHERE unit_id = ?
+                """,
+                (bound_source_json, _utcnow().isoformat(), unit_id),
+            )
         event_id = str(unit["event_id"])
         attempts = int(unit["attempts"])
         # The queued row's attribution is what the unit was captured under; a
@@ -560,7 +681,10 @@ def drain(
     drain — it is not a unit count, because most scanned events are not of a
     captured type. When ``records`` is supplied, each ``complete_work`` or
     ``complete_execution_item`` unit's trace carries that item's own bounded
-    execution and research records before generation.
+    execution and research records before generation. The unit source copies
+    work_id, candidate_id, and revision_id from that stored trace.
+    ``_process_units`` sets those ids again from the trace, including on retry,
+    which does not read records.
     """
     workspace = str(workspace_id)
     started_at = _utcnow().isoformat()
