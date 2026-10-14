@@ -3802,9 +3802,9 @@
     {
       "path": "agents/python-reviewer.md",
       "sha256": "d2180b115f5840383268c13d5d075b0541fe7ef2a1ac8ecd5d835266ca1b27ce",
-      "classification": "reference-only",
-      "reason": "Upstream agents family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-python-reviewer"
     },
     {
       "path": "agents/pytorch-build-resolver.md",
@@ -3851,16 +3851,16 @@
     {
       "path": "agents/rust-reviewer.md",
       "sha256": "10af67c5764677596d43f32a952d8ec28662bb353fd986d726daefd3382ebeca",
-      "classification": "reference-only",
-      "reason": "Upstream agents family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-rust-reviewer"
     },
     {
       "path": "agents/security-reviewer.md",
       "sha256": "813e4062bed5f42ab25dd02a0070f682058ffe9508198fcfdbb2c31296f93b7b",
-      "classification": "reference-only",
-      "reason": "Upstream agents family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-security-reviewer"
     },
     {
       "path": "agents/seo-specialist.md",
@@ -16654,9 +16654,9 @@
     {
       "path": "rules/common/security.md",
       "sha256": "58f0acc56331b8d554dd036b8a1d5b2305a908e3960ff1e2d7e55223d5918bc3",
-      "classification": "reference-only",
-      "reason": "Upstream rules family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-common-security-rule"
     },
     {
       "path": "rules/common/testing.md",
@@ -17018,44 +17018,44 @@
     {
       "path": "rules/python/coding-style.md",
       "sha256": "f9d6d7a39c5f5ea809579fecac591f390fa9264c088c7e209d464d5244747003",
-      "classification": "reference-only",
-      "reason": "Upstream rules family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-python-coding-style-rule"
     },
     {
       "path": "rules/python/fastapi.md",
       "sha256": "e796ecbe93c4d50de6ab34ab1d8fc35db5e6bac03144cbaef09939ae5c3b6e2a",
-      "classification": "reference-only",
-      "reason": "Upstream rules family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-python-fastapi-rule"
     },
     {
       "path": "rules/python/hooks.md",
       "sha256": "7ebd12233f6917905d5653a63afe2361450ed732fd965de55055ed5ffd3c14a7",
-      "classification": "reference-only",
-      "reason": "Upstream rules family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-python-hooks-rule"
     },
     {
       "path": "rules/python/patterns.md",
       "sha256": "d9cab9b536321ea7efc6180668fd48820deaf571400db732f0ca17bdda92b7d0",
-      "classification": "reference-only",
-      "reason": "Upstream rules family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-python-patterns-rule"
     },
     {
       "path": "rules/python/security.md",
       "sha256": "6bbbb6c800cdfef23c3f9a5055ce31096a7724b51f0d528935f6c32970639453",
-      "classification": "reference-only",
-      "reason": "Upstream rules family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-python-security-rule"
     },
     {
       "path": "rules/python/testing.md",
       "sha256": "92655aa5047ee456501ad6605c428680bac6433965f89ce531fe79627004e8c6",
-      "classification": "reference-only",
-      "reason": "Upstream rules family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-python-testing-rule"
     },
     {
       "path": "rules/react-native/accessibility.md",
@@ -17193,30 +17193,30 @@
     {
       "path": "rules/rust/hooks.md",
       "sha256": "a7494896f1c8838f31cd72846f435e6388f91bf94e0d91eb226dd9b5b684ca55",
-      "classification": "reference-only",
-      "reason": "Upstream rules family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-rust-hooks-rule"
     },
     {
       "path": "rules/rust/patterns.md",
       "sha256": "08a09f7cf61991f4bdb69e388a9df546ea490c5c822aebcdd066e227cb06e16b",
-      "classification": "reference-only",
-      "reason": "Upstream rules family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-rust-patterns-rule"
     },
     {
       "path": "rules/rust/security.md",
       "sha256": "09c5225869c09fc605f8495ae2c3728093e3b652dcc0ab55a9186946f5c67995",
-      "classification": "reference-only",
-      "reason": "Upstream rules family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-rust-security-rule"
     },
     {
       "path": "rules/rust/testing.md",
       "sha256": "54987d858918a433aea954c272c519d7ccb113834013fb79cc77ef7e6d571c8e",
-      "classification": "reference-only",
-      "reason": "Upstream rules family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-rust-testing-rule"
     },
     {
       "path": "rules/swift/coding-style.md",
@@ -17256,37 +17256,37 @@
     {
       "path": "rules/typescript/coding-style.md",
       "sha256": "cb6fbe555d700a65d466fc27377fbb66d6da0e2bcf4411656918f6a45402af1a",
-      "classification": "reference-only",
-      "reason": "Upstream rules family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-typescript-coding-style-rule"
     },
     {
       "path": "rules/typescript/hooks.md",
       "sha256": "930bbe5d5a66e0022a55c87d5a17765d1633669620f9a3be6815f3ab4ddcd6b4",
-      "classification": "reference-only",
-      "reason": "Upstream rules family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-typescript-hooks-rule"
     },
     {
       "path": "rules/typescript/patterns.md",
       "sha256": "20870f78aa32429fe13f35b415e9f6f8f7809e39c460cf8146d181b7306159fd",
-      "classification": "reference-only",
-      "reason": "Upstream rules family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-typescript-patterns-rule"
     },
     {
       "path": "rules/typescript/security.md",
       "sha256": "86b14a5a56f4e61750ab30ca50bd264f52f90f5358303f3028d41030a4c50f18",
-      "classification": "reference-only",
-      "reason": "Upstream rules family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-typescript-security-rule"
     },
     {
       "path": "rules/typescript/testing.md",
       "sha256": "92e3d02b4fff30899bc1a2af043d74941adbf3b2c0e972d2fcd2c68c9c2ea70b",
-      "classification": "reference-only",
-      "reason": "Upstream rules family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-typescript-testing-rule"
     },
     {
       "path": "rules/vue/coding-style.md",
@@ -19902,16 +19902,16 @@
     {
       "path": "skills/api-design/SKILL.md",
       "sha256": "bfae53167acc91caff0ff9ab73a80ee3fd92caccdfa445c88302c3bf95255156",
-      "classification": "reference-only",
-      "reason": "Upstream skills family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-api-design"
     },
     {
       "path": "skills/architecture-decision-records/SKILL.md",
       "sha256": "525e51b4ed98222cd49ea7d2e42b51a010ecab391b25022a86164258c14b8bb0",
-      "classification": "reference-only",
-      "reason": "Upstream skills family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-architecture-decision-records"
     },
     {
       "path": "skills/article-writing/SKILL.md",
@@ -20210,9 +20210,9 @@
     {
       "path": "skills/coding-standards/SKILL.md",
       "sha256": "e80544c3d1eac5b14f22022146bd91a6b0ecc30e099cf5181894853aeb81dee1",
-      "classification": "reference-only",
-      "reason": "Upstream skills family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-coding-standards"
     },
     {
       "path": "skills/competitive-platform-analysis/SKILL.md",
@@ -20525,9 +20525,9 @@
     {
       "path": "skills/database-migrations/SKILL.md",
       "sha256": "ad7f2f04ca03e592a16e2a539d8c6e90bf4e08892408820ce99a53e9d07775de",
-      "classification": "reference-only",
-      "reason": "Upstream skills family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-database-migrations"
     },
     {
       "path": "skills/deep-research/SKILL.md",
@@ -20966,9 +20966,9 @@
     {
       "path": "skills/hexagonal-architecture/SKILL.md",
       "sha256": "1579f70e4cd5a2dde39d29a2055d18b39f06b063a308d3b43a498900c99495b7",
-      "classification": "reference-only",
-      "reason": "Upstream skills family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-hexagonal-architecture"
     },
     {
       "path": "skills/hipaa-compliance/SKILL.md",
@@ -21708,9 +21708,9 @@
     {
       "path": "skills/postgres-patterns/SKILL.md",
       "sha256": "9c8c391ae9e9aa87faa7ca091e1d395c97766df14080d0bfbea8a97721776163",
-      "classification": "reference-only",
-      "reason": "Upstream skills family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-postgres-patterns"
     },
     {
       "path": "skills/prediction-market-oracle-research/SKILL.md",
@@ -21778,16 +21778,16 @@
     {
       "path": "skills/python-patterns/SKILL.md",
       "sha256": "103e0130dac33a49d26705fc5a2df804980fcab6a0138d65bc7f370a987d49f6",
-      "classification": "reference-only",
-      "reason": "Upstream skills family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-python-patterns"
     },
     {
       "path": "skills/python-testing/SKILL.md",
       "sha256": "b9f7a158dae3b6c06c9c75ffe84e27a1edc86092d2afdcb39e96fc2569902eb7",
-      "classification": "reference-only",
-      "reason": "Upstream skills family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-python-testing"
     },
     {
       "path": "skills/pytorch-patterns/SKILL.md",
@@ -22170,16 +22170,16 @@
     {
       "path": "skills/rust-patterns/SKILL.md",
       "sha256": "51379df2bd92a482309e109e5a210210842594f660cceeb2d68d18e995108edf",
-      "classification": "reference-only",
-      "reason": "Upstream skills family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-rust-patterns"
     },
     {
       "path": "skills/rust-testing/SKILL.md",
       "sha256": "02a9a40dcc42dd21d14730d29b13ee0a8b274694360585dc0fadb2602eb56ddf",
-      "classification": "reference-only",
-      "reason": "Upstream skills family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-rust-testing"
     },
     {
       "path": "skills/safety-guard/SKILL.md",
@@ -22261,9 +22261,9 @@
     {
       "path": "skills/security-scan/SKILL.md",
       "sha256": "74bc3006fb15eef9cea6bf70a4e9cc45ec118ef00733d1c8226c9dc428f8d658",
-      "classification": "reference-only",
-      "reason": "Upstream skills family",
-      "assetId": null
+      "classification": "deferred",
+      "reason": "Domain pack member; adaptation pending WP3",
+      "assetId": "ecc-security-scan"
     },
     {
       "path": "skills/seo/SKILL.md",

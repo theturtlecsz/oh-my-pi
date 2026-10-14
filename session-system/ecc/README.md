@@ -37,6 +37,21 @@ Upstream pin: repository `https://github.com/affaan-m/ECC.git`, commit
   MLE, benchmark-optimization, agent-self-evaluation, eval-harness, and
   scholar-evaluation skills.
 
+- **`ecc-domain-rust`** — both coding-style rules, Rust hooks, patterns, security,
+  testing, skills, and reviewer.
+- **`ecc-domain-typescript`** — TypeScript rules plus coding-standards,
+  hexagonal-architecture, architecture-decision-records, and api-design skills.
+- **`ecc-domain-python`** — Python rules, patterns/testing skills, and reviewer.
+- **`ecc-domain-postgresql`** — postgres-patterns and database-migrations skills
+  plus the existing database-reviewer advisor.
+- **`ecc-domain-security`** — common, Rust, TypeScript, and Python security rules,
+  security reviewer, and security-scan skill.
+
+New domain members are inactive and deferred pending WP3 adaptation. Domain packs
+reuse existing adapted assets: Rust installs both coding-style rules, PostgreSQL
+installs the disabled database advisor, and the other domain packs install no
+content until their deferred members are adapted.
+
 Assets are only ever installed through a declared pack; arbitrary subsets are not
 part of the contract.
 
