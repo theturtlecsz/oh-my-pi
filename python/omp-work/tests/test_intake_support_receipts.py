@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
 
+from omp_work.contracts.nsi.v1.models import Binding, IntakeOntology, IntakeSnapshot
+from omp_work.intake_repository import EvidenceLinkRecord, IntakeRevisionBody
 from omp_work.intake_support import (
     ClaimProjection,
     SupportReceipt,
@@ -381,3 +384,77 @@ def test_pending_receipt_blocks_support_but_preserves_contradiction(verdict: str
     assert status_from_receipts([
         ("supports", _parse()), (None, pending), ("contradicts", _parse(verdict="contradicts")),
     ]) == "contested"
+
+
+# --- storage envelope: EvidenceLinkRecord.support_receipt ---
+
+
+def _link(**over: object) -> dict[str, object]:
+    base: dict[str, object] = {
+        "claim_id": "c1", "artifact_id": "a1", "start_byte": 0, "end_byte": 5,
+        "quote": None, "relation": "neither",
+    }
+    base.update(over)
+    return base
+
+
+def _body(links: list[EvidenceLinkRecord]) -> IntakeRevisionBody:
+    return IntakeRevisionBody(
+        workspace_id=uuid4(),
+        snapshot=IntakeSnapshot(
+            run_id="r", revision=0, state="collecting", artifacts=[], entities=[], claims=[],
+            ontology=IntakeOntology(predicates=[], dimensions=[]),
+        ),
+        binding=Binding(
+            run_id="r", revision=0, contract_hash=H, claim_set_hash=H,
+            rule_bundle_hash=H, schema_hash=H, source_hash=H,
+        ),
+        artifact_bytes={}, evidence_links=links,
+    )
+
+
+@pytest.mark.parametrize("explicit_none", [False, True])
+def test_receipt_free_link_dump_keeps_previous_shape(explicit_none: bool) -> None:
+    extra = {"support_receipt": None} if explicit_none else {}
+    link = EvidenceLinkRecord.model_validate(_link(**extra))
+    expected = _link()
+    assert link.model_dump() == expected
+    assert json.loads(link.model_dump_json()) == expected
+    assert link.model_dump(mode="json", exclude_unset=True).get("quote", "absent") in (None, "absent")
+    assert "support_receipt" not in link.model_dump(exclude_unset=True)
+
+    dumped = _body([link]).model_dump(mode="json")["evidence_links"][0]
+    assert dumped == expected
+    assert dumped["quote"] is None
+    assert "support_receipt" not in _body([link]).model_dump(exclude_unset=True)["evidence_links"][0]
+    assert "support_receipt" not in json.loads(_body([link]).model_dump_json())["evidence_links"][0]
+
+
+def test_populated_receipt_round_trips_with_unknown_nulls() -> None:
+    receipt = _receipt(measurement="unknown", input_tokens=None, output_tokens=None, usage_id=None)
+    link = EvidenceLinkRecord.model_validate_json(
+        json.dumps(_link(relation="supports", quote="hello", support_receipt=receipt))
+    )
+    dumped = json.loads(link.model_dump_json())
+    assert dumped["support_receipt"] == receipt
+    assert dumped["support_receipt"]["input_tokens"] is None
+    assert dumped["support_receipt"]["usage_id"] is None
+    body = _body([link])
+    nested = json.loads(body.model_dump_json())["evidence_links"][0]
+    assert nested["support_receipt"] == receipt
+    assert body.model_dump(mode="json", exclude_unset=True)["evidence_links"][0]["support_receipt"] == receipt
+    assert EvidenceLinkRecord.model_validate_json(json.dumps(dumped)) == link
+
+
+@pytest.mark.parametrize("bad", [
+    {"verdict": "maybe"},
+    {"passage_sha256": "A" * 64},
+    {"measurement": "measured", "input_tokens": None},
+    {"measurement": "unknown"},
+    {"source_span": {"start": 5, "end": 1}},
+])
+def test_link_rejects_malformed_receipt(bad: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        EvidenceLinkRecord.model_validate_json(
+            json.dumps(_link(relation="supports", support_receipt=_receipt(**bad)))
+        )

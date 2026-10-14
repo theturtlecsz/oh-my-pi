@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .contracts.nsi.v1 import models
 from .contracts.nsi.v1.validate import content_hash
+from .intake_support import SupportReceipt
 from .v1.api_models import IntakeAssessmentView, IntakeCriterionLink, IntakeDecisionRecord, IntakeIssueRecord
 
 
@@ -61,6 +62,7 @@ class EvidenceLinkRecord(_Record):
     end_byte: int
     quote: str | None = None
     relation: Literal["supports", "contradicts", "neither"]
+    support_receipt: SupportReceipt | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class DecisionHistory(_Record):
