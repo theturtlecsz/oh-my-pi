@@ -52,7 +52,196 @@ Three behaviours decide the autoresearch outcome. Presence checks (`code_presenc
     "adaptivity": ["R10", "R11", "R13"],
     "improvement": ["R18"],
     "all_three": ["R19"]
-  }
+  },
+  "examples": [
+    {
+      "id": "matched-gain",
+      "record": {
+        "arm_b2": true,
+        "arm_b3": true,
+        "same_budget": true,
+        "observation_changes_next": true,
+        "development": ["ml"],
+        "deltas": {"engineering": 0.1},
+        "lo": 0.02,
+        "hi": 0.2,
+        "seeds": 5
+      },
+      "decisions": ["pass", "pass", "pass"],
+      "programme": false
+    },
+    {
+      "id": "null-interval",
+      "record": {
+        "arm_b2": true,
+        "arm_b3": true,
+        "same_budget": true,
+        "observation_changes_next": true,
+        "development": ["ml"],
+        "deltas": {"engineering": 0.1},
+        "lo": -0.01,
+        "hi": 0.05,
+        "seeds": 5
+      },
+      "decisions": ["pass", "pass", "inconclusive"],
+      "programme": false
+    },
+    {
+      "id": "transfer-loss",
+      "record": {
+        "arm_b2": true,
+        "arm_b3": true,
+        "same_budget": true,
+        "observation_changes_next": true,
+        "development": ["ml"],
+        "deltas": {"engineering": -0.1},
+        "lo": -0.2,
+        "hi": -0.05,
+        "seeds": 5
+      },
+      "decisions": ["pass", "fail", "fail"],
+      "programme": false
+    },
+    {
+      "id": "unknown-cost",
+      "record": {
+        "arm_b2": true,
+        "arm_b3": true,
+        "same_budget": true,
+        "observation_changes_next": true,
+        "development": ["ml"],
+        "deltas": {"engineering": 0.1},
+        "lo": 0.02,
+        "hi": 0.2,
+        "seeds": 5,
+        "costs_known": false
+      },
+      "decisions": ["pass", "pass", "inconclusive"],
+      "programme": false
+    },
+    {
+      "id": "code-presence",
+      "record": {
+        "arm_b2": true,
+        "arm_b3": true,
+        "same_budget": true,
+        "observation_changes_next": true,
+        "development": ["ml"],
+        "deltas": {"engineering": 0.1},
+        "lo": 0.02,
+        "hi": 0.2,
+        "seeds": 5,
+        "code_presence": true,
+        "fixture_only": true
+      },
+      "decisions": ["fail", "fail", "fail"],
+      "programme": false
+    },
+    {
+      "id": "untrusted",
+      "record": {
+        "arm_b2": true,
+        "arm_b3": true,
+        "same_budget": true,
+        "observation_changes_next": true,
+        "development": ["ml"],
+        "deltas": {"engineering": 0.1},
+        "lo": 0.02,
+        "hi": 0.2,
+        "seeds": 5,
+        "trusted": false
+      },
+      "decisions": ["fail", "pass", "fail"],
+      "programme": false
+    },
+    {
+      "id": "cycle",
+      "record": {
+        "arm_b2": true,
+        "arm_b3": true,
+        "same_budget": true,
+        "observation_changes_next": true,
+        "development": ["ml"],
+        "deltas": {"engineering": 0.1},
+        "lo": 0.02,
+        "hi": 0.2,
+        "seeds": 5,
+        "equivalent_repeat": true
+      },
+      "decisions": ["fail", "pass", "fail"],
+      "programme": false
+    },
+    {
+      "id": "drift",
+      "record": {
+        "arm_b2": true,
+        "arm_b3": true,
+        "same_budget": true,
+        "observation_changes_next": true,
+        "development": ["ml"],
+        "deltas": {"engineering": 0.1},
+        "lo": 0.02,
+        "hi": 0.2,
+        "seeds": 5,
+        "drift": true,
+        "new_window": false
+      },
+      "decisions": ["pass", "pass", "inconclusive"],
+      "programme": false
+    },
+    {
+      "id": "same-domain",
+      "record": {
+        "arm_b2": true,
+        "arm_b3": true,
+        "same_budget": true,
+        "observation_changes_next": true,
+        "development": ["ml"],
+        "deltas": {"ml": 0.2},
+        "lo": 0.02,
+        "hi": 0.2,
+        "seeds": 5,
+        "disjoint": false
+      },
+      "decisions": ["pass", "fail", "pass"],
+      "programme": false
+    },
+    {
+      "id": "unknown-as-zero",
+      "record": {
+        "arm_b2": true,
+        "arm_b3": true,
+        "same_budget": true,
+        "observation_changes_next": true,
+        "development": ["ml"],
+        "deltas": {"engineering": 0.1},
+        "lo": 0.02,
+        "hi": 0.2,
+        "seeds": 5,
+        "unknown_as_zero": true,
+        "costs_known": false
+      },
+      "decisions": ["pass", "pass", "fail"],
+      "programme": false
+    },
+    {
+      "id": "self-score",
+      "record": {
+        "arm_b2": true,
+        "arm_b3": true,
+        "same_budget": true,
+        "observation_changes_next": true,
+        "development": ["ml"],
+        "deltas": {"engineering": 0.1},
+        "lo": 0.02,
+        "hi": 0.2,
+        "seeds": 5,
+        "self_score": true
+      },
+      "decisions": ["fail", "fail", "fail"],
+      "programme": false
+    }
+  ]
 }
 ```
 
