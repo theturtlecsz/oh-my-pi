@@ -1,5 +1,10 @@
 """Counter report and the read-only qualification count command."""
+import builtins
+import io
 import json
+import os
+from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
@@ -20,6 +25,7 @@ from omp_work.qualification_records import (
     Exclusion, ExecutionAttempt, FrozenProtocol, Observation, Receipt, ResourceUsage, ScopeIdentity,
     Snapshot, decode_evidence,
 )
+from omp_work.v1.canonical import sha256
 
 START = datetime(2026, 10, 13, tzinfo=timezone.utc)
 SCOPE = ScopeIdentity("release", "config", "recipe", "evaluator", "workload", "criteria")
@@ -501,3 +507,278 @@ def test_connection_error_strips_password_and_keeps_the_diagnostic(tmp_path, mon
     assert "postgresql://omp_work_readonly:[redacted]@127.0.0.1/omp_work" in captured.err
     assert calls == {"reads": 1, "defaults": 1}
     assert composed == []
+
+
+# Independent table contract: the double accepts only these scoped source reads,
+# never arbitrary SELECTs (which could hide a mutating function or CTE).
+_COUNT_SOURCES = (
+    ("omp_work.work_items", "work_id", "created_at"),
+    ("omp_work.work_revisions", "revision_id", "recorded_at"),
+    ("omp_evidence.receipts", "receipt_id", "issued_at"),
+    ("omp_audit.domain_events", "event_id", "occurred_at"),
+    ("omp_research.campaigns", "campaign_id", "created_at"),
+    ("omp_research.trials", "trial_id", "proposed_at"),
+    ("omp_research.observations", "observation_id", "recorded_at"),
+    ("omp_research.components", "component_sha256", "registered_at"),
+    ("omp_jobs.jobs", "job_id", "created_at"),
+)
+_JOB_EVENTS_QUERY = (
+    "SELECT e.* FROM omp_jobs.job_events e "
+    "JOIN omp_jobs.jobs j ON j.job_id=e.job_id "
+    "WHERE j.workspace_id=%s ORDER BY e.at, e.job_id, e.seq"
+)
+
+
+class _CountConnection:
+    def __init__(self, rows, workspace, actor):
+        self.rows = rows
+        self.workspace = workspace
+        self.actor = actor
+        self.read_only = None
+        self.isolation_level = None
+        self.queries = []
+        self.settings = []
+        self.rejected = []
+        self.transactions = []
+        self.reads = []
+        self.active = False
+        self.unavailable = None
+        self.selected = None
+        self.allowed = {}
+        for source, id_field, time_field in _COUNT_SOURCES:
+            table = ".".join(f'"{part}"' for part in source.split("."))
+            order = "sequence" if source == "omp_audit.domain_events" else id_field
+            query = f'SELECT * FROM {table} WHERE workspace_id=%s ORDER BY "{time_field}", "{order}"'
+            self.allowed[query] = source
+        self.allowed[_JOB_EVENTS_QUERY] = "omp_jobs.job_events"
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    @contextmanager
+    def transaction(self):
+        self.transactions.append((self.read_only, self.isolation_level))
+        assert self.read_only is True
+        assert self.isolation_level == psycopg.IsolationLevel.REPEATABLE_READ
+        self.active = True
+        try:
+            yield
+        finally:
+            self.active = False
+
+    def cursor(self, *, row_factory):
+        assert row_factory is psycopg.rows.dict_row
+        return self
+
+    def execute(self, query, params=None):
+        text = query if isinstance(query, str) else query.as_string()
+        self.queries.append((text, params))
+        assert self.active
+        if text == "SET LOCAL search_path = pg_catalog" and params is None and not self.settings:
+            self.settings.append((text, params))
+        elif text == "SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)":
+            assert params == (str(self.workspace), str(self.actor))
+            assert len(self.settings) == 1
+            self.settings.append((text, params))
+        elif text in self.allowed:
+            assert len(self.settings) == 2
+            assert params == (self.workspace,)
+            self.selected = self.allowed[text]
+            self.reads.append(self.selected)
+            if self.selected == self.unavailable:
+                raise psycopg.errors.UndefinedTable(f'relation "{self.selected}" does not exist')
+        else:
+            self.rejected.append((text, params))
+            raise AssertionError(f"unapproved or mutating SQL: {text}")
+
+    def fetchall(self):
+        assert self.selected is not None
+        # Hand out stored objects so an accidental in-place decoder mutation is
+        # visible to the deep comparison, rather than hidden by copied results.
+        return self.rows[self.selected]
+
+
+@pytest.fixture
+def count_sources(tmp_path, monkeypatch):
+    config = OperationsConfig(tmp_path / "config", tmp_path / "state", tmp_path / "data")
+    workspace, actor = uuid4(), uuid4()
+    for directory in (config.config_dir, config.state_dir, config.data_dir):
+        directory.mkdir()
+        sentinel = directory / "sentinel"
+        sentinel.write_bytes(b"existing state\x00\xff")
+        sentinel.chmod(0o640)
+    config.credentials_dir.mkdir()
+    for name, value in (
+        ("workspace-id", workspace), ("operator-actor-id", actor),
+        ("omp_work_readonly", "readonly-test-secret"),
+    ):
+        path = config.secret_path(name)
+        path.write_text(f"{value}\n")
+        path.chmod(0o600)
+    rows = {source: [] for source, _, _ in _COUNT_SOURCES}
+    rows["omp_jobs.job_events"] = []
+    conn = _CountConnection(rows, workspace, actor)
+    calls = []
+
+    def defaults(cls):
+        calls.append("defaults")
+        return config
+
+    def connect(received, role):
+        assert received is config
+        # Read the real, permission-checked credential as the real connector does.
+        assert config.connection_kwargs(role)["password"] == "readonly-test-secret"
+        calls.append(role)
+        return conn
+
+    monkeypatch.setattr(OperationsConfig, "defaults", classmethod(defaults))
+    monkeypatch.setattr(qualification_snapshot, "_connect", connect)
+    return config, conn, calls
+
+
+def _legacy_count_rows(config, conn):
+    evidence_path = str(config.data_dir / "evidence-must-stay-inert.json")
+    for source, id_field, time_field in _COUNT_SOURCES:
+        conn.rows[source].append({
+            id_field: uuid4(), "workspace_id": conn.workspace, time_field: START,
+        })
+    receipt = conn.rows["omp_evidence.receipts"][0]
+    payload = {"path": evidence_path, "result": "legacy verification"}
+    receipt.update(
+        work_id=uuid4(), revision_id=uuid4(), candidate_id=uuid4(),
+        kind="verification", issuer="legacy", payload=payload,
+        payload_sha256=sha256(payload),
+    )
+    observation = _observation({"path": evidence_path, "result": "negative science"}, "")
+    observation.update(
+        workspace_id=conn.workspace, source_ref=evidence_path,
+        observed_at=START, recorded_at=START,
+    )
+    observation["payload_sha256"] = sha256(observation["payload"])
+    conn.rows["omp_research.observations"] = [observation]
+    job = conn.rows["omp_jobs.jobs"][0]
+    job.update(attempt=1, state="settled", settlement={"outcome": "succeeded", "evidence_path": evidence_path})
+    conn.rows["omp_jobs.job_events"] = [{
+        "job_id": job["job_id"], "seq": 1, "at": START, "kind": "settled",
+        "payload": {"evidence_path": evidence_path},
+    }]
+
+
+def _count_tree(root):
+    return {
+        str(path.relative_to(root)): (
+            path.stat().st_mode, None if path.is_dir() else path.read_bytes(),
+        )
+        for path in (root, *root.rglob("*"))
+    }
+
+
+def _count_without_writes(tmp_path, monkeypatch, count_sources):
+    config, conn, calls = count_sources
+    before_files, before_rows = _count_tree(tmp_path), deepcopy(conn.rows)
+    violations = []
+
+    def reject(*args, **kwargs):
+        violations.append((args, kwargs))
+        raise AssertionError("qualification count attempted filesystem mutation")
+
+    def guarded_open(original):
+        def open_readonly(file, mode="r", *args, **kwargs):
+            if any(flag in mode for flag in "wax+"):
+                return reject(file, mode)
+            if not isinstance(file, int) and os.fspath(file) == str(config.data_dir / "evidence-must-stay-inert.json"):
+                return reject(file, "evidence dereference")
+            return original(file, mode, *args, **kwargs)
+        return open_readonly
+
+    original_os_open = os.open
+
+    def os_open_readonly(file, flags, *args, **kwargs):
+        if flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND):
+            return reject(file, flags)
+        if os.fspath(file) == str(config.data_dir / "evidence-must-stay-inert.json"):
+            return reject(file, "evidence dereference")
+        return original_os_open(file, flags, *args, **kwargs)
+
+    # All setup precedes this scope; restore even on failure, before pytest's
+    # capture/cache/tmpdir teardown needs filesystem write access again.
+    with monkeypatch.context() as guard:
+        guard.setattr(builtins, "open", guarded_open(builtins.open))
+        guard.setattr(io, "open", guarded_open(io.open))
+        guard.setattr(os, "open", os_open_readonly)
+        for name in (
+            "mkdir", "makedirs", "remove", "unlink", "rmdir", "removedirs",
+            "rename", "renames", "replace", "chmod", "fchmod", "chown", "fchown",
+            "lchown", "link", "symlink", "truncate", "ftruncate", "utime",
+            "write", "pwrite", "writev", "mknod", "mkfifo",
+        ):
+            guard.setattr(os, name, reject)
+        result = main(["qualification", "count"])
+    assert violations == []
+    assert _count_tree(tmp_path) == before_files
+    assert conn.rows == before_rows
+    assert calls == ["defaults", "omp_work_readonly"]
+    assert conn.transactions == [(True, psycopg.IsolationLevel.REPEATABLE_READ)]
+    assert conn.active is False and conn.rejected == []
+    assert conn.settings[0] == ("SET LOCAL search_path = pg_catalog", None)
+    assert conn.settings[1][1] == (str(conn.workspace), str(conn.actor))
+    assert conn.reads == [source for source, _, _ in _COUNT_SOURCES] + ["omp_jobs.job_events"]
+    assert len(conn.queries) == len(conn.reads) + 2
+    return result
+
+
+@pytest.mark.parametrize("legacy", [False, True], ids=["empty", "legacy"])
+def test_real_loader_count_not_started_writes_nothing(legacy, tmp_path, monkeypatch, capsys, count_sources):
+    config, conn, _ = count_sources
+    if legacy:
+        _legacy_count_rows(config, conn)
+    assert _count_without_writes(tmp_path, monkeypatch, count_sources) == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    report = json.loads(captured.out)
+    assert report["grants_acceptance"] is False and report["frozen"] is None
+    assert set(report["gates"]) == {"consecutive", "sustained", "attempts"}
+    for gate in report["gates"].values():
+        assert gate["status"] == "not started" and gate["count"] is None
+        assert gate["strata"] == {"status": "not preregistered", "allocations": []}
+        if legacy:
+            ids = {row["record_id"] for row in gate["exclusions"]}
+            for source, id_field, _ in _COUNT_SOURCES:
+                assert str(conn.rows[source][0][id_field]) in ids
+            job_id = conn.rows["omp_jobs.jobs"][0]["job_id"]
+            assert f"{job_id}:1" in ids
+        else:
+            assert gate["exclusions"] == []
+    assert "invalid receipt:" not in captured.out and "invalid observation:" not in captured.out
+
+
+def test_real_loader_unavailable_source_fails_without_writes(tmp_path, monkeypatch, capsys, count_sources):
+    config, conn, _ = count_sources
+    _legacy_count_rows(config, conn)
+    conn.unavailable = "omp_jobs.job_events"
+    assert _count_without_writes(tmp_path, monkeypatch, count_sources) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == 'relation "omp_jobs.job_events" does not exist\n'
+
+
+@pytest.mark.parametrize("source,id_field,prefix", [
+    ("omp_evidence.receipts", "receipt_id", "invalid receipt:"),
+    ("omp_research.observations", "observation_id", "invalid observation:"),
+])
+def test_real_loader_decoded_corruption_fails_without_writes(
+    source, id_field, prefix, tmp_path, monkeypatch, capsys, count_sources,
+):
+    config, conn, _ = count_sources
+    _legacy_count_rows(config, conn)
+    row = conn.rows[source][0]
+    row["payload_sha256"] = "0" * 64
+    assert _count_without_writes(tmp_path, monkeypatch, count_sources) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert str(row[id_field]) in captured.err
+    assert prefix in captured.err and "payload hash mismatch" in captured.err
+    assert "O9 freeze and release baseline unavailable" not in captured.err
