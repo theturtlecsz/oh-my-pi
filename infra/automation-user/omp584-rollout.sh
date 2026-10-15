@@ -319,10 +319,6 @@ omp584_install() (
     git -C "$OMP584_FLOOD_DIR" reset -q HEAD -- planner-independence.md flood.py || exit
 )
 
-omp584_poll_step() {
-    :
-}
-
 omp584_activate() (
     local target_commit code_sha256 rules_sha256 offset=0
     [[ -s "$OMP584_STAGE/target_commit" ]] || {
@@ -336,75 +332,82 @@ omp584_activate() (
         offset=$(cat "$OMP584_STAGE/flood.log.offset")
     fi
 
-    local timeout=${OMP584_POLL_TIMEOUT:-3}
-    local deadline=$((SECONDS + timeout))
-    local poll_interval=0.1
-    local matched=0
-
-    while (( SECONDS < deadline )); do
-        omp584_poll_step
-        if python3 - "$OMP584_FLOOD_DIR/flood.log" "$offset" "$code_sha256" "$rules_sha256" "$target_commit" \
-                   "$OMP584_STAGE/matched_record.json" "$OMP584_EVIDENCE_DIR/reload.log" <<'PY' 2>/dev/null; then
-import sys, json, pathlib
+    # Start the monotonic budget inside the matcher, after interpreter startup.
+    # Always scan once: scheduling delays must not skip already-written proof.
+    python3 - "$OMP584_FLOOD_DIR/flood.log" "$offset" "$code_sha256" "$rules_sha256" "$target_commit" \
+               "$OMP584_STAGE/matched_record.json" "$OMP584_EVIDENCE_DIR/reload.log" \
+               "${OMP584_POLL_TIMEOUT:-3}" <<'PY' || return 1
+import sys, json, pathlib, time
 
 log_path = pathlib.Path(sys.argv[1])
 offset = int(sys.argv[2])
-expected_code = sys.argv[3]
-expected_rules = sys.argv[4]
-expected_commit = sys.argv[5]
+expected = {
+    "event": "loaded",
+    "code_sha256": sys.argv[3],
+    "rules_sha256": sys.argv[4],
+    "external_head": sys.argv[5],
+}
 record_out = pathlib.Path(sys.argv[6])
 reload_out = pathlib.Path(sys.argv[7])
+deadline = time.monotonic() + float(sys.argv[8])
 
-if not log_path.is_file():
-    sys.exit(1)
 
-with log_path.open("r", encoding="utf-8", errors="replace") as f:
-    if offset > 0:
-        f.seek(offset)
-    lines = f.readlines()
+def scan():
+    try:
+        with log_path.open("r", encoding="utf-8", errors="replace") as f:
+            f.seek(offset)
+            lines = f.readlines()
+    except FileNotFoundError:
+        return None, [], f"{log_path} not found (offset {offset})"
+    except OSError as exc:
+        return None, [], f"cannot read {log_path} at offset {offset}: {exc}"
 
-matched_record = None
-matched_reload_lines = []
-current_reload_lines = None
-
-for line in lines:
-    if "[reload] flood.py or flood.json changed: exec in place" in line:
-        current_reload_lines = [line]
-        continue
-    if current_reload_lines is not None:
+    reason = f"no reload line after offset {offset} ({len(lines)} lines read)"
+    current_reload_lines = None
+    for line in lines:
+        if "[reload] flood.py or flood.json changed: exec in place" in line:
+            current_reload_lines = [line]
+            reason = "reload observed, but no loaded record followed"
+            continue
+        if current_reload_lines is None:
+            continue
         current_reload_lines.append(line)
-        if " loaded " in line:
-            parts = line.split(" loaded ", 1)
-            try:
-                rec = json.loads(parts[1])
-                if (rec.get("event") == "loaded" and
-                    rec.get("code_sha256") == expected_code and
-                    rec.get("rules_sha256") == expected_rules and
-                    rec.get("external_head") == expected_commit and
-                    isinstance(rec.get("at"), str)):
-                    matched_record = rec
-                    matched_reload_lines = list(current_reload_lines)
-                    break
-            except Exception:
-                pass
+        if " loaded " not in line:
+            continue
+        try:
+            rec = json.loads(line.split(" loaded ", 1)[1])
+        except json.JSONDecodeError as exc:
+            reason = f"invalid loaded record: {exc}"
+            continue
+        if not isinstance(rec, dict):
+            reason = f"loaded record is not an object: {rec!r}"
+            continue
+        mismatches = [
+            f"{key}: expected {value!r}, got {rec.get(key)!r}"
+            for key, value in expected.items() if rec.get(key) != value
+        ]
+        if not isinstance(rec.get("at"), str):
+            mismatches.append(f"at: expected string, got {rec.get('at')!r}")
+        if mismatches:
+            reason = "last loaded record mismatch: " + "; ".join(mismatches)
+            continue
+        return rec, current_reload_lines, ""
+    return None, [], reason
 
-if not matched_record:
-    sys.exit(1)
 
-record_out.write_text(json.dumps(matched_record, indent=2) + "\n")
-reload_out.write_text("".join(matched_reload_lines))
-sys.exit(0)
+while True:
+    matched_record, reload_lines, reason = scan()
+    if matched_record is not None:
+        record_out.write_text(json.dumps(matched_record, indent=2) + "\n")
+        reload_out.write_text("".join(reload_lines))
+        break
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        print("Activation timeout: matching reload and loaded record not observed in time; " + reason,
+              file=sys.stderr)
+        sys.exit(1)
+    time.sleep(min(0.1, remaining))
 PY
-            matched=1
-            break
-        fi
-        sleep "$poll_interval"
-    done
-
-    if (( ! matched )); then
-        echo "Activation timeout: matching reload and loaded record not observed in time" >&2
-        return 1
-    fi
 
     # After wait verify both disk targets and committed blobs equal tested bytes; drift/timeout fails without successful rollout.json.
     cmp -s -- "$OMP584_STAGE/flood.py" "$OMP584_FLOOD_DIR/flood.py" || {

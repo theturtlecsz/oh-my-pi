@@ -20,6 +20,7 @@ from omp622_rollout_helpers import (
     checkout_snapshot,
     create_checkout,
     file_snapshot,
+    run_driver,
     run_script,
 )
 
@@ -99,6 +100,12 @@ def install_hook(source: Path, *, code_sha: str | None = None, at: str = ACTIVAT
     path.chmod(0o755)
 
 
+@pytest.fixture(autouse=True)
+def activation_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Allow activation on a loaded CI worker; negative tests set their own budget."""
+    monkeypatch.setenv("OMP584_POLL_TIMEOUT", "30")
+
+
 def write_older_log(source: Path) -> None:
     (source / "flood.log").write_text(OLD_LOG)
 
@@ -174,9 +181,12 @@ def test_all_installed_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     assert not evidence.exists()
 
 
-def test_all_parts_installed_rules_absent(tmp_path: Path) -> None:
+@pytest.mark.parametrize("poll_timeout", ["30", "0"], ids=["ci-budget", "elapsed-budget"])
+def test_all_parts_installed_rules_absent(tmp_path: Path, poll_timeout: str) -> None:
     """Installed code parts with no rules file commit the asset rules and leave flood.py bytes."""
     source, env = create_checkout(tmp_path)
+    # Even an elapsed budget must scan proof already written by the commit hook.
+    env["OMP584_POLL_TIMEOUT"] = poll_timeout
     evidence = tmp_path / "evidence"
     apply_planner(source, env, canonical=True, rules=False)
     assert not (source / RULES_NAME).exists()
@@ -273,8 +283,51 @@ def test_wrong_code_hash(tmp_path: Path) -> None:
 
     assert result.returncode != 0, result.stdout + result.stderr
     assert "Activation timeout" in result.stderr
+    assert "last loaded record mismatch: code_sha256:" in result.stderr
+    assert "expected " + repr(file_sha256(source / "flood.py")) in result.stderr
+    assert "got " + repr("0" * 64) in result.stderr
     loaded = json.loads((source / "flood.log").read_text().split(" loaded ", 1)[1])
     assert loaded["code_sha256"] == "0" * 64 != file_sha256(source / "flood.py")
     assert loaded["rules_sha256"] == file_sha256(source / RULES_NAME)
     assert loaded["external_head"] == git(source, env, "rev-parse", "HEAD").stdout.strip()
+    assert not (evidence / "rollout.json").exists()
+
+
+@pytest.mark.parametrize("log_text, reason", [
+    (None, "not found"),
+    ("tick [reload] flood.py or flood.json changed: exec in place\n"
+     "tick loaded {invalid json}\n", "invalid loaded record"),
+])
+def test_activation_wait_keeps_full_budget(tmp_path: Path, log_text: str | None, reason: str) -> None:
+    """Missing runtime evidence gets a full second of polling, even near a clock tick."""
+    source, env = create_checkout(tmp_path)
+    if log_text is not None:
+        (source / "flood.log").write_text(log_text)
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    (stage / "target_commit").write_text(git(source, env, "rev-parse", "HEAD").stdout)
+    (stage / "flood.py").write_bytes((source / "flood.py").read_bytes())
+    (stage / RULES_NAME).write_bytes((ASSETS / "omp584-planner-rules.md").read_bytes())
+    env["OMP584_STAGE"] = str(stage)
+    env["OMP584_POLL_TIMEOUT"] = "1"
+
+    result = run_driver(
+        source, evidence, functions=("omp584_preflight",), env=env,
+        extra=r'''
+# Align activation near the end of a wall-clock second without generating load.
+python3 -c 'import time; time.sleep((0.9 - time.time() % 1) % 1)'
+started=$(python3 -c 'import time; print(time.monotonic())')
+if omp584_activate; then rc=0; else rc=$?; fi
+python3 -c 'import sys, time; print("elapsed:", time.monotonic() - float(sys.argv[1]))' "$started"
+exit "$rc"
+''',
+    )
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    elapsed = float(result.stdout.split("elapsed:", 1)[1].strip())
+    assert elapsed >= 1, result.stdout + result.stderr
+    assert "Activation timeout" in result.stderr
+    assert reason in result.stderr
     assert not (evidence / "rollout.json").exists()
