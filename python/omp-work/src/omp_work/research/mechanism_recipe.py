@@ -22,6 +22,10 @@ ROOT_FIRST = "root-first.v1"
 FAMILIES = (ADAPTIVE_RESTART, ROOT_FIRST)
 THRESHOLD_GRID = (0.25, 0.5, 0.75)
 _FIELDS = frozenset({"family", "min_metric"})
+# The R13 study schema (recursive._R13Inputs) sanctions these display-only keys in
+# a recipe and hands the raw recipe to generation_job, so they must not change
+# generation or count as unknown fields.
+_BOOKKEEPING = frozenset({"id", "name", "label"})
 
 
 def canonical_recipe(recipe: Mapping[str, Any]) -> dict[str, Any]:
@@ -31,7 +35,7 @@ def canonical_recipe(recipe: Mapping[str, Any]) -> dict[str, Any]:
     """
     if not isinstance(recipe, Mapping):
         raise ValueError("recipe must be a mapping")
-    unknown = set(recipe) - _FIELDS
+    unknown = set(recipe) - _FIELDS - _BOOKKEEPING
     if unknown:
         raise ValueError(f"unknown recipe fields: {sorted(map(str, unknown))}")
     family = recipe.get("family", ADAPTIVE_RESTART)

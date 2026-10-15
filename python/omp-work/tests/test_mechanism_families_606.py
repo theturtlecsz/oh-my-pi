@@ -116,8 +116,21 @@ def test_gradient_case_separates_thresholds_within_adaptive_restart() -> None:
 def test_legacy_min_metric_recipe_keeps_adaptive_restart_bytes() -> None:
     legacy = mechanism.generation_job(SPEC, {"min_metric": 0.5})
     assert legacy == mechanism.generation_job(SPEC, {"family": ADAPTIVE_RESTART, "min_metric": 0.5})
-    assert "threshold = 0.5\n" in legacy
+    # Downstream packaging hashes and ships these bytes; the frozen legacy digest
+    # is the observable contract for byte-stable adaptive-restart.v1 output.
+    assert hashlib.sha256(legacy.encode()).hexdigest() == (
+        "d2f2b48d3e4b6d743bd502d0cb7fb27ff66ff4fbd4be1fbec6d198c10827d41c"
+    )
     assert canonical_recipe({"min_metric": 1}) == {"family": ADAPTIVE_RESTART, "min_metric": 1.0}
+
+
+def test_r13_bookkeeping_keys_do_not_change_generation() -> None:
+    # recursive_method.run_method hands the raw R13 recipe to generation_job; the
+    # schema (recursive._R13Inputs) sanctions id/name/label, so they must be inert.
+    bare = mechanism.generation_job(SPEC, {"min_metric": 0.5})
+    named = mechanism.generation_job(SPEC, {"id": "x", "name": "first", "label": "renamed", "min_metric": 0.5})
+    assert named == bare
+    assert canonical_recipe({"name": "first", "min_metric": 0.5}) == {"family": ADAPTIVE_RESTART, "min_metric": 0.5}
 
 
 @pytest.mark.parametrize(
