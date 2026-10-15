@@ -71,6 +71,7 @@
 
 ### Changed
 
+- Orchestrator delivers compiled lesson context into the headless worker prompt only when learning is enabled and approved; an end-to-end journey test covers delivery, separate supply/use records, and suspension (OMP-607).
 - Per-workspace domain-event reads (event-cursor watermark, page scan, subscription replay, mission link walk, and the per-aggregate head) now use dedicated `(workspace_id, sequence)` and `(workspace_id, aggregate_id, sequence)` indexes instead of scanning every workspace's events (migration 0035, additive).
 - `ops capabilities grokbot` is now `ops capabilities client --name N [--stop-only]`, minting the `client` actor kind with `work.read`, `work.client`, `work.stop` (or `work.stop` alone with `--stop-only`) (OMP-416).
 - PostgreSQL backups now use the dedicated backup role to export every RLS-protected ledger table, and restore drills verify the selected completed backup in an isolated native PostgreSQL 18 instance.

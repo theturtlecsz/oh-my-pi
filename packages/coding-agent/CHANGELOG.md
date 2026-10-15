@@ -4,6 +4,7 @@
 
 ### Added
 
+- Orchestrator worker renders manifest compiled context into its system prompt and reports compiled-context and prompt SHA-256 hashes on delivery (OMP-607).
 - Documented orchestrator worker launch contract with exact argv `["/opt/omp/bin/omp", "orchestrator-worker"]`, single-task token and manifest injection, lease expiry and sticky refusal semantics, scoped `read`/`write` tools, sandbox evaluate test stage, and loopback model proxy configuration.
 - Added opt-in stage context for native auditor workers. Set `OMP_STAGE_CONTEXT_PUSH=1` to deliver the current Work Ledger digest and stage inputs at launch.
 - `before_agent_start` handlers can return `block`/`reason` to refuse a prompt before any provider call.
