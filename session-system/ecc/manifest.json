@@ -20,8 +20,7 @@
         "ecc-common-coding-style",
         "ecc-rust-coding-style",
         "ecc-search-first",
-        "ecc-verification-loop",
-        "ecc-database-reviewer"
+        "ecc-verification-loop"
       ]
     },
     {
@@ -109,8 +108,7 @@
       },
       "assetIds": [
         "ecc-postgres-patterns",
-        "ecc-database-migrations",
-        "ecc-database-reviewer"
+        "ecc-database-migrations"
       ]
     },
     {
@@ -262,41 +260,6 @@
       "dependencies": [],
       "disposition": "supported-with-adaptation",
       "reason": "Skill namespaced; Claude-only framing, the /verify command, and HEAD~1 diff inference adapted via overlay",
-      "qualification": {
-        "mechanicalTests": [
-          "session-system/tests/ecc-adaptation.test.ts",
-          "session-system/tests/ecc-install.test.ts"
-        ],
-        "behavioralTrial": null,
-        "qualifiedRelease": null
-      },
-      "rollback": { "removeOwnedArtifactOnly": true }
-    },
-    {
-      "id": "ecc-database-reviewer",
-      "pack": "engineering",
-      "upstream": {
-        "repository": "https://github.com/affaan-m/ECC.git",
-        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
-        "path": "agents/database-reviewer.md",
-        "sha256": "945c107dea01ca74e3e9bc3a5841e79e744673e8f14697e88cf1cfd9c01a1cc5"
-      },
-      "target": { "path": ".omp/WATCHDOG.yml", "scope": "project" },
-      "adaptation": {
-        "kind": "database-advisor-profile",
-        "transformVersion": 1,
-        "overlay": "overlays/ecc-database-reviewer.json"
-      },
-      "activation": {
-        "state": "inactive",
-        "mode": "advisor roster entry, disabled until explicitly enabled",
-        "description": "Read-only PostgreSQL review advisor",
-        "selection": "project-scoped data-system tasks after advisor enablement"
-      },
-      "dependencies": [],
-      "runtimes": [],
-      "disposition": "supported-with-adaptation",
-      "reason": "Specialist agent becomes a disabled read-only advisor profile: Bash dropped, psql/EXPLAIN instructions removed, model removed, advice is not acceptance authority",
       "qualification": {
         "mechanicalTests": [
           "session-system/tests/ecc-adaptation.test.ts",

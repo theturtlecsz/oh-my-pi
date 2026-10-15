@@ -85,21 +85,6 @@
       ]
     },
     {
-      "id": "ecc-database-reviewer",
-      "upstreamPath": "agents/database-reviewer.md",
-      "upstreamSha256": "945c107dea01ca74e3e9bc3a5841e79e744673e8f14697e88cf1cfd9c01a1cc5",
-      "adaptedSha256": "a42cf8c566e0b1e20521c55e7de34e6ff7b40e740367893645b42774cf7034ff",
-      "adaptationKind": "database-advisor-profile",
-      "disposition": "supported-with-adaptation",
-      "files": [
-        {
-          "path": ".omp/WATCHDOG.yml",
-          "sha256": "a42cf8c566e0b1e20521c55e7de34e6ff7b40e740367893645b42774cf7034ff",
-          "mode": "644"
-        }
-      ]
-    },
-    {
       "id": "ecc-deep-research",
       "upstreamPath": "skills/deep-research",
       "upstreamSha256": "72e184f5d0f31ca4d45286753409d8c8431b025e8ac3800dcc9f32d9e930f58a",
@@ -220,6 +205,6 @@
       ]
     }
   ],
-  "manifestSha256": "e8e90726ea9a008cc0ef3c26a6202edf3b4d173e95ee2ebd17bac386168825d0",
+  "manifestSha256": "89b5432dbbaded6f3dbb8b3bc69297c41aff2c04b5a1b164649d2379404f3d57",
   "review": null
 }

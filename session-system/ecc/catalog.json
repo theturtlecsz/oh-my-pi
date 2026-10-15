@@ -3557,9 +3557,9 @@
     {
       "path": "agents/database-reviewer.md",
       "sha256": "945c107dea01ca74e3e9bc3a5841e79e744673e8f14697e88cf1cfd9c01a1cc5",
-      "classification": "supported-with-adaptation",
-      "reason": "Specialist agent becomes a disabled read-only advisor profile: Bash dropped, psql/EXPLAIN instructions removed, model removed, advice is not acceptance authority",
-      "assetId": "ecc-database-reviewer"
+      "classification": "reference-only",
+      "reason": "Upstream agents family",
+      "assetId": null
     },
     {
       "path": "agents/django-build-resolver.md",
