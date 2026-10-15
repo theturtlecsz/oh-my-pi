@@ -91,12 +91,14 @@ def install_hook(source: Path, *, code_sha: str | None = None, at: str = ACTIVAT
         code_line,
         f"rules_sha=$(sha256sum {RULES_NAME} | awk '{{print $1}}')",
         "printf '%s [reload] flood.py or flood.json changed: exec in place (running jobs continue)\\n' \"$at\" >> flood.log",
-        "printf '%s loaded {\\\"event\\\":\\\"loaded\\\",\\\"at\\\":\\\"%s\\\",\\\"pid\\\":4242,\\\"code_sha256\\\":\\\"%s\\\",\\\"rules_sha256\\\":\\\"%s\\\",\\\"external_head\\\":\\\"%s\\\"}\\n' \\",
+        'printf \'%s loaded {"event":"loaded","at":"%s","pid":4242,"code_sha256":"%s","rules_sha256":"%s","external_head":"%s"}\\n\' \\',
         "  \"$at\" \"$at\" \"$code_sha\" \"$rules_sha\" \"$head_commit\" >> flood.log",
         "",
     ]
+    hook_text = "\n".join(lines)
+    assert '\\"' not in hook_text, "hook text must not contain backslash-quote sequence"
     path = hooks / "post-commit"
-    path.write_text("\n".join(lines))
+    path.write_text(hook_text)
     path.chmod(0o755)
 
 
