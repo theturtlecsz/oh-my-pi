@@ -5648,7 +5648,6 @@
         "session-system/extensions/workflow/status.ts",
         "session-system/extensions/workflow/tool-description.md",
         "session-system/extensions/workflow/transcript.ts",
-        "session-system/extensions/workflow/typed-completeness.md",
         "session-system/extensions/workflow/work.ts"
       ],
       "agents": [
