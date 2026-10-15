@@ -36,6 +36,10 @@ def compose(directory: Path, patches: list[Path]) -> None:
     git apply has no patch(1) fuzz or partial writes. A partial installation or
     changed hunk must fail before importing any candidate code.
     """
+    path = directory / "flood.py"
+    if b'with_name("planner-independence.md")' in path.read_bytes():
+        path.write_bytes(path.read_bytes().replace(b'with_name("planner-independence.md")',
+                                                  b'with_name("omp584-planner-rules.md")'))
     for patch in reversed(patches):
         reverse = ["git", "apply", "--reverse", str(patch)]
         if command([*reverse, "--check"], directory).returncode == 0:
