@@ -6,12 +6,14 @@ import json
 import os
 from pathlib import Path
 import signal
+import socket
 import subprocess
 import sys
 import time
 
 import pytest
 
+from omp_work import egress_sandbox_helper
 from omp_work.egress_sandbox_helper import HOSTS_TEXT, NSSWITCH_CONF_TEXT, RESOLV_CONF_TEXT
 
 
@@ -223,3 +225,42 @@ def _wait_for_helper(unshare_pid: int, temp_root: Path) -> int:
             break
         time.sleep(0.05)
     raise AssertionError("helper did not reach the running worker")
+
+
+def test_mask_sockets_skips_resolv_conf_bind_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """systemd-resolved: /etc/resolv.conf -> resolve/stub-resolv.conf stays the bound file."""
+    resolve = tmp_path / "resolve"
+    resolve.mkdir()
+    stub = resolve / "stub-resolv.conf"
+    stub.write_text("nameserver 127.0.0.53\n", encoding="utf-8")
+    sock_path = resolve / "io.systemd.Resolve"
+    srv = socket.socket(socket.AF_UNIX)
+    monkeypatch.chdir(resolve)  # relative bind: tmp_path can exceed the AF_UNIX path limit
+    srv.bind(sock_path.name)
+    etc_link = tmp_path / "resolv.conf"
+    etc_link.symlink_to(stub)
+
+    real_glob = egress_sandbox_helper.glob.glob
+    monkeypatch.setattr(
+        egress_sandbox_helper.glob,
+        "glob",
+        lambda pat: [str(p) for p in resolve.iterdir()]
+        if pat == "/run/systemd/resolve/*"
+        else real_glob(pat),
+    )
+    masked: list[str] = []
+    monkeypatch.setattr(egress_sandbox_helper, "_executable", lambda name: name)
+    monkeypatch.setattr(
+        egress_sandbox_helper.subprocess,
+        "run",
+        lambda argv, **_kw: masked.append(argv[-1]),
+    )
+    try:
+        egress_sandbox_helper._mask_sockets([etc_link.resolve()])
+    finally:
+        srv.close()
+
+    assert str(sock_path) in masked
+    assert str(stub) not in masked

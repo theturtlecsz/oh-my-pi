@@ -31,6 +31,7 @@ import glob
 import json
 import os
 import signal
+from collections.abc import Iterable
 from contextlib import suppress
 from pathlib import Path
 import shutil
@@ -320,7 +321,9 @@ def _on_helper_signal(signum: int, _frame: object) -> None:
 _ACTIVE: _HelperTemp | None = None
 
 
-def _mask_sockets() -> None:
+def _mask_sockets(skip: Iterable[Path] = ()) -> None:
+    """Bind /dev/null over resolver/bus sockets, except paths the helper itself bound."""
+    skipped = {os.path.realpath(p) for p in skip}
     socket_paths = [
         "/run/systemd/resolve/io.systemd.Resolve",
         "/run/systemd/resolve/io.systemd.Resolve.Monitor",
@@ -336,6 +339,8 @@ def _mask_sockets() -> None:
 
     mount = _executable("mount")
     for p in socket_paths:
+        if os.path.realpath(p) in skipped:
+            continue
         with suppress(Exception):
             st = os.stat(p, follow_symlinks=False)
             if stat.S_ISSOCK(st.st_mode) or stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode):
@@ -730,7 +735,7 @@ def main() -> None:
                 _setup_etc_files(etc_dir, active.mounts)
 
                 # 4. Mask systemd-resolved, nscd, dbus sockets
-                _mask_sockets()
+                _mask_sockets(active.mounts)
 
                 # 5. Mask cmdline of helper
                 _mask_helper_cmdlines()
