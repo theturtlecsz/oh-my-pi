@@ -354,7 +354,62 @@ def _research_client(config_path: Path) -> tuple[WorkClient, UUID]:
     return client, actor_id
 
 
+def _run_research_compare_command(args: argparse.Namespace) -> int:
+    if _research_db_flags_partial(args):
+        print(
+            "research: --config-dir, --state-dir, --data-dir, and --db-port "
+            "must all be set or all be omitted",
+            file=sys.stderr,
+        )
+        return 2
+
+    from .jobs.campaign_definition import load_definition
+    from .jobs.research_campaign import run_research_campaign
+    from .jobs.store import NativeJobStore
+    from .research.campaign_comparison import compare
+
+    try:
+        ops = _research_db_config(args)
+        client_config = args.client_config or _default_client_config()
+        client, actor_id = _research_client(Path(client_config))
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        print(f"research: {error}", file=sys.stderr)
+        return 2
+
+    try:
+        store = NativeJobStore(ops)
+
+        def callback(definition_path: Path | str) -> dict[str, object]:
+            definition = load_definition(Path(definition_path))
+            with TemporaryDirectory() as temporary:
+                return run_research_campaign(
+                    client,
+                    store,
+                    args.key,
+                    definition,
+                    harness_dir=Path(temporary),
+                    actor_id=actor_id,
+                )
+
+        with TemporaryDirectory() as out_dir:
+            report = compare(callback, args.repo_root, Path(out_dir))
+
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        print(json.dumps(report))
+        return 0
+    except Exception as error:  # noqa: BLE001 - failure or refusal exits nonzero
+        print(f"research: {error}", file=sys.stderr)
+        return 1
+    finally:
+        client.close()
+
+
 def _run_research_command(args: argparse.Namespace) -> int:
+    if getattr(args, "research_command", None) == "compare":
+        return _run_research_compare_command(args)
+
     if _research_db_flags_partial(args):
         print(
             "research: --config-dir, --state-dir, --data-dir, and --db-port "
@@ -644,6 +699,16 @@ def main(argv: list[str] | None = None) -> int | None:
     run_parser.add_argument("--data-dir", type=Path)
     run_parser.add_argument("--db-port", type=int)
     run_parser.add_argument("--resume", type=str, default=None)
+
+    compare_parser = research_sub.add_parser("compare")
+    compare_parser.add_argument("--key", required=True)
+    compare_parser.add_argument("--repo-root", required=True, type=Path)
+    compare_parser.add_argument("--output", required=True, type=Path, metavar="JSON")
+    compare_parser.add_argument("--client-config", type=Path)
+    compare_parser.add_argument("--config-dir", type=Path)
+    compare_parser.add_argument("--state-dir", type=Path)
+    compare_parser.add_argument("--data-dir", type=Path)
+    compare_parser.add_argument("--db-port", type=int)
 
     qualification = subcommands.add_parser(
         "qualification",
