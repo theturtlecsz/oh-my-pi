@@ -601,3 +601,84 @@ def test_hard_error_overrides_met_verdicts_without_losing_counts(evidence):
     assert code == 2 and report["status"] == "failure" and "malformed" in report["error"]
     assert report["plan_count"] == report["start_count"] == 10
     assert report["verdicts"] == {"plans": "met", "starts": "met"}
+
+
+def _git(repo: Path, *args: str) -> str:
+    env = os.environ.copy()
+    env.update(GIT_AUTHOR_NAME="omp", GIT_AUTHOR_EMAIL="omp@example.com",
+               GIT_COMMITTER_NAME="omp", GIT_COMMITTER_EMAIL="omp@example.com")
+    completed = subprocess.run(["git", "-C", str(repo), "-c", "commit.gpgsign=false", *args],
+                               check=True, capture_output=True, text=True, env=env)
+    return completed.stdout.strip()
+
+
+def test_later_flood_py_with_omp584_region_counts_and_revert_is_excluded(tmp_path):
+    evidence = Evidence(tmp_path)
+    repo = evidence.directory
+    base = (repo / "flood.py").read_bytes()
+    if not base.endswith(b"\n"):
+        base += b"\n"
+    region = b"PLANNER_REGION_OMP584 = 'omp584-region-marker'\n"
+    unrelated = b"# unrelated flood.py edit\n"
+    _git(repo, "init", "-b", "main")
+    (repo / "flood.py").write_bytes(base)
+    _git(repo, "add", "flood.py")
+    _git(repo, "commit", "-m", "base")
+    (repo / "flood.py").write_bytes(base + region)
+    _git(repo, "add", "flood.py")
+    _git(repo, "commit", "-m", "activate omp584")
+    activated_commit = _git(repo, "rev-parse", "HEAD")
+    activated = hashlib.sha256((repo / "flood.py").read_bytes()).hexdigest()
+    (repo / "flood.py").write_bytes(base + region + unrelated)
+    _git(repo, "add", "flood.py")
+    _git(repo, "commit", "-m", "unrelated")
+    later = hashlib.sha256((repo / "flood.py").read_bytes()).hexdigest()
+    (repo / "flood.py").write_bytes(base + unrelated)
+    _git(repo, "add", "flood.py")
+    _git(repo, "commit", "-m", "revert omp584")
+    reverted = hashlib.sha256((repo / "flood.py").read_bytes()).hexdigest()
+    # The report imports the on-disk flood.py. Put the unrelated edit back so import still sees the region file.
+    (repo / "flood.py").write_bytes(base + region + unrelated)
+    assert later != activated and reverted not in (activated, later)
+    evidence.rollout.write_text(json.dumps(dict(
+        activated_at=CUTOFF, flood_sha256=activated, repo_commit="echo-me", external_commit=activated_commit)))
+    for name, sha in (("kept", later), ("reverted", reverted)):
+        slices = [evidence.slice(f"{name}-s{i}", "[]" if i < 2 else "[upstream]") for i in range(3)]
+        evidence.tasks[name] = dict(slices=slices, history=[
+            dict(phase="plan-start", attempt=1, at=AFTER, code_sha256=sha),
+            dict(phase="plan-review", attempt=1, verdict="PASS")])
+    evidence.tasks["runs"] = {"history": [
+        dict(**START_METRICS, phase="implement-start", attempt=1, at=AFTER, code_sha256=later, running_implementers=4),
+        dict(**START_METRICS, phase="implement-start", attempt=2, at=AFTER, code_sha256=reverted, running_implementers=9),
+        dict(**START_METRICS, phase="implement-start", attempt=3, at=AFTER, code_sha256=activated, running_implementers=5),
+    ]}
+    evidence.state.write_text(json.dumps({"tasks": evidence.tasks}))
+    before = {p: p.read_bytes() for p in repo.rglob("*") if p.is_file() and ".git" not in p.parts}
+    completed = subprocess.run([sys.executable, str(SCRIPT), "--flood-dir", str(repo),
+        "--rollout", str(evidence.rollout), "--output", str(evidence.output)], capture_output=True, text=True)
+    after = {p: p.read_bytes() for p in repo.rglob("*") if p.is_file() and ".git" not in p.parts}
+    assert "Traceback" not in completed.stderr
+    assert after == before
+    report = json.loads(evidence.output.read_text())
+    assert completed.returncode == 2 and report["status"] == "pending" and report["error"] is None
+    assert [plan["id"] for plan in report["plans"]] == ["kept"]
+    assert report["plans"][0]["code_sha256"] == later
+    assert {(row["attempt"], row["code_sha256"], row["running_implementers"]) for row in report["starts"]} == {
+        (1, later, 4), (3, activated, 5)}
+    assert report["start_count"] == 2 and report["median"] == 4.5
+
+
+def test_repeated_plan_attempt_uses_last_start_before_review(evidence):
+    evidence.plan("qualifier")
+    slices = [evidence.slice(f"rerun-s{i}", "[]" if i < 2 else "[upstream]") for i in range(3)]
+    evidence.tasks["rerun"] = dict(slices=slices, history=[
+        dict(phase="plan-start", attempt=1, at="2026-10-01T00:00:01Z", code_sha256="b" * 64),
+        dict(phase="plan-start", attempt=1, at="2026-10-01T00:00:02Z", code_sha256=SHA),
+        dict(phase="plan-review", attempt=1, verdict="PASS", at="2026-10-01T00:00:03Z"),
+        dict(phase="plan-start", attempt=1, at="2026-10-01T00:00:04Z", code_sha256="c" * 64),
+    ])
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    assert [plan["id"] for plan in report["plans"]] == ["qualifier", "rerun"]
+    rerun = report["plans"][1]
+    assert rerun["attempt"] == 1 and rerun["code_sha256"] == SHA and rerun["roots"] == 2
