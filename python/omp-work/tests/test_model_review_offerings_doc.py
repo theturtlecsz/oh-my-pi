@@ -11,6 +11,13 @@ installed. These tests replay the doc's ``sh`` block through the real
 ``omp_work.__main__.main`` with a real stub ``omp`` on ``PATH`` and the
 doc's own ``HOME``/XDG defaults, then run the unit's decoded ``ExecStart`` and
 assert the record lands directly in ``default_record_dir()``.
+
+OMP-615-s09-s05-s04: the same section's json blocks are the capture formats.
+If an example drifts from ``parse_sources`` or ``parse_listing`` — a relative
+path, a path on an ``omp-cli`` lane, a discovery proof that is not a fresh
+provider read, a retrieval timestamp that is not UTC — a reader copies a
+capture the timer refuses or the check leaves unchecked, while the doc still
+shows it as the format. The tests parse every json block in the section.
 """
 
 from __future__ import annotations
@@ -20,13 +27,16 @@ import shlex
 import stat
 import subprocess
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
 from omp_work.__main__ import main
+from omp_work.operations.offerings_timer import install_timer
 from omp_work.operations.stop import default_systemd_dir
 from omp_work.routing.offerings_evaluation import default_record_dir
+from omp_work.routing.offerings_inputs import OfferingsInputError, parse_listing, parse_sources
 
 from test_offerings_evaluation_cli import install_stub, now, records_of, write_captures
 
@@ -180,3 +190,108 @@ def test_owner_schedule_points_at_the_daily_check_without_the_old_refusal():
     text = "\n".join(lines)
     assert _QUALIFICATION_GATE in text
     assert _LAST_REVIEW in text
+
+
+def _json_blocks(lines: list[str]) -> list[str]:
+    """Every fenced ```json block in the section, in order, fence markers excluded."""
+    blocks: list[str] = []
+    start = 0
+    while True:
+        try:
+            open_at = lines.index("```json", start)
+        except ValueError:
+            break
+        try:
+            close_at = lines.index("```", open_at + 1)
+        except ValueError:
+            pytest.fail(f"{_DOC}: a ```json block is unterminated")
+        body = "\n".join(lines[open_at + 1 : close_at])
+        if not body.strip():
+            pytest.fail(f"{_DOC}: empty ```json block")
+        blocks.append(body)
+        start = close_at + 1
+    if not blocks:
+        pytest.fail(f"{_DOC}: {_SECTION!r} declares no ```json block")
+    return blocks
+
+
+def _prose(lines: list[str]) -> str:
+    return " ".join(line.strip() for line in lines if line.strip())
+
+
+def test_capture_rules_name_the_proof_and_the_unchecked_cases():
+    prose = _prose(_section(_DOC.read_text(encoding="utf-8"), _SECTION))
+    for phrase in (
+        "omp models refresh <provider> --json --no-extensions",
+        "No CLI flag stamps the current time.",
+        "The owner refreshes every `listing-file` capture daily.",
+        "The timer only reads captures.",
+        "The check never fabricates a time.",
+        "Times come only from the capture or from `omp`.",
+        "over 36h old or future-dated",
+        "models.dev",
+    ):
+        assert phrase in prose, phrase
+    assert "`check_gap`" in prose
+    for token in ("absent", "foreign", "bundled", "cache", "stale", "empty", "unreadable"):
+        assert token in prose, token
+
+
+def test_documented_captures_parse_and_install_timer_accepts_the_sources(tmp_path: Path):
+    blocks = _json_blocks(_section(_DOC.read_text(encoding="utf-8"), _SECTION))
+    sources_raw: list[str] = []
+    listings_raw: list[str] = []
+    for block in blocks:
+        try:
+            parse_sources(block)
+        except OfferingsInputError:
+            listings_raw.append(block)
+        else:
+            sources_raw.append(block)
+    assert len(sources_raw) == 1
+    sources = parse_sources(sources_raw[0])
+    assert {lane.kind for lane in sources.lanes.values()} == {"omp-cli", "listing-file"}
+
+    sources_path = tmp_path / "offerings-sources.json"
+    sources_path.write_text(sources_raw[0], encoding="utf-8")
+    stub = tmp_path / "omp"
+    stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
+    units = tmp_path / "systemd"
+    written = install_timer(sources_path, tmp_path / "records", stub, units)
+    assert [path.name for path in written] == [
+        "omp-offerings-check.service",
+        "omp-offerings-check.timer",
+    ]
+    assert all(path.is_file() for path in written)
+
+    used: set[int] = set()
+    for lane in sources.lanes.values():
+        hits: list[tuple[int, object]] = []
+        for index, block in enumerate(listings_raw):
+            try:
+                listing = parse_listing(block, lane)
+            except OfferingsInputError:
+                continue
+            if listing.gaps or listing.provenance is None:
+                continue
+            hits.append((index, listing))
+        assert len(hits) == 1, lane.lane
+        index, listing = hits[0]
+        assert index not in used, lane.lane
+        used.add(index)
+        assert listing.models
+        assert listing.provider == lane.catalog_provider
+        assert listing.provenance is not None
+        if lane.kind == "omp-cli":
+            assert listing.provenance["provider"] == lane.catalog_provider
+            assert listing.provenance["status"] == "ok"
+            assert listing.provenance["stale"] is False
+            assert listing.provenance["source"] == "provider"
+            assert isinstance(listing.provenance["fetchedAt"], int)
+            assert listing.provenance["fetchedAt"] >= 0
+        else:
+            assert listing.provenance["provider"] == lane.catalog_provider
+            assert listing.provenance["success"] is True
+            assert listing.provenance["retrieved_at"].utcoffset() == timedelta(0)
+    assert used == set(range(len(listings_raw)))

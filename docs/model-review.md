@@ -97,6 +97,107 @@ below and the existing `review.last_review` integration. A
 for the weekly qualification on the fixed task set. A `check_gap` finding means
 the named capture inputs must be repaired.
 
+The `--sources` file is `offerings-sources.v1`. `version` is that literal.
+`notices` is the absolute path of the notices capture. Each entry in `lanes`
+is one lane: `kind` is `omp-cli` or `listing-file`, `catalog_provider` is
+unique across the map, and `path` is set only on a `listing-file` lane, where
+it is absolute. Declare one lane for every provider in use. This shape uses
+one lane of each kind:
+
+```json
+{
+  "version": "offerings-sources.v1",
+  "notices": "/home/owner/offerings/offerings-notices.json",
+  "lanes": {
+    "gemini_flash": {
+      "kind": "omp-cli",
+      "catalog_provider": "gemini_flash"
+    },
+    "kimi": {
+      "kind": "listing-file",
+      "catalog_provider": "kimi",
+      "path": "/home/owner/offerings/listing-kimi.json"
+    }
+  }
+}
+```
+
+A listing is a `models` array. On every row, `provider` equals that lane's
+`catalog_provider` and `id` is unique in the array. `name` is a non-empty
+string. `contextWindow` and `maxTokens` are each an integer or null.
+`reasoning` is a boolean. `thinking` is an array of strings or null. `input`
+is an array drawn from `text` and `image`. `cost` is an object.
+
+An `omp-cli` listing is the stdout of `omp models refresh <provider> --json --no-extensions`,
+the command the check runs for that lane. No CLI flag stamps the current time.
+The proof is `discovery.<catalog_provider>`: `provider` equals the catalog
+provider, `status` is `ok`, `stale` is false, `source` is `provider`, and
+`fetchedAt` is epoch milliseconds from `omp`. Shape example for the
+`gemini_flash` lane:
+
+```json
+{
+  "models": [
+    {
+      "provider": "gemini_flash",
+      "id": "gemini-3.8-flash-high",
+      "name": "Gemini 3.8 Flash",
+      "contextWindow": 1048576,
+      "maxTokens": 65536,
+      "reasoning": true,
+      "thinking": ["low", "high"],
+      "input": ["text", "image"],
+      "cost": {}
+    }
+  ],
+  "discovery": {
+    "gemini_flash": {
+      "provider": "gemini_flash",
+      "status": "ok",
+      "stale": false,
+      "source": "provider",
+      "fetchedAt": 1791979200000
+    }
+  }
+}
+```
+
+A `listing-file` listing is the file at that lane's `path`. The owner refreshes
+every `listing-file` capture daily. The timer only reads captures. The proof
+is `retrieval`: `provider` equals the catalog provider, `source` names where
+the listing was taken, `retrieved_at` is an ISO-8601 UTC timestamp from the
+capture, and `success` is true. Shape example for the `kimi` lane:
+
+```json
+{
+  "models": [
+    {
+      "provider": "kimi",
+      "id": "kimi-code/k3-256k",
+      "name": "Kimi K3 256k",
+      "contextWindow": null,
+      "maxTokens": null,
+      "reasoning": true,
+      "thinking": null,
+      "input": ["text"],
+      "cost": {}
+    }
+  ],
+  "retrieval": {
+    "provider": "kimi",
+    "source": "https://capture.example/kimi/models",
+    "retrieved_at": "2026-10-14T12:00:00Z",
+    "success": true
+  }
+}
+```
+
+The lane stays unchecked (`check_gap`) when the proof is absent, foreign,
+`bundled`, `cache`, `models.dev`, or stale, when the listing is empty or
+unreadable, or when `retrieved_at` is over 36h old or future-dated. A CLI
+lane's `fetchedAt` is held to that same age. The check never fabricates a
+time. Times come only from the capture or from `omp`.
+
 ## Written rubric
 
 | Axis | Required evidence and decision |
