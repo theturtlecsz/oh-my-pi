@@ -13,6 +13,10 @@ saveTextLockfile = true
 ".lark" = "text"
 
 [test]
+# Give every root `bun test` process a private TMPDIR for its lifetime, so
+# prompt fixtures that fall back to `<os.tmpdir()>/omp-local` never share a
+# root across runs (and never inherit a mode-000 leftover). See the preload.
+preload = ["./scripts/session-system-test-preload.ts"]
 # bun test does NOT honor .gitignore; prune robomp's repo clones and
 # scratch dirs so a root-level `bun test` doesn't walk into them.
 #
