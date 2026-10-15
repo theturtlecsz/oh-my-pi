@@ -198,13 +198,25 @@ PY
     local pytest_temp
     pytest_temp=$(mktemp -d) || return
     trap 'rm -rf -- "$pytest_temp"' EXIT
+
+    local -a pytest_files=(
+        "$OMP584_ROOT/python/omp-work/tests/test_omp622_exact.py"
+    )
+    local -a pytest_k=()
+    if [[ -f "$OMP584_STAGE/legacy-composable" ]]; then
+        pytest_files+=(
+            "$OMP584_ROOT/python/omp-work/tests/test_flood_planner_rollout.py"
+            "$OMP584_ROOT/python/omp-work/tests/test_flood_rollout_provenance.py"
+        )
+        pytest_k=(-k 'test_combined_ or not test_flood_planner_rollout')
+    fi
     OMP584_FLOOD_SOURCE="$OMP584_STAGE" PYTHONDONTWRITEBYTECODE=1 \
         uv run --project "$OMP584_ROOT/python/omp-work" --extra dev pytest \
-        "$OMP584_ROOT/python/omp-work/tests/test_flood_planner_rollout.py" \
-        "$OMP584_ROOT/python/omp-work/tests/test_flood_rollout_provenance.py" \
+        "${pytest_files[@]}" \
         --basetemp "$pytest_temp/pytest" \
-        -k 'test_combined_ or not test_flood_planner_rollout' -rs \
+        ${pytest_k[@]+"${pytest_k[@]}"} -rs \
         >"$OMP584_EVIDENCE_DIR/pytest.log" 2>&1 || return
+
     # Qualify the exact canonical deployment bytes, without recomposing them.
     python3 - "$OMP584_STAGE/flood.py" <<'PYCODE' || return
 import pathlib, sys
@@ -212,10 +224,22 @@ p = pathlib.Path(sys.argv[1])
 p.write_bytes(p.read_bytes().replace(b'with_name("omp584-planner-rules.md")',
                                     b'with_name("planner-independence.md")'))
 PYCODE
+
+    local -a exact_files=(
+        "$OMP584_ROOT/python/omp-work/tests/test_omp622_exact.py"
+    )
+    local -a exact_k=()
+    if [[ -f "$OMP584_STAGE/legacy-composable" ]]; then
+        exact_files+=(
+            "$OMP584_ROOT/python/omp-work/tests/test_flood_planner_rollout.py"
+        )
+        exact_k=(-k 'test_combined_ or not test_flood_planner_rollout')
+    fi
     OMP584_FLOOD_SOURCE="$OMP584_STAGE" OMP584_TEST_EXACT=1 PYTHONDONTWRITEBYTECODE=1 \
         uv run --project "$OMP584_ROOT/python/omp-work" --extra dev pytest \
-        "$OMP584_ROOT/python/omp-work/tests/test_flood_planner_rollout.py" \
-        --basetemp "$pytest_temp/exact" -k test_combined_ -rs \
+        "${exact_files[@]}" \
+        --basetemp "$pytest_temp/exact" \
+        ${exact_k[@]+"${exact_k[@]}"} -rs \
         >"$OMP584_EVIDENCE_DIR/pytest-exact.log" 2>&1
 )
 
