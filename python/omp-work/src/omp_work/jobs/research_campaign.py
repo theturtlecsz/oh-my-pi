@@ -249,6 +249,7 @@ def run_research_campaign(
     *,
     harness_dir: Path,
     actor_id: UUID,
+    resume_campaign_id: UUID | None = None,
 ) -> dict[str, object]:
     """Conclude only after each targeted job settles with a stored observation.
 
@@ -265,14 +266,85 @@ def run_research_campaign(
     item = client.work_item(key)
     workspace_id, work_id = item.workspace_id, item.work_id
     setup = prepare_campaign(client, workspace_id, definition, harness_dir=harness_dir)
-    resumed = (
-        _resumable_campaign(client, key, item, setup)
-        if definition.search is not None
-        else None
-    )
-    if resumed is not None:
-        campaign_id = resumed.campaign_id
+    resumed: ResearchCampaign | None = None
+    if resume_campaign_id is not None:
+        if definition.search is None:
+            raise RuntimeError("resume requires explicit search configuration")
+        campaigns = [
+            c for c in client.research(key).campaigns
+            if c.campaign_id == resume_campaign_id
+        ]
+        if not campaigns:
+            raise RuntimeError(f"campaign {resume_campaign_id} is not on work item {key}")
+        resumed = campaigns[0]
+        if resumed.workspace_id != workspace_id or resumed.work_id != work_id:
+            raise RuntimeError(f"campaign {resume_campaign_id} is not on work item {key}")
+        if resumed.state != "running":
+            raise RuntimeError(
+                f"campaign {resume_campaign_id} is {resumed.state}, expected running"
+            )
+        state_in_store = _campaign_state(store, workspace_id, actor_id, resume_campaign_id)
+        if state_in_store != "running":
+            raise RuntimeError(
+                f"campaign {resume_campaign_id} is {state_in_store}, expected running"
+            )
+        if resumed.revision_id != item.revision.revision_id:
+            raise RuntimeError(
+                f"campaign {resume_campaign_id} revision {resumed.revision_id} "
+                f"does not match work item revision {item.revision.revision_id}"
+            )
+        if resumed.spec_sha256 != setup.spec_sha256:
+            raise RuntimeError(
+                f"campaign {resume_campaign_id} spec hash does not match definition"
+            )
+        if (
+            resumed.policy_sha256 is not None
+            and resumed.policy_sha256 != setup.policy_sha256
+        ):
+            raise RuntimeError(
+                f"campaign {resume_campaign_id} policy hash does not match setup"
+            )
+        if (
+            resumed.compatibility_sha256 is not None
+            and resumed.compatibility_sha256 != setup.compatibility_sha256
+        ):
+            raise RuntimeError(
+                f"campaign {resume_campaign_id} compatibility hash does not match setup"
+            )
+        campaign_id = resume_campaign_id
+    elif definition.search is not None:
+        resumed = _resumable_campaign(client, key, item, setup)
+        if resumed is not None:
+            campaign_id = resumed.campaign_id
+        else:
+            campaign_id = uuid4()
+            client.execute(_envelope(workspace_id, CreateResearchCampaignCommand(
+                type="create_research_campaign",
+                payload=CreateResearchCampaignPayload(
+                    campaign_id=campaign_id, work_id=work_id,
+                    revision_id=item.revision.revision_id, domain=definition.domain,
+                    spec=setup.spec, spec_sha256=setup.spec_sha256,
+                ),
+            )))
+            client.execute(_envelope(workspace_id, AdmitResearchCampaignCommand(
+                type="admit_research_campaign",
+                payload=AdmitResearchCampaignPayload(
+                    campaign_id=campaign_id, work_id=work_id,
+                    revision_id=item.revision.revision_id, spec_sha256=setup.spec_sha256,
+                    policy_sha256=setup.policy_sha256, compatibility=setup.compatibility,
+                    compatibility_sha256=setup.compatibility_sha256,
+                ),
+            )))
+            client.execute(_envelope(workspace_id, SetResearchCampaignStateCommand(
+                type="set_research_campaign_state",
+                payload=SetResearchCampaignStatePayload(
+                    campaign_id=campaign_id, work_id=work_id,
+                    expected_state="admitted", target_state="running",
+                    policy_sha256=setup.policy_sha256,
+                ),
+            )))
     else:
+        resumed = None
         campaign_id = uuid4()
         client.execute(_envelope(workspace_id, CreateResearchCampaignCommand(
             type="create_research_campaign",

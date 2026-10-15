@@ -371,6 +371,14 @@ def _run_research_command(args: argparse.Namespace) -> int:
         print(f"research: {error}", file=sys.stderr)
         return 2
 
+    resume_campaign_id: UUID | None = None
+    if getattr(args, "resume", None) is not None:
+        try:
+            resume_campaign_id = UUID(str(args.resume))
+        except (ValueError, TypeError) as error:
+            print(f"research: invalid resume UUID {args.resume!r}: {error}", file=sys.stderr)
+            return 2
+
     from .jobs.research_campaign import run_research_campaign
     from .jobs.store import NativeJobStore
 
@@ -386,22 +394,32 @@ def _run_research_command(args: argparse.Namespace) -> int:
         store = NativeJobStore(ops)
         if args.harness_dir is None:
             with TemporaryDirectory() as temporary:
+                kwargs: dict[str, Any] = {
+                    "harness_dir": Path(temporary),
+                    "actor_id": actor_id,
+                }
+                if resume_campaign_id is not None:
+                    kwargs["resume_campaign_id"] = resume_campaign_id
                 result = run_research_campaign(
                     client,
                     store,
                     args.key,
                     definition,
-                    harness_dir=Path(temporary),
-                    actor_id=actor_id,
+                    **kwargs,
                 )
         else:
+            kwargs = {
+                "harness_dir": Path(args.harness_dir),
+                "actor_id": actor_id,
+            }
+            if resume_campaign_id is not None:
+                kwargs["resume_campaign_id"] = resume_campaign_id
             result = run_research_campaign(
                 client,
                 store,
                 args.key,
                 definition,
-                harness_dir=Path(args.harness_dir),
-                actor_id=actor_id,
+                **kwargs,
             )
     except Exception as error:  # noqa: BLE001 - failure or refusal exits nonzero
         print(f"research: {error}", file=sys.stderr)
@@ -625,6 +643,7 @@ def main(argv: list[str] | None = None) -> int | None:
     run_parser.add_argument("--state-dir", type=Path)
     run_parser.add_argument("--data-dir", type=Path)
     run_parser.add_argument("--db-port", type=int)
+    run_parser.add_argument("--resume", type=str, default=None)
 
     qualification = subcommands.add_parser(
         "qualification",
