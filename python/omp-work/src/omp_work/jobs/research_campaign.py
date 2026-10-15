@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -250,6 +251,7 @@ def run_research_campaign(
     harness_dir: Path,
     actor_id: UUID,
     resume_campaign_id: UUID | None = None,
+    lease_seconds: int = 60,
 ) -> dict[str, object]:
     """Conclude only after each targeted job settles with a stored observation.
 
@@ -261,7 +263,10 @@ def run_research_campaign(
     and ``JobWorker`` enforce. No legal pick, or a selected cost that would
     exceed the budget, stops through ``score_campaign`` and does not try a
     cheaper node. A native reservation or budget refusal propagates and is
-    not stored as a score.
+    not stored as a score. New jobs use ``lease_seconds``; existing jobs retain
+    their stored resources and lease. Automatic recovery ticks an active job
+    for at most two seconds in short waits, leaving expiry and observation
+    reconciliation to the native worker, then refuses if still unsettled.
     """
     item = client.work_item(key)
     workspace_id, work_id = item.workspace_id, item.work_id
@@ -485,14 +490,34 @@ def run_research_campaign(
                 store, operation_id=str(uuid4()), workspace_id=workspace_id,
                 actor_id=actor_id, work_id=work_id, trial_id=trial_id,
                 resources={"cpu": 1, "memory_mib": 0, "gpu": 0, "model_calls": 0},
-                lease_seconds=60,
+                lease_seconds=lease_seconds,
             )
+        # Only recovery waits for an existing lease. Native tick owns expiry,
+        # reconciliation and observe; never rerun a handler ourselves. Bound
+        # the wait so a live worker can retain a longer lease without blocking
+        # this invocation indefinitely.
+        deadline = time.monotonic() + 2.0
+        while True:
+            _refuse_stopped(store, workspace_id, actor_id, campaign_id)
+            job = None
+            if pending is not None:
+                with store.transaction(workspace_id, actor_id) as cur:
+                    job = store.job_view(cur, workspace_id, job_id)
+                if job is not None and job["settlement"]:
+                    break
+            if worker.tick(job_id=job_id) == job_id:
+                break
+            if (
+                pending is None or job is None or job["worker_id"] is None
+                or time.monotonic() >= deadline
+            ):
+                # Reservation and item-budget gates refuse inside the worker.
+                # That refusal is not a trial score.
+                raise RuntimeError(
+                    f"research worker did not execute target job {job_id}; job is unsettled"
+                )
+            time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
         pending = None
-        _refuse_stopped(store, workspace_id, actor_id, campaign_id)
-        if worker.tick(job_id=job_id) != job_id:
-            # Reservation and item-budget gates refuse inside the worker.
-            # That refusal is not a trial score.
-            raise RuntimeError(f"research worker did not execute target job {job_id}")
         persisted = next(
             (
                 candidate for candidate in client.research(key).trials
