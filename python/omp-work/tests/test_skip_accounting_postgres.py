@@ -1009,6 +1009,114 @@ def test_launch_prerequisite_refusal_never_executes_pytest(
     assert not sentinel.exists() and "test session starts" not in captured.out
 
 
+def procfs_refusal(probe: int = 2, stderr: str = "mount: /proc: permission denied.\nsecond line") -> PrerequisiteError:
+    return PrerequisiteError(
+        f"namespace_probe_{probe}_failed", "unshare denied", argv=sap.NAMESPACE_PROBES[probe - 1],
+        status=1, stderr=stderr,
+    )
+
+
+@pytest.fixture
+def procfs_gap_host(launch_suite: Path, monkeypatch: pytest.MonkeyPatch) -> PrerequisiteError:
+    """Local host where probe 2 refuses and the re-run of probe 3 refuses too."""
+    first = procfs_refusal(2)
+    for key in ("CI", "GITHUB_ACTIONS"):
+        monkeypatch.delenv(key, raising=False)
+
+    def refuse() -> None:
+        raise first
+
+    monkeypatch.setattr(sap, "check_prerequisites", refuse)
+    monkeypatch.setattr(
+        sap, "_PROBE_RUN",
+        lambda argv, **kw: cp(tuple(argv), 1, err="mount: /proc: permission denied.\n"),
+    )
+    return first
+
+
+PROCFS_SUITE = textwrap.dedent('''
+    import pytest
+
+    def test_needs_procfs():
+        pytest.skip("userns procfs mounts unsupported: denied")
+
+    def test_other_skip():
+        pytest.skip("unrelated reason")
+
+    def test_plain():
+        pass
+''')
+
+
+def test_local_procfs_gap_runs_pytest_and_receipt_names_host_skip(
+    procfs_gap_host: PrerequisiteError, launch_suite: Path, tmp_path: Path, capfd: pytest.CaptureFixture[str],
+) -> None:
+    (launch_suite / "test_procfs.py").write_text(PROCFS_SUITE)
+    out = tmp_path / "out"
+    assert sap.main(["--out", str(out)]) == 0
+    receipt = json.loads(next(out.glob(f"*{sa.RECEIPT_SUFFIX}")).read_text())
+    calls = {node.split("::")[-1]: phases["call"] for node, phases in receipt["nodes"].items()}
+    assert calls["test_needs_procfs"] == {
+        "outcome": "skipped",
+        "reason": "host lacks nested procfs (namespace_probe_2: mount: /proc: permission denied.)",
+        "covering_check": "CI ubuntu-22.04 work-ledger-integration",
+    }
+    assert calls["test_other_skip"] == {"outcome": "skipped", "reason": "unrelated reason"}
+    assert calls["test_plain"]["outcome"] == "passed"
+    assert [g["probe"] for g in receipt["host_gaps"]] == ["namespace_probe_2", "namespace_probe_3"]
+    assert receipt["host_gaps"][0]["argv"] == list(sap.NAMESPACE_PROBES[1]) and receipt["host_gaps"][0]["status"] == 1
+    assert sa.read_receipt(next(out.glob(f"*{sa.RECEIPT_SUFFIX}"))).complete
+    captured = capfd.readouterr()
+    assert "namespace_probe_2" in captured.err and "namespace_probe_3" in captured.err
+    assert "permission denied" in captured.err
+    summary = json.loads(next(line.removeprefix("summary: ") for line in captured.out.splitlines() if line.startswith("summary: ")))
+    assert summary["host_skips"] == ["test_procfs.py::test_needs_procfs"]
+    assert summary["covering_check"] == "CI ubuntu-22.04 work-ledger-integration"
+    assert printed_receipt(captured.out)["nodes"] == receipt["nodes"]
+
+
+@pytest.mark.parametrize("variable, value", [("CI", "1"), ("GITHUB_ACTIONS", "true")])
+def test_procfs_gap_in_ci_refuses_before_pytest(
+    procfs_gap_host: PrerequisiteError, launch_suite: Path, monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str], variable: str, value: str,
+) -> None:
+    sentinel = launch_suite / "executed"
+    (launch_suite / "test_never.py").write_text(f"from pathlib import Path\nPath({str(sentinel)!r}).touch()\n")
+    monkeypatch.setenv(variable, value)
+    assert sap.main([]) == 2
+    captured = capfd.readouterr()
+    assert "namespace_probe_2_failed" in captured.err and "permission denied" in captured.err
+    assert not sentinel.exists() and "test session starts" not in captured.out
+
+
+def test_probe_one_refusal_is_never_a_host_gap(
+    procfs_gap_host: PrerequisiteError, launch_suite: Path, monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    sentinel = launch_suite / "executed"
+    (launch_suite / "test_never.py").write_text(f"from pathlib import Path\nPath({str(sentinel)!r}).touch()\n")
+
+    def refuse() -> None:
+        raise procfs_refusal(1)
+
+    monkeypatch.setattr(sap, "check_prerequisites", refuse)
+    assert sap.main([]) == 2
+    assert "namespace_probe_1_failed" in capfd.readouterr().err
+    assert not sentinel.exists()
+
+
+def test_assertion_failure_under_host_gap_stays_nonzero(
+    procfs_gap_host: PrerequisiteError, launch_suite: Path, tmp_path: Path,
+) -> None:
+    (launch_suite / "test_procfs.py").write_text(PROCFS_SUITE + "\ndef test_broken():\n    assert False\n")
+    out = tmp_path / "out"
+    assert sap.main(["--out", str(out)]) == 1
+    receipt = sa.read_receipt(next(out.glob(f"*{sa.RECEIPT_SUFFIX}")))
+    assert receipt.exitstatus == 1
+    broken = next(p for n, p in receipt.nodes.items() if n.endswith("test_broken"))
+    assert broken["call"].outcome == "failed"
+
+
 @pytest.mark.parametrize("args", [["--suite", "tests"], ["-x"], ["--ou", "tmp"], ["tests"]])
 def test_cli_rejects_selectors_and_abbreviations(args: list[str]) -> None:
     with pytest.raises(SystemExit) as exc:

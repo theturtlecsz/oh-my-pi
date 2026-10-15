@@ -2,7 +2,10 @@
 
 ``check_prerequisites`` refuses (raises ``PrerequisiteError``, ``exit_code`` 2) unless the
 host is a non-root Linux box with PostgreSQL 18 tooling, libseccomp, and working
-unprivileged user/net/mount/pid namespaces. There is no fallback and no skip.
+unprivileged user/net/mount/pid namespaces. There is no fallback and no skip, with one
+recorded exception (OMP-617 scope ruling 2026-10-15): outside CI, a host whose only failing
+prerequisites are the nested procfs probes (``--mount-proc``) runs the suite anyway, and the
+receipt names every node that skipped for lack of nested procfs plus the CI check covering it.
 """
 
 from __future__ import annotations
@@ -75,6 +78,12 @@ NAMESPACE_PROBES: tuple[tuple[str, ...], ...] = (
         "unshare", "--pid", "--fork", "--mount-proc", "true",
     ),
 )  # fmt: skip
+
+HOST_GAP_CHECK = "CI ubuntu-22.04 work-ledger-integration"
+_CI_ENV = ("CI", "GITHUB_ACTIONS")
+_PROCFS_PROBE_CAUSES = ("namespace_probe_2_failed", "namespace_probe_3_failed")
+_PROCFS_SKIP_RE = re.compile(r"procfs", re.IGNORECASE)
+_PROBE_RUN: Callable[..., Any] = subprocess.run
 
 _VERSION_RE = re.compile(r"\(PostgreSQL\)\s+(\d+)")
 
@@ -215,6 +224,65 @@ def check_prerequisites(
 
     for index, argv in enumerate(NAMESPACE_PROBES, start=1):
         _run(argv, f"namespace_probe_{index}", run, timeout)
+
+
+def _host_gaps(
+    first: PrerequisiteError, environ: dict[str, str] | os._Environ[str], timeout: float = COMMAND_TIMEOUT_SECONDS,
+) -> list[PrerequisiteError]:
+    """Recorded nested-procfs gaps for ``first``, or re-raise it when it is not excusable.
+
+    Only a nonzero exit of namespace probe 2 or 3, outside CI, is excusable. Probes run in
+    order and these are last, so every other prerequisite already held; probe 3 is re-run
+    when probe 2 was the one that failed.
+    """
+    if first.cause not in _PROCFS_PROBE_CAUSES or any(environ.get(key) for key in _CI_ENV):
+        raise first
+    gaps = [first]
+    if first.cause == _PROCFS_PROBE_CAUSES[0]:
+        try:
+            _run(NAMESPACE_PROBES[2], "namespace_probe_3", _PROBE_RUN, timeout)
+        except PrerequisiteError as exc:
+            if exc.cause != _PROCFS_PROBE_CAUSES[1]:
+                raise
+            gaps.append(exc)
+    return gaps
+
+
+def _gap_stderr_line(gap: PrerequisiteError) -> str:
+    lines = gap.stderr.strip().splitlines()
+    return lines[0] if lines else ""
+
+
+def _gap_probe(gap: PrerequisiteError) -> str:
+    return gap.cause.removesuffix("_failed")
+
+
+def _print_gaps(gaps: Sequence[PrerequisiteError]) -> None:
+    for gap in gaps:
+        print(
+            f"skip_accounting_postgres: host gap {_gap_probe(gap)}: argv={list(gap.argv or ())} "
+            f"status={gap.status} stderr={gap.stderr.strip()!r}; covering check: {HOST_GAP_CHECK}",
+            file=sys.stderr, flush=True,
+        )
+
+
+def _record_host_skips(path: Path, gaps: Sequence[PrerequisiteError]) -> dict[str, Any]:
+    """Rewrite skipped procfs nodes in a receipt with the host-gap reason and covering check."""
+    raw = json.loads(path.read_text())
+    reason = f"host lacks nested procfs ({_gap_probe(gaps[0])}: {_gap_stderr_line(gaps[0])})"
+    for phases in raw["nodes"].values():
+        for body in phases.values():
+            if body["outcome"] == "skipped" and _PROCFS_SKIP_RE.search(body.get("reason", "")):
+                body["reason"] = reason
+                body["covering_check"] = HOST_GAP_CHECK
+    raw["host_gaps"] = [
+        {"probe": _gap_probe(g), "argv": list(g.argv or ()), "status": g.status, "stderr": g.stderr}
+        for g in gaps
+    ]
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(raw, sort_keys=True))
+    tmp.replace(path)
+    return raw
 
 
 def _stat_mode(path: Path) -> int:
@@ -488,22 +556,35 @@ def _suite_path() -> Path:
     return Path(__file__).resolve().parents[2] / "tests"
 
 
-def _print_receipts(out: Path, child: subprocess.Popen[bytes], env: dict[str, str]) -> None:
+def _print_receipts(
+    out: Path, child: subprocess.Popen[bytes], env: dict[str, str], gaps: Sequence[PrerequisiteError] = (),
+) -> None:
     prefix = f"{env[skip_accounting.ENV_CHECK]}-{env[skip_accounting.ENV_RUN]}-{child.pid}-"
     for path in sorted(out.glob(f"*{skip_accounting.RECEIPT_SUFFIX}")):
         if not path.name.startswith(prefix):
             continue
         receipt = skip_accounting.read_receipt(path)
-        print("receipt: " + json.dumps({"path": str(path), **receipt.to_json()}, sort_keys=True), flush=True)
+        body = {"path": str(path), **receipt.to_json()}
+        if gaps:
+            body.update(_record_host_skips(path, gaps), path=str(path))
+        print("receipt: " + json.dumps(body, sort_keys=True), flush=True)
         counts: dict[str, int] = {}
         for phases in receipt.nodes.values():
             for name, phase in phases.items():
                 key = f"{name}/{phase.outcome}"
                 counts[key] = counts.get(key, 0) + 1
-        print("summary: " + json.dumps({
+        summary: dict[str, Any] = {
             "check": receipt.check, "run_id": receipt.run_id, "complete": receipt.complete,
             "exitstatus": receipt.exitstatus, "phases": counts,
-        }, sort_keys=True), flush=True)
+        }
+        if gaps:
+            summary["host_gaps"] = body["host_gaps"]
+            summary["host_skips"] = sorted(
+                node for node, phases in body["nodes"].items()
+                if any(phase.get("covering_check") for phase in phases.values())
+            )
+            summary["covering_check"] = HOST_GAP_CHECK
+        print("summary: " + json.dumps(summary, sort_keys=True), flush=True)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -529,8 +610,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _launch(out_arg: str | None, run_arg: str | None) -> int:
     owned: OwnedTemp | None = None
     children: list[subprocess.Popen[bytes]] = []
+    gaps: list[PrerequisiteError] = []
     try:
-        check_prerequisites()
+        try:
+            check_prerequisites()
+        except PrerequisiteError as exc:
+            gaps = _host_gaps(exc, os.environ)
+            _print_gaps(gaps)
         owned = OwnedTemp.create()
         root = repo_root()
         env = {
@@ -554,7 +640,7 @@ def _launch(out_arg: str | None, run_arg: str | None) -> int:
         ], cwd=root, env=env)
         children.append(child)
         status = child.wait()
-        _print_receipts(out, child, env)
+        _print_receipts(out, child, env, gaps)
         return status
     finally:
         if owned is not None:
