@@ -84,6 +84,7 @@
 - the worker `capacity` setting is documented as a resource-weight budget; the worker runs one job at a time (OMP-475).
 - Plan stamping waits for confirmation of a linked mission's new or changed scope.
 - research lesson stage admits a draft only after every cited receipt resolves to the same claim, source span, revision, work item, candidate, evaluator, and outcome, and the ML investigation replaces the shared zero experiment receipt with the SHA-256 of each experiment's canonical name and metrics (OMP-607).
+- Orchestrator worker launch records lesson supplies from verified context delivery without inferring lesson use or outcome (OMP-607).
 
 ### Fixed
 

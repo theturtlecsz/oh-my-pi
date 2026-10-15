@@ -206,9 +206,42 @@ def test_unconfigured_context_keeps_worker_output_uncaptured(delivery):
     assert delivery.runs[0][2]["output"] is None
     assert "context" not in delivery.runs[0][3]
     assert "prompt_hash" not in outcome.data
+    assert "lesson_supply_ids" not in outcome.data
+    recorded = next(step for step in delivery.worker.handlers["*"].steps()
+                    if step["kind"] == "outcome" and step["stage"] == "implement")
+    assert "prompt_hash" not in recorded["data"]
+    assert "lesson_supply_ids" not in recorded["data"]
     assert learning_rows(delivery, "supplies") == []
     assert_no_uses_or_outcomes(delivery)
     assert_cleanup(delivery)
+
+
+def test_disabled_learning_context_contains_no_lesson_and_invokes_no_deliver(delivery):
+    handler = delivery.worker.handlers["*"]
+    handler.config = dataclasses.replace(
+        handler.config,
+        learning_state_dir=None,
+        learning_command=(),
+        learning_bearer_file=None,
+    )
+    outcome = run(delivery)
+    assert outcome.outcome == "succeeded"
+    manifest = delivery.runs[0][3]
+    assert "context" in manifest
+    assert "Verified worker lesson" not in manifest["context"]
+    assert "context-lesson" not in manifest["context"]
+    assert delivery.runs[0][2]["output"] is not None
+    assert not any("deliver" in invocation[0] for invocation in delivery.compiles)
+    assert "prompt_hash" not in outcome.data
+    assert "lesson_supply_ids" not in outcome.data
+    recorded = next(step for step in delivery.worker.handlers["*"].steps()
+                    if step["kind"] == "outcome" and step["stage"] == "implement")
+    assert "prompt_hash" not in recorded["data"]
+    assert "lesson_supply_ids" not in recorded["data"]
+    assert learning_rows(delivery, "supplies") == []
+    assert_no_uses_or_outcomes(delivery)
+    assert_cleanup(delivery)
+
 
 
 @pytest.fixture
