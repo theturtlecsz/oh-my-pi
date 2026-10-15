@@ -174,6 +174,19 @@ def test_worker_grant_manifest_and_cleanup(wiring, exit_code, revoke_error):
     assert state.revoked == [state.grant["id"]]
 
 
+def test_task_capability_binds_captured_task_deadline(wiring):
+    state = wiring
+    assert run(state).outcome == "succeeded"
+    ctx = state.contexts[0]
+    assert len(state.runs) == 1
+    manifest = state.runs[0][3]
+    task_path = ctx.config.ops.config_dir / "capabilities" / f"task-{ctx.mission_id}-{ctx.step_index}-implement.json"
+    task_doc = json.loads(task_path.read_text())
+    assert task_doc["expires_at"] == state.expiry
+    assert task_doc["expires_at"] == manifest["task_deadline"]
+    assert task_doc["expires_at"] != manifest["lease_expires_at"]
+
+
 @pytest.mark.parametrize("case,expected,code", [
     ("missing", "crashed", "worker_argv_missing"),
     ("other", "succeeded", None),
