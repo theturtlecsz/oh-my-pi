@@ -85,7 +85,8 @@ class GeneratedCampaign:
     @property
     def components(self) -> ManagedComponents:
         source = self.source
-        assert source is not None
+        if source is None:
+            raise RuntimeError("generated campaign source missing")
         recipe = canonical_json(self.recipe).encode()
         commitment_payload = {
             "version": 2, "source": hashlib.sha256(source).hexdigest(),
@@ -162,7 +163,8 @@ class GeneratedRun:
             self.failure = "selection_budget_exhausted"
             return None
         cancel = threading.Event()
-        assert self.config.source is not None
+        if self.config.source is None:
+            raise RuntimeError("generated campaign source missing")
         with watch_state(gate, cancel):
             result = strategy_execution.execute_strategy(
                 self.config.source, steps, sorted(opened), seed=search.seed, width=search.width,
