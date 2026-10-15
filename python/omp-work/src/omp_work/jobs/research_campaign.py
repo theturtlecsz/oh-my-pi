@@ -2,14 +2,25 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from uuid import UUID, uuid4
 
 from omp_work.jobs.campaign_completion import read_trial_completion
+from omp_work.jobs.campaign_decisions import (
+    Decision,
+    decision_id,
+    decode,
+    encode,
+    format_rationale,
+    observations_digest,
+)
 from omp_work.jobs.campaign_definition import (
     CampaignDefinition,
+    SearchConfig,
     score_campaign,
     score_metrics,
+    search_steps,
 )
 from omp_work.jobs.campaign_setup import prepare_campaign
 from omp_work.jobs.research_trial import (
@@ -20,6 +31,7 @@ from omp_work.jobs.research_trial import (
 )
 from omp_work.jobs.store import NativeJobStore
 from omp_work.jobs.worker import JobWorker, WorkerConfig
+from omp_work.research.search import next_step, winner
 from omp_work.v1.client import WorkClient, _envelope
 from omp_work.v1.models import (
     AdmitResearchCampaignCommand,
@@ -87,21 +99,73 @@ def run_research_campaign(
         ResearchTrialHandler(harness_dir=harness_dir, execute=client.execute),
     )
     worker.start()
+
+    search = definition.search
+    if search is None:
+        search = SearchConfig(
+            policy="fixed",
+            budget=math.fsum(trial.cost for trial in definition.trials),
+            width=1,
+            seed=0,
+            metric=definition.criteria[0].metric,
+        )
+    steps = search_steps(definition)
+    trials_by_step = {
+        (trial.id if trial.id is not None else f"t{index:03d}"): trial
+        for index, trial in enumerate(definition.trials)
+    }
+
     trials: list[dict[str, object]] = []
     verdicts: list[tuple[str, str]] = []
-    for trial in definition.trials:
+    decisions: list[Decision] = []
+    proposed_costs: list[float] = []
+    opened: set[str] = set()
+    completions: list[tuple[UUID, float | None]] = []
+    index = 0
+
+    while True:
+        pick, _ = next_step(
+            search.policy, steps, opened, seed=search.seed, width=search.width,
+        )
+        if pick is None:
+            break
+        cost = steps[pick]["cost"]
+        try:
+            prospective_spent = math.fsum([*proposed_costs, cost])
+        except OverflowError:
+            break
+        if prospective_spent > search.budget:
+            break
+
+        obs_digest = observations_digest(completions)
+        parent = steps[pick].get("parent_id")
+        metric_basis = steps[parent].get("metric") if parent is not None else None
+        rationale = format_rationale(pick, parent=parent, metric_basis=metric_basis)
+        decision = Decision(
+            index=index,
+            policy=search.policy,
+            step_id=pick,
+            observations_count=index,
+            observations_sha256=obs_digest,
+            rationale=rationale,
+        )
+        encoded_reason = encode(decision)
+        d_id = decision_id(campaign_id, index)
+        trial = trials_by_step[pick]
         trial_id = uuid4()
         client.execute(_envelope(workspace_id, ProposeResearchTrialCommand(
             type="propose_research_trial",
             payload=ProposeResearchTrialPayload(
                 trial_id=trial_id, campaign_id=campaign_id, work_id=work_id,
-                decision_id=uuid4(), action="evaluate",
+                decision_id=d_id, action="evaluate",
                 candidate_digest=trial.candidate_digest,
                 experiment_spec_sha256=setup.spec_sha256,
                 evaluator_sha256=setup.evaluator_by_digest[trial.candidate_digest],
                 environment_sha256=setup.environment_sha256,
                 input_manifest_sha256=setup.compatibility_sha256,
                 policy_sha256=setup.policy_sha256,
+                reason=encoded_reason,
+                seed=search.seed,
             ),
         )))
         dispatch_trial(
@@ -124,18 +188,30 @@ def run_research_campaign(
             raise RuntimeError(f"research trial {trial_id} is not persisted")
         completion = read_trial_completion(
             client, store, key, campaign_id, persisted, actor_id,
-            definition.criteria[0].metric,
+            search.metric,
         )
+        steps[pick]["metric"] = completion.value
+        steps[pick]["infra_error"] = completion.infra_error
+        opened.add(pick)
+        proposed_costs.append(cost)
+        completions.append((trial_id, completion.value))
+        decoded_decision = decode(encoded_reason)
+        if decoded_decision is not None:
+            decisions.append(decoded_decision)
+
         verdicts.append(score_metrics(
             completion.metrics, definition.criteria, completion.execution_status,
         ))
         trials.append({
             "trial_id": str(trial_id),
+            "step_id": pick,
             "execution_status": completion.execution_status,
             "metrics": {
                 name: float(value) for name, value in completion.metrics.items()
             },
         })
+        index += 1
+
     outcome, reason = score_campaign(verdicts)
     client.execute(_envelope(workspace_id, SetResearchCampaignStateCommand(
         type="set_research_campaign_state",
@@ -152,7 +228,20 @@ def run_research_campaign(
             outcome=outcome, reason=reason,
         ),
     )))
+    winner_id = winner({step_id: steps[step_id] for step_id in opened})
+    best = (
+        {"step_id": winner_id, "metric": float(steps[winner_id]["metric"])}
+        if winner_id is not None
+        else None
+    )
+    spent = float(math.fsum(proposed_costs))
     return {
-        "campaign_id": str(campaign_id), "state": "concluded",
-        "outcome": outcome, "reason": reason, "trials": trials,
+        "campaign_id": str(campaign_id),
+        "state": "concluded",
+        "outcome": outcome,
+        "reason": reason,
+        "trials": trials,
+        "decisions": decisions,
+        "best": best,
+        "spent": spent,
     }
