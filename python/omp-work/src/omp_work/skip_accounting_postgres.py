@@ -43,7 +43,7 @@ ROOT_PREFIX = "omp-skip-pg-"
 STORAGE_MODE = 0o755
 PROBE_NAME = ".omp-storage-probe"
 
-_OWNER_SENTINEL = object()
+_ALLOCATION_MINT = object()
 
 REQUIRED_TOOLS: tuple[str, ...] = (
     "initdb",
@@ -280,6 +280,28 @@ def _rollback(path: Path, rmtree: Callable[[Path], None]) -> OSError | None:
     return None
 
 
+class _Allocation:
+    """Immutable identity of one factory allocation; its only mint is ``OwnedTemp.create``.
+
+    ``root`` is fixed at construction and ``consumed`` flips once, so cleanup authority
+    can neither be redirected nor replayed against a path that was later reused.
+    """
+
+    __slots__ = ("consumed", "root")
+
+    def __init__(self, mint: object, root: Path) -> None:
+        if mint is not _ALLOCATION_MINT:
+            raise TypeError("allocations are minted by OwnedTemp.create only")
+        object.__setattr__(self, "root", root)
+        object.__setattr__(self, "consumed", False)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if name == "consumed" and value is True and not self.consumed:
+            object.__setattr__(self, name, value)
+            return
+        raise AttributeError(f"_Allocation.{name} is read-only")
+
+
 class OwnedTemp:
     """One storage root, owned only by the :meth:`create` that allocated it.
 
@@ -294,12 +316,14 @@ class OwnedTemp:
         tmpdir: Path,
         basetemp: Path,
         *,
-        _owner_token: object = None,
+        _allocation: _Allocation | None = None,
     ) -> None:
         self._root = Path(root)
         self._tmpdir = Path(tmpdir)
         self._basetemp = Path(basetemp)
-        self._owner_token = _owner_token
+        if _allocation is not None and not isinstance(_allocation, _Allocation):
+            raise TypeError("ownership is granted by OwnedTemp.create only")
+        self._allocation = _allocation
 
     @property
     def root(self) -> Path:
@@ -315,7 +339,7 @@ class OwnedTemp:
 
     @property
     def is_owned(self) -> bool:
-        return self._owner_token is _OWNER_SENTINEL
+        return self._allocation is not None and not self._allocation.consumed
 
     def __repr__(self) -> str:
         return f"OwnedTemp(root={self._root!r}, tmpdir={self._tmpdir!r}, basetemp={self._basetemp!r})"
@@ -388,8 +412,28 @@ class OwnedTemp:
             root=root,
             tmpdir=tmpdir,
             basetemp=basetemp,
-            _owner_token=_OWNER_SENTINEL,
+            _allocation=_Allocation(_ALLOCATION_MINT, root),
         )
+
+    def cleanup(self, *, rmtree: Callable[[Path], None] = _remove_tree) -> None:
+        """Remove the allocated root once; unowned or already-consumed handles do nothing.
+
+        Authority is the factory allocation, never this handle's path fields. A root that
+        is already absent counts as removed. Real removal errors raise
+        ``PrerequisiteError`` and leave authority intact for a retry.
+        """
+        allocation = self._allocation
+        if allocation is None or allocation.consumed:
+            return
+        root = allocation.root
+        try:
+            rmtree(root)
+        except OSError as exc:
+            if not os.path.lexists(root):
+                allocation.consumed = True
+                return
+            raise _operation_error("remove", root, exc) from exc
+        allocation.consumed = True
 
     def env(self) -> dict[str, str]:
         """Environment exposing this root's ``TMPDIR``; merge into a spawned child's env."""

@@ -430,3 +430,103 @@ def test_storage_probe_standalone(tmp_path: Path) -> None:
     (d / sap.PROBE_NAME).unlink(missing_ok=True)
 
 
+
+
+def make_owned(tmp_path: Path) -> sap.OwnedTemp:
+    return sap.OwnedTemp.create(base=prepare_base(tmp_path), searchable=searchable_in_fixture(tmp_path))
+
+
+def test_cleanup_removes_created_storage(tmp_path: Path) -> None:
+    owned = make_owned(tmp_path)
+    try:
+        owned.cleanup()
+        assert not owned.root.exists()
+        assert not owned.is_owned
+    finally:
+        shutil.rmtree(owned.root, ignore_errors=True)
+
+
+def test_cleanup_unowned_with_path_shaped_fields_touches_nothing(tmp_path: Path) -> None:
+    sentinel = tmp_path / "unrelated"
+    sentinel.mkdir()
+    (sentinel / "keep").write_text("x")
+    calls: list[Path] = []
+    fake = sap.OwnedTemp(sentinel, sentinel / "tmp", sentinel / "basetemp")
+    fake.cleanup(rmtree=calls.append)
+    assert calls == [] and (sentinel / "keep").read_text() == "x"
+    with pytest.raises(TypeError):
+        sap.OwnedTemp(sentinel, sentinel, sentinel, _allocation=object())  # type: ignore[arg-type]
+
+
+def test_reassignment_and_copies_cannot_redirect_or_duplicate_authority(tmp_path: Path) -> None:
+    owned = make_owned(tmp_path)
+    sentinel = tmp_path / "unrelated"
+    sentinel.mkdir()
+    try:
+        with pytest.raises(AttributeError):
+            owned.root = sentinel  # type: ignore[misc]
+        owned._root = sentinel  # private tampering must not redirect deletion
+        for dup in (copy.copy(owned), copy.deepcopy(owned)):
+            dup.cleanup()
+            assert owned.is_owned
+        assert owned._allocation is not None
+        with pytest.raises(AttributeError):
+            owned._allocation.root = sentinel  # type: ignore[misc]
+        removed: list[Path] = []
+        owned.cleanup(rmtree=lambda p: (removed.append(p), shutil.rmtree(p))[1])
+        assert sentinel.is_dir()
+        assert len(removed) == 1 and removed[0].parent == tmp_path / "base"
+        assert not removed[0].exists()
+    finally:
+        for child in (tmp_path / "base").iterdir():
+            shutil.rmtree(child, ignore_errors=True)
+
+
+def test_cleanup_consumed_after_success_never_removes_reused_path(tmp_path: Path) -> None:
+    owned = make_owned(tmp_path)
+    root = owned.root
+    try:
+        owned.cleanup()
+        root.mkdir()
+        (root / "sentinel").write_text("x")
+        calls: list[Path] = []
+        owned.cleanup(rmtree=calls.append)
+        assert calls == [] and (root / "sentinel").read_text() == "x"
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_cleanup_absent_root_is_terminal_success_and_consumes(tmp_path: Path) -> None:
+    owned = make_owned(tmp_path)
+    root = owned.root
+    try:
+        shutil.rmtree(root)
+        owned.cleanup()
+        assert not owned.is_owned
+        root.mkdir()
+        (root / "sentinel").write_text("x")
+        calls: list[Path] = []
+        owned.cleanup(rmtree=calls.append)
+        assert calls == [] and (root / "sentinel").read_text() == "x"
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_cleanup_removal_error_surfaces_chained_and_keeps_authority(tmp_path: Path) -> None:
+    owned = make_owned(tmp_path)
+    try:
+
+        def boom(path: Path) -> None:
+            raise OSError(errno.EBUSY, "device busy")
+
+        with pytest.raises(PrerequisiteError) as info:
+            owned.cleanup(rmtree=boom)
+        err = info.value
+        assert err.exit_code == 2 and err.cause == "owned_temp_remove_failed"
+        assert "remove" in err.detail and str(owned.root) in err.detail and "device busy" in err.detail
+        assert isinstance(err.__cause__, OSError)
+        assert owned.root.exists() and owned.is_owned
+        owned.cleanup()
+        assert not owned.root.exists()
+    finally:
+        shutil.rmtree(owned.root, ignore_errors=True)
