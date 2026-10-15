@@ -1214,10 +1214,10 @@ class OrchestratorHandler:
         if parsed[1] == "wait":
             return self._wait(job, str(parsed[2]), int(parsed[3]))
         step_index = int(parsed[2])
-        if recovering:
-            posted = _posted(self.steps(), step_index)
-            if posted is not None:
-                return Settlement(outcome="succeeded", receipts=[])
+        posted = _posted(self.steps(), step_index)
+        if posted is not None:
+            self._replay_post(job, posted)
+            return Settlement(outcome="succeeded", receipts=[])
         self._run_stage(job, step_index)
         return Settlement(outcome="succeeded", receipts=[])
 
@@ -1259,6 +1259,7 @@ class OrchestratorHandler:
             produced = _outcome_from(recorded)
             facts = self._facts(steps, step_index, stage, produced)
             chosen = decide(facts, self._bounds(stage))
+            self._reverify_success(stage, produced, chosen.kind)
         if chosen.kind == "frozen":
             raise Frozen
         if chosen.kind in UNRECORDED_KINDS:
@@ -1356,6 +1357,20 @@ class OrchestratorHandler:
                         code = refusal.code
             intake_binding.hold(cur, workspace_id=workspace_id, mission_id=self.mission_id, code=code)
         return Outcome(outcome="failed", data={"stage": stage, "code": code})
+
+    def _reverify_success(self, stage: str, outcome: Outcome | None, kind: str) -> None:
+        """Refuse recovery effects without rewriting immutable outcomes or decisions.
+
+        Owner gates and abandonment retain their precedence. The intake cursor
+        commits its hold or append-only rebind before any recovery effect runs.
+        """
+        if outcome is None or outcome.outcome != "succeeded" or kind not in {
+            "advance", "retry", "repair", "reroute", "reschedule", "end",
+        }:
+            return
+        refusal = self._intake_hold(stage)
+        if refusal is not None:
+            raise OrchestratorError(str(refusal.data["code"]))
 
     def _record_confirm_pause(self, step_index: int, decision_id: str, stage: str) -> None:
         """Record the confirm pause that adopted the intake stage's own decision."""
@@ -1514,6 +1529,9 @@ class OrchestratorHandler:
 
     def _replay_post(self, job: dict[str, Any], posted: Mapping[str, Any]) -> None:
         kind = str(posted.get("kind"))
+        step_index = int(posted["step_index"])
+        recorded = _outcome_step(self.steps(), step_index)
+        self._reverify_success(str(posted["stage"]), _outcome_from(recorded), kind)
         work_id = UUID(str(job["work_id"]))
         if kind in {"advance", "retry", "repair", "reroute", "reschedule"} and posted.get("next_job"):
             self._enqueue(str(posted["next_job"]), work_id)
