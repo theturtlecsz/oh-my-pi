@@ -37,6 +37,8 @@ from omp_work.operations import database, fingerprints
 from omp_work.operations.capabilities import provision_task_capability
 from omp_work.orchestrator import (
     candidate_git,
+    intake_binding,
+    intake_gate,
     lesson_context,
     merge_gate,
     model_proxy_client,
@@ -267,6 +269,53 @@ def run_plan(ctx: StageContext) -> Outcome:
     project_id = UUID(str(ctx.project_id))
     mission_id = UUID(str(ctx.mission_id))
 
+    # The gate commits before admit_mission; it is never held across that command.
+    with intake_gate.cursor(
+        ctx._handler.store, workspace_id=workspace_id, actor_id=actor_id
+    ) as cur:
+        head = intake_gate.read_head(cur, workspace_id=workspace_id, mission_id=mission_id)
+        if head is None:
+            return Outcome(
+                outcome="failed",
+                data={"stage": "plan", "code": intake_gate.TYPED_INTAKE_MISSING},
+            )
+        receipt = intake_gate.latest_pass(
+            cur, workspace_id=workspace_id, run_id=head.run_id, revision=head.revision
+        )
+        if receipt is None:
+            return Outcome(
+                outcome="failed",
+                data={"stage": "plan", "code": intake_gate.INTAKE_RECEIPT_MISSING},
+            )
+        refusal = intake_gate.verify(
+            cur,
+            workspace_id=workspace_id,
+            mission_id=mission_id,
+            revision=head.revision,
+            assessment_id=receipt.assessment_id,
+        )
+        if refusal is not None:
+            return Outcome(
+                outcome="failed", data={"stage": "plan", "code": refusal.code}
+            )
+        admitted = intake_binding.read(
+            cur, workspace_id=workspace_id, mission_id=mission_id
+        )
+        if (
+            admitted is None
+            or admitted.state != "admitted"
+            or admitted.revision != head.revision
+            or admitted.assessment_id != receipt.assessment_id
+        ):
+            intake_binding.admit(
+                cur,
+                workspace_id=workspace_id,
+                mission_id=mission_id,
+                run_id=head.run_id,
+                revision=head.revision,
+                assessment_id=receipt.assessment_id,
+            )
+
     ctx.projects.admit_mission(
         workspace_id,
         actor_id,
@@ -315,7 +364,15 @@ def run_plan(ctx: StageContext) -> Outcome:
             },
         )
 
-    return Outcome(outcome="succeeded", data={"stage": "plan"})
+    return Outcome(
+        outcome="succeeded",
+        data={
+            "stage": "plan",
+            "run_id": head.run_id,
+            "revision": head.revision,
+            "assessment_id": receipt.assessment_id,
+        },
+    )
 
 
 def _request_mapping(request: object) -> Mapping[str, Any]:
