@@ -56,10 +56,6 @@ function installLockPath(options: AdapterOptions): string {
 	return path.join(options.projectRoot, ".omp", "ecc", "adapted.lock.json");
 }
 
-async function loadAdvisorPolicy(eccRoot: string): Promise<string> {
-	return Bun.file(path.join(eccRoot, "advisor", "database-reviewer-policy.md")).text();
-}
-
 /**
  * Transform every selected, installable asset into an in-memory install plan.
  * Reads the mirror, verifying each asset's upstream sha256 against the manifest
@@ -71,9 +67,6 @@ export async function buildPlan(
 	assets: ManifestAsset[],
 ): Promise<InstallPlan> {
 	const index = buildIndexFromManifest(manifest.assets);
-	const policy = assets.some(a => a.adaptation.kind === "database-advisor-profile")
-		? await loadAdvisorPolicy(options.eccRoot)
-		: undefined;
 
 	const planned: PlannedFile[] = [];
 	const lockAssets: LockAsset[] = [];
@@ -102,7 +95,7 @@ export async function buildPlan(
 			}
 		}
 
-		const result = transformAsset(asset, bytes, { index, overlay, helperFiles, advisorPolicy: policy });
+		const result = transformAsset(asset, bytes, { index, overlay, helperFiles });
 		planned.push(...result.files);
 		lockAssets.push({
 			id: asset.id,

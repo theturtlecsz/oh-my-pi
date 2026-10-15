@@ -1,4 +1,4 @@
-"""Host prerequisite check for the skip-accounting PostgreSQL alternate lane (OMP-617).
+"""PostgreSQL skip-accounting lane: ``python -m omp_work.skip_accounting_postgres``.
 
 ``check_prerequisites`` refuses (raises ``PrerequisiteError``, ``exit_code`` 2) unless the
 host is a non-root Linux box with PostgreSQL 18 tooling, libseccomp, and working
@@ -7,8 +7,10 @@ unprivileged user/net/mount/pid namespaces. There is no fallback and no skip.
 
 from __future__ import annotations
 
+import argparse
 import ctypes
 import ctypes.util
+import json
 import os
 import re
 import shutil
@@ -16,9 +18,14 @@ import stat
 import subprocess
 import sys
 import tempfile
+import uuid
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
+from weakref import WeakKeyDictionary
+
+from omp_work import skip_accounting
+from omp_work.skip_accounting_report import repo_root
 
 __all__ = [
     "COMMAND_TIMEOUT_SECONDS",
@@ -31,6 +38,7 @@ __all__ = [
     "OwnedTemp",
     "PrerequisiteError",
     "check_prerequisites",
+    "main",
 ]
 
 
@@ -43,7 +51,6 @@ ROOT_PREFIX = "omp-skip-pg-"
 STORAGE_MODE = 0o755
 PROBE_NAME = ".omp-storage-probe"
 
-_OWNER_SENTINEL = object()
 
 REQUIRED_TOOLS: tuple[str, ...] = (
     "initdb",
@@ -249,6 +256,43 @@ def _operation_error(operation: str, path: Path, exc: OSError) -> PrerequisiteEr
     )
 
 
+def _child_error(
+    child: Any, operation: str, root: Path, exc: OSError | subprocess.TimeoutExpired
+) -> PrerequisiteError:
+    pid = getattr(child, "pid", None)
+    label = f"child {child!r}" if pid is None else f"child pid {pid}"
+    return PrerequisiteError(
+        f"owned_temp_child_{operation}_failed",
+        f"{operation} {label} while cleaning {root}: {exc}; storage retained",
+        stderr=str(exc),
+    )
+
+
+def _end_child(child: Any, root: Path) -> None:
+    """Terminate if live, then reap with bounded waits, escalating to kill on timeout."""
+    wait_op = "wait"
+    try:
+        wait_op = "poll"
+        if child.poll() is None:
+            wait_op = "terminate"
+            child.terminate()
+        wait_op = "wait"
+        child.wait(timeout=COMMAND_TIMEOUT_SECONDS)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    except OSError as exc:
+        raise _child_error(child, wait_op, root, exc) from exc
+    try:
+        child.kill()
+    except OSError as exc:
+        raise _child_error(child, "kill", root, exc) from exc
+    try:
+        child.wait(timeout=COMMAND_TIMEOUT_SECONDS)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        raise _child_error(child, "wait_after_kill", root, exc) from exc
+
+
 def _require_searchable(root: Path, searchable: Callable[[Path], int]) -> None:
     """Raise unless every resolved ancestor of ``root`` grants other-search (o+x).
 
@@ -280,6 +324,11 @@ def _rollback(path: Path, rmtree: Callable[[Path], None]) -> OSError | None:
     return None
 
 
+# Factory authority lives outside handle fields: construction, reinitialization and
+# copying cannot register a root or restore a consumed entry. Paths are immutable.
+_OWNED_ROOTS: WeakKeyDictionary[OwnedTemp, Path] = WeakKeyDictionary()
+
+
 class OwnedTemp:
     """One storage root, owned only by the :meth:`create` that allocated it.
 
@@ -293,13 +342,10 @@ class OwnedTemp:
         root: Path,
         tmpdir: Path,
         basetemp: Path,
-        *,
-        _owner_token: object = None,
     ) -> None:
         self._root = Path(root)
         self._tmpdir = Path(tmpdir)
         self._basetemp = Path(basetemp)
-        self._owner_token = _owner_token
 
     @property
     def root(self) -> Path:
@@ -315,7 +361,7 @@ class OwnedTemp:
 
     @property
     def is_owned(self) -> bool:
-        return self._owner_token is _OWNER_SENTINEL
+        return self in _OWNED_ROOTS
 
     def __repr__(self) -> str:
         return f"OwnedTemp(root={self._root!r}, tmpdir={self._tmpdir!r}, basetemp={self._basetemp!r})"
@@ -384,13 +430,136 @@ class OwnedTemp:
                     stderr=str(failure),
                 ) from exc
             raise
-        return cls(
-            root=root,
-            tmpdir=tmpdir,
-            basetemp=basetemp,
-            _owner_token=_OWNER_SENTINEL,
-        )
+        owned = cls(root=root, tmpdir=tmpdir, basetemp=basetemp)
+        _OWNED_ROOTS[owned] = root
+        return owned
+
+    def cleanup(
+        self,
+        children: Sequence[Any] = (),
+        *,
+        rmtree: Callable[[Path], None] = _remove_tree,
+    ) -> None:
+        """Remove the allocated root once; unowned or already-consumed handles do nothing.
+
+        ``children`` are Popen-like direct children using this storage. Each is terminated
+        if live (killed after ``COMMAND_TIMEOUT_SECONDS``) and reaped, exited ones too.
+        Any child failure raises ``PrerequisiteError`` and retains storage and authority;
+        removal happens only after every child has ended.
+
+        Authority is the factory allocation, never this handle's path fields. A root that
+        is already absent counts as removed. Real removal errors raise
+        ``PrerequisiteError`` and leave authority intact for a retry.
+        """
+        root = _OWNED_ROOTS.get(self)
+        if root is None:
+            return
+        first_failure: PrerequisiteError | None = None
+        for child in children:
+            try:
+                _end_child(child, root)
+            except PrerequisiteError as exc:
+                if first_failure is None:
+                    first_failure = exc
+        if first_failure is not None:
+            raise first_failure
+        try:
+            rmtree(root)
+        except OSError as exc:
+            try:
+                root.lstat()
+            except FileNotFoundError:
+                del _OWNED_ROOTS[self]
+                return
+            except OSError:
+                # Inspection failure does not establish absence. Preserve removal's
+                # original OS error, including its exception chain.
+                pass
+            raise _operation_error("remove", root, exc) from exc
+        del _OWNED_ROOTS[self]
 
     def env(self) -> dict[str, str]:
         """Environment exposing this root's ``TMPDIR``; merge into a spawned child's env."""
         return {"TMPDIR": str(self._tmpdir)}
+
+
+def _suite_path() -> Path:
+    """Full source suite; internal seam for launcher regression tests."""
+    return Path(__file__).resolve().parents[2] / "tests"
+
+
+def _print_receipts(out: Path, child: subprocess.Popen[bytes], env: dict[str, str]) -> None:
+    prefix = f"{env[skip_accounting.ENV_CHECK]}-{env[skip_accounting.ENV_RUN]}-{child.pid}-"
+    for path in sorted(out.glob(f"*{skip_accounting.RECEIPT_SUFFIX}")):
+        if not path.name.startswith(prefix):
+            continue
+        receipt = skip_accounting.read_receipt(path)
+        print("receipt: " + json.dumps({"path": str(path), **receipt.to_json()}, sort_keys=True), flush=True)
+        counts: dict[str, int] = {}
+        for phases in receipt.nodes.values():
+            for name, phase in phases.items():
+                key = f"{name}/{phase.outcome}"
+                counts[key] = counts.get(key, 0) + 1
+        print("summary: " + json.dumps({
+            "check": receipt.check, "run_id": receipt.run_id, "complete": receipt.complete,
+            "exitstatus": receipt.exitstatus, "phases": counts,
+        }, sort_keys=True), flush=True)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run every source test with PostgreSQL enabled, retaining complete skip evidence."""
+    parser = argparse.ArgumentParser(prog="omp_work.skip_accounting_postgres", allow_abbrev=False)
+    parser.add_argument("--out", metavar="DIR")
+    parser.add_argument("--run", metavar="ID")
+    args = parser.parse_args(argv)
+    try:
+        return _launch(args.out, args.run)
+    except PrerequisiteError as exc:
+        print(f"skip_accounting_postgres: {exc}", file=sys.stderr)
+        for name in ("argv", "status", "stdout", "stderr"):
+            value = getattr(exc, name)
+            if value is not None and value != "":
+                print(f"{name}: {value}", file=sys.stderr)
+        return EXIT_CODE
+    except (OSError, ValueError) as exc:
+        print(f"skip_accounting_postgres: {exc}", file=sys.stderr)
+        return EXIT_CODE
+
+
+def _launch(out_arg: str | None, run_arg: str | None) -> int:
+    owned: OwnedTemp | None = None
+    children: list[subprocess.Popen[bytes]] = []
+    try:
+        check_prerequisites()
+        owned = OwnedTemp.create()
+        root = repo_root()
+        env = {
+            key: value for key, value in os.environ.items()
+            if not key.startswith(("PYTEST_", "OMP_INSTALLED_", "FLOOD_"))
+            and key != "OMP584_FLOOD_SOURCE"
+        }
+        out = Path(out_arg or env.get(skip_accounting.ENV_DIR) or owned.root / "receipts").resolve()
+        out.mkdir(parents=True, exist_ok=True)
+        env.update(owned.env())
+        env[skip_accounting.ENV_DIR] = str(out)
+        env[skip_accounting.ENV_RUN] = run_arg or env.get(skip_accounting.ENV_RUN) or str(uuid.uuid4())
+        env[skip_accounting.ENV_CHECK] = env.get(skip_accounting.ENV_CHECK) or "work-ledger-integration"
+        env[skip_accounting.ENV_ROOT] = env.get(skip_accounting.ENV_ROOT) or str(root)
+        env["OMP_WORK_POSTGRES_INTEGRATION"] = "1"
+        child = subprocess.Popen([
+            sys.executable, "-m", "pytest", str(_suite_path()),
+            "-p", "omp_work.skip_accounting", "-p", "no:cacheprovider",
+            "-o", "addopts=", "--maxfail=0", f"--rootdir={root}",
+            f"--basetemp={owned.basetemp}",
+        ], cwd=root, env=env)
+        children.append(child)
+        status = child.wait()
+        _print_receipts(out, child, env)
+        return status
+    finally:
+        if owned is not None:
+            owned.cleanup(children)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

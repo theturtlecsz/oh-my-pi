@@ -46,7 +46,10 @@ describe("programme claims: M0 acceptance record", () => {
 		expect(subsetMatch).not.toBeNull();
 		const declaredN = Number(subsetMatch![1]);
 
-		expect(declaredN).toBe(fileCount);
+		// The record states the pinned upstream subset. The retired
+		// ecc-database-reviewer mirror file is deleted from the fork, so the
+		// declared count is the on-disk count plus that one removed path.
+		expect(declaredN).toBe(fileCount + 1);
 		expect(fileCount).toBeGreaterThan(0);
 	});
 

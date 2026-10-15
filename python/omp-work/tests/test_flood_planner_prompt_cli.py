@@ -29,7 +29,12 @@ def stage(tmp_path: Path) -> Path:
     dest = tmp_path / "stage"
     dest.mkdir()
     shutil.copyfile(Path(source) / "flood.py", dest / "flood.py")
-    shutil.copyfile(ASSETS / "planner-independence.md", dest / "planner-independence.md")
+    for name in ("planner-independence.md", "omp584-planner-rules.md"):
+        sibling = Path(source) / name
+        if sibling.is_file():
+            shutil.copyfile(sibling, dest / name)
+        elif name == "planner-independence.md":
+            shutil.copyfile(ASSETS / name, dest / name)
     shutil.copyfile(ASSETS / "omp584-planner-independence.patch", dest / "omp584-planner-independence.patch")
     return dest / "flood.py"
 

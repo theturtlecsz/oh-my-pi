@@ -151,14 +151,6 @@ function mappedReadOnlyTools(frontmatter: Record<string, unknown>): string[] {
 	return mapped;
 }
 
-function yamlLiteralBlock(value: string, indent: string): string {
-	return value
-		.trim()
-		.split("\n")
-		.map(line => `${indent}${line}`)
-		.join("\n");
-}
-
 /**
  * The single line in the frontmatter declaring the skill name. The OMP name is
  * always `ecc-<upstream name>` so a pack skill can never claim a bare native
@@ -196,8 +188,6 @@ function namespacedSkillContent(record: ManifestAsset, content: string, overlay?
  *  - skill-namespaced: `name: <x>` becomes `name: ecc-<x>`; overlays translate
  *    Claude-only paths/tools; helper files are installed verbatim.
  *  - agent-metadata: an OMP read-only task agent (`ecc-` prefix, Bash dropped).
- *  - database-advisor-profile: a project WATCHDOG.yml roster entry with a static
- *    read-only policy and `enabled: false` (explicit opt-in only).
  */
 export function transformAsset(
 	record: ManifestAsset,
@@ -206,10 +196,9 @@ export function transformAsset(
 		index: InstallIndex;
 		helperFiles?: Map<string, Uint8Array>;
 		overlay?: Overlay;
-		advisorPolicy?: string;
 	},
 ): TransformResult {
-	const { index, helperFiles, overlay, advisorPolicy } = options;
+	const { index, helperFiles, overlay } = options;
 	const targetRel = record.target.path.replace(/^~\//, "");
 
 	switch (record.adaptation.kind) {
@@ -271,29 +260,6 @@ export function transformAsset(
 			return finish(record, [
 				{ relativePath: targetRel, bytes: encode(`${frontmatterText}\n\n${body.trimStart()}`) },
 			]);
-		}
-
-		case "database-advisor-profile": {
-			const content = decode(upstreamBytes);
-			const { frontmatter, body } = parseFrontmatter(content, { source: record.upstream.path });
-			const tools = mappedReadOnlyTools(frontmatter);
-			if (tools.length === 0) {
-				throw new Error(`Advisor profile '${record.id}' has no permitted read-only tools`);
-			}
-			if (!overlay) throw new Error(`Advisor profile '${record.id}' requires a safety overlay`);
-			if (!advisorPolicy) throw new Error(`Advisor profile '${record.id}' requires the read-only policy`);
-			const adaptedBody = applyOverlay(body.trim(), overlay, sha256Hex(upstreamBytes));
-			const instructions = `${advisorPolicy.trim()}\n\n${adaptedBody}`;
-			const lines = [
-				"advisors:",
-				"  - name: ECC Database Reviewer",
-				"    tools:",
-				...tools.map(tool => `      - ${tool}`),
-				"    enabled: false",
-				"    instructions: |-",
-				yamlLiteralBlock(instructions, "      "),
-			];
-			return finish(record, [{ relativePath: targetRel, bytes: encode(`${lines.join("\n")}\n`) }]);
 		}
 
 		default: {

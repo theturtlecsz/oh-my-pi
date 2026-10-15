@@ -354,7 +354,62 @@ def _research_client(config_path: Path) -> tuple[WorkClient, UUID]:
     return client, actor_id
 
 
+def _run_research_compare_command(args: argparse.Namespace) -> int:
+    if _research_db_flags_partial(args):
+        print(
+            "research: --config-dir, --state-dir, --data-dir, and --db-port "
+            "must all be set or all be omitted",
+            file=sys.stderr,
+        )
+        return 2
+
+    from .jobs.campaign_definition import load_definition
+    from .jobs.research_campaign import run_research_campaign
+    from .jobs.store import NativeJobStore
+    from .research.campaign_comparison import compare
+
+    try:
+        ops = _research_db_config(args)
+        client_config = args.client_config or _default_client_config()
+        client, actor_id = _research_client(Path(client_config))
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        print(f"research: {error}", file=sys.stderr)
+        return 2
+
+    try:
+        store = NativeJobStore(ops)
+
+        def callback(definition_path: Path | str) -> dict[str, object]:
+            definition = load_definition(Path(definition_path))
+            with TemporaryDirectory() as temporary:
+                return run_research_campaign(
+                    client,
+                    store,
+                    args.key,
+                    definition,
+                    harness_dir=Path(temporary),
+                    actor_id=actor_id,
+                )
+
+        with TemporaryDirectory() as out_dir:
+            report = compare(callback, args.repo_root, Path(out_dir))
+
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        print(json.dumps(report))
+        return 0
+    except Exception as error:  # noqa: BLE001 - failure or refusal exits nonzero
+        print(f"research: {error}", file=sys.stderr)
+        return 1
+    finally:
+        client.close()
+
+
 def _run_research_command(args: argparse.Namespace) -> int:
+    if getattr(args, "research_command", None) == "compare":
+        return _run_research_compare_command(args)
+
     if _research_db_flags_partial(args):
         print(
             "research: --config-dir, --state-dir, --data-dir, and --db-port "
@@ -371,6 +426,14 @@ def _run_research_command(args: argparse.Namespace) -> int:
         print(f"research: {error}", file=sys.stderr)
         return 2
 
+    resume_campaign_id: UUID | None = None
+    if getattr(args, "resume", None) is not None:
+        try:
+            resume_campaign_id = UUID(str(args.resume))
+        except (ValueError, TypeError) as error:
+            print(f"research: invalid resume UUID {args.resume!r}: {error}", file=sys.stderr)
+            return 2
+
     from .jobs.research_campaign import run_research_campaign
     from .jobs.store import NativeJobStore
 
@@ -386,22 +449,32 @@ def _run_research_command(args: argparse.Namespace) -> int:
         store = NativeJobStore(ops)
         if args.harness_dir is None:
             with TemporaryDirectory() as temporary:
+                kwargs: dict[str, Any] = {
+                    "harness_dir": Path(temporary),
+                    "actor_id": actor_id,
+                }
+                if resume_campaign_id is not None:
+                    kwargs["resume_campaign_id"] = resume_campaign_id
                 result = run_research_campaign(
                     client,
                     store,
                     args.key,
                     definition,
-                    harness_dir=Path(temporary),
-                    actor_id=actor_id,
+                    **kwargs,
                 )
         else:
+            kwargs = {
+                "harness_dir": Path(args.harness_dir),
+                "actor_id": actor_id,
+            }
+            if resume_campaign_id is not None:
+                kwargs["resume_campaign_id"] = resume_campaign_id
             result = run_research_campaign(
                 client,
                 store,
                 args.key,
                 definition,
-                harness_dir=Path(args.harness_dir),
-                actor_id=actor_id,
+                **kwargs,
             )
     except Exception as error:  # noqa: BLE001 - failure or refusal exits nonzero
         print(f"research: {error}", file=sys.stderr)
@@ -422,6 +495,24 @@ def _run_qualification_count() -> int:
         print(diagnostic(error), file=sys.stderr)
         return 1
     return run_count(config)
+
+
+def _run_offerings_check(args: argparse.Namespace) -> int:
+    """Dispatch offerings check after argparse has accepted the command."""
+    from .routing.offerings_evaluation import OfferingsEvaluationError, run_offerings_check
+
+    try:
+        outcome = run_offerings_check(
+            args.sources,
+            record_dir=args.record_dir,
+            omp=args.omp,
+            max_age_hours=args.max_age_hours,
+        )
+    except OfferingsEvaluationError as error:
+        print(f"offerings check: {error}", file=sys.stderr)
+        return 2
+    print(json.dumps(outcome.report))
+    return outcome.exit_code
 
 
 def _run_drain_command(args: argparse.Namespace) -> int:
@@ -445,7 +536,7 @@ def main(argv: list[str] | None = None) -> int | None:
     subcommands = parser.add_subparsers(
         dest="command",
         required=True,
-        metavar="{schema,hash,approve,validate,ops,serve,headroom,stall-check,parallel-admit,budget-alerts,projects,stop,alarms,jobs,owner-key,ingress,orchestrator,drain,research,qualification}",
+        metavar="{schema,hash,approve,validate,ops,serve,headroom,stall-check,parallel-admit,budget-alerts,projects,stop,alarms,jobs,owner-key,ingress,orchestrator,drain,research,qualification,offerings}",
     )
 
     schema = subcommands.add_parser("schema")
@@ -607,6 +698,17 @@ def main(argv: list[str] | None = None) -> int | None:
     run_parser.add_argument("--state-dir", type=Path)
     run_parser.add_argument("--data-dir", type=Path)
     run_parser.add_argument("--db-port", type=int)
+    run_parser.add_argument("--resume", type=str, default=None)
+
+    compare_parser = research_sub.add_parser("compare")
+    compare_parser.add_argument("--key", required=True)
+    compare_parser.add_argument("--repo-root", required=True, type=Path)
+    compare_parser.add_argument("--output", required=True, type=Path, metavar="JSON")
+    compare_parser.add_argument("--client-config", type=Path)
+    compare_parser.add_argument("--config-dir", type=Path)
+    compare_parser.add_argument("--state-dir", type=Path)
+    compare_parser.add_argument("--data-dir", type=Path)
+    compare_parser.add_argument("--db-port", type=int)
 
     qualification = subcommands.add_parser(
         "qualification",
@@ -626,6 +728,38 @@ def main(argv: list[str] | None = None) -> int | None:
         ),
     )
 
+    offerings = subcommands.add_parser(
+        "offerings",
+        help="Compare provider offerings with the governing policy (read-only)",
+        description="Compare provider offerings with the governing policy (read-only).",
+    )
+    offerings_commands = offerings.add_subparsers(
+        dest="offerings_command",
+        required=True,
+        metavar="{check,install-timer}",
+    )
+    check = offerings_commands.add_parser(
+        "check",
+        help="Append one immutable evaluation record for the owner's review",
+        description=(
+            "Compare the configured captures with the governing policy and append one "
+            "immutable evaluation record, read-only outside the record directory."
+        ),
+    )
+    check.add_argument("--sources", required=True, type=Path, metavar="FILE")
+    check.add_argument("--record-dir", type=Path, metavar="DIR")
+    check.add_argument("--omp", metavar="PATH")
+    check.add_argument("--max-age-hours", type=float, default=36.0)
+
+    install_timer_parser = offerings_commands.add_parser(
+        "install-timer",
+        help="Install the daily offerings check as a systemd user timer",
+    )
+    install_timer_parser.add_argument("--sources", required=True, type=Path, metavar="FILE")
+    install_timer_parser.add_argument("--record-dir", type=Path, metavar="DIR")
+    install_timer_parser.add_argument("--omp", metavar="PATH")
+    install_timer_parser.add_argument("--systemd-dir", type=Path, metavar="DIR")
+
     args = parser.parse_args(argv)
     if args.command == "alarms":
         if args.client_config is None:
@@ -639,6 +773,17 @@ def main(argv: list[str] | None = None) -> int | None:
         return _run_research_command(args)
     if args.command == "qualification":
         return _run_qualification_count()
+    if args.command == "offerings":
+        if args.offerings_command == "install-timer":
+            from .operations.offerings_timer import install_timer
+
+            try:
+                install_timer(args.sources, args.record_dir, args.omp, args.systemd_dir)
+            except ValueError as error:
+                print(f"offerings install-timer: {error}", file=sys.stderr)
+                return 2
+            return 0
+        return _run_offerings_check(args)
     if args.command == "stop":
         return _run_stop_command(args)
     if args.command == "serve":

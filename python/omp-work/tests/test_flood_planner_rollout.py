@@ -93,7 +93,8 @@ def candidate(tmp_path, monkeypatch):
         if p.is_file() and p.suffix in (".py", ".md"):
             shutil.copy2(p, directory / p.name)
     for name in (RULES, SPEC_RULES):
-        shutil.copyfile(ASSETS / RULES, directory / name)
+        if not (directory / name).is_file():
+            shutil.copyfile(ASSETS / RULES, directory / name)
     init_repo(directory)
     if os.environ.get("OMP584_TEST_EXACT") != "1":
         compose(directory, PATCHES)

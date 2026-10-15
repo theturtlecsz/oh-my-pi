@@ -306,31 +306,12 @@ describe("overlay drift refuses unreviewed output", () => {
 	});
 });
 
-describe("database-reviewer adaptation drops execution authority", () => {
-	test("the advisor target is a disabled read-only roster with a static policy", async () => {
-		const asset = assetById("ecc-database-reviewer");
-		const upstreamBytes = await readAssetSource(ECC_ROOT, asset);
-		const index = buildIndexFromManifest(manifest.assets);
-
-		// A database advisor profile cannot be produced without its safety overlay.
-		expect(() => transformAsset(asset, upstreamBytes, { index })).toThrow(/requires a safety overlay/);
-
-		const overlay = await loadOverlay(asset.adaptation.overlay!, ECC_ROOT, asset.id, asset.upstream.path);
-		const policy = await Bun.file(path.join(ECC_ROOT, "advisor", "database-reviewer-policy.md")).text();
-		const result = transformAsset(asset, upstreamBytes, { index, overlay, advisorPolicy: policy });
-		expect(result.files[0].path).toBe(".omp/WATCHDOG.yml");
-		const text = new TextDecoder().decode(result.files[0].bytes);
-		expect(text).toContain("tools:\n      - read\n      - grep\n      - glob");
-		expect(text).toContain("enabled: false");
-		expect(text).not.toContain("- bash");
-		expect(text).not.toContain("- Bash");
-		expect(text).not.toContain("model:");
-		// The executable diagnostic block is replaced, and no runnable psql
-		// command or bash fence survives anywhere in the installed instructions.
-		expect(text).not.toContain("psql $DATABASE_URL");
-		expect(text).not.toContain("```bash");
-		expect(text).toContain("## Inspection");
-		expect(text).toContain("Never request or imply command execution");
+describe("database-reviewer adaptation is retired", () => {
+	test("the retired advisor asset is absent and its WATCHDOG target is not produced", async () => {
+		expect(manifest.assets.some(asset => asset.id === "ecc-database-reviewer")).toBe(false);
+		expect(manifest.assets.some(asset => asset.adaptation.kind === "database-advisor-profile")).toBe(false);
+		expect(manifest.assets.some(asset => asset.target.path === ".omp/WATCHDOG.yml")).toBe(false);
+		expect(() => assetById("ecc-database-reviewer")).toThrow(/test references unknown asset/);
 	});
 });
 

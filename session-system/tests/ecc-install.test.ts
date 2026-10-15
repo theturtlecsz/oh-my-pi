@@ -203,18 +203,16 @@ describe("research pack installs script-dependent assets with helpers", () => {
 	});
 });
 
-describe("database advisor installs disabled and activates only on explicit opt-in", () => {
-	test("installed advisor is discovered but disabled by default", async () => {
+describe("retired database advisor is never installed", () => {
+	test("installing the engineering pack installs no advisor and writes no WATCHDOG.yml", async () => {
 		const projectRoot = await makeProject();
 		const agentDir = await makeTempDir("ecc-advisor-agent-");
 		await installAssets(projectRoot, "ecc-engineering");
 
 		const discovered = await discoverAdvisorConfigs(projectRoot, agentDir);
 		const advisor = discovered.advisors.find(a => a.name === "ECC Database Reviewer");
-		expect(advisor).toBeDefined();
-		expect(advisor?.enabled).toBe(false);
-		expect(advisor?.tools).toEqual(["read", "grep", "glob"]);
-		expect(advisor?.instructions).toContain("read-only database and data-systems advisor");
+		expect(advisor).toBeUndefined();
+		expect(await Bun.file(path.join(projectRoot, ".omp", "WATCHDOG.yml")).exists()).toBe(false);
 	});
 
 	test("after removal no advisor remains discoverable", async () => {

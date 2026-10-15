@@ -18,7 +18,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType
@@ -37,7 +37,7 @@ from omp_work.jobs.worker import Frozen, Settlement
 from omp_work.operations.capabilities import DEFAULT_BASE_URL
 from omp_work.operations.config import OperationsConfig
 from omp_work.operations.database import _jobs_migration_state, check_migrations
-from omp_work.orchestrator import qualification, verify_main
+from omp_work.orchestrator import intake_binding, intake_gate, qualification, verify_main
 from omp_work.orchestrator.stages import (
     STAGE_ORDER,
     UNRECORDED_KINDS,
@@ -1214,10 +1214,10 @@ class OrchestratorHandler:
         if parsed[1] == "wait":
             return self._wait(job, str(parsed[2]), int(parsed[3]))
         step_index = int(parsed[2])
-        if recovering:
-            posted = _posted(self.steps(), step_index)
-            if posted is not None:
-                return Settlement(outcome="succeeded", receipts=[])
+        posted = _posted(self.steps(), step_index)
+        if posted is not None:
+            self._replay_post(job, posted)
+            return Settlement(outcome="succeeded", receipts=[])
         self._run_stage(job, step_index)
         return Settlement(outcome="succeeded", receipts=[])
 
@@ -1246,7 +1246,11 @@ class OrchestratorHandler:
         if recorded is None and chosen.kind == "dispatch":
             if chosen.kind not in UNRECORDED_KINDS:
                 self._record_decision(step_index, chosen, None)
-            outcome = self._operate(job, step_index, stage, facts)
+            outcome = self._intake_hold(stage)
+            if outcome is None:
+                before = self._intake_head(stage)
+                outcome = self._operate(job, step_index, stage, facts)
+                outcome = self._intake_advanced(stage, before, outcome)
             self.record(step_index, _outcome_body(self.mission_id, step_index, stage, outcome))
             produced = outcome
             facts = self._facts(self.steps(), step_index, stage, outcome)
@@ -1255,6 +1259,7 @@ class OrchestratorHandler:
             produced = _outcome_from(recorded)
             facts = self._facts(steps, step_index, stage, produced)
             chosen = decide(facts, self._bounds(stage))
+            self._reverify_success(stage, produced, chosen.kind)
         if chosen.kind == "frozen":
             raise Frozen
         if chosen.kind in UNRECORDED_KINDS:
@@ -1274,6 +1279,98 @@ class OrchestratorHandler:
         outcome = produced
         self._record_decision(step_index, chosen, outcome)
         self._apply(job, step_index, chosen, outcome)
+
+    def _intake_head(self, stage: str) -> intake_gate.Head | None:
+        """Committed head read on its own short cursor; never held across execution."""
+        if stage in {"intake", "confirm"}:
+            return None
+        if self.mission_id is None:
+            raise AssertionError("mission_id is None")
+        workspace_id = self.config.workspace_id
+        with intake_gate.cursor(
+            self.store, workspace_id=workspace_id, actor_id=self.principal.actor_id,
+        ) as cur:
+            return intake_gate.read_head(cur, workspace_id=workspace_id, mission_id=self.mission_id)
+
+    def _intake_advanced(
+        self, stage: str, before: intake_gate.Head | None, outcome: Outcome,
+    ) -> Outcome:
+        """Hold the binding when the head moved during the operation; keep its committed effects."""
+        if stage in {"intake", "confirm"}:
+            return outcome
+        after = self._intake_head(stage)
+        if after == before:
+            return outcome
+        if self.mission_id is None:
+            raise AssertionError("mission_id is None")
+        workspace_id = self.config.workspace_id
+        code = intake_gate.INTAKE_REVISION_ADVANCED
+        with intake_gate.cursor(
+            self.store, workspace_id=workspace_id, actor_id=self.principal.actor_id,
+        ) as cur:
+            intake_binding.hold(cur, workspace_id=workspace_id, mission_id=self.mission_id, code=code)
+        if outcome.outcome != "succeeded":
+            return outcome
+        return replace(outcome, outcome="failed", data={**outcome.data, "stage": stage, "code": code})
+
+    def _intake_hold(self, stage: str) -> Outcome | None:
+        """Fence operations with committed intake checks, never an execution-spanning lock."""
+        if stage in {"intake", "confirm"}:
+            return None
+        if self.mission_id is None:
+            raise AssertionError("mission_id is None")
+        workspace_id = self.config.workspace_id
+        with intake_gate.cursor(
+            self.store, workspace_id=workspace_id, actor_id=self.principal.actor_id,
+        ) as cur:
+            binding = intake_binding.read(cur, workspace_id=workspace_id, mission_id=self.mission_id)
+            # run_plan owns initial admission, including missing-head/receipt refusals.
+            if binding is None:
+                return None
+            head = intake_gate.read_head(cur, workspace_id=workspace_id, mission_id=self.mission_id)
+            code = intake_gate.INTAKE_REVISION_ADVANCED
+            if head is not None and head.run_id == binding.run_id:
+                if head.revision == binding.revision and binding.assessment_id is not None:
+                    refusal = intake_gate.verify(
+                        cur, workspace_id=workspace_id, mission_id=self.mission_id,
+                        revision=binding.revision, assessment_id=binding.assessment_id,
+                    )
+                    if refusal is None and binding.state == "admitted":
+                        return None
+                    code = refusal.code if refusal is not None else binding.hold_code or code
+                elif head.revision > binding.revision:
+                    receipt = intake_gate.latest_pass(
+                        cur, workspace_id=workspace_id, run_id=head.run_id, revision=head.revision,
+                    )
+                    if receipt is not None:
+                        refusal = intake_gate.verify(
+                            cur, workspace_id=workspace_id, mission_id=self.mission_id,
+                            revision=head.revision, assessment_id=receipt.assessment_id,
+                        )
+                        if refusal is None:
+                            intake_binding.admit(
+                                cur, workspace_id=workspace_id, mission_id=self.mission_id,
+                                run_id=head.run_id, revision=head.revision,
+                                assessment_id=receipt.assessment_id,
+                            )
+                            return None
+                        code = refusal.code
+            intake_binding.hold(cur, workspace_id=workspace_id, mission_id=self.mission_id, code=code)
+        return Outcome(outcome="failed", data={"stage": stage, "code": code})
+
+    def _reverify_success(self, stage: str, outcome: Outcome | None, kind: str) -> None:
+        """Refuse recovery effects without rewriting immutable outcomes or decisions.
+
+        Owner gates and abandonment retain their precedence. The intake cursor
+        commits its hold or append-only rebind before any recovery effect runs.
+        """
+        if outcome is None or outcome.outcome != "succeeded" or kind not in {
+            "advance", "retry", "repair", "reroute", "reschedule", "end",
+        }:
+            return
+        refusal = self._intake_hold(stage)
+        if refusal is not None:
+            raise OrchestratorError(str(refusal.data["code"]))
 
     def _record_confirm_pause(self, step_index: int, decision_id: str, stage: str) -> None:
         """Record the confirm pause that adopted the intake stage's own decision."""
@@ -1432,6 +1529,9 @@ class OrchestratorHandler:
 
     def _replay_post(self, job: dict[str, Any], posted: Mapping[str, Any]) -> None:
         kind = str(posted.get("kind"))
+        step_index = int(posted["step_index"])
+        recorded = _outcome_step(self.steps(), step_index)
+        self._reverify_success(str(posted["stage"]), _outcome_from(recorded), kind)
         work_id = UUID(str(job["work_id"]))
         if kind in {"advance", "retry", "repair", "reroute", "reschedule"} and posted.get("next_job"):
             self._enqueue(str(posted["next_job"]), work_id)

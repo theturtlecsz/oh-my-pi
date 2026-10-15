@@ -59,7 +59,7 @@ describe("ECC upstream-check adapter", () => {
 		expect(result.candidateCommit).toBe(candidateCommit);
 		expect(result.newFiles).toEqual([]);
 		expect(result.overlayConflicts).toEqual([]);
-		expect(result.files.length).toBe(18);
+		expect(result.files.length).toBe(17);
 
 		for (const file of result.files) {
 			expect(file.status).toBe("unchanged");
@@ -103,7 +103,7 @@ describe("ECC upstream-check adapter", () => {
 
 		// All other rows remain unchanged
 		const unchangedRows = result.files.filter(f => f.status === "unchanged");
-		expect(unchangedRows.length).toBe(17);
+		expect(unchangedRows.length).toBe(16);
 	});
 
 	test("deleted helper: row missing; added skills/agent-self-evaluation/extra.md: in newFiles", async () => {
@@ -176,7 +176,7 @@ describe("ECC upstream-check adapter", () => {
 		};
 		expect(body.candidateCommit).toBe(commit);
 		expect(body.changed).toBe(false);
-		expect(body.files.length).toBe(18);
+		expect(body.files.length).toBe(17);
 		expect(body.newFiles).toEqual([]);
 		expect(body.overlayConflicts).toEqual([]);
 	});

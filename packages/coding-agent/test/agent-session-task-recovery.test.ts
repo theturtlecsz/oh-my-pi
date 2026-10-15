@@ -1302,7 +1302,14 @@ describe("native task recovery session integration", () => {
 		cleanups.push(async () => release.resolve());
 		f.releaseChild.resolve();
 		f.releaseParent.resolve();
-		await untilAborted(AbortSignal.timeout(10000), held.promise);
+		const run = f.run!;
+		const settledBeforeAuthority = (cause?: unknown): never => {
+			throw new Error(
+				`TTSR queued read run settled before authority hold: stimulusSent=${stimulusSent}, authorityHeld=${authorityHeld}, models=${f.calls.map(call => call.model).join(",")}`,
+				{ cause },
+			);
+		};
+		await Promise.race([held.promise, run.then(() => settledBeforeAuthority(), settledBeforeAuthority)]);
 		expect(stimulusSent).toBe(true);
 		expect(child).toBeDefined();
 		expect(child!.agent.state.isStreaming).toBe(true);
@@ -1326,7 +1333,7 @@ describe("native task recovery session integration", () => {
 		).toBe(false);
 		expect(child!.agent.continue).not.toHaveBeenCalled();
 		release.resolve();
-		await untilAborted(AbortSignal.timeout(10000), f.run!);
+		await run;
 		expect(shouldRenderAbortReason(target!)).toBe(false);
 		expect(child!.agent.continue).toHaveBeenCalledTimes(1);
 		const entries = child!.sessionManager.getEntries();

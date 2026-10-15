@@ -1,0 +1,439 @@
+"""Worker delivery records supplies, independently of exit status or lesson use.
+
+A delivered lesson's supply rows survive every later stage: a normal audited
+close, and the two audit resume variants crash injects at ``seal_audit_manifest``
+(``audit_ready``) and ``reserve_auditor_launch`` (``auditor_in_flight``) leave
+behind. The worker is never relaunched and never re-delivers, the original
+supply ids, count, lesson version, job, and hashes stay put, and neither an
+uncited delivery nor the audited close infers a use or an outcome.
+"""
+from __future__ import annotations
+
+import dataclasses
+import json
+import os
+from pathlib import Path
+import sqlite3
+import sys
+from types import SimpleNamespace
+from uuid import UUID
+
+import httpx
+import pytest
+
+from omp_work import egress_sandbox
+from omp_work.orchestrator import model_proxy_client, operations, worker_sandbox
+from omp_work.orchestrator.service import submit
+from omp_work.v1.canonical import sha256
+from orchestrator_e2e_support import (
+    SimulatedCrash,
+    crash_after_command,
+    open_e2e_world,
+    open_worker,
+    seed_published_budget,
+    tick_until,
+)
+from test_orchestrator_audit_stage import (
+    _attempts,
+    _audit_ctx,
+    _expire_lease,
+    _launches,
+    _outcomes,
+    _steps,
+    _tick_to_push,
+    restore_registry,
+)
+from test_orchestrator_worker_wiring import wiring, run
+from test_orchestrator_worker_context import context, token_counter, enable_learning
+from test_workflow_service import OWNER
+
+pytest_plugins = ("test_workflow_service",)
+pytestmark = pytest.mark.skipif(
+    os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1",
+    reason="PostgreSQL integration required",
+)
+
+PROMPT_HASH = "a" * 64
+
+
+def configure_context_cli(config, settings):
+    """Configure the real context CLI, also usable when reopening a worker."""
+    return dataclasses.replace(config, context_command=(sys.executable, "-m", "omp_knowledge.context"),
+                               context_settings_path=settings)
+
+
+def configure_learning_cli(config, learning_dir, bearer):
+    """Restore owner-enabled learning configuration for a resumed worker."""
+    return dataclasses.replace(config, learning_state_dir=learning_dir,
+                               learning_command=(sys.executable, "-m", "omp_knowledge.learning"),
+                               learning_bearer_file=bearer)
+
+
+@pytest.fixture
+def delivery(context, tmp_path, monkeypatch):
+    state = context
+    state.learning_dir = enable_learning(state, tmp_path)
+    handler = state.worker.handlers["*"]
+    handler.config = configure_learning_cli(
+        configure_context_cli(handler.config, state.settings),
+        state.learning_dir, handler.config.learning_bearer_file,
+    )
+    sandbox = worker_sandbox.run_sandboxed
+    state.evidence = "valid"
+
+    def delivered(*args, **kwargs):
+        code = sandbox(*args, **kwargs)
+        manifest = state.runs[-1][3]
+        output = kwargs.get("output")
+        if output is not None and manifest is not None and "context" in manifest:
+            event = {
+                "type": "context-delivery",
+                "compiled_context_hash": sha256(manifest["context"]),
+                "prompt_hash": PROMPT_HASH,
+            }
+            if state.evidence == "wrong-hash":
+                event["compiled_context_hash"] = "b" * 64
+            if state.evidence != "absent":
+                output.extend((json.dumps(event) + "\n").encode())
+            # Ordinary uncited worker output must not become a lesson use.
+            output.extend(b'{"type":"message","text":"Completed work"}\n')
+        return code
+
+    monkeypatch.setattr(worker_sandbox, "run_sandboxed", delivered)
+    return state
+
+
+def learning_rows(state, table):
+    with sqlite3.connect(state.learning_dir / "learning.sqlite") as conn:
+        conn.row_factory = sqlite3.Row
+        return [dict(row) for row in conn.execute(f"SELECT * FROM {table}")]
+
+
+def assert_no_uses_or_outcomes(state):
+    assert learning_rows(state, "uses") == []
+    assert learning_rows(state, "outcomes") == []
+
+
+def assert_cleanup(state):
+    assert not Path(state.runs[0][1]["OMP_WORKER_MANIFEST"]).exists()
+    assert state.revoked == [state.grant["id"]]
+
+
+@pytest.mark.parametrize("exit_code", [0, 1, None])
+def test_delivery_persists_supply_without_inferring_use_or_outcome(delivery, exit_code):
+    state = delivery
+    state.exit_code = exit_code
+    outcome = run(state)
+    assert outcome.outcome == ("succeeded" if exit_code == 0 else "crashed"), outcome.data
+    if exit_code is None:
+        assert outcome.data["code"] == "lease_dead"
+    ctx = state.contexts[0]
+    manifest = state.runs[0][3]
+    compiled = json.loads(state.compiles[0][2].stdout)
+    workflow = ctx.service.read(ctx.principal, ctx.workspace_id, "workflow", operations._work_key(ctx))
+    assert manifest["candidate_id"] == str(workflow["item"]["candidate"]["candidate_id"])
+    rows = learning_rows(state, "supplies")
+    proposed = {row["supply_id"]: row for row in compiled["lesson_supplies"]}
+    assert proposed
+    assert {row["supply_id"] for row in rows} == set(compiled["lesson_supply_ids"]) == set(proposed)
+    assert len(rows) == len(proposed)
+    for row in rows:
+        source = proposed[row["supply_id"]]
+        assert row["procedure_id"] == source["procedure_id"] == "context-lesson"
+        assert row["version"] == source["version"] == 1
+        assert row["work_key"] == source["work_key"] == operations._work_key(ctx)
+        assert row["worker_job_id"] == str(ctx.lease.job_id)
+        assert row["compiled_context_hash"] == sha256(manifest["context"]) == outcome.data["compiled_context_hash"]
+        assert row["prompt_hash"] == PROMPT_HASH
+    assert outcome.data["prompt_hash"] == PROMPT_HASH
+    recorded = next(step for step in state.worker.handlers["*"].steps()
+                    if step["kind"] == "outcome" and step["stage"] == "implement")
+    assert recorded["data"]["prompt_hash"] == PROMPT_HASH
+    assert recorded["data"]["lesson_supply_ids"] == list(compiled["lesson_supply_ids"])
+    assert_no_uses_or_outcomes(state)
+    assert_cleanup(state)
+
+
+@pytest.mark.parametrize("evidence", ["absent", "wrong-hash"])
+def test_invalid_delivery_evidence_never_records_supply(delivery, evidence):
+    delivery.evidence = evidence
+    outcome = run(delivery)
+    assert outcome.outcome == "failed"
+    assert outcome.data["code"] == "context_delivery_failed"
+    assert "prompt_hash" not in outcome.data
+    assert learning_rows(delivery, "supplies") == []
+    assert_no_uses_or_outcomes(delivery)
+    assert_cleanup(delivery)
+
+
+def test_compile_failure_never_registers_or_launches_or_records_supply(delivery):
+    delivery.settings.write_text("{}")
+    outcome = run(delivery)
+    assert outcome.outcome == "failed"
+    assert outcome.data["code"] == "context_compile_failed"
+    assert delivery.posts == []
+    assert delivery.runs == []
+    assert learning_rows(delivery, "supplies") == []
+    assert_no_uses_or_outcomes(delivery)
+
+
+def test_register_failure_after_compile_never_records_unlaunched_supply(delivery, monkeypatch):
+    def unavailable(*args, **kwargs):
+        delivery.posts.append(args[2])
+        raise httpx.TransportError("register unavailable")
+
+    monkeypatch.setattr(model_proxy_client, "register", unavailable)
+    outcome = run(delivery)
+    assert outcome.outcome == "failed"
+    assert outcome.data["code"] == "proxy_unavailable"
+    compiled = json.loads(delivery.compiles[0][2].stdout)
+    assert compiled["lesson_supply_ids"]
+    assert len(delivery.posts) == 1
+    assert delivery.runs == []
+    assert delivery.revoked == []
+    assert learning_rows(delivery, "supplies") == []
+    assert_no_uses_or_outcomes(delivery)
+
+
+def test_unconfigured_context_keeps_worker_output_uncaptured(delivery):
+    handler = delivery.worker.handlers["*"]
+    handler.config = dataclasses.replace(
+        handler.config, context_command=(), context_settings_path=None,
+        learning_command=(), learning_state_dir=None, learning_bearer_file=None,
+    )
+    outcome = run(delivery)
+    assert outcome.outcome == "succeeded"
+    assert delivery.runs[0][2]["output"] is None
+    assert "context" not in delivery.runs[0][3]
+    assert "prompt_hash" not in outcome.data
+    assert "lesson_supply_ids" not in outcome.data
+    recorded = next(step for step in delivery.worker.handlers["*"].steps()
+                    if step["kind"] == "outcome" and step["stage"] == "implement")
+    assert "prompt_hash" not in recorded["data"]
+    assert "lesson_supply_ids" not in recorded["data"]
+    assert learning_rows(delivery, "supplies") == []
+    assert_no_uses_or_outcomes(delivery)
+    assert_cleanup(delivery)
+
+
+def test_disabled_learning_context_contains_no_lesson_and_invokes_no_deliver(delivery):
+    handler = delivery.worker.handlers["*"]
+    handler.config = dataclasses.replace(
+        handler.config,
+        learning_state_dir=None,
+        learning_command=(),
+        learning_bearer_file=None,
+    )
+    outcome = run(delivery)
+    assert outcome.outcome == "succeeded"
+    manifest = delivery.runs[0][3]
+    assert "context" in manifest
+    assert "Verified worker lesson" not in manifest["context"]
+    assert "context-lesson" not in manifest["context"]
+    assert delivery.runs[0][2]["output"] is not None
+    assert not any("deliver" in invocation[0] for invocation in delivery.compiles)
+    assert "prompt_hash" not in outcome.data
+    assert "lesson_supply_ids" not in outcome.data
+    recorded = next(step for step in delivery.worker.handlers["*"].steps()
+                    if step["kind"] == "outcome" and step["stage"] == "implement")
+    assert "prompt_hash" not in recorded["data"]
+    assert "lesson_supply_ids" not in recorded["data"]
+    assert learning_rows(delivery, "supplies") == []
+    assert_no_uses_or_outcomes(delivery)
+    assert_cleanup(delivery)
+
+
+
+@pytest.fixture
+def audited(service, token_counter, tmp_path, monkeypatch, restore_registry):
+    """A pass-verifier ``open_e2e_world`` that reaches a real audited close.
+
+    The world registers the real operations, points ``model_proxy_url`` at a
+    loopback address, uses an absolute worker argv ending ``orchestrator-worker``
+    and seeds the published budget; ``register``/``revoke_task`` are stubbed
+    locally with a valid grant descriptor. ``run_sandboxed`` is intercepted only
+    for calls whose env names ``OMP_WORKER_MANIFEST``: those emit a valid
+    context-delivery event, write the permitted ``feature.txt`` into
+    ``kwargs["worktree"]`` and return 0. Every other call (evaluate, verifier)
+    passes through to the saved real ``run_sandboxed`` with the same arguments.
+    """
+    knowledge = Path(__file__).resolve().parents[2] / "omp-knowledge" / "src"
+    monkeypatch.syspath_prepend(str(knowledge))
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join((str(knowledge), str(Path(__file__).resolve().parents[1] / "src"))))
+    for key in list(os.environ):
+        if key.startswith("OMP_KNOWLEDGE_"):
+            monkeypatch.delenv(key)
+    world = open_e2e_world(
+        service, tmp_path, monkeypatch, verifier_mode="pass", worker_mode="ok",
+        extra_capability=None, operations=("omp_work.orchestrator.operations:register",),
+    )
+    executable = tmp_path / "omp"
+    executable.write_text("stand-in")
+    executable.chmod(0o700)
+    world.request = dataclasses.replace(
+        world.request, worker_argv=(str(executable), "orchestrator-worker")
+    )
+    settings = tmp_path / "context.json"
+    settings.write_text(json.dumps({
+        "command": [sys.executable, "-m", "omp_knowledge.context"],
+        "token_cmd": [sys.executable, str(token_counter)],
+        "state_dir": str(tmp_path / "context-state"), "encoding": "test-words", "token_budget": 100000,
+    }))
+    world.config = configure_context_cli(
+        dataclasses.replace(world.config, model_proxy_url="http://127.0.0.1:9"), settings
+    )
+    submitted = submit(world.config, world.request)
+    work_id = UUID(str(submitted["work_id"]))
+    tree = world.store.read(world.workspace_id, OWNER, "tree", "")
+    item = next(row for row in tree["items"] if str(row["work_id"]) == str(work_id))
+    seed_published_budget(service, world.workspace_id, work_id, UUID(str(item["revision"]["revision_id"])))
+    state = SimpleNamespace(world=world, work_id=work_id, settings=settings, deliveries=[], revoked=[])
+    state.worker = open_worker(world)
+    state.learning_dir = enable_learning(state, tmp_path)
+    handler = state.worker.handlers["*"]
+    handler.config = configure_learning_cli(
+        handler.config, state.learning_dir, handler.config.learning_bearer_file
+    )
+
+    descriptor = {"api": "google-generative-ai", "id": "gemini-test",
+                  "limits": {"context_tokens": 1000, "max_output_tokens": 100}}
+
+    def register(capability, url, payload):
+        return {"id": "grant-1", "model_token": "model-token", "descriptor": descriptor}
+
+    def revoke(capability, url, task_id):
+        state.revoked.append(task_id)
+        return {"refused": 0, "spent_usd": "0"}
+
+    real_sandbox = egress_sandbox.run_sandboxed
+
+    def intercept(argv, identity, recorder, workdir, env, timeout, **kwargs):
+        manifest_path = env.get("OMP_WORKER_MANIFEST")
+        if manifest_path is None:
+            return real_sandbox(argv, identity, recorder, workdir, env, timeout, **kwargs)
+        manifest = json.loads(Path(manifest_path).read_text())
+        state.deliveries.append((tuple(argv), manifest))
+        output = kwargs["output"]
+        output.extend((json.dumps({
+            "type": "context-delivery",
+            "compiled_context_hash": sha256(manifest["context"]),
+            "prompt_hash": PROMPT_HASH,
+        }) + "\n").encode())
+        # Ordinary uncited worker output must not become a lesson use.
+        output.extend(b'{"type":"message","text":"Completed work"}\n')
+        (Path(kwargs["worktree"]) / "feature.txt").write_text("feature implemented\n")
+        return 0
+
+    monkeypatch.setattr(model_proxy_client, "register", register)
+    monkeypatch.setattr(model_proxy_client, "revoke_task", revoke)
+    monkeypatch.setattr(worker_sandbox, "run_sandboxed", intercept)
+    state.audit_runs = []
+    run_audit = operations.run_audit
+
+    def audit(live):
+        """Rebuild the audit context from the recorded steps and run the audit."""
+        ctx = _audit_ctx(world, work_id)
+        ctx._handler._job_id = str(live.lease.job_id)
+        ctx.lease = live.lease
+        state.audit_runs.append(ctx)
+        return run_audit(ctx)
+
+    # Every new handler re-runs ``operations.register()``, so patch the name it reads.
+    monkeypatch.setattr(operations, "run_audit", audit)
+    operations.register()
+    return state
+
+
+def supply_snapshot(state):
+    keys = ("supply_id", "procedure_id", "version", "work_key",
+            "worker_job_id", "compiled_context_hash", "prompt_hash")
+    rows = learning_rows(state, "supplies")
+    return [{key: row[key] for key in keys} for row in sorted(rows, key=lambda row: row["supply_id"])]
+
+
+def implement_job(world):
+    """The implement step's job id, the one the delivered supply is bound to."""
+    step = next(
+        step for step in _steps(world)
+        if step.get("stage") == "implement" and step.get("kind") == "outcome"
+    )
+    return f"orch:{world.mission_id}:{step['step_index']}"
+
+
+def tick_to_audited(world, worker):
+    def audited(_view):
+        return any(step.get("outcome") == "succeeded" for step in _outcomes(world, "audit"))
+
+    tick_until(worker, world, audited, limit=25)
+
+
+@pytest.mark.parametrize("variant", ["normal", "audit_ready", "auditor_in_flight"])
+def test_supplies_survive_audited_close_and_audit_resume(audited, variant, monkeypatch):
+    """A delivered supply survives the audited close and both audit resume variants.
+
+    The close never re-launches the worker or re-delivers: the original supply
+    id, count, lesson version, job, and hashes stay put, and the uncited lesson
+    gets no use or outcome. ``audit_ready`` crashes after ``seal_audit_manifest``
+    and ``auditor_in_flight`` after ``reserve_auditor_launch``; each resume
+    settles an audited PASS, and the in-flight one reserves a replacement launch
+    while the original launch row stays.
+    """
+    state = audited
+    world, worker, work_id = state.world, state.worker, state.work_id
+    _tick_to_push(world, worker)
+    job_id = implement_job(world)
+    before = supply_snapshot(state)
+    assert len(before) == len(state.deliveries) == 1
+    original_launches = []
+
+    if variant != "normal":
+        command_type, reached, launched = {
+            "audit_ready": ("seal_audit_manifest", "audit_ready", 0),
+            "auditor_in_flight": ("reserve_auditor_launch", "auditor_in_flight", 1),
+        }[variant]
+        crash_after_command(monkeypatch, command_type)
+        with pytest.raises(SimulatedCrash):
+            worker.tick()
+        # The crash left the close attempt in the state the variant names.
+        (crashed,) = _attempts(world, work_id)
+        assert crashed["state"] == reached
+        original_launches = _launches(world, work_id)
+        assert len(original_launches) == launched
+        assert len(state.audit_runs) == 1
+        _expire_lease(world)
+
+    tick_to_audited(world, worker)
+    assert len(state.audit_runs) == (1 if variant == "normal" else 2)
+
+    audit_outcome = _outcomes(world, "audit")[-1]
+    assert audit_outcome["outcome"] == "succeeded"
+    assert audit_outcome["verdict"] == "pass"
+
+    attempts = _attempts(world, work_id)
+    assert len(attempts) == 1
+    attempt = attempts[0]
+    assert attempt["state"] == "audited"
+    assert attempt["accepted_report_count"] == 1
+    launches = _launches(world, work_id)
+    if variant == "auditor_in_flight":
+        # The resume cancels the in-flight launch and reserves a replacement;
+        # the original launch row is retained.
+        assert attempt["launch_count"] == 2
+        assert attempt["cancelled_launch_count"] == 1
+        assert [row["launch_id"] for row in launches][:1] == [row["launch_id"] for row in original_launches]
+        assert [row["launch_number"] for row in launches] == [1, 2]
+    else:
+        assert attempt["launch_count"] == 1
+        assert attempt["cancelled_launch_count"] == 0
+        assert len(launches) == 1
+
+    # One worker launch, one delivery: the close never re-ran or re-delivered.
+    assert len(state.deliveries) == 1
+    assert state.revoked == ["grant-1"]
+    assert supply_snapshot(state) == before
+    for row in before:
+        assert row["procedure_id"] == "context-lesson"
+        assert row["version"] == 1
+        assert row["worker_job_id"] == job_id
+        assert row["prompt_hash"] == PROMPT_HASH
+    assert_no_uses_or_outcomes(state)

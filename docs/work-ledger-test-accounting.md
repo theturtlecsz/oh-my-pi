@@ -46,12 +46,17 @@ The first accepted alternate, in `--alternate` order, whose call executed with n
 `.github/workflows/ci.yml`, job `work_ledger_postgres`, step "Run Work Ledger unit tests":
 
 ```
-uv run --project python/omp-work --extra dev pytest python/omp-work/tests
+uv run --project python/omp-work --extra dev pytest -n 4 python/omp-work/tests
 ```
 
 `oh-my-pi-test.sh` runs the same command under the label "work-ledger unit tests".
 
 This command does not set `OMP_WORK_POSTGRES_INTEGRATION`, `OMP_INSTALLED_RELEASE`, `OMP_INSTALLED_MANIFEST_SHA256`, or `OMP584_FLOOD_SOURCE`. Nodes that skip without those variables are not executed here. Namespace nodes whose unshare probe fails also stay skipped.
+
+Prerequisites:
+
+- no `OMP_WORK_POSTGRES_INTEGRATION`, `OMP_INSTALLED_RELEASE`, `OMP_INSTALLED_MANIFEST_SHA256`, or `OMP584_FLOOD_SOURCE` in the environment
+- pytest-xdist, because the command passes `-n 4`
 
 `package.json` script `test:py` is a different command. It runs `python -m pytest -x` on `python/omp-work/tests`, then the omp-rpc and robomp suites. The `-x` stop makes a failing session incomplete accounting evidence. Do not treat `bun run test:py` as the unit receipt.
 
@@ -62,7 +67,7 @@ This command does not set `OMP_WORK_POSTGRES_INTEGRATION`, `OMP_INSTALLED_RELEAS
 The script sets `OMP_WORK_POSTGRES_INTEGRATION=1` and runs:
 
 ```
-uv run --project python/omp-work --extra dev pytest <allowlist>
+uv run --project python/omp-work --extra dev pytest -n 4 <allowlist>
 ```
 
 The allowlist is the script's `python/omp-work/tests/*.py` arguments, not the whole test tree. `python/omp-work/tests/test_research_m1_investigation.py` is on the allowlist. Each generated report copies the current script text into the `work-ledger integration` check, so the file list stays the script's list.
@@ -73,6 +78,7 @@ Prerequisites:
 - CI installs `postgresql-18` and `postgresql-client-18` when `pg_config`'s major version is not 18, and puts `pg_config --bindir` on `PATH`.
 - `OMP_WORK_POSTGRES_INTEGRATION=1`. Without that flag the M1 module skips.
 - A successful namespace probe for modules that also skip on `unshare`, including the M1 module. The flag alone does not execute a node whose unshare probe fails. The skip reason is then `unshare probe failed`.
+- pytest-xdist, because the command passes `-n 4`.
 
 A node whose file is absent from the allowlist is not run by this check.
 

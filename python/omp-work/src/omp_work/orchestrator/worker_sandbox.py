@@ -198,11 +198,14 @@ def run_worker(
     model_token: str | None = None,
     manifest_path: str | Path | None = None,
     cancel: threading.Event | None = None,
+    output: bytearray | None = None,
 ) -> int:
     """Run ``argv`` in the worker jail. Returns the process exit status.
 
     ``cancel``, when set, SIGKILLs the jail session and returns -9
-    (see :func:`run_sandboxed`).
+    (see :func:`run_sandboxed`). ``output``, when given, receives the jail's
+    stdout and stderr through the bounded capture of :func:`run_sandboxed`; otherwise
+    stdout is inherited.
 
     Refuses, before any sandbox process, a worktree that is the live checkout
     or that lies outside ``OMP_WORKTREES_DIR``. ``token`` is ``OMP_TASK_TOKEN``.
@@ -280,6 +283,7 @@ def run_worker(
         worktree=linked,
         model_proxy=model_proxy,
         cancel=cancel,
+        output=output,
         **(
             {
                 "worktree_readonly": True,

@@ -72,7 +72,7 @@ describe("ecc database advisor trial prepare", () => {
 		}
 	});
 
-	test("discoverAdvisorConfigs sees entry enabled, tools kept", async () => {
+	test("discoverAdvisorConfigs finds no ECC advisor after prepare installs the retired pack", async () => {
 		const tempDir = await makeTempDir("ecc-prep-advisor-");
 		const treeDir = path.join(tempDir, "tree");
 		const agentDir = path.join(tempDir, "agent");
@@ -87,23 +87,12 @@ describe("ecc database advisor trial prepare", () => {
 
 		await runEccCli({ command: "install", project: treeDir, eccRoot: ECC_ROOT });
 
+		// The retired advisor asset is never installed, so no roster entry exists.
 		const watchdogPath = path.join(treeDir, ".omp", "WATCHDOG.yml");
+		expect(await Bun.file(watchdogPath).exists()).toBe(false);
 
-		// Initially, the installed advisor should be present but disabled
-		const initialDiscovered = await discoverAdvisorConfigs(treeDir, agentDir);
-		const initialAdvisor = initialDiscovered.advisors.find(a => a.name === ADVISOR_NAME);
-		expect(initialAdvisor).toBeDefined();
-		expect(initialAdvisor?.enabled).toBe(false);
-
-		// Enable the entry
-		await enableRosterEntry(watchdogPath, ADVISOR_NAME);
-
-		// Now discoverAdvisorConfigs should see the entry enabled with tools preserved
 		const discovered = await discoverAdvisorConfigs(treeDir, agentDir);
-		const advisor = discovered.advisors.find(a => a.name === ADVISOR_NAME);
-		expect(advisor).toBeDefined();
-		expect(advisor?.enabled).toBe(true);
-		expect(advisor?.tools).toEqual(["read", "grep", "glob"]);
+		expect(discovered.advisors.find(a => a.name === ADVISOR_NAME)).toBeUndefined();
 	});
 
 	test("absent throws", async () => {

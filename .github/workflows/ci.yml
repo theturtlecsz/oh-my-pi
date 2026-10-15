@@ -1549,7 +1549,7 @@ jobs:
               fi
               echo "$(pg_config --bindir)" >> "$GITHUB_PATH"
          - name: Run Work Ledger unit tests
-           run: uv run --project python/omp-work --extra dev pytest python/omp-work/tests
+           run: uv run --project python/omp-work --extra dev pytest -n 4 python/omp-work/tests
          - name: Run PostgreSQL integration
            run: bun run test:py:work-ledger:integration
          - name: Run session candidate smoke
