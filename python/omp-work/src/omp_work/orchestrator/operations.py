@@ -838,6 +838,7 @@ def _sandbox(
     manifest_path: Path | None = None,
     deadline: datetime | None = None,
     candidate_id: UUID | None = None,
+    output: bytearray | None = None,
 ) -> int | None:
     """Run ``argv`` in the worker jail until the task deadline or the lease is lost.
 
@@ -879,6 +880,7 @@ def _sandbox(
             manifest_path=manifest_path,
             timeout=remaining,
             cancel=ctx.cancel,
+            output=output,
         )
     except subprocess.TimeoutExpired:
         return None
@@ -1012,13 +1014,17 @@ def _run_model_worker(
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             json.dump(manifest, stream)
         endpoint = urlsplit(base_url)
+        output = bytearray() if context is not None else None
         code = _sandbox(
             ctx, argv, worktree, ro_binds=(Path(argv[0]), manifest_path),
             model_proxy=(endpoint.hostname, endpoint.port or (443 if endpoint.scheme == "https" else 80)),
             model_token=grant["model_token"], manifest_path=manifest_path,
             deadline=deadline,
             candidate_id=UUID(candidate_id),
+            output=output,
         )
+        if context is not None and compiled.get("lesson_supply_ids"):
+            lesson_context.record_delivery(ctx, compiled, bytes(output), data)
         # A non-zero exit at the task deadline, under cancel, or after lease
         # loss is the model being cut off, not a worker verdict.
         if code not in (0, None) and (
