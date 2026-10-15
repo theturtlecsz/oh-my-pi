@@ -21,7 +21,8 @@ from omp_work.jobs.admission import claim_job, enqueue_job
 from omp_work.jobs.campaign_decisions import decode
 from omp_work.jobs.campaign_definition import load_definition, score_campaign, search_steps
 from omp_work.jobs.research_trial import CAPABILITY, trial_job_id
-from omp_work.jobs.worker import JobWorker
+from omp_work.jobs.store import JobError
+from omp_work.jobs.worker import Frozen, JobWorker
 from omp_work.v1.client import _envelope
 from omp_work.v1.models import (
     CancelResearchCampaignCommand,
@@ -452,8 +453,15 @@ def test_stop_between_trials_proposes_and_dispatches_nothing_further(
         return real(*args, **kwargs)
 
     monkeypatch.setattr(research_campaign, "next_step", stop_on_second)
-    with pytest.raises(RuntimeError, match=f"is {state}"):
-        _run(fix, definition)
+    if state == "cancelled":
+        result = _run(fix, definition)
+        assert result["state"] == "cancelled"
+        assert result["outcome"] is None
+        assert result["cancel_reason"] == "stop between trials"
+        assert _steps(result) == ["a"]
+    else:
+        with pytest.raises(RuntimeError, match=f"is {state}"):
+            _run(fix, definition)
 
     camp, trials, view = _persisted(fix)
     assert camp.state == state
@@ -504,8 +512,12 @@ def test_cancel_after_resume_lookup_does_not_dispatch_pending(
         return found
 
     monkeypatch.setattr(research_campaign, "_resumable_campaign", lookup_then_cancel)
-    with pytest.raises(RuntimeError, match="is cancelled"):
-        _run(fix, definition)
+    result = _run(fix, definition)
+    assert result["state"] == "cancelled"
+    assert result["outcome"] is None
+    assert result["cancel_reason"] == "stop between trials"
+    assert _steps(result) == ["a", "b"]
+    assert [d.index for d in result["decisions"]] == [0, 1]
 
     camp, trials, _ = _persisted(fix)
     assert camp.campaign_id == before.campaign_id
@@ -570,3 +582,227 @@ def test_cli_research_run_third_pick_follows_real_a1_observation(
     assert low["decisions"][2]["step_id"] == "a2"
     assert low["decisions"][2]["policy"] == "greedy"
     assert high["campaign_id"] != low["campaign_id"]
+
+
+def test_nonuniform_costs_never_propose_or_dispatch_over_reservation(campaign, monkeypatch):
+    definition, _ = _definition(campaign, [
+        {"id": str(i), "script": _PASS, "cost": cost}
+        for i, cost in enumerate([1, 2, 2, 1])
+    ], budget=3)
+    dispatch = research_campaign.dispatch_trial
+    dispatched = []
+
+    def checked_dispatch(*args, **kwargs):
+        _, trials, _ = _persisted(campaign)
+        costs = {trial.id: trial.cost for trial in definition.trials}
+        assert math.fsum(costs[decode(t.reason).step_id] for t in trials) <= 3
+        dispatched.append(kwargs["trial_id"])
+        return dispatch(*args, **kwargs)
+
+    monkeypatch.setattr(research_campaign, "dispatch_trial", checked_dispatch)
+    result = _run(campaign, definition)
+    _, trials, _ = _persisted(campaign)
+    assert _steps(result) == ["0", "1"]
+    assert result["spent"] == 3
+    assert dispatched == [t.trial_id for t in trials]
+
+
+def test_cancel_after_first_settlement_stops_before_next_selection(campaign, monkeypatch):
+    definition, _ = _definition(campaign, [
+        {"id": str(i), "script": _PASS} for i in range(2)
+    ])
+    tick = JobWorker.tick
+    picks = []
+    select = research_campaign.next_step
+
+    def counted_selection(*args, **kwargs):
+        picks.append(1)
+        return select(*args, **kwargs)
+
+    def settle_then_cancel(self, job_id=None):
+        result = tick(self, job_id=job_id)
+        camp, _, _ = _persisted(campaign)
+        _issue_stop(campaign, camp, "cancelled")
+        return result
+
+    monkeypatch.setattr(JobWorker, "tick", settle_then_cancel)
+    monkeypatch.setattr(research_campaign, "next_step", counted_selection)
+    result = _run(campaign, definition)
+    camp, trials, _ = _persisted(campaign)
+    assert result["state"] == camp.state == "cancelled"
+    assert result["outcome"] is camp.outcome is None
+    assert result["cancel_reason"] == "stop between trials"
+    assert _steps(result) == ["0"]
+    assert result["trials"][0]["execution_status"] == "completed"
+    assert len(trials) == len(picks) == 1
+
+
+def test_cancel_after_initial_running_read_keeps_third_undispatched_decision(campaign, monkeypatch):
+    definition, _ = _definition(campaign, [
+        {"id": str(i), "script": _PASS} for i in range(4)
+    ])
+    dispatch = research_campaign.dispatch_trial
+    count = 0
+
+    def crash_third(*args, **kwargs):
+        nonlocal count
+        count += 1
+        if count == 3:
+            raise _Crash()
+        return dispatch(*args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(research_campaign, "dispatch_trial", crash_third)
+        with pytest.raises(_Crash):
+            _run(campaign, definition)
+    camp, before, _ = _persisted(campaign)
+    assert [decode(t.reason).index for t in before] == [0, 1, 2]
+    assert _job(campaign, before[2].trial_id) is None
+    state_read = research_campaign._campaign_state
+    reads = 0
+
+    def cancel_after_read(*args):
+        nonlocal reads
+        state = state_read(*args)
+        reads += 1
+        if reads == 1:
+            assert state == "running"
+            _issue_stop(campaign, camp, "cancelled")
+        return state
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("execution or selection after cancellation")
+
+    monkeypatch.setattr(research_campaign, "_campaign_state", cancel_after_read)
+    monkeypatch.setattr(research_campaign, "dispatch_trial", forbidden)
+    monkeypatch.setattr(research_campaign, "next_step", forbidden)
+    monkeypatch.setattr(JobWorker, "tick", forbidden)
+    monkeypatch.setattr(JobWorker, "start", forbidden)
+    result = _run(campaign, definition)
+    assert result["state"] == "cancelled"
+    assert result["outcome"] is None
+    assert result["cancel_reason"] == "stop between trials"
+    assert _steps(result) == ["0", "1", "2"]
+    assert [d.index for d in result["decisions"]] == [0, 1, 2]
+    assert result["trials"][2]["execution_status"] == "pending"
+    assert [t["trial_id"] for t in result["trials"]] == [str(t.trial_id) for t in before]
+    assert _job(campaign, before[2].trial_id) is None
+    assert _persisted(campaign)[0].outcome is None
+    with pytest.raises(RuntimeError, match="cancelled, expected running"):
+        research_campaign.run_research_campaign(
+            campaign.client, campaign.store, campaign.key, definition,
+            harness_dir=campaign.harness_dir, actor_id=campaign.actor_id,
+            resume_campaign_id=camp.campaign_id,
+        )
+
+
+def test_cancel_during_pending_lease_wait_stops_before_another_tick(campaign, monkeypatch):
+    definition, _ = _definition(campaign, [
+        {"id": str(i), "script": _PASS} for i in range(2)
+    ])
+
+    def frozen_tick(self, job_id=None):
+        raise Frozen()
+
+    # Claim an actual pending job, then leave its lease active as a crashed worker would.
+    dispatch = research_campaign.dispatch_trial
+
+    def dispatch_and_claim(*args, **kwargs):
+        result = dispatch(*args, **kwargs)
+        camp, _, _ = _persisted(campaign)
+        claim_job(
+            campaign.store, operation_id=str(uuid4()), workspace_id=campaign.workspace_id,
+            actor_id=campaign.actor_id, worker_id=f"research-campaign:{camp.campaign_id}",
+        )
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(research_campaign, "dispatch_trial", dispatch_and_claim)
+        patch.setattr(JobWorker, "tick", frozen_tick)
+        with pytest.raises(Frozen):
+            _run(campaign, definition)
+    camp, before, _ = _persisted(campaign)
+    assert _job(campaign, before[0].trial_id)["worker_id"] is not None
+    tick = JobWorker.tick
+    ticks = []
+
+    def counted_tick(self, job_id=None):
+        ticks.append(job_id)
+        return tick(self, job_id=job_id)
+
+    def cancel_during_wait(seconds):
+        _issue_stop(campaign, camp, "cancelled")
+
+    monkeypatch.setattr(JobWorker, "tick", counted_tick)
+    monkeypatch.setattr(research_campaign.time, "sleep", cancel_during_wait)
+    result = _run(campaign, definition)
+    assert ticks == [trial_job_id(before[0].trial_id)]
+    assert result["state"] == "cancelled"
+    assert result["outcome"] is None
+    assert result["cancel_reason"] == "stop between trials"
+    assert _steps(result) == ["0"]
+    assert [d.index for d in result["decisions"]] == [0]
+    assert _persisted(campaign)[0].outcome is None
+    assert len(_persisted(campaign)[1]) == 1
+
+
+def test_dispatch_item_budget_refusal_propagates_without_later_proposal(campaign, monkeypatch):
+    definition, _ = _definition(campaign, [
+        {"id": str(i), "script": _PASS} for i in range(3)
+    ])
+    refusal = JobError("budget_exceeded")
+
+    def refuse(*args, **kwargs):
+        raise refusal
+
+    monkeypatch.setattr(research_campaign, "dispatch_trial", refuse)
+    with pytest.raises(JobError) as caught:
+        _run(campaign, definition)
+    assert caught.value is refusal
+    camp, trials, view = _persisted(campaign)
+    assert camp.state == "running"
+    assert camp.outcome is None
+    assert [decode(t.reason).index for t in trials] == [0]
+    assert view.observations == ()
+    assert _job(campaign, trials[0].trial_id) is None
+
+
+@pytest.mark.parametrize("boundary", ["proposal", "evaluating"])
+def test_cancel_after_persisted_transition_prevents_dispatch_or_conclusion(campaign, monkeypatch, boundary):
+    definition, _ = _definition(campaign, [{"id": "a", "script": _PASS}])
+    execute = campaign.client.execute
+    commands = []
+    stopped = False
+
+    def cancel_at_boundary(envelope):
+        nonlocal stopped
+        command = envelope.command
+        if stopped:
+            commands.append(command.type)
+        result = execute(envelope)
+        if (
+            boundary == "proposal" and command.type == "propose_research_trial"
+            or boundary == "evaluating" and command.type == "set_research_campaign_state"
+            and command.payload.target_state == "evaluating"
+        ):
+            camp, _, _ = _persisted(campaign)
+            _issue_stop(campaign, camp, "cancelled")
+            stopped = True
+        return result
+
+    monkeypatch.setattr(campaign.client, "execute", cancel_at_boundary)
+    result = _run(campaign, definition)
+    camp, trials, _ = _persisted(campaign)
+    assert stopped
+    assert commands == []
+    assert result["state"] == camp.state == "cancelled"
+    assert result["outcome"] is camp.outcome is None
+    assert result["cancel_reason"] == "stop between trials"
+    assert _steps(result) == ["a"]
+    assert [d.index for d in result["decisions"]] == [0]
+    if boundary == "proposal":
+        assert _job(campaign, trials[0].trial_id) is None
+        assert result["trials"][0]["execution_status"] == "pending"
+    else:
+        assert _job(campaign, trials[0].trial_id)["status"] == "sealed"
+        assert result["trials"][0]["execution_status"] == "completed"
