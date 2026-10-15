@@ -63,6 +63,10 @@
 - Video frame files and browser-recording frames are created in the system temp directory.
 - A security scan pinned to one OAuth account no longer lets background skill compression disable that account. If that account's login is rejected, the scan fails instead of continuing with a different account ([#628](https://github.com/can1357/oh-my-pi/issues/628)).
 
+### Removed
+
+- ECC database advisor is no longer installed; retirement preserves project customizations (OMP-612).
+
 ## [18.4.6] - 2026-10-01
 
 ### Added
