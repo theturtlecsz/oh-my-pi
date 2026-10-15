@@ -1,0 +1,262 @@
+[
+  {
+    "id": "ecc-wp3-python-coding-style",
+    "pack": "engineering",
+    "upstream": {
+      "repository": "https://github.com/affaan-m/ECC.git",
+      "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+      "path": "rules/python/coding-style.md",
+      "sha256": "f9d6d7a39c5f5ea809579fecac591f390fa9264c088c7e209d464d5244747003"
+    },
+    "target": {
+      "path": ".omp/rules/ecc-wp3-python-coding-style.md",
+      "scope": "project"
+    },
+    "adaptation": {
+      "kind": "rule-metadata",
+      "transformVersion": 1,
+      "overlay": "developer/overlays/python-coding-style.json"
+    },
+    "activation": {
+      "state": "inactive",
+      "mode": "rulebook",
+      "description": "Python coding style: idioms, boundaries, and project-selected checks.",
+      "globs": [
+        "**/*.py",
+        "**/*.pyi"
+      ]
+    },
+    "dependencies": [
+      "ecc-wp3-common-coding-style"
+    ],
+    "disposition": "supported-with-adaptation",
+    "reason": "Retain language and database safety guidance as native rulebook content within existing approved scope.",
+    "qualification": {
+      "mechanicalTests": [
+        "session-system/tests/ecc-wp3-services.test.ts"
+      ],
+      "behavioralTrial": null,
+      "qualifiedRelease": null
+    },
+    "rollback": {
+      "removeOwnedArtifactOnly": true
+    }
+  },
+  {
+    "id": "ecc-wp3-python-patterns",
+    "pack": "engineering",
+    "upstream": {
+      "repository": "https://github.com/affaan-m/ECC.git",
+      "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+      "path": "rules/python/patterns.md",
+      "sha256": "d9cab9b536321ea7efc6180668fd48820deaf571400db732f0ca17bdda92b7d0"
+    },
+    "target": {
+      "path": ".omp/rules/ecc-wp3-python-patterns.md",
+      "scope": "project"
+    },
+    "adaptation": {
+      "kind": "rule-metadata",
+      "transformVersion": 1,
+      "overlay": "developer/overlays/python-patterns.json"
+    },
+    "activation": {
+      "state": "inactive",
+      "mode": "rulebook",
+      "description": "Python patterns: idioms, boundaries, and project-selected checks.",
+      "globs": [
+        "**/*.py",
+        "**/*.pyi"
+      ]
+    },
+    "dependencies": [
+      "ecc-wp3-common-patterns"
+    ],
+    "disposition": "supported-with-adaptation",
+    "reason": "Retain language and database safety guidance as native rulebook content within existing approved scope.",
+    "qualification": {
+      "mechanicalTests": [
+        "session-system/tests/ecc-wp3-services.test.ts"
+      ],
+      "behavioralTrial": null,
+      "qualifiedRelease": null
+    },
+    "rollback": {
+      "removeOwnedArtifactOnly": true
+    }
+  },
+  {
+    "id": "ecc-wp3-python-testing",
+    "pack": "engineering",
+    "upstream": {
+      "repository": "https://github.com/affaan-m/ECC.git",
+      "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+      "path": "rules/python/testing.md",
+      "sha256": "92655aa5047ee456501ad6605c428680bac6433965f89ce531fe79627004e8c6"
+    },
+    "target": {
+      "path": ".omp/rules/ecc-wp3-python-testing.md",
+      "scope": "project"
+    },
+    "adaptation": {
+      "kind": "rule-metadata",
+      "transformVersion": 1,
+      "overlay": "developer/overlays/python-testing.json"
+    },
+    "activation": {
+      "state": "inactive",
+      "mode": "rulebook",
+      "description": "Python testing: idioms, boundaries, and project-selected checks.",
+      "globs": [
+        "**/*.py",
+        "**/*.pyi"
+      ]
+    },
+    "dependencies": [
+      "ecc-wp3-common-testing"
+    ],
+    "disposition": "supported-with-adaptation",
+    "reason": "Retain language and database safety guidance as native rulebook content within existing approved scope.",
+    "qualification": {
+      "mechanicalTests": [
+        "session-system/tests/ecc-wp3-services.test.ts"
+      ],
+      "behavioralTrial": null,
+      "qualifiedRelease": null
+    },
+    "rollback": {
+      "removeOwnedArtifactOnly": true
+    }
+  },
+  {
+    "id": "ecc-wp3-python-security",
+    "pack": "engineering",
+    "upstream": {
+      "repository": "https://github.com/affaan-m/ECC.git",
+      "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+      "path": "rules/python/security.md",
+      "sha256": "6bbbb6c800cdfef23c3f9a5055ce31096a7724b51f0d528935f6c32970639453"
+    },
+    "target": {
+      "path": ".omp/rules/ecc-wp3-python-security.md",
+      "scope": "project"
+    },
+    "adaptation": {
+      "kind": "rule-metadata",
+      "transformVersion": 1,
+      "overlay": "developer/overlays/python-security.json"
+    },
+    "activation": {
+      "state": "inactive",
+      "mode": "rulebook",
+      "description": "Python security: idioms, boundaries, and project-selected checks.",
+      "globs": [
+        "**/*.py",
+        "**/*.pyi"
+      ]
+    },
+    "dependencies": [
+      "ecc-wp3-common-security"
+    ],
+    "disposition": "supported-with-adaptation",
+    "reason": "Retain language and database safety guidance as native rulebook content within existing approved scope.",
+    "qualification": {
+      "mechanicalTests": [
+        "session-system/tests/ecc-wp3-services.test.ts"
+      ],
+      "behavioralTrial": null,
+      "qualifiedRelease": null
+    },
+    "rollback": {
+      "removeOwnedArtifactOnly": true
+    }
+  },
+  {
+    "id": "ecc-wp3-postgres-patterns",
+    "pack": "engineering",
+    "upstream": {
+      "repository": "https://github.com/affaan-m/ECC.git",
+      "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+      "path": "skills/postgres-patterns/SKILL.md",
+      "sha256": "9c8c391ae9e9aa87faa7ca091e1d395c97766df14080d0bfbea8a97721776163"
+    },
+    "target": {
+      "path": ".omp/rules/ecc-wp3-postgres-patterns.md",
+      "scope": "project"
+    },
+    "adaptation": {
+      "kind": "rule-metadata",
+      "transformVersion": 1,
+      "overlay": "developer/overlays/postgres-patterns.json"
+    },
+    "activation": {
+      "state": "inactive",
+      "mode": "rulebook",
+      "description": "PostgreSQL query plans, indexes, schemas, parameter binding, RLS, and connection safety.",
+      "globs": [
+        "**/*.sql",
+        "**/*.py",
+        "**/*.pyi"
+      ]
+    },
+    "dependencies": [
+      "ecc-wp3-database-migrations"
+    ],
+    "disposition": "supported-with-adaptation",
+    "reason": "Retain language and database safety guidance as native rulebook content within existing approved scope.",
+    "qualification": {
+      "mechanicalTests": [
+        "session-system/tests/ecc-wp3-services.test.ts"
+      ],
+      "behavioralTrial": null,
+      "qualifiedRelease": null
+    },
+    "rollback": {
+      "removeOwnedArtifactOnly": true
+    }
+  },
+  {
+    "id": "ecc-wp3-database-migrations",
+    "pack": "engineering",
+    "upstream": {
+      "repository": "https://github.com/affaan-m/ECC.git",
+      "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+      "path": "skills/database-migrations/SKILL.md",
+      "sha256": "ad7f2f04ca03e592a16e2a539d8c6e90bf4e08892408820ce99a53e9d07775de"
+    },
+    "target": {
+      "path": ".omp/rules/ecc-wp3-database-migrations.md",
+      "scope": "project"
+    },
+    "adaptation": {
+      "kind": "rule-metadata",
+      "transformVersion": 1,
+      "overlay": "developer/overlays/database-migrations.json"
+    },
+    "activation": {
+      "state": "inactive",
+      "mode": "rulebook",
+      "description": "PostgreSQL and Django migration safety: lock budgets, concurrent indexes, bounded backfills, expand-contract, and rollback design.",
+      "globs": [
+        "**/*.sql",
+        "**/*.py",
+        "**/*.pyi"
+      ]
+    },
+    "dependencies": [
+      "ecc-wp3-postgres-patterns"
+    ],
+    "disposition": "supported-with-adaptation",
+    "reason": "Retain language and database safety guidance as native rulebook content within existing approved scope.",
+    "qualification": {
+      "mechanicalTests": [
+        "session-system/tests/ecc-wp3-services.test.ts"
+      ],
+      "behavioralTrial": null,
+      "qualifiedRelease": null
+    },
+    "rollback": {
+      "removeOwnedArtifactOnly": true
+    }
+  }
+]
