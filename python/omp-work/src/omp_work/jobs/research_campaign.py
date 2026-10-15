@@ -123,6 +123,8 @@ class DecodedDecision(dict):
 
 
 _RESUMABLE_STATES = frozenset({"running", "evaluating"})
+# Terminal or held. None of these is moved back to running.
+_STOPPED_STATES = frozenset({"cancelled", "paused", "blocked"})
 
 
 def _resumable_campaign(
@@ -146,6 +148,34 @@ def _resumable_campaign(
             f"{sorted(str(c.campaign_id) for c in matches)} all match this definition"
         )
     return matches[0] if matches else None
+
+
+def _campaign_state(
+    store: NativeJobStore, workspace_id: UUID, actor_id: UUID, campaign_id: UUID
+) -> str:
+    """Persisted campaign state, read in its own transaction."""
+    with store.transaction(workspace_id, actor_id) as cur:
+        cur.execute(
+            """
+            SELECT state FROM omp_research.campaigns
+            WHERE workspace_id=%s AND campaign_id=%s
+            """,
+            (workspace_id, campaign_id),
+        )
+        row = cur.fetchone()
+    if row is None:
+        raise RuntimeError(f"campaign {campaign_id} is not on the work item")
+    return str(row["state"])
+
+
+def _refuse_stopped(
+    store: NativeJobStore, workspace_id: UUID, actor_id: UUID, campaign_id: UUID
+) -> str:
+    """Re-read state and refuse cancel, pause, or block without writing a transition."""
+    state = _campaign_state(store, workspace_id, actor_id, campaign_id)
+    if state in _STOPPED_STATES:
+        raise RuntimeError(f"campaign {campaign_id} is {state}")
+    return state
 
 
 def _job_missing(
@@ -220,7 +250,18 @@ def run_research_campaign(
     harness_dir: Path,
     actor_id: UUID,
 ) -> dict[str, object]:
-    """Conclude only after each targeted job settles with a stored observation."""
+    """Conclude only after each targeted job settles with a stored observation.
+
+    State is re-read before recovery effects, each proposal, each dispatch,
+    each tick, and conclusion. Cancelled, paused, and blocked campaigns stop
+    at that read: nothing is proposed, dispatched, ticked, or concluded, and
+    the state is not moved back to running. Search budget counts trial cost
+    with ``math.fsum``, separate from the cpu reservation ``dispatch_trial``
+    and ``JobWorker`` enforce. No legal pick, or a selected cost that would
+    exceed the budget, stops through ``score_campaign`` and does not try a
+    cheaper node. A native reservation or budget refusal propagates and is
+    not stored as a score.
+    """
     item = client.work_item(key)
     workspace_id, work_id = item.workspace_id, item.work_id
     setup = prepare_campaign(client, workspace_id, definition, harness_dir=harness_dir)
@@ -258,19 +299,9 @@ def run_research_campaign(
                 policy_sha256=setup.policy_sha256,
             ),
         )))
-    worker = JobWorker(
-        store,
-        WorkerConfig(
-            workspace_id=workspace_id, actor_id=actor_id,
-            worker_id=f"research-campaign:{campaign_id}",
-            component_sha256=setup.worker_sha256,
-            capabilities=[CAPABILITY], capacity=1,
-        ),
-        ResearchTrialHandler(harness_dir=harness_dir, execute=client.execute),
-    )
-    evaluating = resumed is not None and resumed.state == "evaluating"
-    if not evaluating:
-        worker.start()
+    # The resume lookup's campaign object can be stale. Re-read before recovery,
+    # worker registration, or any proposal.
+    _refuse_stopped(store, workspace_id, actor_id, campaign_id)
 
     search = definition.search
     if search is None:
@@ -314,12 +345,30 @@ def run_research_campaign(
         completions.extend(progress.pairs)
         index = len(progress.results)
         pending = progress.pending
+    # Cancel during recovery must win before the worker is registered or a
+    # pending proposal is dispatched. Do not resume a stopped campaign.
+    state = _refuse_stopped(store, workspace_id, actor_id, campaign_id)
+    evaluating = state == "evaluating"
     if evaluating and pending is not None:
         raise RuntimeError(
             f"evaluating campaign {campaign_id} has unsettled trial {pending.trial_id}"
         )
 
+    worker = JobWorker(
+        store,
+        WorkerConfig(
+            workspace_id=workspace_id, actor_id=actor_id,
+            worker_id=f"research-campaign:{campaign_id}",
+            component_sha256=setup.worker_sha256,
+            capabilities=[CAPABILITY], capacity=1,
+        ),
+        ResearchTrialHandler(harness_dir=harness_dir, execute=client.execute),
+    )
+    if not evaluating:
+        worker.start()
+
     while not evaluating:
+        _refuse_stopped(store, workspace_id, actor_id, campaign_id)
         if pending is not None:
             # Persisted proposal: keep its trial id, decision, reason, and seed.
             pick, trial_id = pending.step_id, pending.trial_id
@@ -336,11 +385,14 @@ def run_research_campaign(
                 break
             cost = steps[pick]["cost"]
             try:
+                # Candidate-cost units only. Native cpu/memory reservations stay
+                # inside dispatch_trial and JobWorker.
                 prospective_spent = math.fsum([*proposed_costs, cost])
             except OverflowError:
                 break
             if prospective_spent > search.budget:
                 break
+            _refuse_stopped(store, workspace_id, actor_id, campaign_id)
             trial_id, encoded_reason = _propose(
                 client, setup, trials_by_step[pick], campaign_id=campaign_id,
                 work_id=work_id, workspace_id=workspace_id, search=search,
@@ -348,6 +400,7 @@ def run_research_campaign(
             )
         job_id = trial_job_id(trial_id)
         if pending is None or _job_missing(store, workspace_id, actor_id, job_id):
+            _refuse_stopped(store, workspace_id, actor_id, campaign_id)
             dispatch_trial(
                 store, operation_id=str(uuid4()), workspace_id=workspace_id,
                 actor_id=actor_id, work_id=work_id, trial_id=trial_id,
@@ -355,7 +408,10 @@ def run_research_campaign(
                 lease_seconds=60,
             )
         pending = None
+        _refuse_stopped(store, workspace_id, actor_id, campaign_id)
         if worker.tick(job_id=job_id) != job_id:
+            # Reservation and item-budget gates refuse inside the worker.
+            # That refusal is not a trial score.
             raise RuntimeError(f"research worker did not execute target job {job_id}")
         persisted = next(
             (
@@ -387,6 +443,7 @@ def run_research_campaign(
         ))
         index += 1
 
+    _refuse_stopped(store, workspace_id, actor_id, campaign_id)
     outcome, reason = score_campaign(verdicts)
     if not evaluating:
         client.execute(_envelope(workspace_id, SetResearchCampaignStateCommand(
@@ -397,6 +454,7 @@ def run_research_campaign(
                 policy_sha256=setup.policy_sha256,
             ),
         )))
+    _refuse_stopped(store, workspace_id, actor_id, campaign_id)
     client.execute(_envelope(workspace_id, ConcludeResearchCampaignCommand(
         type="conclude_research_campaign",
         payload=ConcludeResearchCampaignPayload(
@@ -404,10 +462,16 @@ def run_research_campaign(
             outcome=outcome, reason=reason,
         ),
     )))
-    winner_id = winner({step_id: steps[step_id] for step_id in opened})
+    opened_steps = {step_id: steps[step_id] for step_id in opened}
+    winner_id = winner(opened_steps)
+    metric = None if winner_id is None else opened_steps[winner_id].get("metric")
+    # Failed and missing selection metrics stay out of best. None when every
+    # opened node is infra, unscored, or absent.
     best = (
-        {"step_id": winner_id, "metric": float(steps[winner_id]["metric"])}
+        {"step_id": winner_id, "metric": float(metric)}
         if winner_id is not None
+        and metric is not None
+        and opened_steps[winner_id].get("infra_error") is None
         else None
     )
     spent = float(math.fsum(proposed_costs))
