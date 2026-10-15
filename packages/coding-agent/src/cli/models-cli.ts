@@ -13,12 +13,14 @@
  */
 import type { Api, Effort, Model } from "@oh-my-pi/pi-ai";
 import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
+import type { ModelResolutionSource } from "@oh-my-pi/pi-catalog/model-manager";
 import { getModelPricingStatus } from "@oh-my-pi/pi-catalog/models";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { type ModelKind, type ModelPricingStatus, modelKind } from "@oh-my-pi/pi-catalog/types";
 import { formatNumber, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import type { ConfigError } from "../config/config-file";
+import type { ProviderDiscoveryState, ProviderDiscoveryStatus } from "../config/model-provider-discovery";
 import { ModelRegistry } from "../config/model-registry";
 import { isProjectPathTrusted } from "../config/project-trust";
 import { Settings } from "../config/settings";
@@ -88,8 +90,28 @@ interface ModelJson {
 	pricingStatus: ModelPricingStatus;
 }
 
+/**
+ * Per-provider discovery evidence for `--json`, copied verbatim from a
+ * {@link ProviderDiscoveryState}. Only the fields a read-only offerings check can
+ * verify are carried; `error`/`models` are deliberately dropped, and a state that
+ * is absent is omitted rather than invented.
+ */
+interface ModelsDiscoveryJson {
+	provider: string;
+	status: ProviderDiscoveryStatus;
+	stale: boolean;
+	source?: ModelResolutionSource;
+	fetchedAt?: number;
+}
+
 interface ModelsJson {
 	models: ModelJson[];
+	/**
+	 * Discovery state keyed by the exact requested provider (present even when the
+	 * filter matched nothing) plus every provider represented in `models`. Absent
+	 * when no requested or represented provider has discovery state.
+	 */
+	discovery?: Record<string, ModelsDiscoveryJson>;
 }
 
 function writeLine(line = ""): void {
@@ -186,6 +208,53 @@ export interface ModelsListingSource {
 	/** Return models available for the selected catalog kind, or every kind for `all`. */
 	getAvailable(kind?: ModelKind | "all"): Model<Api>[];
 	getError(): ConfigError | undefined;
+	/**
+	 * Optional discovery evidence keyed by the exact provider. {@link ModelRegistry}
+	 * already satisfies this; the structural source used by callers that only need
+	 * `getAvailable`/`getError` may omit it, which yields JSON with no `discovery`.
+	 */
+	getProviderDiscoveryState?(provider: string): ProviderDiscoveryState | undefined;
+}
+
+/**
+ * Project a discovery state down to the fields a read-only offerings check
+ * verifies. `provider` and `stale` are always present; `source`/`fetchedAt` are
+ * carried only when the state declares them, so a consumer can never mistake an
+ * absent time for a fresh one.
+ */
+function toDiscoveryJson(state: ProviderDiscoveryState): ModelsDiscoveryJson {
+	const evidence: ModelsDiscoveryJson = {
+		provider: state.provider,
+		status: state.status,
+		stale: state.stale,
+	};
+	if (state.source !== undefined) evidence.source = state.source;
+	if (state.fetchedAt !== undefined) evidence.fetchedAt = state.fetchedAt;
+	return evidence;
+}
+
+/**
+ * Discovery evidence for the JSON envelope: the exact requested provider (as the
+ * caller typed it, so a typo/substring with no matching provider reports that
+ * provider's real state, never an invented success) plus every provider
+ * represented in `models`. Providers with no recorded state are omitted.
+ */
+function collectDiscoveryJson(
+	source: ModelsListingSource,
+	requested: string | undefined,
+	models: Model<Api>[],
+): Record<string, ModelsDiscoveryJson> | undefined {
+	const read = source.getProviderDiscoveryState?.bind(source);
+	if (!read) return undefined;
+	const providers = new Set<string>();
+	if (requested !== undefined) providers.add(requested);
+	for (const model of models) providers.add(model.provider);
+	const discovery: Record<string, ModelsDiscoveryJson> = {};
+	for (const provider of providers) {
+		const state = read(provider);
+		if (state) discovery[provider] = toDiscoveryJson(state);
+	}
+	return Object.keys(discovery).length > 0 ? discovery : undefined;
 }
 
 /**
@@ -231,7 +300,10 @@ export function renderProviderModels(
 				`Warning: models.yml validation failed — custom providers disabled\n${configError.message}\n`,
 			);
 		}
-		const output: ModelsJson = { models: filtered.slice().sort(byProviderThenId).map(toModelJson) };
+		const sorted = filtered.slice().sort(byProviderThenId);
+		const output: ModelsJson = { models: sorted.map(toModelJson) };
+		const discovery = collectDiscoveryJson(source, pattern, sorted);
+		if (discovery) output.discovery = discovery;
 		writeLine(JSON.stringify(output));
 		return;
 	}
