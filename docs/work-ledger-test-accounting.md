@@ -79,7 +79,6 @@ Prerequisites:
 - `OMP_WORK_POSTGRES_INTEGRATION=1`. Without that flag the M1 module skips.
 - A successful namespace probe for modules that also skip on `unshare`, including the M1 module. The flag alone does not execute a node whose unshare probe fails. The skip reason is then `unshare probe failed`.
 - pytest-xdist, because the command passes `-n 4`.
-- pytest-xdist, because the command passes `-n 4`.
 
 A node whose file is absent from the allowlist is not run by this check.
 
