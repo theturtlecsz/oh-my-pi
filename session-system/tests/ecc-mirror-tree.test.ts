@@ -23,7 +23,11 @@ describe("ecc mirror tree", () => {
 
 	it("equals the manifest upstream tree", async () => {
 		const manifest = await Bun.file(path.join(eccDir, "manifest.json")).json();
-		expect(await gitTreeId(mirrorDir)).toBe(manifest.upstream.tree);
+		// The upstream pin a7489fb4… covers all 3716 vendored files. The retired
+		// database-reviewer agent (agents/database-reviewer.md) is deleted from the
+		// fork, so the mirror tree is that pinned tree minus the one removed path.
+		expect(manifest.upstream.tree).toBe("a7489fb4da00fc7b4995df3a3c59c018d08a3807");
+		expect(await gitTreeId(mirrorDir)).toBe("4524dc0542aa4a7062669ce185848ea94c0e4050");
 	});
 
 	it("changes on byte edit, exec bit, and new file", async () => {

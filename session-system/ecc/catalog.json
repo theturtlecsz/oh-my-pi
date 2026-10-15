@@ -3555,13 +3555,6 @@
       "assetId": null
     },
     {
-      "path": "agents/database-reviewer.md",
-      "sha256": "945c107dea01ca74e3e9bc3a5841e79e744673e8f14697e88cf1cfd9c01a1cc5",
-      "classification": "reference-only",
-      "reason": "Upstream agents family",
-      "assetId": null
-    },
-    {
       "path": "agents/django-build-resolver.md",
       "sha256": "643f1445336ef801f49cc56a00ad09af3435124ef841f4b023be19ee50662b29",
       "classification": "reference-only",

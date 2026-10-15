@@ -33,7 +33,8 @@ describe("ECC file catalog", () => {
 		const fresh = await buildFileCatalog(ECC_ROOT, await loadManifest());
 		expect(await Bun.file(path.join(ECC_ROOT, "catalog.json")).json()).toEqual(fresh);
 		expect(fresh.files.map(file => file.path)).toEqual(await listMirrorFiles());
-		expect(fresh.files).toHaveLength(3716);
+		expect(fresh.files).toHaveLength(3715);
+		expect(fresh.files.some(file => file.path === "agents/database-reviewer.md")).toBe(false);
 		expect(fresh.files.every(file => file.reason.trim().length > 0)).toBe(true);
 		expect(fresh.files.find(file => file.path === "skills/search-first/SKILL.md")?.assetId).toBe("ecc-search-first");
 		expect(fresh.files.find(file => file.path === "skills/continuous-learning-v2/SKILL.md")).toMatchObject({
