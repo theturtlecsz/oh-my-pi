@@ -37,7 +37,7 @@ from omp_work.jobs.worker import Frozen, Settlement
 from omp_work.operations.capabilities import DEFAULT_BASE_URL
 from omp_work.operations.config import OperationsConfig
 from omp_work.operations.database import _jobs_migration_state, check_migrations
-from omp_work.orchestrator import qualification, verify_main
+from omp_work.orchestrator import intake_binding, intake_gate, qualification, verify_main
 from omp_work.orchestrator.stages import (
     STAGE_ORDER,
     UNRECORDED_KINDS,
@@ -1246,7 +1246,11 @@ class OrchestratorHandler:
         if recorded is None and chosen.kind == "dispatch":
             if chosen.kind not in UNRECORDED_KINDS:
                 self._record_decision(step_index, chosen, None)
-            outcome = self._operate(job, step_index, stage, facts)
+            outcome = self._intake_hold(stage)
+            if outcome is None:
+                outcome = self._operate(job, step_index, stage, facts)
+                if outcome.outcome == "succeeded":
+                    outcome = self._intake_hold(stage) or outcome
             self.record(step_index, _outcome_body(self.mission_id, step_index, stage, outcome))
             produced = outcome
             facts = self._facts(self.steps(), step_index, stage, outcome)
@@ -1274,6 +1278,51 @@ class OrchestratorHandler:
         outcome = produced
         self._record_decision(step_index, chosen, outcome)
         self._apply(job, step_index, chosen, outcome)
+
+    def _intake_hold(self, stage: str) -> Outcome | None:
+        """Fence operations with committed intake checks, never an execution-spanning lock."""
+        if stage in {"intake", "confirm"}:
+            return None
+        if self.mission_id is None:
+            raise AssertionError("mission_id is None")
+        workspace_id = self.config.workspace_id
+        with intake_gate.cursor(
+            self.store, workspace_id=workspace_id, actor_id=self.principal.actor_id,
+        ) as cur:
+            binding = intake_binding.read(cur, workspace_id=workspace_id, mission_id=self.mission_id)
+            # run_plan owns initial admission, including missing-head/receipt refusals.
+            if binding is None:
+                return None
+            head = intake_gate.read_head(cur, workspace_id=workspace_id, mission_id=self.mission_id)
+            code = intake_gate.INTAKE_REVISION_ADVANCED
+            if head is not None and head.run_id == binding.run_id:
+                if head.revision == binding.revision and binding.assessment_id is not None:
+                    refusal = intake_gate.verify(
+                        cur, workspace_id=workspace_id, mission_id=self.mission_id,
+                        revision=binding.revision, assessment_id=binding.assessment_id,
+                    )
+                    if refusal is None and binding.state == "admitted":
+                        return None
+                    code = refusal.code if refusal is not None else binding.hold_code or code
+                elif head.revision > binding.revision:
+                    receipt = intake_gate.latest_pass(
+                        cur, workspace_id=workspace_id, run_id=head.run_id, revision=head.revision,
+                    )
+                    if receipt is not None:
+                        refusal = intake_gate.verify(
+                            cur, workspace_id=workspace_id, mission_id=self.mission_id,
+                            revision=head.revision, assessment_id=receipt.assessment_id,
+                        )
+                        if refusal is None:
+                            intake_binding.admit(
+                                cur, workspace_id=workspace_id, mission_id=self.mission_id,
+                                run_id=head.run_id, revision=head.revision,
+                                assessment_id=receipt.assessment_id,
+                            )
+                            return None
+                        code = refusal.code
+            intake_binding.hold(cur, workspace_id=workspace_id, mission_id=self.mission_id, code=code)
+        return Outcome(outcome="failed", data={"stage": stage, "code": code})
 
     def _record_confirm_pause(self, step_index: int, decision_id: str, stage: str) -> None:
         """Record the confirm pause that adopted the intake stage's own decision."""
