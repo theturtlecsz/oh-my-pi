@@ -83,6 +83,7 @@
 - `omp-work jobs check` gives probe jobs a lease well below its timeout (default min(30 s, a quarter of the timeout), set with `--lease`), so a job whose worker is killed mid-run is reclaimed and sealed before the check gives up (OMP-475).
 - the worker `capacity` setting is documented as a resource-weight budget; the worker runs one job at a time (OMP-475).
 - Plan stamping waits for confirmation of a linked mission's new or changed scope.
+- research lesson stage admits a draft only after every cited receipt resolves to the same claim, source span, revision, work item, candidate, evaluator, and outcome, and the ML investigation replaces the shared zero experiment receipt with the SHA-256 of each experiment's canonical name and metrics (OMP-607).
 
 ### Fixed
 
