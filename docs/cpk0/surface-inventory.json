@@ -5632,8 +5632,12 @@
         "session-system/extensions/workflow/execute-prompt.md",
         "session-system/extensions/workflow/git.ts",
         "session-system/extensions/workflow/host.ts",
+        "session-system/extensions/workflow/intake-runner.ts",
         "session-system/extensions/workflow/kind-description.md",
         "session-system/extensions/workflow/lock-refusal.md",
+        "session-system/extensions/workflow/nsi6-draft.md",
+        "session-system/extensions/workflow/nsi6-repair.md",
+        "session-system/extensions/workflow/nsi6-source.md",
         "session-system/extensions/workflow/pending-ops.ts",
         "session-system/extensions/workflow/procedures.ts",
         "session-system/extensions/workflow/rider-batch.ts",
@@ -5644,6 +5648,7 @@
         "session-system/extensions/workflow/status.ts",
         "session-system/extensions/workflow/tool-description.md",
         "session-system/extensions/workflow/transcript.ts",
+        "session-system/extensions/workflow/typed-completeness.md",
         "session-system/extensions/workflow/work.ts"
       ],
       "agents": [
