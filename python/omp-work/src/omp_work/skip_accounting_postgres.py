@@ -1,4 +1,4 @@
-"""Host prerequisite check for the skip-accounting PostgreSQL alternate lane (OMP-617).
+"""PostgreSQL skip-accounting lane: ``python -m omp_work.skip_accounting_postgres``.
 
 ``check_prerequisites`` refuses (raises ``PrerequisiteError``, ``exit_code`` 2) unless the
 host is a non-root Linux box with PostgreSQL 18 tooling, libseccomp, and working
@@ -7,8 +7,10 @@ unprivileged user/net/mount/pid namespaces. There is no fallback and no skip.
 
 from __future__ import annotations
 
+import argparse
 import ctypes
 import ctypes.util
+import json
 import os
 import re
 import shutil
@@ -16,10 +18,14 @@ import stat
 import subprocess
 import sys
 import tempfile
+import uuid
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 from weakref import WeakKeyDictionary
+
+from omp_work import skip_accounting
+from omp_work.skip_accounting_report import repo_root
 
 __all__ = [
     "COMMAND_TIMEOUT_SECONDS",
@@ -32,6 +38,7 @@ __all__ = [
     "OwnedTemp",
     "PrerequisiteError",
     "check_prerequisites",
+    "main",
 ]
 
 
@@ -474,3 +481,85 @@ class OwnedTemp:
     def env(self) -> dict[str, str]:
         """Environment exposing this root's ``TMPDIR``; merge into a spawned child's env."""
         return {"TMPDIR": str(self._tmpdir)}
+
+
+def _suite_path() -> Path:
+    """Full source suite; internal seam for launcher regression tests."""
+    return Path(__file__).resolve().parents[2] / "tests"
+
+
+def _print_receipts(out: Path, child: subprocess.Popen[bytes], env: dict[str, str]) -> None:
+    prefix = f"{env[skip_accounting.ENV_CHECK]}-{env[skip_accounting.ENV_RUN]}-{child.pid}-"
+    for path in sorted(out.glob(f"*{skip_accounting.RECEIPT_SUFFIX}")):
+        if not path.name.startswith(prefix):
+            continue
+        receipt = skip_accounting.read_receipt(path)
+        print("receipt: " + json.dumps({"path": str(path), **receipt.to_json()}, sort_keys=True), flush=True)
+        counts: dict[str, int] = {}
+        for phases in receipt.nodes.values():
+            for name, phase in phases.items():
+                key = f"{name}/{phase.outcome}"
+                counts[key] = counts.get(key, 0) + 1
+        print("summary: " + json.dumps({
+            "check": receipt.check, "run_id": receipt.run_id, "complete": receipt.complete,
+            "exitstatus": receipt.exitstatus, "phases": counts,
+        }, sort_keys=True), flush=True)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run every source test with PostgreSQL enabled, retaining complete skip evidence."""
+    parser = argparse.ArgumentParser(prog="omp_work.skip_accounting_postgres", allow_abbrev=False)
+    parser.add_argument("--out", metavar="DIR")
+    parser.add_argument("--run", metavar="ID")
+    args = parser.parse_args(argv)
+    try:
+        return _launch(args.out, args.run)
+    except PrerequisiteError as exc:
+        print(f"skip_accounting_postgres: {exc}", file=sys.stderr)
+        for name in ("argv", "status", "stdout", "stderr"):
+            value = getattr(exc, name)
+            if value is not None and value != "":
+                print(f"{name}: {value}", file=sys.stderr)
+        return EXIT_CODE
+    except (OSError, ValueError) as exc:
+        print(f"skip_accounting_postgres: {exc}", file=sys.stderr)
+        return EXIT_CODE
+
+
+def _launch(out_arg: str | None, run_arg: str | None) -> int:
+    owned: OwnedTemp | None = None
+    children: list[subprocess.Popen[bytes]] = []
+    try:
+        check_prerequisites()
+        owned = OwnedTemp.create()
+        root = repo_root()
+        env = {
+            key: value for key, value in os.environ.items()
+            if not key.startswith(("PYTEST_", "OMP_INSTALLED_", "FLOOD_"))
+            and key != "OMP584_FLOOD_SOURCE"
+        }
+        out = Path(out_arg or env.get(skip_accounting.ENV_DIR) or owned.root / "receipts").resolve()
+        out.mkdir(parents=True, exist_ok=True)
+        env.update(owned.env())
+        env[skip_accounting.ENV_DIR] = str(out)
+        env[skip_accounting.ENV_RUN] = run_arg or env.get(skip_accounting.ENV_RUN) or str(uuid.uuid4())
+        env[skip_accounting.ENV_CHECK] = env.get(skip_accounting.ENV_CHECK) or "work-ledger-integration"
+        env[skip_accounting.ENV_ROOT] = env.get(skip_accounting.ENV_ROOT) or str(root)
+        env["OMP_WORK_POSTGRES_INTEGRATION"] = "1"
+        child = subprocess.Popen([
+            sys.executable, "-m", "pytest", str(_suite_path()),
+            "-p", "omp_work.skip_accounting", "-p", "no:cacheprovider",
+            "-o", "addopts=", "--maxfail=0", f"--rootdir={root}",
+            f"--basetemp={owned.basetemp}",
+        ], cwd=root, env=env)
+        children.append(child)
+        status = child.wait()
+        _print_receipts(out, child, env)
+        return status
+    finally:
+        if owned is not None:
+            owned.cleanup(children)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

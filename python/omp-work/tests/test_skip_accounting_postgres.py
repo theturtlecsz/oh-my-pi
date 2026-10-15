@@ -4,18 +4,23 @@ from __future__ import annotations
 
 import copy
 import errno
+import json
 import os
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
+import textwrap
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import pytest
 
 from omp_work import skip_accounting_postgres as sap
+from omp_work import skip_accounting as sa
 from omp_work.skip_accounting_postgres import PrerequisiteError, check_prerequisites
 
 
@@ -775,3 +780,237 @@ def test_cleanup_reaps_real_child(tmp_path: Path) -> None:
             child.kill()
             child.wait(timeout=sap.COMMAND_TIMEOUT_SECONDS)
         shutil.rmtree(owned.root, ignore_errors=True)
+
+
+@pytest.fixture
+def launch_suite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    # Scope prerequisite substitution to these launcher tests, never the public CLI.
+    monkeypatch.setattr(sap, "check_prerequisites", lambda: None)
+    monkeypatch.setattr(sap, "_stat_mode", lambda path: stat.S_IFDIR | 0o755)
+    for key in os.environ:
+        if key.startswith("OMP_ACCOUNTING_"):
+            monkeypatch.delenv(key)
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    monkeypatch.setattr(sap, "_suite_path", lambda: suite)
+    return suite
+
+
+def printed_receipt(output: str) -> dict[str, Any]:
+    rows = [json.loads(line.removeprefix("receipt: ")) for line in output.splitlines() if line.startswith("receipt: ")]
+    assert len(rows) == 1, output
+    return rows[0]
+
+
+def read_only_receipt(out: Path) -> sa.Receipt:
+    paths = list(out.glob(f"*{sa.RECEIPT_SUFFIX}"))
+    assert len(paths) == 1
+    return sa.read_receipt(paths[0])
+
+
+def unit_suite(suite: Path, out: Path, run: str) -> sa.Receipt:
+    root = sap.repo_root()
+    env = {key: value for key, value in os.environ.items() if not key.startswith("PYTEST_")}
+    env.pop("OMP_WORK_POSTGRES_INTEGRATION", None)
+    env.update({sa.ENV_DIR: str(out), sa.ENV_RUN: run, sa.ENV_CHECK: "unit", sa.ENV_ROOT: str(root)})
+    proc = subprocess.run([
+        sys.executable, "-m", "pytest", str(suite), "-p", "omp_work.skip_accounting",
+        "-p", "no:cacheprovider", f"--rootdir={root}", f"--basetemp={out.parent / 'unit-temp'}",
+    ], cwd=root, env=env, capture_output=True, text=True, check=False)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    return read_only_receipt(out)
+
+
+def test_launch_enables_db_skips_and_keeps_downstream_teardown_evidence(
+    launch_suite: Path, tmp_path: Path, capfd: pytest.CaptureFixture[str],
+) -> None:
+    (launch_suite / "test_lane.py").write_text(textwrap.dedent('''
+        import os
+        import pytest
+
+        @pytest.fixture
+        def database():
+            if os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1":
+                pytest.skip("setup DB needs integration flag")
+
+        def test_setup_db(database):
+            assert os.environ["OMP_WORK_POSTGRES_INTEGRATION"] == "1"
+
+        def test_body_db():
+            if os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1":
+                pytest.skip("body DB needs integration flag")
+
+        def test_namespace_only():
+            # No DB marker: this node must still be selected by the alternate lane.
+            pass
+
+        @pytest.fixture
+        def downstream():
+            yield
+            pytest.skip("downstream teardown: exact reason\\nsecond line")
+
+        def test_downstream(downstream):
+            pass
+    '''))
+    unit = unit_suite(launch_suite, tmp_path / "unit", "paired")
+    alt_out = tmp_path / "alternate"
+    assert sap.main(["--out", str(alt_out), "--run", "paired"]) == 0
+    alternate = read_only_receipt(alt_out)
+    assert alternate.complete and set(alternate.selected) == set(unit.selected)
+    by_name = {node.split("::")[-1]: phases for node, phases in alternate.nodes.items()}
+    for name in ("test_setup_db", "test_body_db", "test_namespace_only"):
+        assert {phase.outcome for phase in by_name[name].values()} == {"passed"}
+    result = sa.reconcile(unit, [alternate])
+    assert {node.split("::")[-1] for node in result.covered} == {"test_setup_db", "test_body_db"}
+    assert {node.split("::")[-1] for node in result.pending} == {"test_downstream"}
+    assert by_name["test_downstream"]["call"].outcome == "passed"
+    assert by_name["test_downstream"]["teardown"] == sa.Phase("skipped", "downstream teardown: exact reason\nsecond line")
+    printed = printed_receipt(capfd.readouterr().out)
+    assert printed["nodes"] == alternate.to_json()["nodes"]
+    # Explicit output survives while owned temp storage has already been removed.
+    basetemp = next(arg.split("=", 1)[1] for arg in alternate.argv if arg.startswith("--basetemp="))
+    assert not Path(basetemp).parent.exists()
+
+
+def test_launch_failure_does_not_stop_later_nodes_or_inherit_selectors(
+    launch_suite: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    for key, value in {
+        "PYTEST_ADDOPTS": f"-x --maxfail=1 -k test_failure --basetemp={tmp_path}",
+        "PYTEST_PLUGINS": "nonexistent_plugin", "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+        "OMP_INSTALLED_ONLY": "1", "OMP584_FLOOD_SOURCE": "bad", "FLOOD_SOURCE": "bad",
+        "OMP_ACCOUNTING_EXTRA": "keep", "OMP_WORK_POSTGRES_INTEGRATION": "0",
+        "EXPECTED_PATH": os.environ["PATH"], "EXPECTED_PYTHON": sys.executable,
+    }.items():
+        monkeypatch.setenv(key, value)
+    (launch_suite / "pytest.ini").write_text("[pytest]\naddopts = -x --maxfail=1 -k test_failure\n")
+    (launch_suite / "test_failure.py").write_text(textwrap.dedent('''
+        import os
+        import sys
+        from pathlib import Path
+
+        def test_failure():
+            assert False, "deliberate failure"
+
+        def test_later(tmp_path, pytestconfig):
+            # Pytest itself creates these two runtime entries after launch.
+            assert {key: value for key, value in os.environ.items()
+                    if key.startswith(("PYTEST_", "OMP_INSTALLED_", "FLOOD_"))
+                    and key not in ("PYTEST_CURRENT_TEST", "PYTEST_VERSION")} == {}
+            assert "OMP584_FLOOD_SOURCE" not in os.environ
+            assert os.environ["OMP_WORK_POSTGRES_INTEGRATION"] == "1"
+            assert os.environ["OMP_ACCOUNTING_EXTRA"] == "keep"
+            assert os.environ["PATH"] == os.environ["EXPECTED_PATH"]
+            assert sys.executable == os.environ["EXPECTED_PYTHON"]
+            assert not pytestconfig.pluginmanager.hasplugin("cacheprovider")
+            storage = Path(os.environ["TMPDIR"]).parent
+            assert storage.name.startswith("omp-skip-pg-")
+            assert tmp_path.is_relative_to(storage / "basetemp")
+    '''))
+    out = tmp_path / "out"
+    assert sap.main(["--out", str(out)]) == 1
+    receipt = read_only_receipt(out)
+    assert receipt.complete and receipt.exitstatus == 1
+    calls = {node.split("::")[-1]: phases["call"].outcome for node, phases in receipt.nodes.items()}
+    assert calls == {"test_failure": "failed", "test_later": "passed"}
+    output = capfd.readouterr().out
+    assert printed_receipt(output)["exitstatus"] == 1
+    summary = json.loads(next(line.removeprefix("summary: ") for line in output.splitlines() if line.startswith("summary: ")))
+    assert summary["phases"] == {"setup/passed": 2, "call/failed": 1, "call/passed": 1, "teardown/passed": 2}
+
+
+@pytest.mark.parametrize("override", [False, True])
+def test_launch_inherits_accounting_and_cli_overrides_only_out_and_run(
+    launch_suite: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str], override: bool,
+) -> None:
+    (launch_suite / "test_inherited.py").write_text("def test_run():\n    pass\n")
+    inherited = tmp_path / "inherited"
+    monkeypatch.setenv(sa.ENV_DIR, str(inherited))
+    monkeypatch.setenv(sa.ENV_RUN, "inherited-run")
+    monkeypatch.setenv(sa.ENV_CHECK, "inherited-check")
+    monkeypatch.setenv(sa.ENV_ROOT, str(tmp_path))
+    out = tmp_path / "explicit" if override else inherited
+    argv = ["--out", str(out), "--run", "explicit-run"] if override else []
+    assert sap.main(argv) == 0
+    receipt = read_only_receipt(out)
+    assert receipt.complete and receipt.check == "inherited-check"
+    assert receipt.run_id == ("explicit-run" if override else "inherited-run")
+    assert receipt.selected == ["suite/test_inherited.py::test_run"]
+    if override:
+        assert not inherited.exists()
+    assert printed_receipt(capfd.readouterr().out)["path"].startswith(str(out))
+
+
+def test_standalone_defaults_emit_complete_receipt_before_disposal(
+    launch_suite: Path, tmp_path: Path,
+) -> None:
+    root = sap.repo_root()
+    (launch_suite / "test_defaults.py").write_text(textwrap.dedent(f'''
+        import os
+        import pytest
+        from pathlib import Path
+        def test_defaults():
+            if os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1":
+                pytest.skip("requires alternate DB lane")
+            assert Path.cwd() == Path({str(root)!r})
+            assert os.environ["OMP_ACCOUNTING_ROOT"] == {str(root)!r}
+            assert os.environ["OMP_WORK_POSTGRES_INTEGRATION"] == "1"
+    '''))
+    # Exercise standalone process entry with scoped host/suite substitutions only.
+    proc = subprocess.run([sys.executable, "-c", textwrap.dedent('''
+        import sys
+        from pathlib import Path
+        from omp_work import skip_accounting_postgres as sap
+        sap.check_prerequisites = lambda: None
+        sap._stat_mode = lambda path: 0o40755
+        sap._suite_path = lambda: Path(sys.argv[1])
+        raise SystemExit(sap.main([]))
+    '''), str(launch_suite)], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "UsageError" not in proc.stdout + proc.stderr
+    printed = printed_receipt(proc.stdout)
+    assert printed["complete"] and printed["exitstatus"] == 0
+    assert printed["check"] == "work-ledger-integration"
+    UUID(printed["run_id"])
+    receipt_path = Path(printed.pop("path"))
+    assert not receipt_path.parent.parent.exists()
+    # Parse the printed evidence via the real reader; default cleanup loses no evidence.
+    saved = tmp_path / "saved.skip-receipt.json"
+    saved.write_text(json.dumps(printed))
+    receipt = sa.read_receipt(saved)
+    assert receipt.fingerprint == sa.fingerprint(root)
+    assert receipt.collected == receipt.selected
+    assert len(receipt.nodes) == 1 and next(iter(receipt.nodes.values()))["call"].outcome == "passed"
+    unit = unit_suite(launch_suite, tmp_path / "unit", receipt.run_id)
+    result = sa.reconcile(unit, [receipt])
+    assert result.covered == receipt.selected and not result.pending
+
+
+def test_launch_prerequisite_refusal_never_executes_pytest(
+    launch_suite: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str],
+) -> None:
+    sentinel = launch_suite / "executed"
+    (launch_suite / "test_never.py").write_text(f"from pathlib import Path\nPath({str(sentinel)!r}).touch()\n")
+
+    def refuse() -> None:
+        raise PrerequisiteError(
+            "namespace_probe_1_failed", "unshare denied", argv=["unshare", "--user"],
+            status=1, stdout="probe output", stderr="permission denied",
+        )
+
+    monkeypatch.setattr(sap, "check_prerequisites", refuse)
+    assert sap.main([]) == 2
+    captured = capfd.readouterr()
+    assert "namespace_probe_1_failed" in captured.err and "unshare denied" in captured.err
+    assert "probe output" in captured.err and "permission denied" in captured.err
+    assert "unshare" in captured.err and "status: 1" in captured.err
+    assert not sentinel.exists() and "test session starts" not in captured.out
+
+
+@pytest.mark.parametrize("args", [["--suite", "tests"], ["-x"], ["--ou", "tmp"], ["tests"]])
+def test_cli_rejects_selectors_and_abbreviations(args: list[str]) -> None:
+    with pytest.raises(SystemExit) as exc:
+        sap.main(args)
+    assert exc.value.code == 2
