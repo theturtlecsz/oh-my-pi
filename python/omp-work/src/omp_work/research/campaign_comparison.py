@@ -35,7 +35,7 @@ def extract_arm_summary(result: dict[str, Any]) -> dict[str, Any]:
     best_metric = (
         float(best["metric"])
         if isinstance(best, dict) and best.get("metric") is not None
-        else 0.0
+        else None
     )
     return {
         "campaign_id": str(result.get("campaign_id", "")),
@@ -104,7 +104,8 @@ def compare(
     corpus_hashes_by_seed: dict[str, dict[str, str]] = {}
     corpus_trees_by_seed: dict[str, str] = {}
     seeds_report: list[dict[str, Any]] = []
-    differences: list[float] = []
+    differences: list[float | None] = []
+    missing_scores: list[dict[str, Any]] = []
     reference_steps: dict[str, Any] | None = None
 
     for seed in SEEDS:
@@ -122,7 +123,14 @@ def compare(
         greedy_summary = extract_arm_summary(greedy_raw)
         fixed_summary = extract_arm_summary(fixed_raw)
 
-        diff = greedy_summary["best_metric"] - fixed_summary["best_metric"]
+        for arm, summary in (("greedy", greedy_summary), ("fixed", fixed_summary)):
+            if summary["best_metric"] is None:
+                missing_scores.append({"seed": seed, "arm": arm})
+        diff = (
+            greedy_summary["best_metric"] - fixed_summary["best_metric"]
+            if greedy_summary["best_metric"] is not None and fixed_summary["best_metric"] is not None
+            else None
+        )
         differences.append(diff)
 
         seeds_report.append({
@@ -136,7 +144,22 @@ def compare(
             "actual_cost_fixed": fixed_summary["actual_cost"],
         })
 
-    stats = compute_student_t(differences)
+    # An unscored arm is missing evidence, never a measured zero. Keep all five
+    # seeds and their actual costs, but refuse inference on an incomplete pair.
+    if missing_scores:
+        stats = {
+            "mean": None,
+            "sample_stdev": None,
+            "margin": None,
+            "confidence_interval_95": None,
+            "ci_lower": None,
+            "ci_upper": None,
+            "null_result": None,
+            "outcome": "incomplete comparison",
+            "conclusion": "incomplete comparison",
+        }
+    else:
+        stats = compute_student_t([d for d in differences if d is not None])
 
     return {
         "corpus_hashes": corpus_hashes_by_seed,
@@ -151,5 +174,6 @@ def compare(
         "per_seed": {str(s["seed"]): s for s in seeds_report},
         "paired_differences": differences,
         "differences": differences,
+        "missing_scores": missing_scores,
         **stats,
     }

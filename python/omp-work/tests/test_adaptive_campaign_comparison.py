@@ -105,6 +105,52 @@ def test_student_t_refuses_empty() -> None:
         compute_student_t([])
 
 
+@pytest.mark.parametrize("missing_policy", ["greedy", "fixed"])
+def test_missing_trusted_best_rejects_comparison_without_dropping_seeds(
+    tmp_path: Path, missing_policy: str,
+) -> None:
+    """Failed arms retain their cost/evidence and cannot manufacture a win or null."""
+    calls: list[tuple[int, str]] = []
+
+    def run_campaign(definition_path: Path | str) -> dict[str, Any]:
+        definition = load_definition(Path(definition_path))
+        search = definition.search
+        assert search is not None
+        calls.append((search.seed, search.policy))
+        failed = search.seed == 2 and search.policy == missing_policy
+        return {
+            "campaign_id": f"seed-{search.seed}-{search.policy}",
+            "trials": [{
+                "step_id": "a",
+                "execution_status": "failed" if failed else "completed",
+                "metrics": {} if failed else {"ratio": 4.0},
+            }],
+            "best": None if failed else {"step_id": "a", "metric": 4.0},
+            "decisions": [{"index": 0, "step_id": "a"}],
+            "spent": 1.0,
+        }
+
+    report = compare(run_campaign, Path(__file__).resolve().parents[3], tmp_path)
+
+    assert calls == [(seed, policy) for seed in SEEDS for policy in ("greedy", "fixed")]
+    assert [row["seed"] for row in report["seeds"]] == list(SEEDS)
+    failed_seed = report["seeds"][2]
+    assert failed_seed[missing_policy]["best_metric"] is None
+    assert failed_seed[missing_policy]["best"] is None
+    assert failed_seed[missing_policy]["trusted_metrics"] == [{}]
+    assert failed_seed[missing_policy]["actual_trials"] == 1
+    assert failed_seed[missing_policy]["actual_cost"] == 1.0
+    assert failed_seed[missing_policy]["campaign_id"] == f"seed-2-{missing_policy}"
+    assert report["paired_differences"] == [0.0, 0.0, None, 0.0, 0.0]
+    assert failed_seed["difference"] is None
+    assert report["outcome"] == "incomplete comparison"
+    assert report["mean"] is None
+    assert report["confidence_interval_95"] is None
+    assert report["null_result"] is None
+    assert report["missing_scores"] == [{"seed": 2, "arm": missing_policy}]
+    json.dumps(report, allow_nan=False)
+
+
 # --- 2. Generated harness computes real compression metric ---
 
 
