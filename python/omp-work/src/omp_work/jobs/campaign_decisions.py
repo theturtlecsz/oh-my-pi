@@ -1,7 +1,7 @@
 """Decision codec for research campaign trial proposals (OMP-605).
 
 Provides a pure codec for encoding and decoding ProposeResearchTrialPayload.reason,
-bounded by the contract's 2048-character limit. Compact sorted JSON format adds v=1.
+bounded by the contract's 2048-character limit. Fixed/greedy use v1; generated uses v2.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from omp_work.v1.canonical import sha256
 
 __all__ = [
     "Decision",
+    "GeneratedDecision",
     "Policy",
     "decision_id",
     "decode",
@@ -119,6 +120,36 @@ class Decision:
         return 1
 
 
+@dataclass(frozen=True, slots=True)
+class GeneratedDecision:
+    """Version two binds a generated choice to code, recipe and opened evidence."""
+
+    index: int
+    step_id: str
+    observations_count: int
+    observations_sha256: str
+    rationale: str
+    source_sha256: str
+    recipe_sha256: str
+    policy: Literal["generated"] = "generated"
+
+    def __post_init__(self) -> None:
+        _validate_decision_fields(
+            index=self.index, policy="fixed", step_id=self.step_id,
+            observations_count=self.observations_count,
+            observations_sha256=self.observations_sha256, rationale=self.rationale,
+        )
+        if self.policy != "generated":
+            raise ValueError("v2 policy must be generated")
+        for digest in (self.source_sha256, self.recipe_sha256):
+            if not isinstance(digest, str) or not _SHA256_PATTERN.fullmatch(digest):
+                raise ValueError("generated decision requires source and recipe hashes")
+
+    @property
+    def v(self) -> int:
+        return 2
+
+
 def format_rationale(
     node: str,
     *,
@@ -136,12 +167,12 @@ def format_rationale(
     return res
 
 
-def encode(decision: Decision) -> str:
-    """Encode a Decision into a compact sorted JSON string adding v=1.
+def encode(decision: Decision | GeneratedDecision) -> str:
+    """Encode a versioned decision into a compact sorted JSON string.
 
     Refuses over the 2048-character limit.
     """
-    if not isinstance(decision, Decision):
+    if not isinstance(decision, (Decision, GeneratedDecision)):
         raise TypeError(f"expected Decision instance, got {type(decision).__name__}")
 
     payload = {
@@ -151,19 +182,21 @@ def encode(decision: Decision) -> str:
         "policy": decision.policy,
         "rationale": decision.rationale,
         "step_id": decision.step_id,
-        "v": 1,
+        "v": decision.v,
     }
+    if isinstance(decision, GeneratedDecision):
+        payload.update(source_sha256=decision.source_sha256, recipe_sha256=decision.recipe_sha256)
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     if len(encoded) > MAX_REASON_LENGTH:
         raise ValueError(f"encoded decision exceeds {MAX_REASON_LENGTH} characters ({len(encoded)} > {MAX_REASON_LENGTH})")
     return encoded
 
 
-def decode(reason: str | None) -> Decision | None:
+def decode(reason: str | None) -> Decision | GeneratedDecision | None:
     """Decode a reason string into a Decision.
 
     Returns None for absent records or legacy text.
-    Raises ValueError / TypeError for malformed v1 records.
+    Raises ValueError / TypeError for malformed versioned records.
     """
     if reason is None or not isinstance(reason, str) or not reason.strip():
         return None
@@ -179,14 +212,19 @@ def decode(reason: str | None) -> Decision | None:
     if "v" not in data:
         return None
 
-    if data["v"] != 1 or isinstance(data["v"], bool):
+    if (data["v"] not in (1, 2) or isinstance(data["v"], bool)
+            or (data["v"] == 2 and data.get("policy") != "generated")):
         raise ValueError(f"unsupported decision record version: {data['v']!r}")
 
     if len(reason) > MAX_REASON_LENGTH:
-        raise ValueError(f"v1 decision record exceeds {MAX_REASON_LENGTH} characters ({len(reason)} > {MAX_REASON_LENGTH})")
+        raise ValueError(f"v{data['v']} decision record exceeds {MAX_REASON_LENGTH} characters ({len(reason)} > {MAX_REASON_LENGTH})")
 
-    if set(data.keys()) != _V1_KEYS:
-        raise ValueError(f"malformed v1 decision record: keys mismatch: {set(data.keys())}")
+    keys = _V1_KEYS if data["v"] == 1 else _V1_KEYS | {"source_sha256", "recipe_sha256"}
+    if set(data.keys()) != keys:
+        raise ValueError(f"malformed v{data['v']} decision record: keys mismatch: {set(data.keys())}")
+
+    if data["v"] == 2:
+        return GeneratedDecision(**{key: value for key, value in data.items() if key != "v"})
 
     return Decision(
         index=data["index"],
