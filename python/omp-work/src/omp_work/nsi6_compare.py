@@ -4,6 +4,12 @@ The intake runner is the only model boundary, and it receives ``evaluator_input`
 alone. Original source hashes are checked before that call. Proof is evaluated
 from the original scenario, then projected with ``nsi6_observation`` before the
 unchanged ``nsi_eval.score``. Saved completions can be replayed without a model.
+
+Finding: the 2026-10-15 shadow run scored the same supplied bounded drafts in
+both arms, without model drafting, and hard-coded zero usage as labeled replay.
+Identical metrics therefore measured evaluator agreement on those drafts, not
+model-backed intake quality. The drafting/usage regression test distinguishes
+that replay from generated drafts with measured model receipts.
 """
 from __future__ import annotations
 
@@ -237,23 +243,41 @@ def _empty_transcript(model: str, max_usd: float) -> dict:
     }
 
 
+class RunnerFailure(RuntimeError):
+    """Process failure with all available output and partial model receipts."""
+
+    def __init__(self, message: str, stdout: bytes = b"", stderr: bytes = b"", transcript: dict | None = None):
+        super().__init__(message)
+        self.evidence = {"diagnostics": [message], "stdout_hex": stdout.hex(), "stderr_hex": stderr.hex()}
+        self.transcript = transcript
+
+
+def _runner_output(stdout: bytes) -> dict | None:
+    try:
+        payload = json.loads(stdout)
+    except (ValueError, UnicodeError):
+        return None
+    return payload if isinstance(payload, dict) and isinstance(payload.get("cases"), list) else None
+
+
 def call_intake_runner(request: dict) -> dict:
     """JSON stdin/stdout CLI of intake-runner.ts. No ledger client and no gold."""
     if not request["cases"]:
         return _empty_transcript(request["model"], request["max_usd"])
     timeout = max(120, 90 * len(request["cases"]))
-    proc = subprocess.run(  # nosec B603 - fixed bun argv, JSON over stdin, no shell
-        ["bun", str(RUNNER)], input=json.dumps(request).encode(),
-        capture_output=True, timeout=timeout, check=False,
-    )
-    stdout = proc.stdout.decode()
     try:
-        payload = json.loads(stdout) if stdout else {}
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"intake runner returned non-JSON: {stdout[:500]}") from exc
-    if proc.returncode != 0 or "cases" not in payload:
-        detail = payload.get("error") if isinstance(payload, dict) else None
-        raise RuntimeError(detail or proc.stderr.decode()[:500] or f"intake runner exited {proc.returncode}")
+        proc = subprocess.run(  # nosec B603 - fixed bun argv, JSON over stdin, no shell
+            ["bun", str(RUNNER)], input=json.dumps(request).encode(),
+            capture_output=True, timeout=timeout, check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout, stderr = exc.stdout or b"", exc.stderr or b""
+        raise RunnerFailure(str(exc), stdout, stderr, _runner_output(stdout)) from exc
+    payload = _runner_output(proc.stdout)
+    if proc.returncode != 0 or payload is None:
+        detail = proc.stdout.decode(errors="replace") if payload is None else ""
+        message = f"intake runner exited {proc.returncode}: {detail or proc.stderr.decode(errors='replace')}"
+        raise RunnerFailure(message, proc.stdout, proc.stderr, payload)
     return payload
 
 
@@ -300,7 +324,7 @@ def _assess_arm(raw: dict, arm: str, runner_row: dict | None, proof: dict, requi
         usage = _usage({})
         observation = _blank("crashed", ["runner omitted this case"], 0)
         projected = project_observation(observation, proof if required else None, proof_required=required)
-        return _arm_record(None, [], [], "failed", ["runner omitted this case"], usage, {}, projected, raw)
+        return _arm_record(None, [], [], "failed", ["runner omitted this case"], usage, {}, projected)
 
     usage = _usage(runner_row)
     status = runner_row.get("status")
@@ -448,11 +472,21 @@ def compare(
     started = time.monotonic()
     request, prepared = build_runner_request(document, model, float(max_usd))
     if transcript is None:
-        transcript = (runner or call_intake_runner)(request) if request["cases"] else _empty_transcript(model, float(max_usd))
+        try:
+            transcript = (runner or call_intake_runner)(request) if request["cases"] else _empty_transcript(model, float(max_usd))
+            if not isinstance(transcript, dict) or not isinstance(transcript.get("cases"), list):
+                raise RunnerFailure("runner transcript must be an object with cases")
+        except Exception as exc:
+            transcript = deepcopy(exc.transcript) if isinstance(exc, RunnerFailure) and exc.transcript is not None else _empty_transcript(model, float(max_usd))
+            transcript["runner_failure"] = deepcopy(exc.evidence) if isinstance(exc, RunnerFailure) else {
+                "diagnostics": [f"{type(exc).__name__}: {exc}"],
+            }
     if not isinstance(transcript, dict) or not isinstance(transcript.get("cases"), list):
         raise ValueError("runner transcript must be an object with cases")
     indexed = _index_transcript(transcript)
     failures = []
+    if "runner_failure" in transcript:
+        failures.append(_failure("*", None, "runner_exit", "failed", transcript["runner_failure"]["diagnostics"]))
     rows = []
     for case, raw, original_failure in prepared:
         required = bool(raw.get("nsi2_proof_scenario"))
@@ -546,6 +580,7 @@ def compare(
         },
         "cap_usd": float(max_usd),
         "spent_usd": summed_usd,
+        "spend_accounting_complete": "runner_failure" not in transcript,
         "model_tokens": sum(aggregate_report[arm]["model_tokens"] for arm in ARMS),
         "requests": summed_requests,
         "denied_requests": summed_denied,
@@ -577,6 +612,7 @@ def compare(
             "proof": "disposable_provenance reads the original scenario, so a generated draft cannot erase tamper or staleness.",
             "false_ready": "Unchanged nsi_eval.score after project_observation. Non-ready gold stays in the denominator.",
             "residual_false_ready": "Every scored false-ready id and cause, including unsupported model repairs.",
+            "spend_accounting_complete": "False after a runner process failure: spent_usd sums available receipts only; unobserved spend is unknown.",
             "complete_evidence": "Every case finished under the cap with measured usage. Exhausted, unmeasured, and crashed proof runs are not evidence.",
             "replay": "verify rebuilds drafts from saved completions and reruns assessment, proof, projection, and score without a model call.",
         },
@@ -595,7 +631,7 @@ def compare(
 
 
 def _is_complete(rows: list[dict], failures: list[dict], spent: float, cap: float, denied: int) -> bool:
-    if denied or _over_cap(spent, cap) or any(item["stage"] in {"accounting", "cap"} for item in failures):
+    if denied or _over_cap(spent, cap) or any(item["stage"] in {"accounting", "cap", "runner_exit"} for item in failures):
         return False
     for row in rows:
         if row["provenance"]["status"] == "crashed":

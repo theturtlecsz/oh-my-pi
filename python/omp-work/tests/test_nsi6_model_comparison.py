@@ -502,3 +502,74 @@ def test_intake_runner_cli_is_json_over_stdin(monkeypatch):
         call_intake_runner(request)
     assert captured["argv"] == ["bun", str(ROOT / "session-system/extensions/workflow/intake-runner.ts")]
     assert captured["input"] == request
+
+
+def test_missing_runner_rows_keep_all_cases(corpus, shadow):
+    transcript = _envelope([], 100)
+    report = compare(
+        corpus, model=MODEL, max_usd=100, transcript=transcript,
+        provenance=_shadow_provenance(corpus, shadow),
+    )
+    assert len(report["cases"]) == 26
+    assert report["complete_evidence"] is False
+    for arm in ("current", "typed"):
+        assert report["aggregate"][arm]["false_ready"] == ratio(0, 19)
+    assert sum(item["stage"] == "runner" for item in report["failures"]) == 46
+
+
+@pytest.mark.parametrize("failure", ["timeout", "exit", "non_json", "exception"])
+def test_runner_process_failure_writes_partial_evidence(corpus, shadow, tmp_path, monkeypatch, failure):
+    provenance = _shadow_provenance(corpus, shadow)
+
+    @contextmanager
+    def fixture():
+        yield provenance
+
+    monkeypatch.setattr("omp_work.nsi6_compare.disposable_provenance", fixture)
+
+    def process(argv, input, capture_output, timeout, check):
+        request = json.loads(input)
+        partial = _envelope([_scripted(
+            request["cases"][0], request["cases"][0]["input"]["bounded"]["draft"],
+            usd=0.25, tokens=17,
+        )], request["max_usd"])
+        output = json.dumps(partial).encode()
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(argv, timeout, output=output, stderr=b"timed out")
+        if failure == "exception":
+            raise OSError("cannot start bun")
+        if failure == "non_json":
+            return subprocess.CompletedProcess(argv, 0, stdout=b"broken JSON\xff", stderr=b"transport lost")
+        return subprocess.CompletedProcess(argv, 2, stdout=output, stderr=b"runner crashed")
+
+    monkeypatch.setattr("omp_work.nsi6_compare.subprocess.run", process)
+    destination = tmp_path / "failure.json"
+    report = run(CORPUS / "nsi6-manifest.json", destination, MODEL, 100)
+    assert json.loads(destination.read_text()) == report
+    assert len(report["cases"]) == 26
+    assert report["complete_evidence"] is False
+    assert report["sealed"] is False
+    assert report["spend_accounting_complete"] is False
+    assert any(item["stage"] == "runner_exit" for item in report["failures"])
+    for arm in ("current", "typed"):
+        assert report["aggregate"][arm]["false_ready"]["denominator"] == 19
+        assert report["aggregate"][arm]["critical_detection"]["denominator"] > 0
+    if failure in {"timeout", "exit"}:
+        assert report["spent_usd"] == 0.25
+        assert report["model_tokens"] == 17
+        assert report["transcript"]["cases"][0]["completions"]
+    else:
+        assert report["spent_usd"] == 0  # Known receipts only; unobserved spend remains unknown.
+    if failure == "non_json":
+        assert bytes.fromhex(report["transcript"]["runner_failure"]["stdout_hex"]) == b"broken JSON\xff"
+    replayed = replay_transcript(
+        corpus, report["transcript"], provenance, model=MODEL, max_usd=100,
+        corpus_record=report["corpus"], manifest=CORPUS / "nsi6-manifest.json",
+    )
+    for arm in ("current", "typed"):
+        assert {key: value for key, value in replayed["aggregate"][arm].items() if key != "wall_seconds"} == {
+            key: value for key, value in report["aggregate"][arm].items() if key != "wall_seconds"
+        }
+    assert replayed["failures"] == report["failures"]
+    with pytest.raises(ValueError, match="incomplete run"):
+        verify_report(destination, provenance=provenance)
