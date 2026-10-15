@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import subprocess
@@ -28,6 +29,7 @@ from omp_work.model_proxy import ProxyConfig, create_app
 from omp_work.orchestrator import worker_sandbox
 from omp_work.orchestrator import service as orchestrator
 from omp_work.orchestrator.service import OrchestratorHandler, submit
+from omp_work.v1.canonical import sha256
 from omp_work.v1.server import create_app as work_app
 from orchestrator_e2e_support import open_e2e_world, open_worker, tick_until
 from psycopg.rows import dict_row
@@ -76,6 +78,8 @@ _EXPECTED_PREPARED_USD = Decimal("0.03375")
 # 2.50 USD/M. Two consumed calls total 0.000031.
 _PER_CALL_USD = Decimal("0.0000155")
 _TOTAL_USD = Decimal("0.000031")
+# Independent pricing arithmetic (USD/M rates), not read from any ledger.
+_INDEPENDENT_PER_CALL_USD = (10 * Decimal("0.30") + 5 * Decimal("2.50")) / 1_000_000
 
 
 def test_namespaces_are_available() -> None:
@@ -766,9 +770,25 @@ def test_renewed_model_authority(renewed_world: RenewedWorld, record_property: A
     # 2.50 USD/M is 0.0000155 per call and 0.000031 total. Equality across
     # ledgers alone would permit consistently wrong pricing; these are concrete
     # expected amounts.
-    usage_events = state.usage_events()
-    spend_records = state.spend_records()
-    receipts = state.receipts()
+    assert _INDEPENDENT_PER_CALL_USD == _PER_CALL_USD == Decimal("0.0000155")
+    assert 2 * _INDEPENDENT_PER_CALL_USD == _TOTAL_USD == Decimal("0.000031")
+    job_id = str(grant_payload["job_id"])
+    # Scope every ledger read to this job/work/workspace; unrelated rows never count.
+    with psycopg.connect(
+        **state.gate.db_kwargs, autocommit=True, row_factory=dict_row
+    ) as conn:
+        usage_events = conn.execute(
+            "SELECT * FROM omp_jobs.usage_events WHERE workspace_id=%s AND job_id_derived=%s ORDER BY recorded_at",
+            (state.world.workspace_id, job_id),
+        ).fetchall()
+        receipts = conn.execute(
+            "SELECT * FROM omp_jobs.operations WHERE workspace_id=%s AND kind='model_call_receipt' AND result->'fingerprint'->>'job_id'=%s ORDER BY created_at",
+            (state.world.workspace_id, job_id),
+        ).fetchall()
+        spend_records = conn.execute(
+            "SELECT * FROM omp_work.spend_records WHERE workspace_id=%s AND project_id=%s AND mission_id=%s ORDER BY recorded_at",
+            (state.world.workspace_id, state.world.project_id, state.world.mission_id),
+        ).fetchall()
 
     assert len(usage_events) == 2
     assert len(spend_records) == 2
@@ -784,7 +804,8 @@ def test_renewed_model_authority(renewed_world: RenewedWorld, record_property: A
         assert settlement["input_tokens"] == 10
         assert settlement["output_tokens"] == 5
         assert settlement["cache_tokens"] == 0
-        assert Decimal(str(settlement["actual_usd"])) == _PER_CALL_USD
+        assert settlement["price_version"] == "p1"
+        assert Decimal(str(settlement["actual_usd"])) == _INDEPENDENT_PER_CALL_USD
 
         # Each durable receipt fingerprints the exact admitted bound it charged:
         # the whole context reserved as input, output (1000) + thinking (500), and
@@ -829,20 +850,54 @@ def test_renewed_model_authority(renewed_world: RenewedWorld, record_property: A
         seen_usage.add(identity)
 
         event = matching_usage[0]
+        # The receipt's embedded usage result names this exact, unique usage row.
+        assert receipt["result"]["result"]["usage"]["usage_id"] == event["usage_id"]
+        assert sum(1 for e in usage_events if e["usage_id"] == event["usage_id"]) == 1
+        # The usage request identity derives from this receipt's proxy request id.
+        assert identity == sha256({
+            "workspace_id": fingerprint["workspace_id"],
+            "work_id": fingerprint["work_id"],
+            "job_id": fingerprint["job_id"],
+            "request_id": fingerprint["request_id"],
+        })
+        assert event["request_id"] == f"model_call:request:{identity}"
+        assert str(event["workspace_id"]) == str(state.world.workspace_id)
+        assert event["job_id_derived"] == fingerprint["job_id"] == job_id
+        assert str(event["work_id"]) == fingerprint["work_id"]
+        assert fingerprint["workspace_id"] == str(state.world.workspace_id)
+        assert event["price_version"] == "p1"
+        assert event["cache_tokens"] == 0
         assert event["measurement"] == "measured"
         assert event["role_derived"] == "model_call"
         assert event["model"] == "gemini-3.8-flash-high"
         assert event["input_tokens"] == 10
         assert event["output_tokens"] == 5
-        assert Decimal(str(event["price_usd"])) == _PER_CALL_USD
+        assert Decimal(str(event["price_usd"])) == _INDEPENDENT_PER_CALL_USD
 
         record = matching_spend[0]
-        assert Decimal(str(record["amount_usd"])) == _PER_CALL_USD
+        assert Decimal(str(record["amount_usd"])) == _INDEPENDENT_PER_CALL_USD
         assert str(record["project_id"]) == str(state.world.project_id)
         assert str(record["mission_id"]) == str(state.world.mission_id)
 
     assert len(seen_spend) == 2
     assert len(seen_usage) == 2
+
+    # Each receipt's provider body hash is the hash of the body one of the two real
+    # provider calls received, in call order, with the renewal falling between them.
+    # The proxy forwards compact JSON; hash it independently of the receipt.
+    provider_hashes = [
+        hashlib.sha256(
+            json.dumps(call[1], separators=(",", ":"), ensure_ascii=False).encode()
+        ).hexdigest()
+        for call in state.calls
+    ]
+    receipt_hashes = [r["result"]["fingerprint"]["prepared"]["body_sha256"] for r in receipts]
+    assert receipt_hashes == provider_hashes
+    assert len(set(receipt_hashes)) == 2
+    for receipt, call in zip(receipts, state.calls, strict=True):
+        assert receipt["created_at"] <= call[4] + timedelta(seconds=_GATE_TIMEOUT_S)
+    assert receipts[0]["created_at"] < state.gate.released_at
+    assert state.calls[0][4] < state.gate.original_expiry < state.calls[1][4]
 
     # The two receipts were admitted on opposite sides of the original lease
     # expiry (call 1 before, call 2 after). Their fingerprints must carry byte-identical
@@ -860,7 +915,9 @@ def test_renewed_model_authority(renewed_world: RenewedWorld, record_property: A
         (Decimal(str(r["result"]["settlement"]["actual_usd"])) for r in receipts), Decimal()
     )
     assert total_usage_usd == total_spend_usd == total_receipt_usd == _TOTAL_USD
+    assert total_usage_usd == 2 * _INDEPENDENT_PER_CALL_USD
 
+    assert [sum(e[k] for e in usage_events) for k in ("input_tokens", "output_tokens", "cache_tokens")] == [20, 10, 0]
     total_tokens = sum(
         event["input_tokens"] + event["output_tokens"] for event in usage_events
     )
@@ -876,6 +933,10 @@ def test_renewed_model_authority(renewed_world: RenewedWorld, record_property: A
     revocation = json.loads(revoke_http.response_body)
     assert revocation["refused"] is False
     assert Decimal(revocation["spent_usd"]) == _TOTAL_USD
+    # The only DELETE came after the worker's last model request (worker exit).
+    assert state.proxy.exchanges.index(revoke_http) > max(
+        state.proxy.exchanges.index(r) for r in state.worker_requests
+    )
 
     # The job settled terminal for the same worker and fence that renewed it.
     job_row = state.job_row()
@@ -884,10 +945,21 @@ def test_renewed_model_authority(renewed_world: RenewedWorld, record_property: A
     assert job_row["worker_id"] == state.gate.worker_id
     assert job_row["fence"] == state.gate.fence
 
-    # 6. Post-exit token probe adds no provider call/charge
+    # 6. Revoked token probe adds no provider call/charge
+    def snapshot() -> tuple[Any, ...]:
+        return (
+            len(state.calls),
+            [(e["usage_id"], e["price_usd"]) for e in state.usage_events()],
+            [(r["record_id"], r["amount_usd"]) for r in state.spend_records()],
+            [(r["operation_id"], r["result"]) for r in state.receipts()],
+        )
+
+    before = snapshot()
+    assert before[0] == 2
+    model_path = "/v1beta/models/gemini-3.8-flash-high:streamGenerateContent?alt=sse"
     with httpx.Client(base_url=state.proxy_url, timeout=30) as client:
         probe_resp = client.post(
-            "/v1beta/models/gemini-3.8-flash-high:streamGenerateContent?alt=sse",
+            model_path,
             json={"contents": [{"parts": [{"text": "probe"}]}]},
             headers={"Authorization": f"Bearer {model_token}"},
         )
@@ -902,11 +974,6 @@ def test_renewed_model_authority(renewed_world: RenewedWorld, record_property: A
         assert probe_resp2.status_code == 403
         assert probe_resp2.json()["detail"] == "grant_refused"
 
-    assert len(state.calls) == 2
-    assert len(state.usage_events()) == 2
-    assert len(state.spend_records()) == 2
-    assert len(state.receipts()) == 2
-    assert sum(event["price_usd"] for event in state.usage_events()) == total_usage_usd
-    assert (
-        sum(record["amount_usd"] for record in state.spend_records()) == total_spend_usd
-    )
+    assert snapshot() == before
+    assert len(state.grants) == 1
+    assert len(state.revocations) == 1
