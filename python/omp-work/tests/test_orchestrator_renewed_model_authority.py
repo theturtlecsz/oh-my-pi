@@ -22,7 +22,7 @@ import psycopg
 import pytest
 from omp_work.jobs.worker import JobWorker
 from omp_work.model_proxy import ProxyConfig, create_app
-from omp_work.orchestrator import model_proxy_client, worker_sandbox
+from omp_work.orchestrator import worker_sandbox
 from omp_work.orchestrator import service as orchestrator
 from omp_work.orchestrator.service import OrchestratorHandler, submit
 from omp_work.v1.server import create_app as work_app
@@ -30,7 +30,7 @@ from orchestrator_e2e_support import open_e2e_world, open_worker, tick_until
 from psycopg.rows import dict_row
 from test_item_budget_alerts import _seed_budget
 from test_model_proxy import serving
-from test_model_proxy_upstream import gemini_route, ollama_route
+from test_model_proxy_upstream import gemini_route
 from test_orchestrator_production_worker import (
     CONTENT,
     CONTROL_TOKEN,
@@ -73,7 +73,16 @@ class RenewalGate:
     """Synchronize model response release with proven DB lease renewal past expiry."""
 
     def __init__(self, db_kwargs: dict[str, Any]):
-        self.db_kwargs = db_kwargs
+        # Every fixture query, including polling and final ledgers, uses these
+        # server-side bounds. A Python polling deadline cannot interrupt SQL.
+        self.db_kwargs = {
+            **db_kwargs,
+            "connect_timeout": 3,
+            "options": (
+                f"{db_kwargs.get('options', '')} "
+                "-c statement_timeout=2000 -c lock_timeout=1000"
+            ).strip(),
+        }
         self.workspace_id: UUID | None = None
         self.job_id: str | None = None
         self.worker_id: str | None = None
@@ -168,39 +177,74 @@ class RenewalGate:
                 await asyncio.sleep(0.05)
 
 
+@dataclass
+class HttpExchange:
+    """Bytes observed at the proxy boundary, before provider normalization."""
+
+    method: str
+    path: str
+    query: bytes
+    headers: tuple[tuple[bytes, bytes], ...]
+    request_body: bytes = b""
+    status: int | None = None
+    response_headers: tuple[tuple[bytes, bytes], ...] = ()
+    response_body: bytes = b""
+
+
 class HoldFirstProxyResponse:
-    """Hold first proxy response after ModelProxyBudget.call commits, with DB locks free."""
+    """Record HTTP and hold first response after budget commit, with DB locks free."""
 
     def __init__(self, app: Any, gate: RenewalGate):
         self.app = app
         self.gate = gate
+        self.exchanges: list[HttpExchange] = []
+        self.errors: list[Exception] = []
         self._model_calls = 0
-        self._lock = threading.Lock()
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
-        if scope["type"] != "http" or scope.get("method") != "POST":
+        if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        path = scope.get("path") or ""
-        if path == "/tasks" or path.startswith("/tasks/"):
-            await self.app(scope, receive, send)
-            return
-
-        with self._lock:
+        exchange = HttpExchange(
+            scope["method"],
+            scope["path"],
+            scope["query_string"],
+            tuple(scope["headers"]),
+        )
+        self.exchanges.append(exchange)
+        is_grant = exchange.method == "POST" and exchange.path == "/tasks"
+        is_model = exchange.method == "POST" and not (
+            exchange.path == "/tasks" or exchange.path.startswith("/tasks/")
+        )
+        if is_model:
             self._model_calls += 1
-            call_index = self._model_calls
+        hold = is_model and self._model_calls == 1
 
-        if call_index != 1:
-            await self.app(scope, receive, send)
-            return
+        async def receive_recorded() -> Any:
+            message = await receive()
+            if message["type"] == "http.request":
+                exchange.request_body += message.get("body", b"")
+                if is_grant and not message.get("more_body", False):
+                    self.gate.record_grant(json.loads(exchange.request_body))
+            return message
 
-        async def send_held(message: Any) -> None:
+        async def send_recorded(message: Any) -> None:
             if message["type"] == "http.response.start":
-                self.gate.mark_call1_committed()
-                await self.gate.wait_for_renewal_past_expiry()
+                exchange.status = message["status"]
+                exchange.response_headers = tuple(message.get("headers", ()))
+                if hold:
+                    self.gate.mark_call1_committed()
+                    await self.gate.wait_for_renewal_past_expiry()
+            elif message["type"] == "http.response.body":
+                exchange.response_body += message.get("body", b"")
             await send(message)
 
-        await self.app(scope, receive, send_held)
+        try:
+            await self.app(scope, receive_recorded, send_recorded)
+        except Exception as exc:
+            # Uvicorn otherwise logs ASGI failures only in its server thread.
+            self.errors.append(exc)
+            raise
 
 
 @dataclass
@@ -212,13 +256,24 @@ class RenewedWorld:
     gate: RenewalGate
     proxy_url: str
     work_url: str
-    grants: list[dict[str, Any]]
-    revocations: list[tuple[str, str]]
+    proxy: HoldFirstProxyResponse
     manifests: list[dict[str, Any]]
     calls: list[Any]
     provider_entered: Any
     provider_release: Any
     service: Any
+
+    @property
+    def grants(self) -> list[HttpExchange]:
+        return [r for r in self.proxy.exchanges if r.method == "POST" and r.path == "/tasks"]
+
+    @property
+    def revocations(self) -> list[HttpExchange]:
+        return [r for r in self.proxy.exchanges if r.method == "DELETE"]
+
+    @property
+    def worker_requests(self) -> list[HttpExchange]:
+        return [r for r in self.proxy.exchanges if r.method == "POST" and r.path != "/tasks"]
 
     def run(self) -> dict[str, Any]:
         def implemented(view: dict[str, Any]) -> bool:
@@ -227,7 +282,11 @@ class RenewedWorld:
                 for step in view["steps"]
             )
 
-        tick_until(self.worker, self.world, implemented, limit=60)
+        try:
+            tick_until(self.worker, self.world, implemented, limit=60)
+        finally:
+            if self.proxy.errors:
+                raise ExceptionGroup("proxy server failed", self.proxy.errors)
         handler = OrchestratorHandler(self.world.config)
         handler.mission_id = self.world.mission_id
         return next(
@@ -238,7 +297,7 @@ class RenewedWorld:
 
     def usage_events(self) -> list[dict[str, Any]]:
         with psycopg.connect(
-            **self.service.config.connection_kwargs("postgres"), row_factory=dict_row
+            **self.gate.db_kwargs, autocommit=True, row_factory=dict_row
         ) as conn:
             return conn.execute(
                 "SELECT * FROM omp_jobs.usage_events WHERE workspace_id=%s ORDER BY recorded_at",
@@ -247,7 +306,7 @@ class RenewedWorld:
 
     def spend_records(self) -> list[dict[str, Any]]:
         with psycopg.connect(
-            **self.service.config.connection_kwargs("postgres"), row_factory=dict_row
+            **self.gate.db_kwargs, autocommit=True, row_factory=dict_row
         ) as conn:
             return conn.execute(
                 "SELECT * FROM omp_work.spend_records WHERE workspace_id=%s ORDER BY recorded_at",
@@ -256,7 +315,7 @@ class RenewedWorld:
 
     def receipts(self) -> list[dict[str, Any]]:
         with psycopg.connect(
-            **self.service.config.connection_kwargs("postgres"), row_factory=dict_row
+            **self.gate.db_kwargs, autocommit=True, row_factory=dict_row
         ) as conn:
             return conn.execute(
                 "SELECT * FROM omp_jobs.operations WHERE workspace_id=%s AND kind='model_call_receipt' ORDER BY created_at",
@@ -265,7 +324,7 @@ class RenewedWorld:
 
     def job_renewals(self) -> list[dict[str, Any]]:
         with psycopg.connect(
-            **self.service.config.connection_kwargs("postgres"), row_factory=dict_row
+            **self.gate.db_kwargs, autocommit=True, row_factory=dict_row
         ) as conn:
             return conn.execute(
                 "SELECT * FROM omp_jobs.operations WHERE workspace_id=%s AND kind='job_renew' ORDER BY created_at",
@@ -274,11 +333,11 @@ class RenewedWorld:
 
     def job_row(self, job_id: str | None = None) -> dict[str, Any] | None:
         """Current job row: proves the final lease ownership and fence after exit."""
-        jid = job_id or (self.grants[0]["payload"]["job_id"] if self.grants else None)
+        jid = job_id or self.gate.job_id
         if jid is None:
             return None
         with psycopg.connect(
-            **self.service.config.connection_kwargs("postgres"), row_factory=dict_row
+            **self.gate.db_kwargs, autocommit=True, row_factory=dict_row
         ) as conn:
             return conn.execute(
                 "SELECT * FROM omp_jobs.jobs WHERE workspace_id=%s AND job_id=%s",
@@ -319,46 +378,12 @@ def renewed_world(service: Any, tmp_path: Path, monkeypatch: Any, binary: Any):
     data["token"] = CONTROL_TOKEN
     capability.write_text(json.dumps(data), encoding="utf-8")
     capability.chmod(0o600)
-    for name in ("gemini-key", "ollama-key"):
-        key = service.config.credentials_dir / name
-        key.write_text(PROVIDER_KEY, encoding="utf-8")
-        key.chmod(0o600)
+    key = service.config.credentials_dir / "gemini-key"
+    key.write_text(PROVIDER_KEY, encoding="utf-8")
+    key.chmod(0o600)
 
     db_kwargs = service.config.connection_kwargs("postgres")
     gate = RenewalGate(db_kwargs)
-
-    registered_grants: list[dict[str, Any]] = []
-    real_register = model_proxy_client.register
-
-    def spy_register(
-        cap_path: Any, base_url: str, payload: dict[str, Any], **kwargs: Any
-    ) -> dict[str, Any]:
-        gate.record_grant(payload)
-        result = real_register(cap_path, base_url, payload, **kwargs)
-        registered_grants.append(
-            {
-                "id": result["id"],
-                "model_token": result["model_token"],
-                "descriptor": result["descriptor"],
-                "expires_at": payload["expires_at"],
-                "payload": payload,
-                "grant": result,
-            }
-        )
-        return result
-
-    revoked_tasks: list[tuple[str, str]] = []
-    real_revoke_task = model_proxy_client.revoke_task
-
-    def spy_revoke_task(
-        cap_path: Any, base_url: str, task_id: str, **kwargs: Any
-    ) -> Any:
-        revoked_tasks.append((base_url.rstrip("/"), task_id))
-        gate.stop.set()
-        return real_revoke_task(cap_path, base_url, task_id, **kwargs)
-
-    monkeypatch.setattr(model_proxy_client, "register", spy_register)
-    monkeypatch.setattr(model_proxy_client, "revoke_task", spy_revoke_task)
 
     manifests: list[dict[str, Any]] = []
     real_sandbox = worker_sandbox.run_sandboxed
@@ -389,8 +414,8 @@ def renewed_world(service: Any, tmp_path: Path, monkeypatch: Any, binary: Any):
             capability,
             {
                 "gemini_flash": gemini_route(model="gemini-3.8-flash-high"),
-                "ollama_cloud": ollama_route(model="deepseek-v4.1-flash:cloud"),
             },
+            overflow="queue",
         )
         base_app = create_app(config, transport=transport)
         held_app = HoldFirstProxyResponse(base_app, gate)
@@ -434,8 +459,7 @@ def renewed_world(service: Any, tmp_path: Path, monkeypatch: Any, binary: Any):
                 gate=gate,
                 proxy_url=proxy_url,
                 work_url=work_url,
-                grants=registered_grants,
-                revocations=revoked_tasks,
+                proxy=held_app,
                 manifests=manifests,
                 calls=calls,
                 provider_entered=entered,
@@ -464,7 +488,11 @@ def test_renewed_model_authority(renewed_world: RenewedWorld):
 
     # 2. Fixed token/route/candidate/scopes/USD and token ceilings/output cap
     assert len(state.grants) == 1
-    grant = state.grants[0]
+    grant_http = state.grants[0]
+    assert grant_http.status == 200
+    assert dict(grant_http.headers)[b"authorization"] == f"Bearer {CONTROL_TOKEN}".encode()
+    grant = json.loads(grant_http.response_body)
+    grant_payload = json.loads(grant_http.request_body)
     model_token = grant["model_token"]
     assert model_token and isinstance(model_token, str)
 
@@ -491,7 +519,7 @@ def test_renewed_model_authority(renewed_world: RenewedWorld):
     assert task_cap["expires_at"] == manifest["task_deadline"]
 
     # Fixed USD ceiling
-    assert Decimal(grant["payload"]["ceiling_usd"]) == Decimal("2.00")
+    assert Decimal(grant_payload["ceiling_usd"]) == Decimal("2.00")
 
     # Fixed token ceiling and concrete output/context caps: independent expected
     # limits, not the descriptor the fixture produced, and the caps actually sent
@@ -500,6 +528,21 @@ def test_renewed_model_authority(renewed_world: RenewedWorld):
     assert state.world.request.scope.budget_policy.tokens == 200_000
     assert manifest["model"]["limits"]["context_window"] == _EXPECTED_CONTEXT_TOKENS
     assert manifest["model"]["limits"]["max_output_tokens"] == _EXPECTED_MAX_OUTPUT_TOKENS
+    # Raw worker wire requests retain scoped credentials and tool results; the
+    # upstream log alone cannot prove what the worker sent before normalization.
+    assert len(state.worker_requests) == 2
+    for request in state.worker_requests:
+        assert request.status == 200
+        assert request.path.endswith("/models/gemini-3.8-flash-high:streamGenerateContent")
+        assert request.query == b"alt=sse"
+        assert dict(request.headers)[b"x-goog-api-key"] == model_token.encode()
+        assert b"data: " in request.response_body
+    second_body = json.loads(state.worker_requests[1].request_body)
+    assert any(
+        part.get("functionResponse", {}).get("name") == "write"
+        for row in second_body["contents"]
+        for part in row.get("parts", [])
+    )
     provider_calls = state.calls
     assert len(provider_calls) == 2
     for path, body, _headers, _held, _at in provider_calls:
@@ -540,7 +583,7 @@ def test_renewed_model_authority(renewed_world: RenewedWorld):
         job = renewal["result"]["job"]
         assert job["worker_id"] == state.gate.worker_id
         assert job["fence"] == state.gate.fence
-        assert job["job_id"] == str(grant["payload"]["job_id"])
+        assert job["job_id"] == str(grant_payload["job_id"])
 
     # 4. Exactly-once charges: one measured usage event/spend record/receipt per
     # consumed call, correlated by settlement identity and priced against the
@@ -617,7 +660,13 @@ def test_renewed_model_authority(renewed_world: RenewedWorld):
     # 5. One grant and final revocation
     assert len(state.grants) == 1
     assert len(state.revocations) == 1
-    assert state.revocations[0] == (state.proxy_url.rstrip("/"), grant["id"])
+    revoke_http = state.revocations[0]
+    assert revoke_http.path == f"/tasks/{grant['id']}"
+    assert revoke_http.status == 200
+    assert dict(revoke_http.headers)[b"authorization"] == f"Bearer {CONTROL_TOKEN}".encode()
+    revocation = json.loads(revoke_http.response_body)
+    assert revocation["refused"] is False
+    assert Decimal(revocation["spent_usd"]) == _TOTAL_USD
 
     # The job settled terminal for the same worker and fence that renewed it.
     job_row = state.job_row()
