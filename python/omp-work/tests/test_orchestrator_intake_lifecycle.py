@@ -69,10 +69,10 @@ def _retry_pause(view):
     return next(step for step in view["steps"] if step.get("rule_id") == "retry-bound")
 
 
-def _grant_outcomes(world):
+def _stage_effects(world):
     return [
         step for step in _steps(world)
-        if step.get("stage") == "grant" and step.get("kind") == "outcome"
+        if step.get("kind") in {"dispatch", "outcome"}
     ]
 
 
@@ -179,6 +179,7 @@ def test_authorized_abandon_while_held_leaves_no_stage_effect(service, tmp_path,
     advance_revision(world.store, **_scope(world))
     held = _binding(world)
     assert (held.binding_id, held.state) == (admitted.binding_id, "held")
+    stage_effects = _stage_effects(world)
 
     decision_id = _authorized_abandon(service, tmp_path, world)
     request_terminal(world.config, world.mission_id, "abandon", basis=str(decision_id))
@@ -187,7 +188,7 @@ def test_authorized_abandon_while_held_leaves_no_stage_effect(service, tmp_path,
     tick_until(worker, world, lambda view: view["status"] == "abandoned", limit=20)
 
     assert any(step.get("rule_id") == "terminal-with-basis" for step in _steps(world))
-    assert _grant_outcomes(world) == []
+    assert _stage_effects(world) == stage_effects
     released = _binding(world)
     assert (released.binding_id, released.state) == (admitted.binding_id, "held")
     _no_grant(world)
