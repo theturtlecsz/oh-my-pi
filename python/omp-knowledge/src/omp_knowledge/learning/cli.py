@@ -51,6 +51,13 @@ def _build_parser() -> argparse.ArgumentParser:
         )
         sub.add_argument("--json", action="store_true")
 
+    sweep_parser = subcommands.add_parser("sweep")
+    sweep_parser.add_argument("--state-dir", required=True)
+    sweep_parser.add_argument("--work-url", required=True)
+    sweep_parser.add_argument("--workspace", required=True)
+    sweep_parser.add_argument("--bearer-file", required=True)
+    sweep_parser.add_argument("--json", action="store_true")
+
     supply_parser = subcommands.add_parser("supply")
     supply_parser.add_argument("--state-dir", required=True)
     supply_parser.add_argument("--workspace", required=True)
@@ -215,13 +222,46 @@ def main(
 
     active_generator = generator
     try:
+        if args.command == "sweep":
+            from .lifecycle import sweep, workspace_has_resolvable_lessons
+
+            # Open a client only when a lesson in this workspace must be read
+            # and the caller did not inject that reader. An empty store, or a
+            # lesson whose source is not an identity, must not touch the bearer.
+            needs_client = receipts is None or records is None
+            if needs_client and workspace_has_resolvable_lessons(
+                active_store, args.workspace
+            ):
+                if client is None:
+                    client = WorkClient(
+                        args.work_url,
+                        UUID(str(args.workspace)),
+                        Path(args.bearer_file),
+                    )
+                receipts = receipts or client
+                records = records or client
+            suspended = sweep(active_store, receipts, records, args.workspace)
+            payload = {"suspended": suspended}
+            if args.json:
+                print(json.dumps(payload, indent=2, sort_keys=True))
+            else:
+                print(f"suspended={len(suspended)}")
+                for procedure_id in suspended:
+                    print(f"  {procedure_id}")
+            return EXIT_OK
+
         if args.command in ("drain", "retry"):
-            if events is None or receipts is None:
-                client = WorkClient(
-                    args.work_url,
-                    UUID(str(args.workspace)),
-                    Path(args.bearer_file),
-                )
+            # Drain needs events. Retry does not. Records stay optional: a
+            # caller that injects events and receipts and no records seam must
+            # not open a bearer file that the test never created.
+            needs_events = args.command == "drain" and events is None
+            if needs_events or receipts is None:
+                if client is None:
+                    client = WorkClient(
+                        args.work_url,
+                        UUID(str(args.workspace)),
+                        Path(args.bearer_file),
+                    )
                 events = events or client
                 receipts = receipts or client
 
@@ -241,7 +281,13 @@ def main(
                     records=records if records is not None else client,
                 )
             else:
-                record = retry(active_store, receipts, active_generator)
+                record = retry(
+                    active_store,
+                    receipts,
+                    active_generator,
+                    records=records if records is not None else client,
+                    workspace_id=args.workspace,
+                )
 
             payload = _run_payload(record)
             if args.json:

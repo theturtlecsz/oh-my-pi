@@ -1090,8 +1090,20 @@ class OrchestratorHandler:
             self._worker.cancel_requested.set()
         return Settlement(outcome="failed", receipts=[])
 
+    def _sweep_lessons(self) -> None:
+        """Suspend unsupported lessons before dispatch, replay, or wait.
+
+        Imported inside the method: lesson_context imports StageContext from this
+        module. The sweep uses the same learning state directory as compilation
+        and does not require the workflow to have a candidate.
+        """
+        from omp_work.orchestrator.lesson_context import sweep_lessons
+
+        sweep_lessons(self.config)
+
     def run(self, ctx: Any, job: dict[str, Any]) -> Settlement:
         self._begin(ctx, job)
+        self._sweep_lessons()
         try:
             return self._dispatch(job, recovering=False)
         except LeaseLost as error:
@@ -1099,6 +1111,7 @@ class OrchestratorHandler:
 
     def observe(self, ctx: Any, job: dict[str, Any]) -> Settlement | None:
         self._begin(ctx, job)
+        self._sweep_lessons()
         try:
             return self._observe(job)
         except LeaseLost as error:

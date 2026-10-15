@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS proposals (
 CREATE TABLE IF NOT EXISTS procedures (
     procedure_id TEXT PRIMARY KEY,
     fingerprint TEXT NOT NULL UNIQUE,
-    status TEXT NOT NULL CHECK(status IN ('active', 'withdrawn')),
+    status TEXT NOT NULL CHECK(status IN ('active', 'withdrawn', 'suspended')),
     current_version INTEGER NOT NULL DEFAULT 1,
     title TEXT NOT NULL,
     created_at TEXT NOT NULL,
@@ -211,6 +211,53 @@ class LearningStore:
             self._conn.execute(
                 "ALTER TABLE cleanup_queue ADD COLUMN last_error TEXT"
             )
+        self._migrate_procedure_status()
+
+    def _migrate_procedure_status(self) -> None:
+        """Rebuild procedures so status may be suspended.
+
+        SQLite cannot alter a CHECK constraint. The rebuild is one immediate
+        transaction: rename, create, copy every existing row, drop the old
+        table. ``executescript`` would commit mid-rebuild, so each statement
+        is its own ``execute``.
+        """
+        row = self._conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'procedures'"
+        ).fetchone()
+        if row is None or not row["sql"] or "suspended" in str(row["sql"]):
+            return
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            self._conn.execute("ALTER TABLE procedures RENAME TO procedures_old")
+            self._conn.execute(
+                """
+                CREATE TABLE procedures (
+                    procedure_id TEXT PRIMARY KEY,
+                    fingerprint TEXT NOT NULL UNIQUE,
+                    status TEXT NOT NULL CHECK(status IN ('active', 'withdrawn', 'suspended')),
+                    current_version INTEGER NOT NULL DEFAULT 1,
+                    title TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            self._conn.execute(
+                """
+                INSERT INTO procedures (
+                    procedure_id, fingerprint, status, current_version, title,
+                    created_at, updated_at
+                )
+                SELECT procedure_id, fingerprint, status, current_version, title,
+                       created_at, updated_at
+                FROM procedures_old
+                """
+            )
+            self._conn.execute("DROP TABLE procedures_old")
+            self._conn.execute("COMMIT")
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
 
     @contextmanager
     def transaction(self) -> Generator[sqlite3.Connection, None, None]:

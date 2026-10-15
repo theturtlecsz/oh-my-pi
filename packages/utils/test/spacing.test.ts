@@ -3,7 +3,6 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils/dirs";
-import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
 import { getEditorConfigFormatting } from "@oh-my-pi/pi-utils/tab-spacing";
 
 describe("getEditorConfigFormatting", () => {
@@ -12,8 +11,7 @@ describe("getEditorConfigFormatting", () => {
 
 	beforeEach(async () => {
 		previousProjectDir = getProjectDir();
-		tempDir = path.join(os.tmpdir(), "pi-utils-editorconfig-formatting", Snowflake.next());
-		await fs.mkdir(tempDir, { recursive: true });
+		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-utils-editorconfig-formatting-"));
 		setProjectDir(tempDir);
 	});
 

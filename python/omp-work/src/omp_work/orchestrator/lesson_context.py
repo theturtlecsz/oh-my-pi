@@ -107,6 +107,40 @@ def record_delivery(ctx: StageContext, compiled: dict[str, Any], output: str | b
     data["prompt_hash"] = prompt_hash
 
 
+def sweep_lessons(config: Any) -> None:
+    """Sweep active lessons before a service cycle, whether or not a candidate exists.
+
+    Learning that is not configured is a no-op. A non-zero sweep command or a
+    failure to start it raises ``lesson_sweep_failed`` and does not change lesson
+    status itself; the learning command decides which lessons suspend.
+    """
+    if not config.learning_command or config.learning_state_dir is None:
+        return
+    argv = [
+        *config.learning_command,
+        "sweep",
+        "--state-dir",
+        str(config.learning_state_dir),
+        "--work-url",
+        str(config.workservice_url),
+        "--workspace",
+        str(config.workspace_id),
+        "--bearer-file",
+        str(config.learning_bearer_file),
+    ]
+    try:
+        result = subprocess.run(  # nosec B603 - argv list, no shell; command comes from operator config
+            argv, capture_output=True, text=True, check=False,
+        )
+    except OSError as error:
+        raise WorkError("lesson_sweep_failed") from error
+    if result.returncode != 0:
+        raise WorkError(
+            "lesson_sweep_failed",
+            diagnostics=(result.stderr.strip()[-500:], result.stdout.strip()[-200:]),
+        )
+
+
 def compile_context(ctx: StageContext, worktree: Path, work_key: str) -> tuple[str, dict[str, Any]] | None:
     """Return the workflow candidate and complete compiler result, when configured."""
     if not ctx.config.context_command:

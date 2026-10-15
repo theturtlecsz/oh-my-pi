@@ -18,6 +18,7 @@ block.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 from uuid import UUID
@@ -25,16 +26,25 @@ from uuid import UUID
 import httpx
 from omp_work.v1.api_models import ResearchView, WorkflowView, WorkItemsPage
 from omp_work.v1.canonical import canonical_json
-from omp_work.v1.models import ResearchDeliverableBinding
+from omp_work.v1.models import Candidate, EvidenceReceipt, ResearchDeliverableBinding
 from omp_work.v1.service import WorkError
+from pydantic import ValidationError
 
 __all__ = [
     "MAX_KEY_SCAN",
     "NativeRecords",
     "NativeResearchRecords",
+    "ReceiptMalformed",
+    "ReceiptMissing",
+    "ResolvedSource",
+    "WorkflowMalformed",
+    "WorkflowMissing",
     "bounded_capture_records",
     "bounded_work_record",
+    "evidence_is_fresh",
     "research_record_block",
+    "resolve_cited_receipt",
+    "resolve_source_workflow",
     "resolve_work_key",
     "work_record_block",
 ]
@@ -373,6 +383,227 @@ def bounded_work_record(
         return _read_workflow(records, key)
     except (WorkError, httpx.HTTPError):
         return None
+
+
+class ReceiptMissing(LookupError):
+    """A cited receipt is definitively absent (no row, unknown id, or 404)."""
+
+
+class ReceiptMalformed(ValueError):
+    """A cited id resolved to something that is not an evidence receipt."""
+
+
+class WorkflowMalformed(ValueError):
+    """The source workflow payload is not a workflow view or a workflow mapping."""
+
+
+class WorkflowMissing(LookupError):
+    """The source alias resolved, and the workflow itself is definitively gone."""
+
+
+@dataclass(frozen=True)
+class ResolvedSource:
+    """Revision and candidate identity read from a workflow projection.
+
+    A complete view also carries the candidate model, including its hash and
+    commit. A mapping that only names the ids still identifies the source; it
+    cannot prove a receipt that recorded a hash.
+    """
+
+    work_id: str | None
+    revision_id: str | None
+    candidate_id: str | None
+    candidate: Candidate | None
+
+
+def _is_permission(error: WorkError) -> bool:
+    return error.status in {401, 403} or error.code == "forbidden"
+
+
+def _is_definitive_absence(error: WorkError) -> bool:
+    """A missing row. The service reports an unknown receipt as invalid_request/400."""
+    if _is_permission(error):
+        return False
+    return error.status == 404 or error.code in {"not_found", "invalid_request"}
+
+
+def _same_id(left: object, right: object) -> bool:
+    if left is None or right is None:
+        return False
+    return str(left) == str(right)
+
+
+def _text_id(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def evidence_is_fresh(
+    receipt: EvidenceReceipt,
+    candidate: Candidate | None,
+    revision_id: UUID | str,
+    *,
+    work_id: UUID | str | None = None,
+    candidate_id: UUID | str | None = None,
+) -> bool:
+    """Whether a cited receipt still supports this candidate and revision.
+
+    Lessons admitted from receipts that never recorded a candidate hash or
+    commit stay fresh when the work, revision, and candidate ids still match.
+    The work-service check also requires the hash and commit, which those
+    receipts do not carry. A receipt that does record either value is fresh
+    only when that check passes against a complete candidate.
+    """
+    revision = revision_id if isinstance(revision_id, UUID) else UUID(str(revision_id))
+    if receipt.candidate_sha256 is None and receipt.candidate_commit is None:
+        bound_work = work_id if work_id is not None else (
+            None if candidate is None else candidate.work_id
+        )
+        bound_candidate = candidate_id if candidate_id is not None else (
+            None if candidate is None else candidate.candidate_id
+        )
+        return (
+            _same_id(receipt.work_id, bound_work)
+            and _same_id(receipt.revision_id, revision)
+            and _same_id(receipt.candidate_id, bound_candidate)
+        )
+    if candidate is None:
+        return False
+    from omp_work.v1.semantics import evidence_is_fresh as candidate_fresh
+
+    return candidate_fresh(receipt, candidate, revision)
+
+
+def _resolved_from_view(view: WorkflowView) -> ResolvedSource:
+    candidate = view.item.candidate
+    return ResolvedSource(
+        work_id=str(view.item.work_id),
+        revision_id=str(view.item.revision.revision_id),
+        candidate_id=None if candidate is None else str(candidate.candidate_id),
+        candidate=candidate,
+    )
+
+
+def _resolved_from_mapping(raw: Mapping[str, Any]) -> ResolvedSource:
+    """Read source identity from a workflow view or the mapping capture already accepts.
+
+    Test doubles often return the bounded fields (work, revision, candidate ids)
+    without the rest of a workflow view. That mapping is still the source.
+    A payload with no item mapping is malformed.
+    """
+    try:
+        return _resolved_from_view(WorkflowView.model_validate(raw))
+    except ValidationError:
+        pass
+    item = raw.get("item")
+    if not isinstance(item, Mapping):
+        raise WorkflowMalformed("workflow item missing")
+    revision = item.get("revision")
+    revision_id = _text_id(revision.get("revision_id")) if isinstance(revision, Mapping) else None
+    candidate_raw = item.get("candidate")
+    candidate_model: Candidate | None = None
+    candidate_id: str | None = None
+    if isinstance(candidate_raw, Candidate):
+        candidate_model = candidate_raw
+        candidate_id = str(candidate_raw.candidate_id)
+    elif isinstance(candidate_raw, Mapping):
+        candidate_id = _text_id(candidate_raw.get("candidate_id"))
+        try:
+            candidate_model = Candidate.model_validate(candidate_raw)
+        except ValidationError:
+            candidate_model = None
+        else:
+            candidate_id = str(candidate_model.candidate_id)
+    elif candidate_raw is not None:
+        raise WorkflowMalformed("workflow candidate")
+    work_id = _text_id(item.get("work_id"))
+    if work_id is None and candidate_model is not None:
+        work_id = str(candidate_model.work_id)
+    return ResolvedSource(
+        work_id=work_id,
+        revision_id=revision_id,
+        candidate_id=candidate_id,
+        candidate=candidate_model,
+    )
+
+
+def resolve_cited_receipt(receipts: Any, receipt_id: str | UUID) -> EvidenceReceipt:
+    """Resolve one cited receipt.
+
+    ``None``, ``KeyError``, HTTP 404, and the service's ``invalid_request`` for
+    a missing row become :class:`ReceiptMissing`. A payload that is not an
+    :class:`EvidenceReceipt` becomes :class:`ReceiptMalformed`. Transport errors
+    and permission failures propagate.
+    """
+    try:
+        raw = receipts.receipt(receipt_id)
+    except KeyError as error:
+        raise ReceiptMissing(str(receipt_id)) from error
+    except WorkError as error:
+        if _is_permission(error):
+            raise
+        if _is_definitive_absence(error):
+            raise ReceiptMissing(str(receipt_id)) from error
+        raise
+    if raw is None:
+        raise ReceiptMissing(str(receipt_id))
+    if isinstance(raw, EvidenceReceipt):
+        return raw
+    try:
+        return EvidenceReceipt.model_validate(raw)
+    except ValidationError as error:
+        raise ReceiptMalformed(str(receipt_id)) from error
+
+
+def resolve_source_workflow(
+    records: NativeRecords, source: Any
+) -> ResolvedSource | None:
+    """The source identity for a lesson.
+
+    ``None`` means this records seam did not resolve the work id. A reader that
+    only lists the item it is capturing leaves other lessons unresolved; that
+    is not evidence the candidate is gone. Once the alias is resolved, a
+    missing workflow (``None``, ``KeyError``, 404, or ``invalid_request``)
+    raises :class:`WorkflowMissing`. Transport errors and permission failures
+    propagate. A payload that is neither a workflow view nor a workflow
+    mapping raises :class:`WorkflowMalformed`. A mapping that names the
+    revision and candidate is the source even when the rest of the view is
+    absent.
+    """
+    work_id = getattr(source, "work_id", None)
+    if not isinstance(work_id, str) or not work_id.strip():
+        return None
+    try:
+        key = resolve_work_key(records, work_id)
+    except KeyError:
+        return None
+    except WorkError as error:
+        if _is_permission(error):
+            raise
+        if _is_definitive_absence(error):
+            return None
+        raise
+    if key is None:
+        return None
+    try:
+        raw = records.workflow(key)
+    except KeyError as error:
+        raise WorkflowMissing(work_id) from error
+    except WorkError as error:
+        if _is_permission(error):
+            raise
+        if _is_definitive_absence(error):
+            raise WorkflowMissing(work_id) from error
+        raise
+    if raw is None:
+        raise WorkflowMissing(work_id)
+    if isinstance(raw, WorkflowView):
+        return _resolved_from_view(raw)
+    if isinstance(raw, Mapping):
+        return _resolved_from_mapping(raw)
+    raise WorkflowMalformed(work_id)
 
 
 def bounded_capture_records(

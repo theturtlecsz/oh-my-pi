@@ -40,8 +40,9 @@ Ledger OMP-615 r3, Chris, 2026-10-13:
 The governing policy records this schedule under `review.schedule`, with
 `review.task_set_digest`, `review.last_review` (date/outcome) and per-recipe
 status in `review.recipes`. Current last review: 2026-10-14, `baseline_retained`
-(Chris decision 5); no live qualification is claimed. No scheduler or live
-provider runner is installed by this policy.
+(Chris decision 5); no live qualification is claimed. The daily check is
+installed and read as described under
+[Daily offerings check](#daily-offerings-check).
 
 Current grandfathered recipes (stages, tiers, alternate, every reviewer identity
 with suffix, and concrete test-verified lane/role bindings) are frozen in
@@ -50,6 +51,152 @@ pinned by SHA256 in `routing/model_review.py`. `check_policy_review(policy)`
 accepts a `baseline` entry only for the exact frozen recipe; any addition or
 change needs a dated `qualified` entry whose outputs are re-graded with
 `qualify`. Bindings without a resolved wire or verified caller stay `pending`.
+
+## Daily offerings check
+
+The owner schedule's daily check is installed as a systemd user timer; the
+policy installs no live provider runner of its own. From a checkout:
+
+```sh
+omp-work offerings install-timer --sources "$HOME/offerings/offerings-sources.json"
+systemctl --user daemon-reload
+systemctl --user enable --now omp-offerings-check.timer
+```
+
+`install-timer` takes `--sources` (required), `--record-dir`, `--omp` and
+`--systemd-dir`; they default, in order, to the sources file the line names,
+`default_record_dir()`, the `omp` on `PATH`, and `default_systemd_dir()`
+(`$XDG_CONFIG_HOME/systemd/user`, else `~/.config/systemd/user`). A relative
+path in the sources file — the notices capture, or any `listing-file` lane — is
+refused before anything is written, as a missing or malformed sources file and
+an unfindable `omp` are. The two units are `omp-offerings-check.service` and
+`omp-offerings-check.timer`: the service runs the CLI with no working directory
+(so every path is absolute), `Type=oneshot`, `UMask=0077` and
+`SuccessExitStatus=3`, and the timer is `OnCalendar=daily` with
+`Persistent=true`. The command prints exactly the two `systemctl --user` lines
+above and activates nothing; the owner enables the timer.
+
+Records land directly in `--record-dir`, else directly in
+`default_record_dir()` (`$XDG_STATE_HOME/omp/work-ledger/offerings`, else
+`~/.local/state/omp/work-ledger/offerings`) — no per-run subfolder. Each run
+appends one `evaluation-<created_ns>-<uuid4>.json`, plus an
+`owner-report-<same stem>.json` alongside it whenever any finding is
+`urgent_review` or `check_gap`. Exit `0`: nothing actionable. Exit `3`: an owner
+report was written, which `SuccessExitStatus=3` keeps healthy for the unit.
+Exit `2`: an input error — one diagnostic line on stderr, empty stdout, no
+record written, and the unit fails. The run's stdout JSON
+(`{evaluation, owner_report, counts}`) is what
+`journalctl --user -u omp-offerings-check.service` shows. Every record keeps the
+last successful listing per lane, so a current gap never erases a prior
+snapshot.
+
+Daily, the owner inspects the unit status and the newest owner report. An
+`urgent_review` finding is reviewed immediately, against the Written rubric
+below and the existing `review.last_review` integration. A
+`pending_qualification` finding lives only in the evaluation records and waits
+for the weekly qualification on the fixed task set. A `check_gap` finding means
+the named capture inputs must be repaired.
+
+The `--sources` file is `offerings-sources.v1`. `version` is that literal.
+`notices` is the absolute path of the notices capture. Each entry in `lanes`
+is one lane: `kind` is `omp-cli` or `listing-file`, `catalog_provider` is
+unique across the map, and `path` is set only on a `listing-file` lane, where
+it is absolute. Declare one lane for every provider in use. This shape uses
+one lane of each kind:
+
+```json
+{
+  "version": "offerings-sources.v1",
+  "notices": "/home/owner/offerings/offerings-notices.json",
+  "lanes": {
+    "gemini_flash": {
+      "kind": "omp-cli",
+      "catalog_provider": "gemini_flash"
+    },
+    "kimi": {
+      "kind": "listing-file",
+      "catalog_provider": "kimi",
+      "path": "/home/owner/offerings/listing-kimi.json"
+    }
+  }
+}
+```
+
+A listing is a `models` array. On every row, `provider` equals that lane's
+`catalog_provider` and `id` is unique in the array. `name` is a non-empty
+string. `contextWindow` and `maxTokens` are each an integer or null.
+`reasoning` is a boolean. `thinking` is an array of strings or null. `input`
+is an array drawn from `text` and `image`. `cost` is an object.
+
+An `omp-cli` listing is the stdout of `omp models refresh <provider> --json --no-extensions`,
+the command the check runs for that lane. No CLI flag stamps the current time.
+The proof is `discovery.<catalog_provider>`: `provider` equals the catalog
+provider, `status` is `ok`, `stale` is false, `source` is `provider`, and
+`fetchedAt` is epoch milliseconds from `omp`. Shape example for the
+`gemini_flash` lane:
+
+```json
+{
+  "models": [
+    {
+      "provider": "gemini_flash",
+      "id": "gemini-3.8-flash-high",
+      "name": "Gemini 3.8 Flash",
+      "contextWindow": 1048576,
+      "maxTokens": 65536,
+      "reasoning": true,
+      "thinking": ["low", "high"],
+      "input": ["text", "image"],
+      "cost": {}
+    }
+  ],
+  "discovery": {
+    "gemini_flash": {
+      "provider": "gemini_flash",
+      "status": "ok",
+      "stale": false,
+      "source": "provider",
+      "fetchedAt": 1791979200000
+    }
+  }
+}
+```
+
+A `listing-file` listing is the file at that lane's `path`. The owner refreshes
+every `listing-file` capture daily. The timer only reads captures. The proof
+is `retrieval`: `provider` equals the catalog provider, `source` names where
+the listing was taken, `retrieved_at` is an ISO-8601 UTC timestamp from the
+capture, and `success` is true. Shape example for the `kimi` lane:
+
+```json
+{
+  "models": [
+    {
+      "provider": "kimi",
+      "id": "kimi-code/k3-256k",
+      "name": "Kimi K3 256k",
+      "contextWindow": null,
+      "maxTokens": null,
+      "reasoning": true,
+      "thinking": null,
+      "input": ["text"],
+      "cost": {}
+    }
+  ],
+  "retrieval": {
+    "provider": "kimi",
+    "source": "https://capture.example/kimi/models",
+    "retrieved_at": "2026-10-14T12:00:00Z",
+    "success": true
+  }
+}
+```
+
+The lane stays unchecked (`check_gap`) when the proof is absent, foreign,
+`bundled`, `cache`, `models.dev`, or stale, when the listing is empty or
+unreadable, or when `retrieved_at` is over 36h old or future-dated. A CLI
+lane's `fetchedAt` is held to that same age. The check never fabricates a
+time. Times come only from the capture or from `omp`.
 
 ## Written rubric
 

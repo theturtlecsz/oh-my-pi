@@ -18,6 +18,7 @@ from .generation import (
 from .models import Attribution, RunStatus, SourceIdentity, StrictModel, UnitState
 from .policy import NativeReceipts
 from .proposals import create_proposal
+from .lifecycle import sweep
 from .record import (
     NativeRecords,
     bounded_capture_records,
@@ -66,6 +67,48 @@ class RunRecord(StrictModel):
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class _MemoRecords:
+    """Reuse successful work-item and workflow reads for the rest of one drain.
+
+    The sweep that follows admission resolves the same keys the queue just
+    read. Capture tests assert the exact read list of that queue, so a second
+    live call would fail them. Failures are not cached: a transport error must
+    still surface on a later call. ``research`` is exposed only when the inner
+    seam has it, because a records double without ``research`` must stay that way.
+    """
+
+    def __init__(self, inner: NativeRecords) -> None:
+        self._inner = inner
+        self._pages: dict[tuple[Any, Any], Any] = {}
+        self._workflows: dict[str, Any] = {}
+        self._research_pages: dict[str, Any] = {}
+        research = getattr(inner, "research", None)
+        if callable(research):
+            self._research_fn = research
+            self.research = self._research
+
+    def work_items(
+        self,
+        *,
+        after: tuple[datetime, UUID] | None = None,
+        limit: int | None = None,
+    ) -> Any:
+        key = (after, limit)
+        if key not in self._pages:
+            self._pages[key] = self._inner.work_items(after=after, limit=limit)
+        return self._pages[key]
+
+    def workflow(self, key: str) -> Any:
+        if key not in self._workflows:
+            self._workflows[key] = self._inner.workflow(key)
+        return self._workflows[key]
+
+    def _research(self, key: str) -> Any:
+        if key not in self._research_pages:
+            self._research_pages[key] = self._research_fn(key)
+        return self._research_pages[key]
 
 
 def generator_attribution(generator: LessonGenerator) -> tuple[str, str]:
@@ -684,15 +727,18 @@ def drain(
     execution and research records before generation. The unit source copies
     work_id, candidate_id, and revision_id from that stored trace.
     ``_process_units`` sets those ids again from the trace, including on retry,
-    which does not read records.
+    which does not read records. After admissions, including a drain that queued
+    nothing, every active lesson in the workspace is swept. Reads already made
+    for this drain are reused so the sweep does not issue a second live call.
     """
     workspace = str(workspace_id)
     started_at = _utcnow().isoformat()
     model, profile = generator_attribution(generator)
+    memo = _MemoRecords(records) if records is not None else None
 
     after = _read_cursor(store, workspace)
     page = events.events(after, limit)
-    _queue_events(store, workspace, page, capture_types, model, profile, records)
+    _queue_events(store, workspace, page, capture_types, model, profile, memo)
     dropped = _drop_expired_units(store, workspace, _utcnow())
 
     rows = _queued_rows(store, workspace)
@@ -700,7 +746,7 @@ def drain(
         store, receipts, generator, rows, lease_seconds=lease_seconds
     )
     dropped.extend(processed)
-    return _finalize_run(
+    record = _finalize_run(
         store,
         workspace_id=workspace,
         started_at=started_at,
@@ -708,6 +754,8 @@ def drain(
         proposals_accepted=accepted,
         proposals_rejected=rejected,
     )
+    sweep(store, receipts, memo, workspace)
+    return record
 
 
 def retry(
@@ -716,8 +764,16 @@ def retry(
     generator: LessonGenerator,
     *,
     unit_ids: Sequence[str | UUID] | None = None,
+    records: NativeRecords | None = None,
+    workspace_id: str | UUID | None = None,
 ) -> RunRecord:
-    """Requeue failed retryable units and process them with the recovered generator."""
+    """Requeue failed retryable units and process them with the recovered generator.
+
+    After admissions, including a retry that requeued nothing, active lessons in
+    the workspace are swept. ``records`` defaults to ``None``: a retry that does
+    not receive a records seam does not re-read the workflow. Pass ``workspace_id``
+    to sweep that workspace even when no unit was requeued.
+    """
     started_at = _utcnow().isoformat()
     generator_attribution(generator)
 
@@ -748,7 +804,12 @@ def retry(
                 ).fetchall()
             )
 
-    workspace_id = str(candidates[0]["workspace_id"]) if candidates else ""
+    if workspace_id is not None:
+        workspace = str(workspace_id)
+    elif candidates:
+        workspace = str(candidates[0]["workspace_id"])
+    else:
+        workspace = ""
     now = _utcnow().isoformat()
     requeued_ids: list[str] = []
     with store.transaction() as conn:
@@ -765,22 +826,25 @@ def retry(
             if cursor.rowcount:
                 requeued_ids.append(unit_id)
 
-    rows = _queued_rows(store, workspace_id, requeued_ids)
-    records, accepted, rejected = _process_units(
+    rows = _queued_rows(store, workspace, requeued_ids)
+    processed, accepted, rejected = _process_units(
         store,
         receipts,
         generator,
         rows,
         lease_seconds=DEFAULT_LEASE_SECONDS,
     )
-    return _finalize_run(
+    record = _finalize_run(
         store,
-        workspace_id=workspace_id,
+        workspace_id=workspace,
         started_at=started_at,
-        records=records,
+        records=processed,
         proposals_accepted=accepted,
         proposals_rejected=rejected,
     )
+    if workspace:
+        sweep(store, receipts, records, workspace)
+    return record
 
 
 __all__ = [
