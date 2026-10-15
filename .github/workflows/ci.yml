@@ -301,6 +301,15 @@ jobs:
            run: |
               bun test scripts/check-test-external-reads.test.ts
               bun scripts/check-test-external-reads.ts
+         # OMP-616: a test writing into a fixed-name root directly under the
+         # shared tmpdir collides with a same-named unwritable directory another
+         # job left behind, so the suite fails only on a dirty machine. Guard
+         # rejects new fixed-name temp roots and reproduces the blocked-root
+         # case. Unconditional: the collision hits any event, not just PRs.
+         - name: Guard tests against fixed-name temp roots
+           run: |
+              bun test scripts/check-test-tmp-roots.test.ts
+              bun scripts/check-test-tmp-roots.ts
          - name: Type check workspace
            run: bun run ci:check:full
          - name: Build collab web
