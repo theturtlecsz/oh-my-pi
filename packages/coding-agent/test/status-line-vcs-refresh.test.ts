@@ -755,56 +755,79 @@ describe("StatusLineComponent git watcher survives atomic HEAD renames", () => {
 	// survives the inode swap on every platform.
 	it("keeps firing #onBranchChange across consecutive branch switches", async () => {
 		vi.restoreAllMocks();
-		gitControls.defaultBranch.mockReturnValue(Promise.withResolvers<string | null>().promise);
-		gitControls.statusSummary.mockReturnValue(Promise.withResolvers<GitStatus | null>().promise);
+		const realRepository = vcs.git(repoDir);
+		const repoInfo = vcs.gitInfo(repoDir);
+		if (!realRepository || !repoInfo) throw new Error("test repository not discovered");
+		// restoreAllMocks also restores gitControls' implementations. Use local
+		// pending mocks so unrelated async fetches cannot supply repaint signals.
+		const repository = {
+			headSync: () => realRepository.headSync(),
+			linkedWorktree: () => realRepository.linkedWorktree(),
+			defaultBranch: vi.fn(() => Promise.withResolvers<string | null>().promise),
+			statusSummary: vi.fn(() => Promise.withResolvers<GitStatus | null>().promise),
+		} as unknown as VcsGitRepo;
+		const localRepo = unifiedGit(repository, repoInfo);
+		vi.spyOn(vcs, "git").mockReturnValue(repository);
+		vi.spyOn(vcs, "repo").mockReturnValue(localRepo);
+		vi.spyOn(vcs, "repoForDisplay").mockReturnValue(localRepo);
 		const watchFileSpy = vi.spyOn(nodeFs, "watchFile");
 
 		setProjectDir(repoDir);
 		const component = new StatusLineComponent(makeSession(), statusLineHost);
-		component.updateSettings(gitSegment);
+		try {
+			component.updateSettings(gitSegment);
 
-		// Await the watcher's own #onBranchChange signal rather than a wall-clock
-		// delay. Only resolve once the atomically replaced HEAD is observable.
-		let branchChanged = Promise.withResolvers<void>();
-		let expectedBranch: string | null = null;
-		component.watchBranch(() => {
-			if (expectedBranch && component.getTopBorder(80).content.includes(expectedBranch)) {
-				branchChanged.resolve();
-			}
-		});
-		// Platform-independent pin: the watch must be a stat-poll of the HEAD
-		// *path* (inode-independent), not an fs.watch event subscription.
-		expect(watchFileSpy).toHaveBeenCalledWith(
-			path.join(repoDir, ".git", "HEAD"),
-			expect.objectContaining({ interval: vcs.HEAD_WATCH_INTERVAL_MS }),
-			expect.any(Function),
-		);
-		// Prime the branch cache off the initial HEAD. The status/default mocks
-		// never resolve, so this cold paint cannot fire #onBranchChange itself.
-		component.getTopBorder(80);
+			let callbackCount = 0;
+			let lastBorder = "";
+			component.watchBranch(() => {
+				callbackCount++;
+				lastBorder = component.getTopBorder(80).content;
+			});
+			// Platform-independent pin: the watch must be a stat-poll of the HEAD
+			// *path* (inode-independent), not an fs.watch event subscription.
+			expect(watchFileSpy).toHaveBeenCalledWith(
+				path.join(repoDir, ".git", "HEAD"),
+				expect.objectContaining({ interval: vcs.HEAD_WATCH_INTERVAL_MS }),
+				expect.any(Function),
+			);
+			// Prime the branch cache off the initial HEAD. The status/default mocks
+			// never resolve, so this cold paint cannot fire #onBranchChange itself.
+			component.getTopBorder(80);
 
-		const switchTo = async (branchName: string) => {
-			const gitDir = path.join(repoDir, ".git");
-			const headLock = path.join(gitDir, "HEAD.lock");
-			// Reproduce Git's relevant integration boundary directly: write the
-			// lock, then atomically replace HEAD. Spawning Git adds process startup
-			// but no coverage to the filesystem-watcher regression.
-			await fs.writeFile(headLock, `ref: refs/heads/${branchName}\n`);
-			branchChanged = Promise.withResolvers<void>();
-			expectedBranch = branchName;
-			const fired = branchChanged.promise;
-			await fs.rename(headLock, path.join(gitDir, "HEAD"));
-			await fired;
-			expectedBranch = null;
-		};
+			const headPath = repoInfo.headPath;
+			const initialStat = await fs.stat(headPath);
+			let mtimeSeconds = Math.floor(initialStat.mtimeMs / 1000);
+			const deadline = Date.now() + 10_000;
+			const switchTo = async (branchName: string) => {
+				const gitDir = path.join(repoDir, ".git");
+				const headLock = path.join(gitDir, "HEAD.lock");
+				// Reproduce Git's relevant integration boundary directly: write the
+				// lock, then atomically replace HEAD. Spawning Git adds process startup
+				// but no coverage to the filesystem-watcher regression.
+				await fs.writeFile(headLock, `ref: refs/heads/${branchName}\n`);
+				// Distinct whole-second mtimes survive coarse filesystem stat precision.
+				mtimeSeconds++;
+				await fs.utimes(headLock, mtimeSeconds, mtimeSeconds);
+				const callbacksBeforeRename = callbackCount;
+				await fs.rename(headLock, headPath);
+				do {
+					lastBorder = component.getTopBorder(80).content;
+					if (callbackCount > callbacksBeforeRename && lastBorder.includes(branchName)) return;
+					await Bun.sleep(20);
+				} while (Date.now() < deadline);
+				throw new Error(
+					`Branch ${branchName}: callback delta ${callbackCount - callbacksBeforeRename}; last border ${lastBorder}`,
+				);
+			};
 
-		await switchTo("first");
-		expect(component.getTopBorder(80).content).toContain("first");
+			await switchTo("first");
+			expect(component.getTopBorder(80).content).toContain("first");
 
-		// Regression: the second switch must still reach the display.
-		await switchTo("second");
-		expect(component.getTopBorder(80).content).toContain("second");
-
-		component.dispose();
+			// Regression: the second switch must still reach the display.
+			await switchTo("second");
+			expect(component.getTopBorder(80).content).toContain("second");
+		} finally {
+			component.dispose();
+		}
 	});
 });
