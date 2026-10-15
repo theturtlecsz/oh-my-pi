@@ -424,6 +424,24 @@ def _run_qualification_count() -> int:
     return run_count(config)
 
 
+def _run_offerings_check(args: argparse.Namespace) -> int:
+    """Dispatch offerings check after argparse has accepted the command."""
+    from .routing.offerings_evaluation import OfferingsEvaluationError, run_offerings_check
+
+    try:
+        outcome = run_offerings_check(
+            args.sources,
+            record_dir=args.record_dir,
+            omp=args.omp,
+            max_age_hours=args.max_age_hours,
+        )
+    except OfferingsEvaluationError as error:
+        print(f"offerings check: {error}", file=sys.stderr)
+        return 2
+    print(json.dumps(outcome.report))
+    return outcome.exit_code
+
+
 def _run_drain_command(args: argparse.Namespace) -> int:
     try:
         missions = drain_ops.in_flight(OperationsConfig.defaults())
@@ -445,7 +463,7 @@ def main(argv: list[str] | None = None) -> int | None:
     subcommands = parser.add_subparsers(
         dest="command",
         required=True,
-        metavar="{schema,hash,approve,validate,ops,serve,headroom,stall-check,parallel-admit,budget-alerts,projects,stop,alarms,jobs,owner-key,ingress,orchestrator,drain,research,qualification}",
+        metavar="{schema,hash,approve,validate,ops,serve,headroom,stall-check,parallel-admit,budget-alerts,projects,stop,alarms,jobs,owner-key,ingress,orchestrator,drain,research,qualification,offerings}",
     )
 
     schema = subcommands.add_parser("schema")
@@ -626,6 +644,29 @@ def main(argv: list[str] | None = None) -> int | None:
         ),
     )
 
+    offerings = subcommands.add_parser(
+        "offerings",
+        help="Compare provider offerings with the governing policy (read-only)",
+        description="Compare provider offerings with the governing policy (read-only).",
+    )
+    offerings_commands = offerings.add_subparsers(
+        dest="offerings_command",
+        required=True,
+        metavar="{check}",
+    )
+    check = offerings_commands.add_parser(
+        "check",
+        help="Append one immutable evaluation record for the owner's review",
+        description=(
+            "Compare the configured captures with the governing policy and append one "
+            "immutable evaluation record, read-only outside the record directory."
+        ),
+    )
+    check.add_argument("--sources", required=True, type=Path, metavar="FILE")
+    check.add_argument("--record-dir", type=Path, metavar="DIR")
+    check.add_argument("--omp", metavar="PATH")
+    check.add_argument("--max-age-hours", type=float, default=36.0)
+
     args = parser.parse_args(argv)
     if args.command == "alarms":
         if args.client_config is None:
@@ -639,6 +680,8 @@ def main(argv: list[str] | None = None) -> int | None:
         return _run_research_command(args)
     if args.command == "qualification":
         return _run_qualification_count()
+    if args.command == "offerings":
+        return _run_offerings_check(args)
     if args.command == "stop":
         return _run_stop_command(args)
     if args.command == "serve":
