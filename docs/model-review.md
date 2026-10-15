@@ -40,8 +40,9 @@ Ledger OMP-615 r3, Chris, 2026-10-13:
 The governing policy records this schedule under `review.schedule`, with
 `review.task_set_digest`, `review.last_review` (date/outcome) and per-recipe
 status in `review.recipes`. Current last review: 2026-10-14, `baseline_retained`
-(Chris decision 5); no live qualification is claimed. No scheduler or live
-provider runner is installed by this policy.
+(Chris decision 5); no live qualification is claimed. The daily check is
+installed and read as described under
+[Daily offerings check](#daily-offerings-check).
 
 Current grandfathered recipes (stages, tiers, alternate, every reviewer identity
 with suffix, and concrete test-verified lane/role bindings) are frozen in
@@ -50,6 +51,51 @@ pinned by SHA256 in `routing/model_review.py`. `check_policy_review(policy)`
 accepts a `baseline` entry only for the exact frozen recipe; any addition or
 change needs a dated `qualified` entry whose outputs are re-graded with
 `qualify`. Bindings without a resolved wire or verified caller stay `pending`.
+
+## Daily offerings check
+
+The owner schedule's daily check is installed as a systemd user timer; the
+policy installs no live provider runner of its own. From a checkout:
+
+```sh
+omp-work offerings install-timer --sources "$HOME/offerings/offerings-sources.json"
+systemctl --user daemon-reload
+systemctl --user enable --now omp-offerings-check.timer
+```
+
+`install-timer` takes `--sources` (required), `--record-dir`, `--omp` and
+`--systemd-dir`; they default, in order, to the sources file the line names,
+`default_record_dir()`, the `omp` on `PATH`, and `default_systemd_dir()`
+(`$XDG_CONFIG_HOME/systemd/user`, else `~/.config/systemd/user`). A relative
+path in the sources file — the notices capture, or any `listing-file` lane — is
+refused before anything is written, as a missing or malformed sources file and
+an unfindable `omp` are. The two units are `omp-offerings-check.service` and
+`omp-offerings-check.timer`: the service runs the CLI with no working directory
+(so every path is absolute), `Type=oneshot`, `UMask=0077` and
+`SuccessExitStatus=3`, and the timer is `OnCalendar=daily` with
+`Persistent=true`. The command prints exactly the two `systemctl --user` lines
+above and activates nothing; the owner enables the timer.
+
+Records land directly in `--record-dir`, else directly in
+`default_record_dir()` (`$XDG_STATE_HOME/omp/work-ledger/offerings`, else
+`~/.local/state/omp/work-ledger/offerings`) — no per-run subfolder. Each run
+appends one `evaluation-<created_ns>-<uuid4>.json`, plus an
+`owner-report-<same stem>.json` alongside it whenever any finding is
+`urgent_review` or `check_gap`. Exit `0`: nothing actionable. Exit `3`: an owner
+report was written, which `SuccessExitStatus=3` keeps healthy for the unit.
+Exit `2`: an input error — one diagnostic line on stderr, empty stdout, no
+record written, and the unit fails. The run's stdout JSON
+(`{evaluation, owner_report, counts}`) is what
+`journalctl --user -u omp-offerings-check.service` shows. Every record keeps the
+last successful listing per lane, so a current gap never erases a prior
+snapshot.
+
+Daily, the owner inspects the unit status and the newest owner report. An
+`urgent_review` finding is reviewed immediately, against the Written rubric
+below and the existing `review.last_review` integration. A
+`pending_qualification` finding lives only in the evaluation records and waits
+for the weekly qualification on the fixed task set. A `check_gap` finding means
+the named capture inputs must be repaired.
 
 ## Written rubric
 
