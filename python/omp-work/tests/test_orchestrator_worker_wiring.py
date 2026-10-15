@@ -273,7 +273,7 @@ def test_manifest_uses_plan_or_intake_approach(wiring, monkeypatch, stamp):
     assert run(wiring).outcome == "succeeded"
     assert wiring.runs[0][3]["approach"] == (
         ["Follow approved implementation plan"] if stamp
-        else ["Implement requested feature", "Preserve CLI behavior"]
+        else [wiring.world.request.intake.goal.statement, "Preserve CLI behavior"]
     )
 
 
