@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import http.client
 import json
 import os
 import subprocess
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import replace
@@ -544,6 +546,43 @@ def test_production_worker(service, tmp_path, monkeypatch, binary, capfd, mode):
             assert all(row[0] > 0 for row in rows)
 
 
+class _HoldSettledModelResponse:
+    """Keep a settled model response unread until ``stop`` is set.
+
+    Wall-clock spend rounds to the next second at the half-second, and a
+    settlement in that last half-second cancels the job. The blocked provider
+    is released earlier so the charge commits under the limit. Holding the
+    body leaves the worker parked on this call until the task deadline.
+    """
+
+    def __init__(self, app, hold: dict[str, datetime | None], stop: threading.Event):
+        self.app = app
+        self.hold = hold
+        self.stop = stop
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope.get("method") != "POST":
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path") or ""
+        # Grant registration is POST /tasks. The worker's model call is
+        # POST /models/...:streamGenerateContent (no /v1 prefix).
+        if path == "/tasks" or path.startswith("/tasks/"):
+            await self.app(scope, receive, send)
+            return
+
+        async def send_held(message):
+            if message["type"] == "http.response.start":
+                until = self.hold.get("until")
+                if isinstance(until, datetime):
+                    cap = until + timedelta(seconds=5)
+                    while datetime.now(UTC) < cap and not self.stop.is_set():
+                        await asyncio.sleep(0.05)
+            await send(message)
+
+        await self.app(scope, receive, send_held)
+
+
 @pytest.mark.parametrize("scenario", ["success", "provider_500", "timeout"])
 def test_revocation_after_success_failure_timeout(
     service, tmp_path, monkeypatch, binary, capfd, scenario
@@ -586,8 +625,50 @@ def test_revocation_after_success_failure_timeout(
         key.chmod(0o600)
 
     real_sandbox = worker_sandbox.run_sandboxed
+    response_hold: dict[str, datetime | None] = {"until": None}
+    stop_hold = threading.Event()
 
     def observe_sandbox(argv, identity, recorder, workdir, env, timeout, **kwargs):
+        if (
+            scenario == "timeout"
+            and registered_grants
+            and isinstance(timeout, (int, float))
+        ):
+            # The provider call locks the job row until it returns, so the 2s
+            # lease can be renewed only before that call. Extend it past the
+            # task deadline first.
+            grant = registered_grants[-1]
+            deadline = datetime.fromisoformat(grant["expires_at"])
+            target = deadline + timedelta(seconds=3)
+            started = time.monotonic()
+            budget = max(0.0, float(timeout) - 6.0)
+            row = None
+            with psycopg.connect(
+                **service.config.connection_kwargs("postgres"), autocommit=True
+            ) as conn:
+                while time.monotonic() - started < budget:
+                    row = conn.execute(
+                        """
+                        SELECT lease_expires_at FROM omp_jobs.jobs
+                        WHERE workspace_id=%s AND job_id=%s
+                        """,
+                        (world.workspace_id, grant["job_id"]),
+                    ).fetchone()
+                    if row is not None and row[0] is not None and row[0] >= target:
+                        break
+                    time.sleep(0.05)
+            remaining = (deadline - datetime.now(UTC)).total_seconds()
+            response_hold["until"] = deadline
+            # Wall-clock spend rounds up at the half-second, so settle before
+            # that. The response stays held, and the worker's deadline abort
+            # (or this backstop) ends the process at the task deadline.
+            def release_before_deadline() -> None:
+                while datetime.now(UTC) + timedelta(milliseconds=1200) < deadline:
+                    time.sleep(0.01)
+                release.set()
+
+            threading.Thread(target=release_before_deadline, daemon=True).start()
+            timeout = max(1.0, remaining + 1.0)
         kwargs["ro_binds"] = (*kwargs.get("ro_binds", ()), str(shim), str(native))
         return real_sandbox(argv, identity, recorder, workdir, env, timeout, **kwargs)
 
@@ -603,6 +684,7 @@ def test_revocation_after_success_failure_timeout(
                 "id": result["id"],
                 "model_token": result["model_token"],
                 "expires_at": payload["expires_at"],
+                "job_id": payload["job_id"],
             }
         )
         return result
@@ -624,8 +706,8 @@ def test_revocation_after_success_failure_timeout(
         "omp_work.orchestrator.model_proxy_client.revoke_task", spy_revoke_task
     )
 
-    # Allow compiled CLI startup while keeping the blocked-provider lease short.
-    lease_seconds = 8 if scenario == "timeout" else 180
+    # Renewal keeps this lease alive. The blocked provider runs to the task deadline.
+    lease_seconds = 2 if scenario == "timeout" else 180
     status_code = 500 if scenario == "provider_500" else 200
     block_all = scenario == "timeout"
 
@@ -644,6 +726,8 @@ def test_revocation_after_success_failure_timeout(
             },
         )
         app = create_app(config, transport=transport)
+        if scenario == "timeout":
+            app = _HoldSettledModelResponse(app, response_hold, stop_hold)
         with (
             serving(app) as proxy_url,
             serving(
@@ -662,6 +746,30 @@ def test_revocation_after_success_failure_timeout(
             item = next(
                 row for row in tree["items"] if str(row.get("work_id")) == str(work_id)
             )
+            wall_clock_seconds = 180
+            if scenario == "timeout":
+                with psycopg.connect(
+                    **service.config.connection_kwargs("postgres")
+                ) as conn:
+                    oldest = conn.execute(
+                        """
+                        WITH RECURSIVE tree(job_id, created_at) AS (
+                            SELECT job_id, created_at FROM omp_jobs.jobs
+                            WHERE workspace_id=%s AND work_id=%s
+                            UNION
+                            SELECT j.job_id, j.created_at FROM omp_jobs.jobs j
+                            JOIN tree t ON j.parent_job_id = t.job_id
+                            WHERE j.workspace_id=%s
+                        )
+                        SELECT MIN(created_at) FROM tree
+                        """,
+                        (world.workspace_id, work_id, world.workspace_id),
+                    ).fetchone()[0]
+                wall_clock_seconds = int(
+                    (
+                        datetime.now(UTC) + timedelta(seconds=20) - oldest
+                    ).total_seconds()
+                )
             _seed_budget(
                 SimpleNamespace(
                     service=service, workspace_id=world.workspace_id, actor_id=OWNER
@@ -671,7 +779,7 @@ def test_revocation_after_success_failure_timeout(
                 budget={
                     "usd": "2.00",
                     "tokens": 200_000,
-                    "wall_clock_seconds": 180,
+                    "wall_clock_seconds": wall_clock_seconds,
                     "max_subagents": 0,
                 },
             )
@@ -689,6 +797,7 @@ def test_revocation_after_success_failure_timeout(
                 finished_at = datetime.now(UTC)
             finally:
                 release.set()
+                stop_hold.set()
 
             handler = OrchestratorHandler(world.config)
             handler.mission_id = world.mission_id

@@ -4,6 +4,7 @@
 
 ### Added
 
+- `omp-work qualification count` prints the read-only qualification gate counter: with no frozen O9 protocol or release baseline it reports each gate as `not started` with a null count, names the missing proof, and never claims a passed gate or invents allocations ([#620](https://github.com/can1357/oh-my-pi/issues/620)).
 - Documented orchestrator worker launch contract, model proxy configuration (`model-proxy.json`), and systemd unit; enforced loopback bind and mode 0600 file permissions for model proxy keys and capability files; and added loopback launch integration tests verifying authority boundaries.
 - An NSI-2 intake built through the API, including owner decisions, criteria, and supersessions, certifies `READY_FOR_RATIFICATION` for that revision ([#522](https://github.com/can1357/oh-my-pi/issues/522)).
 - Audit integration launches `/usr/bin/python3 -P -m omp_work.orchestrator.verify_main`; a signed PASS settles only for the frozen digest and attempt; failing tests, an out-of-envelope candidate, a drifted checkout, a wrong-attempt replay, and a key-theft or forge command do not settle a PASS.
@@ -82,9 +83,11 @@
 - `omp-work jobs check` gives probe jobs a lease well below its timeout (default min(30 s, a quarter of the timeout), set with `--lease`), so a job whose worker is killed mid-run is reclaimed and sealed before the check gives up (OMP-475).
 - the worker `capacity` setting is documented as a resource-weight budget; the worker runs one job at a time (OMP-475).
 - Plan stamping waits for confirmation of a linked mission's new or changed scope.
+- research lesson stage admits a draft only after every cited receipt resolves to the same claim, source span, revision, work item, candidate, evaluator, and outcome, and the ML investigation replaces the shared zero experiment receipt with the SHA-256 of each experiment's canonical name and metrics (OMP-607).
 
 ### Fixed
 
+- Test suite binds egress `record.sock` under a short `tmp_path` so `pytest -n N` no longer overflows the AF_UNIX path limit ([#623](https://github.com/can1357/oh-my-pi/issues/623)).
 - NSI-6 pin drift names changed sources and the reseal command (OMP-621).
 - Orchestrator admission compares qualification proof with the configured running release, a missing stage handler fails closed, an audit pass without a stored independent acceptance cannot complete, and a checkpoint is delivered only after a confirmed signed push of the exact rendered payload (OMP-594).
 - Verifier runtime roots now reject resolved `/work` and descendants, the worktree, roots inside or containing it, and existing forbidden roots while allowing trees under another directory named `work`; jailed `PYTHONPATH` entries follow the same `/work` and worktree rule. On proc mount `EPERM`/`EACCES`, the shim drops bounding and inheritable capability sets and sets `no_new_privs` in `unshare` before mounting an empty read-only tmpfs; `execvp` launches the payload directly instead of `setpriv`, so `setpriv` never reads `/proc`.

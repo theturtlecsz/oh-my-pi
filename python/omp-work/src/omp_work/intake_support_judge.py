@@ -137,13 +137,17 @@ def judge_link(
 
     Refuses, before ``complete``, when ``model_id`` is empty, ``remaining_usd``
     is not positive, or the tuning pin does not match the sealed corpus and the
-    prompt bytes. ``settle`` runs once after ``complete`` returns and before the
-    reply is parsed, including when the reply is unparsable.
+    prompt bytes. Completion timeouts produce a timeout receipt with unknown
+    usage. ``settle`` runs once after completion or timeout and before the reply
+    is parsed, including when the reply is unparsable.
     """
     _refuse_unless_admitted(model_id, remaining_usd)
     sealed, prompt_hash = _sealed_pin()
     rendered = _render(claim_text, passage, context)
-    completion = complete(rendered, model_id)
+    try:
+        completion = complete(rendered, model_id)
+    except httpx.TimeoutException:
+        completion = Completion('{"verdict": "timeout"}', None, None)
     usage_id = settle(completion)
     measurement, input_tokens, output_tokens = _measurement(completion)
     verdict = _parse_verdict(completion.text)
@@ -200,7 +204,8 @@ def complete_from_env(
 
     An unset or blank URL raises ``model_grant_required`` before a client or
     transport is used. The JSON body supplies ``text`` and optional
-    ``input_tokens`` and ``output_tokens``.
+    ``input_tokens`` and ``output_tokens``. Timeouts propagate to ``judge_link``;
+    other transport errors raise ``judge_transport``.
     """
     url = os.environ.get("OMP_INTAKE_JUDGE_URL", "").strip()
     if not url:
@@ -210,6 +215,8 @@ def complete_from_env(
             response = client.post(url, json={"prompt": prompt, "model": model_id})
             response.raise_for_status()
             payload = response.json()
+    except httpx.TimeoutException:
+        raise
     except (httpx.HTTPError, json.JSONDecodeError) as exc:
         raise IntakeJudgeRefusal(JUDGE_TRANSPORT) from exc
     if not isinstance(payload, dict) or not isinstance(payload.get("text"), str):

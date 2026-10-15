@@ -1,16 +1,22 @@
 """Deterministic three-gate counter report as plain JSON-ready data.
 
-Pure projection of ``ordinary_gate_reports`` and ``attempt_gate_report``. It
-reads nothing, writes nothing and decides nothing: counts grant no acceptance
-or qualification, and no target allocation is invented.
+``build_report`` is a pure projection of ``ordinary_gate_reports`` and
+``attempt_gate_report``. It reads nothing, writes nothing and decides nothing.
+
+``run_count`` reads one existing snapshot and prints that report once. Counts
+grant no acceptance or qualification, and no target allocation is invented.
 """
 from __future__ import annotations
 
 import json
+import re
+import sys
 from collections.abc import Iterable
 from dataclasses import fields, is_dataclass
 from datetime import datetime, timedelta
 
+from omp_work import qualification_snapshot
+from omp_work.operations.config import OperationsConfig
 from omp_work.qualification_attempts import AttemptGateReport, attempt_gate_report
 from omp_work.qualification_ordinary import (
     DISTINCT_TASKS,
@@ -118,7 +124,8 @@ def _observations(snapshot: Snapshot, shared: Iterable[object]) -> dict[str, dic
 
 
 def _extend(target: object, items: list[object]) -> None:
-    assert isinstance(target, list)
+    if not isinstance(target, list):
+        raise AssertionError
     for item in items:
         if item not in target:
             target.append(item)
@@ -128,7 +135,8 @@ def _source(record: Receipt | Observation | None) -> dict[str, object] | None:
     if record is None:
         return None
     data = _plain(record)
-    assert isinstance(data, dict)
+    if not isinstance(data, dict):
+        raise AssertionError
     data["payload"] = json.loads(str(data.pop("payload_json")))
     data["kind"] = "observation" if isinstance(record, Observation) else "receipt"
     return data
@@ -203,3 +211,72 @@ def _attempt_gate(report: AttemptGateReport, snapshot: Snapshot) -> dict[str, ob
             key=lambda row: row["record_id"],
         ),
     }
+
+
+# Decoder failures. Legitimate exclusions, including a missing freeze, stay in the report.
+_CORRUPTION_PREFIXES = (
+    "invalid receipt:",
+    "invalid observation:",
+    "invalid acceptance evidence:",
+)
+_ROLE_SECRET = "omp_work_readonly"
+_PASSWORD_FIELD = re.compile(
+    r"(?i)(\bpassword\b\s*=\s*)(?:'(?:\\'|[^'])*'|\"(?:\\.|[^\"])*\"|\S+)"
+)
+_URL_PASSWORD = re.compile(r"(://[^/\s:@]+:)([^@/\s]+)@")
+
+
+def diagnostic(error: BaseException, config: OperationsConfig | None = None) -> str:
+    """Error text with credential values removed. Other wording stays as raised."""
+    message = str(error) or type(error).__name__
+    return _redact(message, config)
+
+
+def run_count(config: OperationsConfig) -> int:
+    """Load one snapshot, print the three-gate report, and return 0.
+
+    Corruption is refused before the report is composed. A source, query,
+    config, or validation failure returns 1 with the diagnostic on stderr and
+    nothing on stdout. Not-started gates still return 0. Counts grant nothing.
+    """
+    try:
+        snapshot = qualification_snapshot.load_snapshot(config)
+        corrupt = tuple(
+            item for item in snapshot.exclusions
+            if item.reason.startswith(_CORRUPTION_PREFIXES)
+        )
+    except Exception as error:  # noqa: BLE001 - no empty report and no second read
+        print(diagnostic(error, config), file=sys.stderr)
+        return 1
+    if corrupt:
+        for item in corrupt:
+            print(f"{item.record_id}: {_redact(item.reason, config)}", file=sys.stderr)
+        return 1
+    try:
+        document = json.dumps(build_report(snapshot), sort_keys=True)
+    except Exception as error:  # noqa: BLE001 - encoding failure is not a partial report
+        print(diagnostic(error, config), file=sys.stderr)
+        return 1
+    print(document)
+    return 0
+
+
+def _password_values(config: OperationsConfig | None) -> tuple[str, ...]:
+    read_secret = getattr(config, "read_secret", None)
+    if not callable(read_secret):
+        return ()
+    try:
+        value = read_secret(_ROLE_SECRET)
+    except Exception:  # noqa: BLE001 - a missing secret must not replace the original diagnostic
+        return ()
+    if isinstance(value, str) and len(value) >= 4:
+        return (value,)
+    return ()
+
+
+def _redact(message: str, config: OperationsConfig | None) -> str:
+    redacted = message
+    for secret in _password_values(config):
+        redacted = redacted.replace(secret, "[redacted]")
+    redacted = _PASSWORD_FIELD.sub(r"\1[redacted]", redacted)
+    return _URL_PASSWORD.sub(r"\1[redacted]@", redacted)

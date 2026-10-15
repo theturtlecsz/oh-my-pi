@@ -82,7 +82,8 @@ def wiring(service, tmp_path, monkeypatch):
 
     def implement(ctx):
         state.contexts.append(ctx)
-        state.expiry = min(ctx.lease_expires_at(), operations._task_deadline(ctx)).isoformat()
+        state.lease = ctx.lease_expires_at().isoformat()
+        state.expiry = operations._task_deadline(ctx).isoformat()
         if getattr(state, "request_patch", None):
             ctx.request = {**ctx.request, **state.request_patch}
         if getattr(state, "before_run", None):
@@ -151,7 +152,8 @@ def test_worker_grant_manifest_and_cleanup(wiring, exit_code, revoke_error):
         "approach": operations._worker_approach(ctx),
         "allowed_paths": list(ctx.request["allowed_paths"]),
         "candidate_id": str(orchestrator_service._ids(ctx.mission_id, "plan-candidate")),
-        "lease_expires_at": payload["expires_at"],
+        "lease_expires_at": state.lease,
+        "task_deadline": state.expiry,
         "model": {
             "api": state.grant["descriptor"]["api"], "id": state.grant["descriptor"]["id"],
             "limits": {
@@ -170,6 +172,19 @@ def test_worker_grant_manifest_and_cleanup(wiring, exit_code, revoke_error):
     assert task_doc["scopes"] == ["work.candidate.read"]
     assert "control-secret" not in env.values() and "provider-secret" not in env.values()
     assert state.revoked == [state.grant["id"]]
+
+
+def test_task_capability_binds_captured_task_deadline(wiring):
+    state = wiring
+    assert run(state).outcome == "succeeded"
+    ctx = state.contexts[0]
+    assert len(state.runs) == 1
+    manifest = state.runs[0][3]
+    task_path = ctx.config.ops.config_dir / "capabilities" / f"task-{ctx.mission_id}-{ctx.step_index}-implement.json"
+    task_doc = json.loads(task_path.read_text())
+    assert task_doc["expires_at"] == state.expiry
+    assert task_doc["expires_at"] == manifest["task_deadline"]
+    assert task_doc["expires_at"] != manifest["lease_expires_at"]
 
 
 @pytest.mark.parametrize("case,expected,code", [
@@ -258,7 +273,7 @@ def test_manifest_uses_plan_or_intake_approach(wiring, monkeypatch, stamp):
     assert run(wiring).outcome == "succeeded"
     assert wiring.runs[0][3]["approach"] == (
         ["Follow approved implementation plan"] if stamp
-        else ["Implement requested feature", "Preserve CLI behavior"]
+        else [wiring.world.request.intake.goal.statement, "Preserve CLI behavior"]
     )
 
 

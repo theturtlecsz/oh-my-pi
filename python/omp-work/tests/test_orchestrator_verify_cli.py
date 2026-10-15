@@ -228,7 +228,7 @@ def test_committed_transport_refused(candidate, monkeypatch):
     candidate_git.git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.test", "-c", "commit.gpgsign=false", "commit", "-m", "committed transport")
     task["candidate_commit"] = candidate_git.git(repo, "rev-parse", "HEAD").decode().strip()
     task["candidate_sha256"] = candidate_git.audit_inputs(repo, task["base_commit"], task["candidate_commit"])["diff_sha256"]
-    task["allowed_paths"] = ["payload", ".omp"]
+    task["allowed_paths"] = ["payload", ".omp/verify-task.json"]
     write_task(repo, task)
     monkeypatch.chdir(repo)
     assert verify_main.main([]) != 0

@@ -30,6 +30,7 @@ from pydantic import ValidationError
 import omp_work
 from omp_work import control_actions, event_push
 from omp_work.action_classify import ResolvedTarget, classify, parse_submission
+from omp_work.intake_repository import read_revision
 from omp_work.jobs.budget import item_budget, item_spend, root_work_id, task_deadline
 from omp_work.jobs.store import NativeJobStore
 from omp_work.mission_intake_rules import scope_draft
@@ -37,6 +38,8 @@ from omp_work.operations import database, fingerprints
 from omp_work.operations.capabilities import provision_task_capability
 from omp_work.orchestrator import (
     candidate_git,
+    intake_binding,
+    intake_gate,
     lesson_context,
     merge_gate,
     model_proxy_client,
@@ -267,6 +270,53 @@ def run_plan(ctx: StageContext) -> Outcome:
     project_id = UUID(str(ctx.project_id))
     mission_id = UUID(str(ctx.mission_id))
 
+    # The gate commits before admit_mission; it is never held across that command.
+    with intake_gate.cursor(
+        ctx._handler.store, workspace_id=workspace_id, actor_id=actor_id
+    ) as cur:
+        head = intake_gate.read_head(cur, workspace_id=workspace_id, mission_id=mission_id)
+        if head is None:
+            return Outcome(
+                outcome="failed",
+                data={"stage": "plan", "code": intake_gate.TYPED_INTAKE_MISSING},
+            )
+        receipt = intake_gate.latest_pass(
+            cur, workspace_id=workspace_id, run_id=head.run_id, revision=head.revision
+        )
+        if receipt is None:
+            return Outcome(
+                outcome="failed",
+                data={"stage": "plan", "code": intake_gate.INTAKE_RECEIPT_MISSING},
+            )
+        refusal = intake_gate.verify(
+            cur,
+            workspace_id=workspace_id,
+            mission_id=mission_id,
+            revision=head.revision,
+            assessment_id=receipt.assessment_id,
+        )
+        if refusal is not None:
+            return Outcome(
+                outcome="failed", data={"stage": "plan", "code": refusal.code}
+            )
+        admitted = intake_binding.read(
+            cur, workspace_id=workspace_id, mission_id=mission_id
+        )
+        if (
+            admitted is None
+            or admitted.state != "admitted"
+            or admitted.revision != head.revision
+            or admitted.assessment_id != receipt.assessment_id
+        ):
+            intake_binding.admit(
+                cur,
+                workspace_id=workspace_id,
+                mission_id=mission_id,
+                run_id=head.run_id,
+                revision=head.revision,
+                assessment_id=receipt.assessment_id,
+            )
+
     ctx.projects.admit_mission(
         workspace_id,
         actor_id,
@@ -315,7 +365,15 @@ def run_plan(ctx: StageContext) -> Outcome:
             },
         )
 
-    return Outcome(outcome="succeeded", data={"stage": "plan"})
+    return Outcome(
+        outcome="succeeded",
+        data={
+            "stage": "plan",
+            "run_id": head.run_id,
+            "revision": head.revision,
+            "assessment_id": receipt.assessment_id,
+        },
+    )
 
 
 def _request_mapping(request: object) -> Mapping[str, Any]:
@@ -356,6 +414,76 @@ def grant_owned(ctx: StageContext, view: Mapping[str, Any]) -> bool:
 
 
 _MAX_GRANT_PHASE_PASSES = 3
+
+
+def _request_constraint_statements(request: Mapping[str, Any]) -> list[str]:
+    intake = request.get("intake") or {}
+    if hasattr(intake, "model_dump"):
+        intake = intake.model_dump(mode="json")
+    if isinstance(intake, Mapping):
+        raw = intake.get("constraints") or ()
+    else:
+        raw = getattr(intake, "constraints", ()) or ()
+    statements: list[str] = []
+    for item in raw:
+        if hasattr(item, "model_dump"):
+            item = item.model_dump(mode="json")
+        if isinstance(item, Mapping):
+            statements.append(str(item.get("statement", "")))
+        else:
+            statements.append(str(getattr(item, "statement", "")))
+    return statements
+
+
+def _approach_lines(
+    goal: str, typed_constraints: Sequence[str], request_constraints: Sequence[str],
+) -> list[str]:
+    """Typed goal, typed constraints, then request constraints not already named."""
+    approach = [goal, *typed_constraints]
+    present = set(approach)
+    for statement in request_constraints:
+        if statement not in present:
+            approach.append(statement)
+            present.add(statement)
+    return approach
+
+
+def _admitted_approach(ctx: StageContext) -> list[str] | intake_gate.Refusal | None:
+    """Approach from the revision stored on the admitted binding.
+
+    The intake head is not read, so a newer head cannot replace the revision
+    the mission was admitted on. ``None`` means that binding is absent. The
+    cursor commits before this returns, so the caller can run a command next.
+    """
+    workspace_id = UUID(str(ctx.workspace_id))
+    actor_id = UUID(str(ctx.principal.actor_id))
+    mission_id = UUID(str(ctx.mission_id))
+    with intake_gate.cursor(
+        ctx._handler.store, workspace_id=workspace_id, actor_id=actor_id,
+    ) as cur:
+        binding = intake_binding.read(
+            cur, workspace_id=workspace_id, mission_id=mission_id,
+        )
+        if binding is None or binding.state != "admitted":
+            return None
+        body = read_revision(
+            cur,
+            workspace_id=workspace_id,
+            run_id=binding.run_id,
+            revision=binding.revision,
+        ).body
+        projected = intake_gate.projection(cur, body)
+    if isinstance(projected, intake_gate.Refusal):
+        return projected
+    typed = [
+        item.statement
+        for item in sorted(projected.constraints, key=lambda item: item.id)
+    ]
+    return _approach_lines(
+        projected.goal.statement,
+        typed,
+        _request_constraint_statements(_request_mapping(ctx.request)),
+    )
 
 
 def run_grant(ctx: StageContext) -> Outcome:
@@ -494,9 +622,11 @@ def _grant_phase(ctx: StageContext, gid: UUID) -> Outcome:
 
     Every pass re-reads the execution view and re-runs ``grant_owned``, so no
     version or revision from an earlier pass or a command's return is reused.
-    ``criteria_pending`` seals the request's acceptance criteria; ``planning``
-    stamps the execution plan; ``executing`` is the grant stage's success. Any
-    other phase, or a phase that repeats, fails with ``grant_phase_<phase>``.
+    ``criteria_pending`` seals the request's acceptance criteria, and an empty
+    list fails ``criteria_missing`` before any receipt or typed criterion is
+    read. ``planning`` stamps the execution plan from the admitted revision.
+    ``executing`` is the grant stage's success. Any other phase, or a phase
+    that repeats, fails with ``grant_phase_<phase>``.
     """
     previous_phase: str | None = None
     for _ in range(_MAX_GRANT_PHASE_PASSES):
@@ -584,35 +714,21 @@ def _grant_phase(ctx: StageContext, gid: UUID) -> Outcome:
                     },
                 )
             pid = service._ids(ctx.mission_id, "plan-candidate")
-            intake = rq.get("intake") or {}
-            if hasattr(intake, "model_dump"):
-                intake = intake.model_dump(mode="json")
-            if isinstance(intake, Mapping):
-                goal = intake.get("goal") or {}
-                if hasattr(goal, "model_dump"):
-                    goal = goal.model_dump(mode="json")
-                goal_statement = str(
-                    goal.get("statement")
-                    if isinstance(goal, Mapping)
-                    else getattr(goal, "statement", "")
+            approach = _admitted_approach(ctx)
+            if isinstance(approach, intake_gate.Refusal):
+                return Outcome(
+                    outcome="failed",
+                    data={"stage": "grant", "code": approach.code, "phase": phase},
                 )
-                raw_constraints = intake.get("constraints") or ()
-            else:
-                goal = getattr(intake, "goal", None)
-                goal_statement = str(getattr(goal, "statement", ""))
-                raw_constraints = getattr(intake, "constraints", ())
-
-            approach: list[str] = [goal_statement]
-            for c in raw_constraints:
-                if hasattr(c, "model_dump"):
-                    c = c.model_dump(mode="json")
-                stmt = (
-                    c.get("statement")
-                    if isinstance(c, Mapping)
-                    else getattr(c, "statement", "")
+            if approach is None:
+                return Outcome(
+                    outcome="failed",
+                    data={
+                        "stage": "grant",
+                        "code": intake_gate.TYPED_INTAKE_MISSING,
+                        "phase": phase,
+                    },
                 )
-                approach.append(str(stmt))
-
             verification = test_command
             raw_paths = rq.get("allowed_paths") or ()
             paths = [str(x) for x in raw_paths]
@@ -822,6 +938,9 @@ def _worker_approach(ctx: StageContext) -> list[str]:
         )
         return list(item["plan_stamp"]["approach"])
     except (WorkError, KeyError, TypeError):
+        admitted = _admitted_approach(ctx)
+        if isinstance(admitted, list):
+            return admitted
         intake = ctx.request["intake"]
         return [intake["goal"]["statement"], *(
             constraint["statement"] for constraint in intake.get("constraints", ())
@@ -839,7 +958,6 @@ def _run_model_worker(
     deadline = _task_deadline(ctx)
     if deadline is None:
         return None
-    expires_at = min(expires_at, deadline)
     context = lesson_context.compile_context(ctx, worktree, _work_key(ctx)) if ctx.config.context_command else None
     candidate_id = str(service._ids(ctx.mission_id, "plan-candidate"))
     if context is not None:
@@ -859,7 +977,7 @@ def _run_model_worker(
                 "mission_id": str(ctx.mission_id), "work_id": str(ctx.work_id),
                 "job_id": str(ctx.lease.job_id), "worker_id": ctx.lease.worker_id,
                 "fence": ctx.lease.fence, "stage": "implement",
-                "expires_at": expires_at.isoformat(), "ceiling_usd": str(ceiling),
+                "expires_at": deadline.isoformat(), "ceiling_usd": str(ceiling),
             },
         )
     except httpx.HTTPStatusError as error:
@@ -877,6 +995,7 @@ def _run_model_worker(
             "allowed_paths": list(ctx.request.get("allowed_paths") or ()),
             "candidate_id": candidate_id,
             "lease_expires_at": expires_at.isoformat(),
+            "task_deadline": deadline.isoformat(),
             "model": {
                 "api": descriptor["api"], "id": descriptor["id"],
                 "limits": {
@@ -897,11 +1016,16 @@ def _run_model_worker(
             ctx, argv, worktree, ro_binds=(Path(argv[0]), manifest_path),
             model_proxy=(endpoint.hostname, endpoint.port or (443 if endpoint.scheme == "https" else 80)),
             model_token=grant["model_token"], manifest_path=manifest_path,
+            deadline=deadline,
             candidate_id=UUID(candidate_id),
         )
-        # The grant ends with the lease this launch saw. A failure after that
-        # moment is the model being cut off, not a worker verdict: lease_dead.
-        if code not in (0, None) and datetime.now(UTC) >= expires_at:
+        # A non-zero exit at the task deadline, under cancel, or after lease
+        # loss is the model being cut off, not a worker verdict.
+        if code not in (0, None) and (
+            datetime.now(UTC) >= deadline
+            or (ctx.cancel is not None and ctx.cancel.is_set())
+            or not ctx.lease_ok()
+        ):
             return None
         return code
     finally:

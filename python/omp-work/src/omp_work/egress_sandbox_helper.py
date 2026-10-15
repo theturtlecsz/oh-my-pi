@@ -18,6 +18,10 @@ touch. The helper runs ``unshare --mount --pid --fork --kill-child`` on
 :mod:`omp_work.egress_research_jail`, which builds that profile's root and
 marks setup_ok only after ``pivot_root``. The jail process is killed when the
 helper dies. Any other named root exits 125 before setup.
+
+The ``omp-helper-*`` directory for the generated resolver files is removed when
+the helper exits, including setup failure and SIGTERM, after those bind mounts
+are detached.
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ import glob
 import json
 import os
 import signal
+from collections.abc import Iterable
 from contextlib import suppress
 from pathlib import Path
 import shutil
@@ -228,7 +233,7 @@ def _setup_network() -> None:
         subprocess.run([ip, *args], check=True)  # nosec B603 - argv list, no shell
 
 
-def _setup_etc_files(etc_dir: Path) -> None:
+def _setup_etc_files(etc_dir: Path, mounted: list[Path]) -> None:
     resolv_file = etc_dir / "resolv.conf"
     resolv_file.write_text(RESOLV_CONF_TEXT, encoding="utf-8")
 
@@ -250,9 +255,75 @@ def _setup_etc_files(etc_dir: Path) -> None:
                 [mount, "--bind", str(src), str(target)],
                 check=True,
             )
+            mounted.append(target)
 
 
-def _mask_sockets() -> None:
+def _umount_bind(target: Path) -> bool:
+    """Detach one helper bind. True when the mount is no longer there."""
+    umount = _executable("umount")
+    target_s = str(target)
+    for args in ([umount, target_s], [umount, "-l", target_s]):
+        result = subprocess.run(  # nosec B603 - argv list, no shell
+            args,
+            check=False,
+            capture_output=True,
+        )
+        if result.returncode == 0:
+            return True
+    return False
+
+
+class _HelperTemp:
+    """Worker child and resolver bind mounts for one helper process."""
+
+    def __init__(self) -> None:
+        self.mounts: list[Path] = []
+        self.child: subprocess.Popen[bytes] | None = None
+        self.signal = 0
+        self.cleaning = False
+
+    def cleanup(self) -> None:
+        """Stop the child, then detach resolver binds so the temp dir can go."""
+        self.cleaning = True
+        child = self.child
+        if child is not None and child.returncode is None and child.pid:
+            with suppress(OSError):
+                os.kill(child.pid, signal.SIGTERM)
+            try:
+                child.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                with suppress(OSError):
+                    os.kill(child.pid, signal.SIGKILL)
+                with suppress(subprocess.TimeoutExpired):
+                    child.wait(timeout=1)
+        mounts = self.mounts
+        self.mounts = []
+        for target in reversed(mounts):
+            if not _umount_bind(target):
+                self.mounts.append(target)
+
+
+def _on_helper_signal(signum: int, _frame: object) -> None:
+    """SIGTERM/SIGINT: stop the child and unwind so the temp dir is removed."""
+    active = _ACTIVE
+    if active is None:
+        return
+    if active.signal == 0:
+        active.signal = signum
+    child = active.child
+    if child is not None and child.returncode is None and child.pid:
+        with suppress(OSError):
+            os.kill(child.pid, signal.SIGTERM)
+    if not active.cleaning:
+        raise SystemExit(128 + signum)
+
+
+_ACTIVE: _HelperTemp | None = None
+
+
+def _mask_sockets(skip: Iterable[Path] = ()) -> None:
+    """Bind /dev/null over resolver/bus sockets, except paths the helper itself bound."""
+    skipped = {os.path.realpath(p) for p in skip}
     socket_paths = [
         "/run/systemd/resolve/io.systemd.Resolve",
         "/run/systemd/resolve/io.systemd.Resolve.Monitor",
@@ -268,6 +339,8 @@ def _mask_sockets() -> None:
 
     mount = _executable("mount")
     for p in socket_paths:
+        if os.path.realpath(p) in skipped:
+            continue
         with suppress(Exception):
             st = os.stat(p, follow_symlinks=False)
             if stat.S_ISSOCK(st.st_mode) or stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode):
@@ -601,7 +674,7 @@ exec "{real_unshare}" "$@"
     return {"PATH": str(shim_dir) + os.pathsep + os.environ.get("PATH", "")}
 
 
-def _spawn_research_jail(config_path: Path) -> int:
+def _spawn_research_jail(config_path: Path, cleanup: _HelperTemp) -> int:
     """Enter the research jail. The helper does not shim mount-proc or touch setup_ok."""
     cmd = [
         _executable("unshare"),
@@ -616,10 +689,12 @@ def _spawn_research_jail(config_path: Path) -> int:
     ]
     # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
     jail = subprocess.Popen(cmd, preexec_fn=_die_with_parent)  # nosec B603 - argv list, no shell
+    cleanup.child = jail
     return jail.wait()
 
 
 def main() -> None:
+    global _ACTIVE
     if len(sys.argv) < 2:
         sys.stderr.write("Usage: python3 -m omp_work.egress_sandbox_helper <config.json>\n")
         sys.exit(1)
@@ -637,76 +712,91 @@ def main() -> None:
     argv = config["argv"]
     workdir = config.get("workdir")
 
-    # 1. lo up, dummy egress0
-    _setup_network()
+    active = _HelperTemp()
+    _ACTIVE = active
+    old_term = signal.signal(signal.SIGTERM, _on_helper_signal)
+    old_int = signal.signal(signal.SIGINT, _on_helper_signal)
+    returncode = 1
+    try:
+        # 1. lo up, dummy egress0
+        _setup_network()
 
-    # 2. AF_PACKET tap on egress0
-    tap = PacketTap(record_sock)
-    tap.start()
+        # 2. AF_PACKET tap on egress0
+        tap = PacketTap(record_sock)
+        tap.start()
 
-    # 3. Bind-mount generated /etc/ files
-    temp_dir = Path(tempfile.mkdtemp(prefix="omp-helper-"))
-    etc_dir = temp_dir / "etc"
-    etc_dir.mkdir(parents=True, exist_ok=True)
-    _setup_etc_files(etc_dir)
+        # Removed when this block exits: normal return, setup failure, and SIGTERM.
+        with tempfile.TemporaryDirectory(prefix="omp-helper-", ignore_cleanup_errors=True) as raw_temp:
+            temp_dir = Path(raw_temp)
+            try:
+                # 3. Bind-mount generated /etc/ files
+                etc_dir = temp_dir / "etc"
+                etc_dir.mkdir(parents=True, exist_ok=True)
+                _setup_etc_files(etc_dir, active.mounts)
 
-    # 4. Mask systemd-resolved, nscd, dbus sockets
-    _mask_sockets()
+                # 4. Mask systemd-resolved, nscd, dbus sockets
+                _mask_sockets(active.mounts)
 
-    # 5. Mask cmdline of helper
-    _mask_helper_cmdlines()
+                # 5. Mask cmdline of helper
+                _mask_helper_cmdlines()
 
-    # 6. Mask sibling sandboxes and expose loopback relays
-    _setup_relays(config)
+                # 6. Mask sibling sandboxes and expose loopback relays
+                _setup_relays(config)
 
-    if root in ("research", "worker"):
-        # No mount-proc shim and no setup_ok touch: the jail marks setup_ok
-        # after pivot_root, or leaves it absent when setup cannot finish.
-        returncode = _spawn_research_jail(config_path)
-    else:
-        # 7. Ensure unshare with mount-proc works
-        env_update = _ensure_worker_unshare_supported(temp_dir)
+                if root in ("research", "worker"):
+                    # No mount-proc shim and no setup_ok touch: the jail marks setup_ok
+                    # after pivot_root, or leaves it absent when setup cannot finish.
+                    returncode = _spawn_research_jail(config_path, active)
+                else:
+                    # 7. Ensure unshare with mount-proc works
+                    env_update = _ensure_worker_unshare_supported(temp_dir)
 
-        worker_env = _worker_env(config, workdir)
-        if "PATH" in env_update:
-            worker_env["PATH"] = env_update["PATH"]
-        # Match subprocess: a provided env searches its PATH, or os.defpath when PATH is absent.
-        # The shim directory, when present, is first, so unshare resolves to that wrapper.
-        search_path = worker_env["PATH"] if "PATH" in worker_env else os.defpath
+                    worker_env = _worker_env(config, workdir)
+                    if "PATH" in env_update:
+                        worker_env["PATH"] = env_update["PATH"]
+                    # Match subprocess: a provided env searches its PATH, or os.defpath when PATH is absent.
+                    # The shim directory, when present, is first, so unshare resolves to that wrapper.
+                    search_path = worker_env["PATH"] if "PATH" in worker_env else os.defpath
 
-        # Signal that setup is complete before launching the worker
-        if setup_ok_path:
-            Path(setup_ok_path).touch()
+                    # Signal that setup is complete before launching the worker
+                    if setup_ok_path:
+                        Path(setup_ok_path).touch()
 
-        # 8. Run worker
-        worker_cmd = [
-            _executable("unshare", search_path),
-            "--pid",
-            "--fork",
-            "--kill-child",
-            "--mount-proc",
-            _executable("setpriv", search_path),
-            "--bounding-set=-all",
-            "--inh-caps=-all",
-            "--no-new-privs",
-            *argv,
-        ]
+                    # 8. Run worker
+                    worker_cmd = [
+                        _executable("unshare", search_path),
+                        "--pid",
+                        "--fork",
+                        "--kill-child",
+                        "--mount-proc",
+                        _executable("setpriv", search_path),
+                        "--bounding-set=-all",
+                        "--inh-caps=-all",
+                        "--no-new-privs",
+                        *argv,
+                    ]
 
-        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
-        worker = subprocess.Popen(  # nosec B603 - argv list, no shell
-            worker_cmd,
-            cwd=workdir,
-            env=worker_env,
-            preexec_fn=_die_with_parent,
-        )
-        returncode = worker.wait()
+                    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+                    worker = subprocess.Popen(  # nosec B603 - argv list, no shell
+                        worker_cmd,
+                        cwd=workdir,
+                        env=worker_env,
+                        preexec_fn=_die_with_parent,
+                    )
+                    active.child = worker
+                    returncode = worker.wait()
 
-    # Drain tap before exit
-    time.sleep(0.05)
-    tap.drain()
-
-    shutil.rmtree(temp_dir, ignore_errors=True)
-    sys.exit(returncode)
+                # Drain tap before exit
+                time.sleep(0.05)
+                tap.drain()
+            finally:
+                # Detach binds before TemporaryDirectory removes the directory.
+                active.cleanup()
+    finally:
+        signal.signal(signal.SIGTERM, old_term)
+        signal.signal(signal.SIGINT, old_int)
+        _ACTIVE = None
+    sys.exit(128 + active.signal if active.signal else returncode)
 
 
 if __name__ == "__main__":

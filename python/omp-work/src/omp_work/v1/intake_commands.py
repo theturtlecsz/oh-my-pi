@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import dataclass
 import hashlib
-from uuid import UUID
+from typing import TYPE_CHECKING
+from uuid import UUID, uuid4
 
 from psycopg import Cursor
 
@@ -14,7 +16,19 @@ from ..intake_repository import (
     EvidenceLinkRecord, IntakeRepositoryError, IntakeRevisionBody, IntakeRevisionView, append_revision,
     lock_revision, read_revision, revision_hashes,
 )
-from ..report_evidence import status_from_labels
+from ..intake_support import SourceSpan, render_claim_text, status_from_receipts
+from ..intake_support_admission import (
+    IntakeAdmissionError,
+    resolve_admission,
+    settle_judge_usage,
+)
+from ..intake_support_judge import (
+    IntakeJudgeRefusal,
+    complete_from_env,
+    current_hook,
+    echo_receipt,
+    judge_link,
+)
 from .api_models import (
     IntakeAssessmentView, IntakeProvenance, IntakeRecordView, IntakeTrace, RegisterIntakeEvidenceResult,
 )
@@ -27,6 +41,27 @@ from .models import (
     RegisterIntakeEvidenceCommand, StartIntakeCommand,
 )
 from .store_shared import WorkStoreError
+
+if TYPE_CHECKING:
+    import psycopg
+
+    from omp_work.jobs.store import NativeJobStore
+    from omp_work.project_store import ProjectStoreMixin
+
+
+@dataclass(frozen=True)
+class IntakeJudgeContext:
+    """Caller-owned handles the support judge needs: budget admission, the open
+    dict-row cursor, and the jobs store that settles usage in its own transaction."""
+
+    projects: ProjectStoreMixin
+    cur: psycopg.Cursor[dict[str, object]]
+    jobs: NativeJobStore
+
+
+def _artifact_text(data: bytes) -> str:
+    """Artifact bytes as judge-visible text; undecodable bytes become replacement chars."""
+    return bytes(data).decode("utf-8", errors="replace")
 
 
 def start_intake(
@@ -164,8 +199,70 @@ class _RecordIntakeClaimResult(dict):
         return super().__getitem__(key)
 
 
+def _judged_link(
+    judge: IntakeJudgeContext | None,
+    envelope: CommandEnvelope,
+    actor_id: UUID,
+    mission_id: UUID,
+    artifact_bytes: dict[str, bytes],
+    claim: nsi.IntakeClaim,
+    claim_text: str,
+    link: IntakeClaimEvidenceLink,
+) -> EvidenceLinkRecord:
+    """Build one evidence link with its support receipt, or refuse the write.
+
+    A test hook with ``echo_caller`` echoes the caller relation without admitting,
+    calling a model, or recording usage. Otherwise an admission context is required
+    (a bare repository write is forbidden): the budget is resolved, the judge is
+    called with the hook's completion or ``complete_from_env``, and token usage is
+    settled under O8 in its own transaction. Admission and judge refusals are the
+    same forbidden write.
+    """
+    artifact_id = link.span.artifact_id
+    passage = link.span.quote or ""
+    context = _artifact_text(artifact_bytes[artifact_id])
+    hook = current_hook()
+    if hook is not None and hook.echo_caller:
+        receipt = echo_receipt(
+            claim_text=claim_text, passage=passage, context=context, caller_relation=link.relation,
+        )
+    elif judge is None:
+        raise WorkStoreError("forbidden")
+    else:
+        complete = (hook.complete if hook is not None else None) or complete_from_env
+        try:
+            admission = resolve_admission(
+                judge.projects, judge.cur, envelope.workspace_id, mission_id,
+            )
+            receipt = judge_link(
+                claim_text=claim_text, passage=passage, context=context,
+                model_id=admission.model_id, remaining_usd=admission.remaining_usd,
+                complete=complete,
+                settle=lambda completion: settle_judge_usage(
+                    judge.jobs, operation_id=str(envelope.operation_id),
+                    workspace_id=envelope.workspace_id, actor_id=actor_id, mission_id=mission_id,
+                    model_id=admission.model_id, request_id=uuid4().hex,
+                    input_tokens=completion.input_tokens, output_tokens=completion.output_tokens,
+                ),
+            )
+        except (IntakeAdmissionError, IntakeJudgeRefusal) as exc:
+            raise WorkStoreError("forbidden") from exc
+    return EvidenceLinkRecord(
+        claim_id=claim.id,
+        artifact_id=artifact_id,
+        start_byte=link.span.start_byte,
+        end_byte=link.span.end_byte,
+        quote=link.span.quote,
+        relation=link.relation,
+        support_receipt=receipt.model_copy(update={
+            "source_span": SourceSpan(start=link.span.start_byte, end=link.span.end_byte),
+        }),
+    )
+
+
 def record_intake_claim(
     cur: Cursor, envelope: CommandEnvelope, actor_id: UUID, actor_kind: str,
+    *, judge: IntakeJudgeContext | None = None,
 ) -> dict[str, object]:
     actor = intake_actor(actor_kind, actor_id)
     if not isinstance(envelope.command, RecordIntakeClaimCommand):
@@ -265,23 +362,62 @@ def record_intake_claim(
         except AuthorityRefusal as exc:
             raise WorkStoreError("forbidden") from exc
 
-        added_links = [
-            EvidenceLinkRecord(
-                claim_id=claim.id,
-                artifact_id=link.span.artifact_id,
-                start_byte=link.span.start_byte,
-                end_byte=link.span.end_byte,
-                quote=link.span.quote,
-                relation=link.relation,
-            )
-            for link in payload.evidence_links
-        ]
-        evidence_status = status_from_labels([link.relation for link in payload.evidence_links])
-
+        predicate_title = next(
+            p.title for p in previous.ontology.predicates if p.id == claim.predicate_id
+        )
+        claim_text = render_claim_text({
+            "subject_id": claim.subject.id,
+            "predicate_id": claim.predicate_id,
+            "predicate_title": predicate_title,
+            "value": claim.value.model_dump(mode="json"),
+            "modality": claim.modality,
+            "polarity": claim.polarity,
+        })
         if existing_claim is None:
+            added_links = [
+                _judged_link(
+                    judge, envelope, actor_id, head[0], stored.artifact_bytes, claim, claim_text, link,
+                )
+                for link in payload.evidence_links
+            ]
+            evidence_status = status_from_receipts([
+                (link.relation, link.support_receipt) for link in added_links
+            ])
             new_claims = [*previous.claims, claim]
             new_links = [*stored.body.evidence_links, *added_links]
         else:
+            # Admission preserves the receipts recorded on proposal without re-judging.
+            stored_receipts = {
+                (link.artifact_id, link.start_byte, link.end_byte, link.quote, link.relation): link.support_receipt
+                for link in stored.body.evidence_links
+                if link.claim_id == claim.id
+            }
+            added_links = [
+                EvidenceLinkRecord(
+                    claim_id=claim.id,
+                    artifact_id=link.span.artifact_id,
+                    start_byte=link.span.start_byte,
+                    end_byte=link.span.end_byte,
+                    quote=link.span.quote,
+                    relation=link.relation,
+                    support_receipt=stored_receipts.get(
+                        (link.span.artifact_id, link.span.start_byte, link.span.end_byte,
+                         link.span.quote, link.relation),
+                    ),
+                )
+                for link in payload.evidence_links
+            ]
+            hook = current_hook()
+            evidence_status = status_from_receipts([
+                (link.relation, link.support_receipt or (
+                    echo_receipt(
+                        claim_text=claim_text, passage=link.quote or "",
+                        context=_artifact_text(stored.artifact_bytes[link.artifact_id]),
+                        caller_relation=link.relation,
+                    ) if hook is not None and hook.echo_caller else None
+                ))
+                for link in added_links
+            ])
             new_claims = [claim if c.id == claim.id else c for c in previous.claims]
             new_links = [link for link in stored.body.evidence_links if link.claim_id != claim.id] + added_links
 
@@ -329,6 +465,7 @@ def record_intake_claim(
 
 def execute_intake(
     cur: Cursor, envelope: CommandEnvelope, actor_id: UUID, actor_kind: str,
+    *, judge: IntakeJudgeContext | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
     handlers = {
         "start_intake": start_intake,
@@ -341,7 +478,10 @@ def execute_intake(
     handler = handlers.get(envelope.command.type)
     if handler is None:
         raise WorkStoreError("invalid_request")
-    result = handler(cur, envelope, actor_id, actor_kind)
+    if envelope.command.type == "record_intake_claim":
+        result = record_intake_claim(cur, envelope, actor_id, actor_kind, judge=judge)
+    else:
+        result = handler(cur, envelope, actor_id, actor_kind)
     return result, dict(result)
 
 

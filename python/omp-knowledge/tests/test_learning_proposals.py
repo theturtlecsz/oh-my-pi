@@ -636,7 +636,7 @@ def test_audit_receipt_with_pass_verdict_supports_claim() -> None:
     assert claim.outcome == "PASS"
     assert r_audit.verdict == "PASS"
 
-    decision = evaluate(lesson, reader)
+    decision = evaluate(lesson, reader, source=attr.source)
     assert decision.accepted is True
     assert decision.reason is None
 

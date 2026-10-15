@@ -2,13 +2,23 @@
 
 from __future__ import annotations
 
+import copy
+import errno
+import os
+import shutil
+import stat
 import subprocess
+import tempfile
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from omp_work import skip_accounting_postgres as sap
 from omp_work.skip_accounting_postgres import PrerequisiteError, check_prerequisites
+
+
 
 PG18 = "{} (PostgreSQL) 18.1\n"
 
@@ -167,3 +177,256 @@ def test_each_probe_refusal_and_timeout(index: int) -> None:
     assert (err.cause, err.argv) == (f"namespace_probe_{index}_timeout", argv)
     host.overrides[argv] = FileNotFoundError("unshare")
     assert refused(host).cause == f"namespace_probe_{index}_launch_failed"
+
+
+SEARCHABLE_MODE = stat.S_IFDIR | 0o755
+
+
+def searchable_in_fixture(tmp_path: Path) -> Callable[[Path], int]:
+    """Real modes inside the fixture tree; other-searchable above it.
+
+    pytest's private ancestors cannot be chmod'd, so the mock stops at the fixture
+    root and the private-ancestor test below still exercises the real mode check.
+    """
+
+    def probe(path: Path) -> int:
+        return path.stat().st_mode if path.is_relative_to(tmp_path) else SEARCHABLE_MODE
+
+    return probe
+
+
+def prepare_base(tmp_path: Path) -> Path:
+    tmp_path.chmod(0o755)
+    base = tmp_path / "base"
+    base.mkdir()
+    return base
+
+
+def owning_mkdtemp(created: list[Path]) -> Callable[..., str]:
+    def mkdtemp(**kwargs: Any) -> str:
+        path = tempfile.mkdtemp(**kwargs)
+        created.append(Path(path))
+        return path
+
+    return mkdtemp
+
+
+def temp_error(cause: str, **kw: Any) -> PrerequisiteError:
+    with pytest.raises(PrerequisiteError) as info:
+        sap.OwnedTemp.create(**kw)
+    assert info.value.exit_code == 2
+    assert info.value.cause == cause, info.value.detail
+    return info.value
+
+
+def test_create_exposes_0755_root_tmpdir_and_basetemp(tmp_path: Path) -> None:
+    base = prepare_base(tmp_path)
+    owned = sap.OwnedTemp.create(base=base, searchable=searchable_in_fixture(tmp_path))
+    try:
+        assert owned.root.parent == base
+        assert owned.root.name.startswith(sap.ROOT_PREFIX)
+        assert stat.S_IMODE(owned.root.stat().st_mode) == 0o755
+        assert owned.tmpdir == owned.root / "tmp" and owned.tmpdir.is_dir()
+        assert owned.basetemp == owned.root / "basetemp" and owned.basetemp.is_dir()
+        assert stat.S_IMODE(owned.tmpdir.stat().st_mode) == 0o755
+        assert stat.S_IMODE(owned.basetemp.stat().st_mode) == 0o755
+        assert owned.env() == {"TMPDIR": str(owned.tmpdir)}
+        assert not (owned.root / sap.PROBE_NAME).exists()
+        assert owned.is_owned
+        other = sap.OwnedTemp.create(base=base, searchable=searchable_in_fixture(tmp_path))
+        try:
+            assert other.root != owned.root
+        finally:
+            shutil.rmtree(other.root, ignore_errors=True)
+    finally:
+        shutil.rmtree(owned.root, ignore_errors=True)
+    assert not owned.root.exists()
+
+
+def test_factory_alone_grants_ownership_and_immutability(tmp_path: Path) -> None:
+    base = prepare_base(tmp_path)
+    owned = sap.OwnedTemp.create(base=base, searchable=searchable_in_fixture(tmp_path))
+    try:
+        assert owned.is_owned
+        unowned = sap.OwnedTemp(root=owned.root, tmpdir=owned.tmpdir, basetemp=owned.basetemp)
+        assert not unowned.is_owned
+        with pytest.raises(AttributeError):
+            owned.root = base  # type: ignore[misc]
+        with pytest.raises(AttributeError):
+            owned.tmpdir = base  # type: ignore[misc]
+        with pytest.raises(AttributeError):
+            owned.basetemp = base  # type: ignore[misc]
+        assert not copy.copy(owned).is_owned
+        assert not copy.deepcopy(owned).is_owned
+        assert repr(owned) == f"OwnedTemp(root={owned.root!r}, tmpdir={owned.tmpdir!r}, basetemp={owned.basetemp!r})"
+    finally:
+        shutil.rmtree(owned.root, ignore_errors=True)
+
+
+def test_create_private_ancestor_refused_unchanged_and_no_leak(tmp_path: Path) -> None:
+    prepare_base(tmp_path)
+    private = tmp_path / "private"
+    private.mkdir()
+    private.chmod(0o700)
+    before = stat.S_IMODE(private.stat().st_mode)
+    created: list[Path] = []
+    err = temp_error(
+        "owned_temp_ancestor_not_searchable",
+        base=private,
+        searchable=searchable_in_fixture(tmp_path),
+        mkdtemp=owning_mkdtemp(created),
+    )
+    assert str(private) in err.detail and "700" in err.detail
+    assert stat.S_IMODE(private.stat().st_mode) == before == 0o700
+    assert created and not created[0].exists()
+    assert list(private.iterdir()) == []
+
+
+def test_create_missing_base_refused_before_allocation(tmp_path: Path) -> None:
+    missing = tmp_path / "absent"
+    err = temp_error("owned_temp_mkdtemp_failed", base=missing, searchable=searchable_in_fixture(tmp_path))
+    assert str(missing) in err.detail and err.stderr
+    assert str(err.__cause__)
+    assert not missing.exists()
+
+
+def test_create_unwritable_base_refused_without_deleting_base(tmp_path: Path) -> None:
+    base = prepare_base(tmp_path)
+    base.chmod(0o500)
+    try:
+        def inject_eacces(**kwargs: Any) -> str:
+            raise PermissionError(errno.EACCES, "Permission denied", str(base))
+
+        mkdtemp_fn = inject_eacces if os.geteuid() == 0 else tempfile.mkdtemp
+        err = temp_error(
+            "owned_temp_mkdtemp_failed",
+            base=base,
+            searchable=searchable_in_fixture(tmp_path),
+            mkdtemp=mkdtemp_fn,
+        )
+        assert str(base) in err.detail
+        assert base.is_dir()
+        assert list(base.iterdir()) == []
+    finally:
+        base.chmod(0o755)
+
+
+def failing_mkdir_tmp(path: os.PathLike[str], mode: int) -> None:
+    if Path(path).name == "tmp":
+        raise OSError("mkdir tmp failed")
+    os.mkdir(path, mode)
+
+
+def failing_mkdir_basetemp(path: os.PathLike[str], mode: int) -> None:
+    if Path(path).name == "basetemp":
+        raise OSError("mkdir basetemp failed")
+    os.mkdir(path, mode)
+
+
+def failing_write_probe(directory: Path) -> None:
+    raise OSError("probe write failed")
+
+
+def failing_unlink_probe(directory: Path) -> None:
+    raise OSError("probe unlink failed")
+
+
+@pytest.mark.parametrize(
+    ("seam_kwargs", "expected_cause", "expected_detail"),
+    [
+        ({"resolve": lambda p: (_ for _ in ()).throw(OSError("resolve failed"))}, "owned_temp_resolve_failed", "resolve"),
+        ({"searchable": lambda p: (_ for _ in ()).throw(OSError("stat failed"))}, "owned_temp_ancestor_stat_failed", "stat ancestor"),
+        ({"chmod": lambda *a: (_ for _ in ()).throw(OSError("chmod failed"))}, "owned_temp_chmod_failed", "chmod"),
+        ({"mkdir": failing_mkdir_tmp}, "owned_temp_mkdir_failed", "tmp"),
+        ({"mkdir": failing_mkdir_basetemp}, "owned_temp_mkdir_failed", "basetemp"),
+        ({"probe": failing_write_probe}, "owned_temp_probe_failed", "probe"),
+        ({"probe": failing_unlink_probe}, "owned_temp_probe_failed", "probe"),
+    ],
+)
+def test_create_post_allocation_failure_rolls_back_root(
+    tmp_path: Path,
+    seam_kwargs: dict[str, Any],
+    expected_cause: str,
+    expected_detail: str,
+) -> None:
+    base = prepare_base(tmp_path)
+    created: list[Path] = []
+    call_kwargs: dict[str, Any] = {
+        "base": base,
+        "searchable": searchable_in_fixture(tmp_path),
+        "mkdtemp": owning_mkdtemp(created),
+    }
+    call_kwargs.update(seam_kwargs)
+    err = temp_error(expected_cause, **call_kwargs)
+    assert expected_detail in err.detail
+    if "ancestor" in expected_cause:
+        assert str(base) in err.detail
+    else:
+        assert str(created[0]) in err.detail
+    assert isinstance(err.__cause__, OSError)
+    assert created and not created[0].exists()
+    assert list(base.iterdir()) == []
+
+
+
+@pytest.mark.parametrize(
+    ("seam_kwargs", "expected_cause"),
+    [
+        ({"resolve": lambda p: (_ for _ in ()).throw(OSError("resolve failed"))}, "owned_temp_resolve_failed"),
+        ({"searchable": lambda p: (_ for _ in ()).throw(OSError("stat failed"))}, "owned_temp_ancestor_stat_failed"),
+        ({"chmod": lambda *a: (_ for _ in ()).throw(OSError("chmod failed"))}, "owned_temp_chmod_failed"),
+        ({"mkdir": failing_mkdir_tmp}, "owned_temp_mkdir_failed"),
+        ({"mkdir": failing_mkdir_basetemp}, "owned_temp_mkdir_failed"),
+        ({"probe": failing_write_probe}, "owned_temp_probe_failed"),
+        ({"probe": failing_unlink_probe}, "owned_temp_probe_failed"),
+    ],
+)
+def test_create_rollback_failure_preserves_cause_and_surfaces_rollback(
+    tmp_path: Path,
+    seam_kwargs: dict[str, Any],
+    expected_cause: str,
+) -> None:
+    base = prepare_base(tmp_path)
+
+    def failing_rmtree(*args: Any, **kwargs: Any) -> Any:
+        raise OSError("busy mount")
+
+    call_kwargs: dict[str, Any] = {
+        "base": base,
+        "searchable": searchable_in_fixture(tmp_path),
+        "rmtree": failing_rmtree,
+    }
+    call_kwargs.update(seam_kwargs)
+    err = temp_error("owned_temp_rollback_failed", **call_kwargs)
+    assert "busy mount" in err.detail
+    assert err.stderr == "busy mount"
+    original = err.__cause__
+    assert isinstance(original, PrerequisiteError) and original.cause == expected_cause
+    assert isinstance(original.__cause__, OSError)
+    for leftover in base.iterdir():
+        leftover.chmod(0o755)
+        shutil.rmtree(leftover, ignore_errors=True)
+
+
+def test_storage_probe_standalone(tmp_path: Path) -> None:
+    base = prepare_base(tmp_path)
+    d = base / "probe_dir"
+    d.mkdir()
+    sap._storage_probe(d)
+    assert not (d / sap.PROBE_NAME).exists()
+
+    def boom_write(*args: Any) -> int:
+        raise OSError("write broke")
+
+    with pytest.raises(OSError, match="write broke"):
+        sap._storage_probe(d, write_bytes=boom_write)
+    (d / sap.PROBE_NAME).unlink(missing_ok=True)
+
+    def boom_remove(*args: Any) -> None:
+        raise OSError("unlink broke")
+
+    with pytest.raises(OSError, match="unlink broke"):
+        sap._storage_probe(d, remove_path=boom_remove)
+    (d / sap.PROBE_NAME).unlink(missing_ok=True)
+
+

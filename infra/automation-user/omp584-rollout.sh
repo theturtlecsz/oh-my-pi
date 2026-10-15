@@ -86,20 +86,100 @@ PYCODE
     cp -- "$OMP584_ASSETS/omp584-planner-rules.md" "$OMP584_STAGE/planner-independence.md" || return
     # The planner prompt patch loads the sibling rules under their legacy filename.
     ln -s planner-independence.md "$OMP584_STAGE/omp584-planner-rules.md" || return
-    local patches=(omp584-dependencies.patch omp584-start-metrics.patch "$OMP584_PROMPT_PATCH")
-    local i patch
-    # Normalize exact installations in reverse composition order. git apply is
-    # atomic per patch, has no fuzz, and rejects partial installations.
-    for ((i=${#patches[@]}-1; i>=0; i--)); do
-        patch=$OMP584_ASSETS/${patches[i]}
-        if git -C "$OMP584_STAGE" apply --reverse --check "$patch" 2>/dev/null; then
-            git -C "$OMP584_STAGE" apply --reverse "$patch" || return
+
+    local parts_out
+    # Classifier diagnostics pass through stderr; conflicts (exit 3) fail staging.
+    parts_out=$(python3 "$OMP584_ASSETS/omp584-parts.py" "$OMP584_STAGE/flood.py") || return 2
+
+    local prompt_patch=${OMP584_PROMPT_PATCH:-omp584-planner-prompt.patch}
+    [[ -s "$OMP584_ASSETS/$prompt_patch" ]] || prompt_patch=omp584-prompt.patch
+
+    local -A patch_files=(
+        [dependencies]="omp584-dependencies.patch"
+        [start-metrics]="omp584-start-metrics.patch"
+        [planner-prompt]="$prompt_patch"
+    )
+
+    local -A states=()
+    local part state
+    while read -r part state; do
+        [[ -n "$part" ]] || continue
+        states["$part"]="$state"
+    done <<< "$parts_out"
+
+    local -a applied_parts=()
+    local -a part_order=(dependencies start-metrics planner-prompt)
+    local patch
+
+    for part in "${part_order[@]}"; do
+        state=${states["$part"]:-missing}
+        if [[ "$state" == "installed" ]]; then
+            echo "part $part: present" >&2
+        elif [[ "$state" == "missing" ]]; then
+            patch=${patch_files["$part"]}
+            if ! git -C "$OMP584_STAGE" apply --check "$OMP584_ASSETS/$patch" 2>/dev/null; then
+                echo "error: part $part is missing and its patch does not apply" >&2
+                return 2
+            fi
+            git -C "$OMP584_STAGE" apply "$OMP584_ASSETS/$patch" || return 2
+            applied_parts+=("$part")
+            echo "part $part: applied" >&2
+        else
+            return 2
         fi
     done
-    for patch in "${patches[@]}"; do
-        git -C "$OMP584_STAGE" apply --check "$OMP584_ASSETS/$patch" || return
-        git -C "$OMP584_STAGE" apply "$OMP584_ASSETS/$patch" || return
+
+    > "$OMP584_STAGE/applied-parts"
+    for part in "${applied_parts[@]}"; do
+        echo "$part" >> "$OMP584_STAGE/applied-parts"
     done
+
+    parts_out=$(python3 "$OMP584_ASSETS/omp584-parts.py" "$OMP584_STAGE/flood.py") || return 2
+    states=()
+    while read -r part state; do
+        [[ -n "$part" ]] || continue
+        states["$part"]="$state"
+    done <<< "$parts_out"
+    for part in "${part_order[@]}"; do
+        [[ "${states["$part"]:-missing}" == installed ]] || return 2
+    done
+
+    local scratch_dir="$OMP584_STAGE/legacy-scratch"
+    mkdir -- "$scratch_dir" || return
+    cp -p -- "$OMP584_STAGE/original-flood.py" "$scratch_dir/flood.py" || return
+    python3 - "$scratch_dir/flood.py" <<'PYCODE' || return
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+p.write_bytes(p.read_bytes().replace(b'with_name("planner-independence.md")',
+                                    b'with_name("omp584-planner-rules.md")'))
+PYCODE
+
+    local legacy_ok=1
+    local legacy_patches=(omp584-dependencies.patch omp584-start-metrics.patch "$prompt_patch")
+    local i p_name
+    for ((i=${#legacy_patches[@]}-1; i>=0; i--)); do
+        p_name=${legacy_patches[i]}
+        if git -C "$scratch_dir" apply --reverse --check "$OMP584_ASSETS/$p_name" 2>/dev/null; then
+            if ! git -C "$scratch_dir" apply --reverse "$OMP584_ASSETS/$p_name" 2>/dev/null; then
+                legacy_ok=0
+                break
+            fi
+        fi
+    done
+    if (( legacy_ok )); then
+        for p_name in "${legacy_patches[@]}"; do
+            if ! git -C "$scratch_dir" apply --check "$OMP584_ASSETS/$p_name" 2>/dev/null || \
+               ! git -C "$scratch_dir" apply "$OMP584_ASSETS/$p_name" 2>/dev/null; then
+                legacy_ok=0
+                break
+            fi
+        done
+    fi
+    rm -rf -- "$scratch_dir"
+    if (( legacy_ok )); then
+        touch "$OMP584_STAGE/legacy-composable"
+    fi
+    return 0
 }
 
 omp584_verify() (
@@ -118,13 +198,25 @@ PY
     local pytest_temp
     pytest_temp=$(mktemp -d) || return
     trap 'rm -rf -- "$pytest_temp"' EXIT
+
+    local -a pytest_files=(
+        "$OMP584_ROOT/python/omp-work/tests/test_omp622_exact.py"
+    )
+    local -a pytest_k=()
+    if [[ -f "$OMP584_STAGE/legacy-composable" ]]; then
+        pytest_files+=(
+            "$OMP584_ROOT/python/omp-work/tests/test_flood_planner_rollout.py"
+            "$OMP584_ROOT/python/omp-work/tests/test_flood_rollout_provenance.py"
+        )
+        pytest_k=(-k 'test_combined_ or not test_flood_planner_rollout')
+    fi
     OMP584_FLOOD_SOURCE="$OMP584_STAGE" PYTHONDONTWRITEBYTECODE=1 \
         uv run --project "$OMP584_ROOT/python/omp-work" --extra dev pytest \
-        "$OMP584_ROOT/python/omp-work/tests/test_flood_planner_rollout.py" \
-        "$OMP584_ROOT/python/omp-work/tests/test_flood_rollout_provenance.py" \
+        "${pytest_files[@]}" \
         --basetemp "$pytest_temp/pytest" \
-        -k 'test_combined_ or not test_flood_planner_rollout' -rs \
+        ${pytest_k[@]+"${pytest_k[@]}"} -rs \
         >"$OMP584_EVIDENCE_DIR/pytest.log" 2>&1 || return
+
     # Qualify the exact canonical deployment bytes, without recomposing them.
     python3 - "$OMP584_STAGE/flood.py" <<'PYCODE' || return
 import pathlib, sys
@@ -132,10 +224,22 @@ p = pathlib.Path(sys.argv[1])
 p.write_bytes(p.read_bytes().replace(b'with_name("omp584-planner-rules.md")',
                                     b'with_name("planner-independence.md")'))
 PYCODE
+
+    local -a exact_files=(
+        "$OMP584_ROOT/python/omp-work/tests/test_omp622_exact.py"
+    )
+    local -a exact_k=()
+    if [[ -f "$OMP584_STAGE/legacy-composable" ]]; then
+        exact_files+=(
+            "$OMP584_ROOT/python/omp-work/tests/test_flood_planner_rollout.py"
+        )
+        exact_k=(-k 'test_combined_ or not test_flood_planner_rollout')
+    fi
     OMP584_FLOOD_SOURCE="$OMP584_STAGE" OMP584_TEST_EXACT=1 PYTHONDONTWRITEBYTECODE=1 \
         uv run --project "$OMP584_ROOT/python/omp-work" --extra dev pytest \
-        "$OMP584_ROOT/python/omp-work/tests/test_flood_planner_rollout.py" \
-        --basetemp "$pytest_temp/exact" -k test_combined_ -rs \
+        "${exact_files[@]}" \
+        --basetemp "$pytest_temp/exact" \
+        ${exact_k[@]+"${exact_k[@]}"} -rs \
         >"$OMP584_EVIDENCE_DIR/pytest-exact.log" 2>&1
 )
 
