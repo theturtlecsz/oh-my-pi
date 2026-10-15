@@ -46,7 +46,74 @@ from omp_work.v1.models import (
     SetResearchCampaignStatePayload,
 )
 
-__all__ = ["run_research_campaign"]
+__all__ = ["DecodedDecision", "run_research_campaign"]
+
+
+class DecodedDecision(dict):
+    """Decoded decision dictionary that exposes codec fields as attributes and serializes cleanly to JSON."""
+
+    @classmethod
+    def from_decision(cls, d: Decision) -> DecodedDecision:
+        return cls({
+            "v": d.v,
+            "index": d.index,
+            "policy": d.policy,
+            "step_id": d.step_id,
+            "observations_count": d.observations_count,
+            "observations_sha256": d.observations_sha256,
+            "rationale": d.rationale,
+        })
+
+    @property
+    def v(self) -> int:
+        return self["v"]
+
+    @property
+    def index(self) -> int:
+        return self["index"]
+
+    @property
+    def policy(self) -> str:
+        return self["policy"]
+
+    @property
+    def step_id(self) -> str:
+        return self["step_id"]
+
+    @property
+    def observations_count(self) -> int:
+        return self["observations_count"]
+
+    @property
+    def observations_sha256(self) -> str:
+        return self["observations_sha256"]
+
+    @property
+    def rationale(self) -> str:
+        return self["rationale"]
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, Decision):
+            return (
+                self.get("index") == other.index
+                and self.get("policy") == other.policy
+                and self.get("step_id") == other.step_id
+                and self.get("observations_count") == other.observations_count
+                and self.get("observations_sha256") == other.observations_sha256
+                and self.get("rationale") == other.rationale
+                and self.get("v") == other.v
+            )
+        return super().__eq__(other)
+
+    def __hash__(self) -> int:
+        return hash((
+            self["index"],
+            self["policy"],
+            self["step_id"],
+            self["observations_count"],
+            self["observations_sha256"],
+            self["rationale"],
+        ))
 
 
 def run_research_campaign(
@@ -117,7 +184,7 @@ def run_research_campaign(
 
     trials: list[dict[str, object]] = []
     verdicts: list[tuple[str, str]] = []
-    decisions: list[Decision] = []
+    decisions: list[DecodedDecision] = []
     proposed_costs: list[float] = []
     opened: set[str] = set()
     completions: list[tuple[UUID, float | None]] = []
@@ -197,7 +264,7 @@ def run_research_campaign(
         completions.append((trial_id, completion.value))
         decoded_decision = decode(encoded_reason)
         if decoded_decision is not None:
-            decisions.append(decoded_decision)
+            decisions.append(DecodedDecision.from_decision(decoded_decision))
 
         verdicts.append(score_metrics(
             completion.metrics, definition.criteria, completion.execution_status,
