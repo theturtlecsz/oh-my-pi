@@ -85,12 +85,50 @@ def event(compiled: dict, **over) -> str:
     compiled_doc(lesson_supplies={"s1": supply("s1")}),
     compiled_doc(lesson_supplies=None),
     compiled_doc(lesson_supply_ids=None),
+    compiled_doc() | {"lesson_supplies": None},
+    compiled_doc() | {"lesson_supply_ids": None},
+    compiled_doc() | {"lesson_supplies": None, "lesson_supply_ids": None},
+    compiled_doc(lesson_supply_ids=None, lesson_supplies=None) | {"lesson_supplies": None},
+    compiled_doc(lesson_supply_ids=None, lesson_supplies=None) | {"lesson_supply_ids": None},
 ], ids=["text", "hash", "error", "missing", "extra", "duplicate", "non-object", "no-id", "not-list",
-        "ids-only", "supplies-only"])
+        "ids-only", "supplies-only", "null-supplies", "null-ids", "both-null",
+        "null-supplies-only", "null-ids-only"])
 def test_compile_refuses_inconsistent_output(tmp_path, doc):
+    ctx, log = make_ctx(tmp_path, {"stdout": json.dumps(doc)})
+    data: dict = {}
     with pytest.raises(WorkError) as raised:
-        compile_with(tmp_path, doc)
+        _, compiled = lesson_context.compile_context(ctx, tmp_path, "wk")
+        lesson_context.record_delivery(ctx, compiled, event(compiled), data)
     assert raised.value.code == "context_compile_failed"
+    assert log.read_text() == "stage\n"
+    assert not ctx.config.learning_state_dir.exists()
+    assert "prompt_hash" not in data
+
+
+@pytest.mark.parametrize("field", list(supply("s1")))
+def test_compile_refuses_supply_missing_required_field(tmp_path, field):
+    record = supply("s1")
+    del record[field]
+    test_compile_refuses_inconsistent_output(tmp_path, compiled_doc(lesson_supplies=[record, supply("s2")]))
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("supply_id", 1),
+    ("procedure_id", []),
+    ("version", "2"),
+    ("version", True),
+    ("workspace_id", None),
+    ("work_key", {}),
+    ("context", []),
+    ("supplied_at", 123),
+    ("worker_job_id", []),
+    ("compiled_context_hash", 123),
+    ("prompt_hash", False),
+    ("unknown", "value"),
+])
+def test_compile_refuses_supply_with_invalid_field(tmp_path, field, value):
+    record = supply("s1") | {field: value}
+    test_compile_refuses_inconsistent_output(tmp_path, compiled_doc(lesson_supplies=[record, supply("s2")]))
 
 
 def test_compile_refuses_nonzero_exit(tmp_path):
@@ -154,7 +192,7 @@ def test_delivery_through_real_cli_records_supply_only(tmp_path, monkeypatch):
     learning = tmp_path / "learning"
     ctx, _ = make_ctx(tmp_path, {}, learning)
     ctx.config.context_command = (sys.executable, "-m", "omp_knowledge.context")
-    compiled = compiled_doc()
+    _, compiled = compile_with(tmp_path, compiled_doc())
     noisy = f"booting\n{{not json\n{json.dumps({'type': 'other'})}\n{event(compiled, prompt_hash='c' * 64)}\nbye\n"
     data: dict = {}
     lesson_context.record_delivery(ctx, compiled, noisy, data)

@@ -7,12 +7,31 @@ import re
 import subprocess  # nosec B404 - runs the operator-configured context CLI
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
 from omp_work.orchestrator.service import StageContext
 from omp_work.v1.canonical import canonical_json, sha256
 from omp_work.v1.service import WorkError
 
 
 _HEX64 = re.compile(r"[0-9a-f]{64}")
+
+
+class _LessonSupply(BaseModel):
+    """The knowledge CLI's supply wire shape, without a runtime knowledge dependency."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    supply_id: str = Field(min_length=1)
+    procedure_id: str
+    version: int
+    workspace_id: str
+    work_key: str
+    context: dict[str, Any]
+    supplied_at: str
+    worker_job_id: str | None = None
+    compiled_context_hash: str | None = None
+    prompt_hash: str | None = None
 
 
 def _validated(compiled: Any) -> dict[str, Any]:
@@ -27,15 +46,18 @@ def _validated(compiled: Any) -> dict[str, Any]:
     ):
         raise WorkError("context_compile_failed")
     ids, supplies = compiled.get("lesson_supply_ids"), compiled.get("lesson_supplies")
-    if ids is None and supplies is None:
+    if "lesson_supply_ids" not in compiled and "lesson_supplies" not in compiled:
         return compiled
     if (
         not isinstance(ids, list) or not isinstance(supplies, list)
         or any(not isinstance(sid, str) or not sid for sid in ids)
-        or any(not isinstance(rec, dict) or not isinstance(rec.get("supply_id"), str)
-               or not rec["supply_id"] for rec in supplies)
     ):
         raise WorkError("context_compile_failed")
+    try:
+        for rec in supplies:
+            _LessonSupply.model_validate(rec)
+    except ValidationError as error:
+        raise WorkError("context_compile_failed") from error
     supplied = [rec["supply_id"] for rec in supplies]
     if len(set(ids)) != len(ids) or len(set(supplied)) != len(supplied) or set(ids) != set(supplied):
         raise WorkError("context_compile_failed")
