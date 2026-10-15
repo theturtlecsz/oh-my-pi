@@ -1,0 +1,269 @@
+{
+  "schemaVersion": 1,
+  "assetId": "ecc-wp3-dynamic-workflow-mode",
+  "upstreamPath": "skills/dynamic-workflow-mode/SKILL.md",
+  "upstreamSha256": "bdf7902e4e213c6f2e7bdc417757004d118e8e36267239b707670e2875ebf7bf",
+  "adaptedSha256": "396309d44d69263d6e0ce1afd84ccd161375aa16a095142a788d9e70aa4dd2c4",
+  "edits": [
+    {
+      "reason": "Replace Claude-specific config, helper paths, and absent surfaces with OMP equivalents",
+      "find": [
+        "name: dynamic-workflow-mode",
+        "description: \"Design task-local harnesses, eval gates, and reusable skill extraction for Claude dynamic workflow mode and other adaptive agent harnesses. Use when building a task-local harness, adding eval gates, or extracting a reusable skill from ad-hoc work.\""
+      ],
+      "replace": [
+        "name: dynamic-workflow-mode",
+        "description: \"Design task-local harnesses and eval gates for omp coding sessions, and note reusable work as an observation candidate. Use when building a task-local harness, adding eval gates, or spotting repeated ad-hoc work.\""
+      ]
+    },
+    {
+      "reason": "Remove git checkpoints, commits, and pushes",
+      "find": [
+        "",
+        "Use this skill when a coding agent can generate or adapt a task-local harness instead of only following a static command flow. The goal is to turn dynamic workflow mode into a disciplined system: temporary harnesses for one-off work, shared skill extraction for repeated work, and observable control pane checkpoints for teams."
+      ],
+      "replace": [
+        "",
+        "Use this skill when a coding agent can generate or adapt a task-local harness instead of only following a static command flow. The goal is a disciplined system: temporary harnesses for one-off work, noted candidates for repeated work, and state recorded in the work item's existing records."
+      ]
+    },
+    {
+      "reason": "Replace Claude-specific config, helper paths, and absent surfaces with OMP equivalents",
+      "find": [
+        "",
+        "- The user mentions dynamic workflows, custom harnesses, harness-per-task, adaptive workflows, or Claude Code dynamic workflow mode."
+      ],
+      "replace": [
+        "",
+        "- The user mentions dynamic workflows, custom harnesses, harness-per-task, or adaptive workflows."
+      ]
+    },
+    {
+      "reason": "Route evidence, review, completion, and lessons to existing OMP records without new mandates",
+      "find": [
+        "- A task needs a custom loop, evaluator, crawler, fixture generator, watcher, or local dashboard.",
+        "- Multiple agents need the same repeatable process but the process is not yet captured as a shared skill.",
+        "- A workflow needs durable handoff artifacts, eval evidence, or operator approval before merge."
+      ],
+      "replace": [
+        "- A task needs a custom loop, evaluator, crawler, fixture generator, watcher, or local dashboard.",
+        "- Multiple agents need the same repeatable process but the process is not yet captured anywhere.",
+        "- A workflow needs durable handoff records or eval evidence."
+      ]
+    },
+    {
+      "reason": "Remove git checkpoints, commits, and pushes",
+      "find": [
+        "- **Inputs**: files, URLs, prompts, data sources, credentials policy, and user-provided constraints.",
+        "- **Outputs**: commits, reports, screenshots, status files, or control pane snapshots."
+      ],
+      "replace": [
+        "- **Inputs**: files, URLs, prompts, data sources, credentials policy, and user-provided constraints.",
+        "- **Outputs**: reports, screenshots, or status records."
+      ]
+    },
+    {
+      "reason": "Align wording with the scoped, evidence-based OMP flow",
+      "find": [
+        "- **Eval**: at least one pass/fail check tied to the task, not only \"it ran\".",
+        "- **Handoff**: a short artifact that tells the next operator what happened, what is blocked, and how to resume."
+      ],
+      "replace": [
+        "- **Eval**: at least one pass/fail check tied to the task, not only \"it ran\".",
+        "- **Handoff**: a short note that tells the next operator what happened, what is blocked, and how to resume."
+      ]
+    },
+    {
+      "reason": "Replace Claude-specific config, helper paths, and absent surfaces with OMP equivalents",
+      "find": [
+        "2. **Repeated task with changing inputs**: create a task-local harness and keep it under a temp or project-local working area.",
+        "3. **Repeated task across teammates or repos**: extract the pattern into a shared skill.",
+        "4. **Task with external state, queueing, or approvals**: add control pane visibility before adding more automation.",
+        "5. **Task with safety risk**: add an eval gate and a human merge gate before autonomous execution."
+      ],
+      "replace": [
+        "2. **Repeated task with changing inputs**: create a task-local harness and keep it under a temp or project-local working area.",
+        "3. **Repeated task across teammates or repos**: note it as a reuse candidate (see Reuse Candidates).",
+        "4. **Task with external state or queueing**: record the state in the work item's existing plan record before adding more automation.",
+        "5. **Task with safety risk**: add an eval gate before autonomous execution; stop on an unsafe external action."
+      ]
+    },
+    {
+      "reason": "Note reuse candidates in existing records; no automatic promotion",
+      "find": [
+        "",
+        "## Shared Skill Extraction"
+      ],
+      "replace": [
+        "",
+        "## Reuse Candidates"
+      ]
+    },
+    {
+      "reason": "Note reuse candidates in existing records; no automatic promotion",
+      "find": [
+        "",
+        "Promote a task-local harness into a shared skill only when at least two of these are true:"
+      ],
+      "replace": [
+        "",
+        "A task-local harness is a reuse candidate when at least two of these are true:"
+      ]
+    },
+    {
+      "reason": "Replace Claude-specific config, helper paths, and absent surfaces with OMP equivalents",
+      "find": [
+        "- The workflow has a stable input/output contract.",
+        "- The workflow benefits from a control pane, status board, or team handoff."
+      ],
+      "replace": [
+        "- The workflow has a stable input/output contract."
+      ]
+    },
+    {
+      "reason": "Replace Claude-specific config, helper paths, and absent surfaces with OMP equivalents",
+      "find": [
+        "",
+        "When extracting, write the skill first in `skills/<name>/SKILL.md`. Add command shims only if a legacy slash-entry surface is still required."
+      ],
+      "replace": [
+        "",
+        "Record the candidate as an observation in `~/.agents/skill-observations/log.md`. Never promote it to a skill or rule automatically: a standing change lands only through an owner-approved change in its canonical source. Reuse findings about existing code stay in the existing intake and plan records, not a second backlog."
+      ]
+    },
+    {
+      "reason": "Remove git checkpoints, commits, and pushes",
+      "find": [
+        "",
+        "## Control Pane Checkpoints"
+      ],
+      "replace": [
+        "",
+        "## Checkpoints"
+      ]
+    },
+    {
+      "reason": "Remove git checkpoints, commits, and pushes",
+      "find": [
+        "",
+        "Dynamic workflow mode becomes team-usable when it exposes state. Record these checkpoints whenever the task spans more than one session:"
+      ],
+      "replace": [
+        "",
+        "Record these in the work item's existing records whenever the task spans more than one session:"
+      ]
+    },
+    {
+      "reason": "Route evidence, review, completion, and lessons to existing OMP records without new mandates",
+      "find": [
+        "",
+        "- **Plan**: objective, owner, acceptance criteria, and risky external systems.",
+        "- **Queue**: work items, assigned agent role, branch/worktree, and dependency edges.",
+        "- **Run**: active harness, current loop step, recent eval result, and token/cost signal if available.",
+        "- **Gate**: test results, browser screenshots, security review, and merge readiness.",
+        "- **Handoff**: what is done, what failed, what needs a human decision."
+      ],
+      "replace": [
+        "",
+        "- **Plan**: objective, acceptance criteria, and risky external systems (the approved `/plan` record).",
+        "- **Run**: active harness, current loop step, and recent eval result.",
+        "- **Evidence**: check results, posted as verification evidence (`append_evidence kind:\"verification\"`) during `/summary`.",
+        "- **Handoff**: what is done, what failed, what needs a decision; the owner's `/done` closes the item."
+      ]
+    },
+    {
+      "reason": "Remove git checkpoints, commits, and pushes",
+      "find": [
+        "",
+        "If the repo has ECC2 state enabled, prefer adding or reading checkpoints through the ECC control pane or state-store-backed scripts instead of scattering untracked notes."
+      ],
+      "replace": [
+        "",
+        "Do not scatter untracked notes or write handoff files."
+      ]
+    },
+    {
+      "reason": "Align wording with the scoped, evidence-based OMP flow",
+      "find": [
+        "",
+        "Every dynamic harness needs a task-specific eval. Pick the cheapest reliable gate:"
+      ],
+      "replace": [
+        "",
+        "Every dynamic harness needs a task-specific eval. The approved scope supplies the checks; pick the cheapest reliable gate it allows:"
+      ]
+    },
+    {
+      "reason": "Remove coverage targets; the approved scope supplies the checks",
+      "find": [
+        "| --- | --- |",
+        "| Code feature | Focused test, lint, coverage, and one integration path |",
+        "| UI/control pane | Browser smoke with screenshot and overflow/error checks |"
+      ],
+      "replace": [
+        "| --- | --- |",
+        "| Code feature | Focused test and the project's own check command (`bun check` in OMP) |",
+        "| UI | Browser smoke with screenshot and overflow/error checks, when the scope lists it |"
+      ]
+    },
+    {
+      "reason": "Delegation uses granted tools and never adds grants",
+      "find": [
+        "| Agent workflow | Fixture transcript or seeded work item with expected routing |",
+        "| Research/content | Source-neutral brief, claim checklist, and publish-ready outline |"
+      ],
+      "replace": [
+        "| Agent workflow | Fixture transcript or seeded work item with expected routing |",
+        "| Research/content | Source-neutral brief and claim checklist |"
+      ]
+    },
+    {
+      "reason": "Route evidence, review, completion, and lessons to existing OMP records without new mandates",
+      "find": [
+        "",
+        "Do not claim a dynamic workflow is reusable until the eval can be rerun by another teammate."
+      ],
+      "replace": [
+        "",
+        "Do not claim a dynamic workflow is reusable until the eval can be rerun by another teammate. Independent review is the existing `run_audit` auditor run through `/summary`; this skill adds no reviewer."
+      ]
+    },
+    {
+      "reason": "Note reuse candidates in existing records; no automatic promotion",
+      "find": [
+        "- Treating dynamic workflow mode as permission to skip tests.",
+        "- Creating one-off docs when a shared skill or status artifact is the real product.",
+        "- Running multiple agents without ownership, merge gate, or conflict policy."
+      ],
+      "replace": [
+        "- Treating dynamic workflow mode as permission to skip tests.",
+        "- Creating one-off docs when an existing record is the real product.",
+        "- Running multiple agents without ownership or a conflict policy."
+      ]
+    },
+    {
+      "reason": "Align wording with the scoped, evidence-based OMP flow",
+      "find": [
+        "",
+        "- The harness or skill path."
+      ],
+      "replace": [
+        "",
+        "- The harness path, if one was made."
+      ]
+    },
+    {
+      "reason": "Replace Claude-specific config, helper paths, and absent surfaces with OMP equivalents",
+      "find": [
+        "- The eval commands and results.",
+        "- The control pane or handoff artifact path.",
+        "- The next reusable extraction candidate."
+      ],
+      "replace": [
+        "- The eval commands and results.",
+        "- Where the evidence landed (plan record or `/summary` verification evidence).",
+        "- Any reuse candidate noted in the observation log."
+      ]
+    }
+  ]
+}

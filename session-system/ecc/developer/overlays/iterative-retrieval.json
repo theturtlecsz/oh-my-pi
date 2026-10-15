@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "assetId": "ecc-wp3-iterative-retrieval",
+  "upstreamPath": "skills/iterative-retrieval/SKILL.md",
+  "upstreamSha256": "b453b16d3e36174b8487c05ab807d0321a66c2d058812b2ae129d82824183725",
+  "adaptedSha256": "a9f12e85343ddeb0900891244f6a2468a42f360b029c520bb56429c234ddaed4",
+  "edits": [
+    {
+      "reason": "Delegation uses granted tools and never adds grants",
+      "find": [
+        "",
+        "// Dispatch to retrieval agent"
+      ],
+      "replace": [
+        "",
+        "// Run with the find and grep tools the task is already granted"
+      ]
+    },
+    {
+      "reason": "Delegation uses granted tools and never adds grants",
+      "find": [
+        "",
+        "## Integration with Agents"
+      ],
+      "replace": [
+        "",
+        "## Integration with Delegation"
+      ]
+    },
+    {
+      "reason": "Delegation uses granted tools and never adds grants",
+      "find": [
+        "",
+        "Use in agent prompts:"
+      ],
+      "replace": [
+        "",
+        "Use in the delegated task's prompt:"
+      ]
+    },
+    {
+      "reason": "Delegation uses granted tools and never adds grants",
+      "find": [
+        "5. Return files with relevance >= 0.7",
+        "```",
+        ""
+      ],
+      "replace": [
+        "5. Return files with relevance >= 0.7",
+        "```",
+        "",
+        "Delegation uses the tools the task is already granted. This pattern never adds a tool grant, a reviewer, or an approval step. If the granted tools cannot reach a file, report the gap instead of widening access.",
+        ""
+      ]
+    },
+    {
+      "reason": "Route evidence, review, completion, and lessons to existing OMP records without new mandates",
+      "find": [
+        "",
+        "## Related"
+      ],
+      "replace": [
+        "",
+        "## Records"
+      ]
+    },
+    {
+      "reason": "Replace Claude-specific config, helper paths, and absent surfaces with OMP equivalents",
+      "find": [
+        "",
+        "- [The Longform Guide](https://x.com/affaanmustafa/status/2014040193557471352) - Subagent orchestration section",
+        "- `continuous-learning` skill - For patterns that improve over time",
+        "- Agent definitions bundled with ECC (manual install path: `agents/`)"
+      ],
+      "replace": [
+        "",
+        "- Reuse findings (which existing code fits and why) belong in the existing intake and plan records; no separate retrieval backlog or report.",
+        "- If a retrieval method repeatedly misled, log an observation in `~/.agents/skill-observations/log.md`. Observations are never promoted to rules automatically."
+      ]
+    }
+  ]
+}

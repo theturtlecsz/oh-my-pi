@@ -1,0 +1,192 @@
+[
+  {
+    "id": "ecc-wp3-verification-loop",
+    "pack": "engineering",
+    "upstream": {
+      "repository": "https://github.com/affaan-m/ECC.git",
+      "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+      "path": "skills/verification-loop/SKILL.md",
+      "sha256": "f0d56107f79e607d4de6c5543b8edfb1b58ab9ae4019b39831689cd91116543e"
+    },
+    "target": {
+      "path": ".omp/rules/ecc-wp3-verification-loop.md",
+      "scope": "project"
+    },
+    "adaptation": {
+      "kind": "rule-metadata",
+      "transformVersion": 1,
+      "overlay": "developer/overlays/verification-loop.json"
+    },
+    "activation": {
+      "state": "inactive",
+      "mode": "rulebook",
+      "description": "Focused verification of work against the approved scope's checks; report what ran as verification evidence",
+      "selection": "model-driven retrieval via rule://"
+    },
+    "dependencies": [],
+    "disposition": "supported-with-adaptation",
+    "reason": "Rule metadata over a reviewed overlay: Claude config/helper paths, slash commands, model names, coverage targets, forced reviewers/E2E, git steps, and new gates replaced with OMP equivalents; evidence, audit, completion, and lessons map to existing OMP paths",
+    "qualification": {
+      "mechanicalTests": [
+        "session-system/tests/ecc-wp3-execution.test.ts"
+      ],
+      "behavioralTrial": null,
+      "qualifiedRelease": null
+    },
+    "rollback": {
+      "removeOwnedArtifactOnly": true
+    }
+  },
+  {
+    "id": "ecc-wp3-iterative-retrieval",
+    "pack": "engineering",
+    "upstream": {
+      "repository": "https://github.com/affaan-m/ECC.git",
+      "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+      "path": "skills/iterative-retrieval/SKILL.md",
+      "sha256": "b453b16d3e36174b8487c05ab807d0321a66c2d058812b2ae129d82824183725"
+    },
+    "target": {
+      "path": ".omp/rules/ecc-wp3-iterative-retrieval.md",
+      "scope": "project"
+    },
+    "adaptation": {
+      "kind": "rule-metadata",
+      "transformVersion": 1,
+      "overlay": "developer/overlays/iterative-retrieval.json"
+    },
+    "activation": {
+      "state": "inactive",
+      "mode": "rulebook",
+      "description": "Bounded context retrieval for delegated tasks: dispatch, evaluate, refine, at most 3 cycles",
+      "selection": "model-driven retrieval via rule://"
+    },
+    "dependencies": [],
+    "disposition": "supported-with-adaptation",
+    "reason": "Rule metadata over a reviewed overlay: Claude config/helper paths, slash commands, model names, coverage targets, forced reviewers/E2E, git steps, and new gates replaced with OMP equivalents; evidence, audit, completion, and lessons map to existing OMP paths",
+    "qualification": {
+      "mechanicalTests": [
+        "session-system/tests/ecc-wp3-execution.test.ts"
+      ],
+      "behavioralTrial": null,
+      "qualifiedRelease": null
+    },
+    "rollback": {
+      "removeOwnedArtifactOnly": true
+    }
+  },
+  {
+    "id": "ecc-wp3-dynamic-workflow-mode",
+    "pack": "engineering",
+    "upstream": {
+      "repository": "https://github.com/affaan-m/ECC.git",
+      "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+      "path": "skills/dynamic-workflow-mode/SKILL.md",
+      "sha256": "bdf7902e4e213c6f2e7bdc417757004d118e8e36267239b707670e2875ebf7bf"
+    },
+    "target": {
+      "path": ".omp/rules/ecc-wp3-dynamic-workflow-mode.md",
+      "scope": "project"
+    },
+    "adaptation": {
+      "kind": "rule-metadata",
+      "transformVersion": 1,
+      "overlay": "developer/overlays/dynamic-workflow-mode.json"
+    },
+    "activation": {
+      "state": "inactive",
+      "mode": "rulebook",
+      "description": "Task-local harnesses and eval gates for repeated work; reuse candidates go to the observation log",
+      "selection": "model-driven retrieval via rule://"
+    },
+    "dependencies": [],
+    "disposition": "supported-with-adaptation",
+    "reason": "Rule metadata over a reviewed overlay: Claude config/helper paths, slash commands, model names, coverage targets, forced reviewers/E2E, git steps, and new gates replaced with OMP equivalents; evidence, audit, completion, and lessons map to existing OMP paths",
+    "qualification": {
+      "mechanicalTests": [
+        "session-system/tests/ecc-wp3-execution.test.ts"
+      ],
+      "behavioralTrial": null,
+      "qualifiedRelease": null
+    },
+    "rollback": {
+      "removeOwnedArtifactOnly": true
+    }
+  },
+  {
+    "id": "ecc-wp3-agentic-engineering",
+    "pack": "engineering",
+    "upstream": {
+      "repository": "https://github.com/affaan-m/ECC.git",
+      "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+      "path": "skills/agentic-engineering/SKILL.md",
+      "sha256": "41c32c20ec97469341f5d83d8beb15f03d1b6f1c40fb1bdf534c50cd9a38cb6f"
+    },
+    "target": {
+      "path": ".omp/rules/ecc-wp3-agentic-engineering.md",
+      "scope": "project"
+    },
+    "adaptation": {
+      "kind": "rule-metadata",
+      "transformVersion": 1,
+      "overlay": "developer/overlays/agentic-engineering.json"
+    },
+    "activation": {
+      "state": "inactive",
+      "mode": "rulebook",
+      "description": "Eval-first execution, unit decomposition, and role-aware routing using effective role assignments",
+      "selection": "model-driven retrieval via rule://"
+    },
+    "dependencies": [],
+    "disposition": "supported-with-adaptation",
+    "reason": "Rule metadata over a reviewed overlay: Claude config/helper paths, slash commands, model names, coverage targets, forced reviewers/E2E, git steps, and new gates replaced with OMP equivalents; evidence, audit, completion, and lessons map to existing OMP paths",
+    "qualification": {
+      "mechanicalTests": [
+        "session-system/tests/ecc-wp3-execution.test.ts"
+      ],
+      "behavioralTrial": null,
+      "qualifiedRelease": null
+    },
+    "rollback": {
+      "removeOwnedArtifactOnly": true
+    }
+  },
+  {
+    "id": "ecc-wp3-tdd-workflow",
+    "pack": "engineering",
+    "upstream": {
+      "repository": "https://github.com/affaan-m/ECC.git",
+      "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+      "path": "skills/tdd-workflow/SKILL.md",
+      "sha256": "f5d8543733c557f0c53b688d40f14e9b870a6b2c7e405bab07433954e363828a"
+    },
+    "target": {
+      "path": ".omp/rules/ecc-wp3-tdd-workflow.md",
+      "scope": "project"
+    },
+    "adaptation": {
+      "kind": "rule-metadata",
+      "transformVersion": 1,
+      "overlay": "developer/overlays/tdd-workflow.json"
+    },
+    "activation": {
+      "state": "inactive",
+      "mode": "rulebook",
+      "description": "Test-driven development with appropriate red/green/refactor and focused verification",
+      "selection": "model-driven retrieval via rule://"
+    },
+    "dependencies": [],
+    "disposition": "supported-with-adaptation",
+    "reason": "Rule metadata over a reviewed overlay: Claude config/helper paths, slash commands, model names, coverage targets, forced reviewers/E2E, git steps, and new gates replaced with OMP equivalents; evidence, audit, completion, and lessons map to existing OMP paths",
+    "qualification": {
+      "mechanicalTests": [
+        "session-system/tests/ecc-wp3-execution.test.ts"
+      ],
+      "behavioralTrial": null,
+      "qualifiedRelease": null
+    },
+    "rollback": {
+      "removeOwnedArtifactOnly": true
+    }
+  }
+]

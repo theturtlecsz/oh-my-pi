@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 1,
+  "assetId": "ecc-wp3-agentic-engineering",
+  "upstreamPath": "skills/agentic-engineering/SKILL.md",
+  "upstreamSha256": "41c32c20ec97469341f5d83d8beb15f03d1b6f1c40fb1bdf534c50cd9a38cb6f",
+  "adaptedSha256": "4de7d544cf80d0e1530a47cd50f35dab43869982798ab1ac2acdf1c93ba53223",
+  "edits": [
+    {
+      "reason": "Delegation uses granted tools and never adds grants",
+      "find": [
+        "name: agentic-engineering",
+        "description: Operate as an agentic engineer using eval-first execution, decomposition, and cost-aware model routing. Use when planning or executing engineering work that agents will carry out end to end."
+      ],
+      "replace": [
+        "name: agentic-engineering",
+        "description: Operate as an agentic engineer using eval-first execution, decomposition, and role-aware model routing. Use when planning or executing engineering work that agents will carry out end to end."
+      ]
+    },
+    {
+      "reason": "Delegation uses granted tools and never adds grants",
+      "find": [
+        "2. Decompose work into agent-sized units.",
+        "3. Route model tiers by task complexity.",
+        "4. Measure with evals and regression checks."
+      ],
+      "replace": [
+        "2. Decompose work into agent-sized units.",
+        "3. Route by role and task complexity.",
+        "4. Measure with the approved scope's checks and regression checks."
+      ]
+    },
+    {
+      "reason": "Align wording with the scoped, evidence-based OMP flow",
+      "find": [
+        "",
+        "1. Define capability eval and regression eval."
+      ],
+      "replace": [
+        "",
+        "1. Define the capability check and the regression check the approved scope names."
+      ]
+    },
+    {
+      "reason": "Align wording with the scoped, evidence-based OMP flow",
+      "find": [
+        "3. Execute implementation.",
+        "4. Re-run evals and compare deltas."
+      ],
+      "replace": [
+        "3. Execute implementation.",
+        "4. Re-run the checks and compare deltas."
+      ]
+    },
+    {
+      "reason": "Align wording with the scoped, evidence-based OMP flow",
+      "find": [
+        "",
+        "## Model Routing"
+      ],
+      "replace": [
+        "",
+        "## Role Routing"
+      ]
+    },
+    {
+      "reason": "Map provider model names to effective roles without changing assignments",
+      "find": [
+        "",
+        "- Haiku: classification, boilerplate transforms, narrow edits",
+        "- Sonnet: implementation and refactors",
+        "- Opus: architecture, root-cause analysis, multi-file invariants"
+      ],
+      "replace": [
+        "",
+        "Roles carry the routing, not model names. Read the effective assignment from the runtime's model resolution, agent definition, and configuration; never change an assignment to route work.",
+        "",
+        "- Light role: classification, boilerplate transforms, narrow edits",
+        "- Worker role: implementation and refactors",
+        "- Deep role: architecture, root-cause analysis, multi-file invariants",
+        "",
+        "Delegate only with the tools already granted to the task; delegation never adds a grant."
+      ]
+    },
+    {
+      "reason": "Route evidence, review, completion, and lessons to existing OMP records without new mandates",
+      "find": [
+        "",
+        "Do not waste review cycles on style-only disagreements when automated format/lint already enforce style."
+      ],
+      "replace": [
+        "",
+        "Do not waste review cycles on style-only disagreements when automated format/lint already enforce style. Independent review is the existing `run_audit` auditor run through `/summary`; this skill adds no reviewer."
+      ]
+    },
+    {
+      "reason": "Route evidence, review, completion, and lessons to existing OMP records without new mandates",
+      "find": [
+        "",
+        "Track per task:",
+        "- model",
+        "- token estimate"
+      ],
+      "replace": [
+        "",
+        "Notice per task, in the evidence you already post:",
+        "- role used"
+      ]
+    },
+    {
+      "reason": "Replace Claude-specific config, helper paths, and absent surfaces with OMP equivalents",
+      "find": [
+        "",
+        "Escalate model tier only when lower tier fails with a clear reasoning gap."
+      ],
+      "replace": [
+        "",
+        "Escalate to a deeper role only when the lighter role fails with a clear reasoning gap, under the existing escalation doctrine.",
+        "",
+        "## Evidence and Lessons",
+        "",
+        "Check results go to verification evidence (`append_evidence kind:\"verification\"` via `/summary`); reuse notes stay in the existing intake and plan records. The owner's `/done` closes. A lesson goes to the observation log (`~/.agents/skill-observations/log.md`) and is never promoted automatically."
+      ]
+    }
+  ]
+}
