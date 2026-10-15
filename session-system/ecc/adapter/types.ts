@@ -9,7 +9,7 @@
  */
 
 /** Adaptation kinds the transform understands. */
-export type AdaptationKind = "rule-metadata" | "skill-namespaced" | "agent-metadata" | "database-advisor-profile";
+export type AdaptationKind = "rule-metadata" | "skill-namespaced" | "agent-metadata";
 
 /** Adoption disposition from ECC-IMPLEMENTATION-SPEC.md section 5. */
 export type Disposition =
