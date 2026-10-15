@@ -48,6 +48,7 @@ class GeneratedCampaign:
     selection_seconds: float = 30
     selection_timeout: float = 5
     selection_attempts: int = 8
+    width: int = mechanism_tasks.WIDTH
 
     def __post_init__(self) -> None:
         recipe = mechanism.canonical_recipe(self.recipe)
@@ -59,6 +60,8 @@ class GeneratedCampaign:
         for limit in (self.node_budget, self.selection_seconds, self.selection_timeout):
             if isinstance(limit, bool) or not math.isfinite(limit) or limit < 0:
                 raise ValueError("campaign caps must be finite and nonnegative")
+        if type(self.width) is not int or self.width <= 0:
+            raise ValueError("width must be positive")
         if type(self.selection_attempts) is not int or self.selection_attempts < 0:
             raise ValueError("selection_attempts must be nonnegative")
 
@@ -76,7 +79,7 @@ class GeneratedCampaign:
                 Path(node.id), candidates[node.id], hashlib.sha256(candidates[node.id]).hexdigest(),
                 node.id, node.parent, node.cost,
             ) for node in task.nodes),
-            search=SearchConfig("fixed", self.node_budget, mechanism_tasks.WIDTH, task.seed, metric),
+            search=SearchConfig("fixed", self.node_budget, self.width, task.seed, metric),
         )
 
     @property

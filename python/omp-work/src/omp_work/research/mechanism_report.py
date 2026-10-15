@@ -15,7 +15,7 @@ import math
 import tempfile
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -27,6 +27,7 @@ from omp_work.research.custody import artifact_path
 from omp_work.research.dossier import verify_dossier, write_dossier
 from omp_work.research.managed import verify_managed_trial
 from omp_work.research.mechanism_recipe import THRESHOLD_GRID
+from omp_work.research.mechanism_tasks import MechanismTask
 from omp_work.research.mechanism_study import (
     PASS_RULE,
     Admission,
@@ -34,6 +35,7 @@ from omp_work.research.mechanism_study import (
     MemberRun,
     StudyExecution,
     population_average,
+    validate_study,
 )
 from omp_work.research.recursive import CallerGrant, RecursionState
 from omp_work.research.recursive_transfer import assemble_results
@@ -111,7 +113,7 @@ def _sign(values: Sequence[float]) -> str:
         return "win"
     if mean < 0:
         return "loss"
-    return "zero"
+    return "null result"
 
 
 def _links(run: MemberRun) -> list[dict[str, Any]]:
@@ -166,10 +168,26 @@ def _identity_ok(run: MemberRun, study: FrozenStudy | None) -> bool:
             return False
         if "recipe_sha256" in row and row.get("recipe_sha256") != run.recipe_sha256:
             return False
-    if study is not None and run.threshold is not None:
+    if study is not None:
+        task = next((task for task in study.tasks if task.task_id == run.task_id), None)
+        if task is None or (
+            run.content_sha256 != task.content_sha256
+            or run.manifest_sha256 != task.manifest_sha256
+            or run.domain != task.domain or run.cohort != task.cohort or run.seed != task.seed
+            or run.protocol_sha256 != hashlib.sha256(task.protocol_bytes).hexdigest()
+            or run.evaluator_sha256 != hashlib.sha256(task.evaluator_script).hexdigest()
+            or run.phase != ("development" if task.cohort == "development" else "confirmation")
+            or run.metric != ("score" if task.domain == "simulation" else "ratio")
+            or run.direction != "higher"
+        ):
+            return False
+    if study is not None:
+        if run.threshold is None:
+            return False
         policy = study.policy(run.family, run.threshold)
         if (
             policy is None
+            or policy.role != run.role
             or policy.source_sha256 != run.source_sha256
             or policy.recipe_sha256 != run.recipe_sha256
             or policy.spec_sha256 != run.spec_sha256
@@ -178,21 +196,34 @@ def _identity_ok(run: MemberRun, study: FrozenStudy | None) -> bool:
     return True
 
 
-def _pair_runs(runs: Sequence[MemberRun]) -> list[tuple[float | None, MemberRun | None, MemberRun | None]]:
+def _pair_runs(
+    runs: Sequence[MemberRun], study: FrozenStudy | None,
+) -> list[tuple[float | None, MemberRun | None, MemberRun | None, MechanismTask | None]]:
     grouped: dict[str, list[MemberRun]] = defaultdict(list)
+    tasks = {} if study is None else {task.task_id: task for task in study.tasks}
+    for task_id in tasks:
+        grouped[task_id] = []
     for run in runs:
+        if study is not None and run.task_id not in tasks:
+            raise ValueError("task_not_frozen")
+        if run.role not in {"baseline", "candidate"} or (
+            study is not None and run.threshold not in THRESHOLD_GRID
+        ):
+            raise ValueError("unknown_member")
         grouped[run.task_id].append(run)
-    pairs: list[tuple[float | None, MemberRun | None, MemberRun | None]] = []
-    for members in grouped.values():
-        if any(member.threshold is not None for member in members):
+    pairs: list[tuple[float | None, MemberRun | None, MemberRun | None, MechanismTask | None]] = []
+    for task_id, members in grouped.items():
+        task = tasks.get(task_id)
+        if study is not None or any(member.threshold is not None for member in members):
             for threshold in THRESHOLD_GRID:
                 pairs.append((
                     threshold,
                     _one(members, "baseline", threshold),
                     _one(members, "candidate", threshold),
+                    task,
                 ))
         else:
-            pairs.append((None, _one(members, "baseline", None), _one(members, "candidate", None)))
+            pairs.append((None, _one(members, "baseline", None), _one(members, "candidate", None), task))
     return pairs
 
 
@@ -278,6 +309,21 @@ def _slice_claim(seed_rows: list[dict[str, Any]]) -> dict[str, Any]:
         "stats": stats,
         "programme_qualification": False,
     }
+
+
+def _domain_claim(claims: list[dict[str, Any]], domain: str) -> dict[str, Any]:
+    """Preserve every protocol slice; never infer across different evaluators."""
+    selected = [claim for claim in claims if claim["domain"] == domain]
+    if len(selected) == 1:
+        return selected[0]
+    outcomes = {claim["outcome"] for claim in selected}
+    deltas = [delta for claim in selected for delta in claim["deltas"]]
+    outcome = "inconclusive"
+    if any(delta is not None for delta in deltas):
+        outcome = ("incomplete comparison" if any(delta is None for delta in deltas)
+                   else next(iter(outcomes)) if len(outcomes) == 1 else "mixed results")
+    return {"outcome": outcome, "deltas": deltas, "inferred": False, "stats": None,
+            "seeds": [row for claim in selected for row in claim["seeds"]], "slices": selected}
 
 
 def _dataset_content(run: MemberRun) -> str:
@@ -369,12 +415,16 @@ def build_report(
         completed = True
     if runs is None:
         raise ValueError("runs are required")
+    if study is not None:
+        validate_study(study)
     history = history if history is not None else ConsumptionHistory()
     failures: list[str] = []
     pairs: list[dict[str, Any]] = []
     measurements: list[dict[str, Any]] = []
     executions: list[TaskExecution] = []
+    execution_pairs: list[dict[str, Any]] = []
     cohorts: list[CohortTask] = []
+    cohort_task_ids: list[str] = []
     # One confirmation document per task. Separate cohorts per threshold share
     # that document and are rejected as duplicate confirmation content.
     pending_steps: dict[tuple, list[StepArms]] = {}
@@ -383,13 +433,28 @@ def build_report(
     any_links = False
     verified_any = False
 
-    for threshold, baseline, candidate in _pair_runs(tuple(runs)):
+    for threshold, baseline, candidate, frozen_task in _pair_runs(tuple(runs), study):
         pair_failures: list[str] = []
         if baseline is None or candidate is None:
             pair_failures.append("missing_member")
-            pairs.append(_empty_pair(threshold, baseline, candidate, pair_failures))
+            pair = _empty_pair(threshold, baseline, candidate, pair_failures, frozen_task)
+            pairs.append(pair)
+            execution_pairs.append(pair)
+            empty_arm = ArmExecution(None, 0, (), None, tuple(pair_failures), state, None, None)
+            executions.append(TaskExecution(
+                pair["phase"], pair["domain"], pair["protocol_sha256"], pair["metric"], pair["direction"],
+                pair["task_id"], None, "ineligible", None, {"baseline": None, "candidate": None},
+                0, tuple(pair_failures), empty_arm, empty_arm, False,
+            ))
             failures.extend(pair_failures)
             continue
+        if baseline.failure or candidate.failure:
+            pair_failures.append("failed_attempt")
+        if (baseline.task_id, baseline.content_sha256, baseline.manifest_sha256, baseline.seed,
+            baseline.domain, baseline.phase, baseline.cohort, baseline.dataset_id) != (
+            candidate.task_id, candidate.content_sha256, candidate.manifest_sha256, candidate.seed,
+            candidate.domain, candidate.phase, candidate.cohort, candidate.dataset_id):
+            pair_failures.append("task_mismatch")
         if baseline.caps != candidate.caps or (study is not None and baseline.caps != study.caps):
             pair_failures.append("unequal_caps")
         if baseline.protocol_sha256 != candidate.protocol_sha256 or baseline.evaluator_sha256 != candidate.evaluator_sha256:
@@ -418,6 +483,8 @@ def build_report(
             if trial_id in seen or ("trial", trial_id) in history.consumed:
                 pair_failures.append("replay")
             seen.add(trial_id)
+        if len(base_trials) != len(cand_trials):
+            pair_failures.append("unequal_attempts")
         difference = None
         if not pair_failures and base_value is not None and cand_value is not None:
             difference = cand_value - base_value if baseline.direction == "higher" else base_value - cand_value
@@ -440,6 +507,7 @@ def build_report(
             "candidate": {"value": cand_value, "trials": cand_trials, "selections": _selections(candidate)},
             "failures": list(dict.fromkeys(pair_failures)),
             "costs": [_costs(baseline), _costs(candidate)],
+            **_task_metadata(frozen_task),
         }
         pairs.append(pair)
         failures.extend(pair["failures"])
@@ -462,10 +530,12 @@ def build_report(
                 StepArms(f"{threshold}:{index}", base_id, cand_id)
                 for index, (base_id, cand_id) in enumerate(zip(base_trials, cand_trials))
             )
+        execution_pairs.append(pair)
         executions.append(_execution(baseline, candidate, difference, pair["failures"], base_trials, cand_trials, state))
 
     for key, steps in pending_steps.items():
         phase, domain, metric, direction, protocol, seed, dataset_id, _task_id, width, budget = key
+        cohort_task_ids.append(_task_id)
         cohorts.append(CohortTask(
             phase=phase, domain=domain, metric=metric, direction=direction,
             protocol_sha256=protocol, seed=seed, width=width, budget=budget,
@@ -477,15 +547,17 @@ def build_report(
             store, workspace_id, actor_id, work_id, data_dir, history=history,
         )
         prepared = prepare_cohorts(tuple(cohorts), native, ())
-        for cohort, task in zip(cohorts, prepared):
+        for cohort, task, task_id in zip(cohorts, prepared, cohort_task_ids, strict=True):
             if not task.eligible:
                 for reason in task.reasons:
                     failures.append("replay" if reason in _REPLAY else reason)
                 for pair in pairs:
-                    if pair["task_id"] and pair["domain"] == cohort.domain and pair["seed"] == cohort.seed and pair["difference"] is not None:
-                        if any(reason in _REPLAY for reason in task.reasons):
-                            pair["failures"].append("replay")
-                            pair["difference"] = None
+                    if (pair["task_id"] == task_id
+                        and pair["phase"] == cohort.phase and pair["domain"] == cohort.domain
+                        and pair["protocol_sha256"] == cohort.protocol_sha256
+                        and pair["metric"] == cohort.metric and pair["direction"] == cohort.direction):
+                        pair["failures"].extend("replay" if reason in _REPLAY else reason for reason in task.reasons)
+                        pair["difference"] = None
 
     for run in runs:
         for trial_id in [link.get("trial_id") for link in _links(run)]:
@@ -496,24 +568,39 @@ def build_report(
         elif run.phase == "development":
             history.record_attempt(("development", run.task_id, run.content_sha256))
 
+    # Freshness and custody eligibility applies to every downstream claim.
+    executions = [replace(item, delta=pair["difference"], ok=pair["difference"] is not None,
+                          status="compared" if pair["difference"] is not None else "ineligible",
+                          failures=tuple(pair["failures"]))
+                  for item, pair in zip(executions, execution_pairs, strict=True)]
+    for pair in pairs:
+        if pair["failures"]:
+            for role in ("baseline", "candidate"):
+                if pair[role] is not None:
+                    pair[role]["value"] = None
+    for measurement in measurements:
+        pair = next(pair for pair in pairs if pair["task_id"] == measurement["task_id"]
+                    and pair["threshold"] == measurement["threshold"])
+        if pair["failures"]:
+            measurement["value"] = None
+        measurement["failures"] = list(pair["failures"])
     comparison = assemble_results(executions)
     seed_groups: dict[tuple, dict[int, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
     for pair in pairs:
         if pair["task_id"] is None:
             continue
-        key = (pair["phase"], pair["domain"], pair["metric"], pair["direction"])
+        key = (pair["phase"], pair["domain"], pair["protocol_sha256"], pair["metric"], pair["direction"])
         seed_groups[key][pair["seed"]].append(pair)
 
-    slices: dict[str, dict[str, Any]] = {}
     claims: list[dict[str, Any]] = []
     for key, seeds in seed_groups.items():
-        phase, domain, metric, direction = key
+        phase, domain, protocol, metric, direction = key
         seed_rows = []
         for seed, members in seeds.items():
             thresholded = [member for member in members if member["threshold"] is not None]
             if thresholded:
                 by_threshold = {member["threshold"]: member["difference"] for member in thresholded}
-                if len(by_threshold) != len(THRESHOLD_GRID) or any(value is None for value in by_threshold.values()):
+                if len(thresholded) != len(THRESHOLD_GRID) or len(by_threshold) != len(THRESHOLD_GRID) or any(value is None for value in by_threshold.values()):
                     difference = None
                 else:
                     ordered = [by_threshold[threshold] for threshold in THRESHOLD_GRID]
@@ -530,15 +617,13 @@ def build_report(
                 "failures": list(dict.fromkeys(reason for member in members for reason in member["failures"])),
             })
         claim = _slice_claim(seed_rows)
-        claim.update({"phase": phase, "domain": domain, "metric": metric, "direction": direction})
+        claim.update({"phase": phase, "domain": domain, "protocol_sha256": protocol, "metric": metric, "direction": direction})
         claims.append(claim)
-        slices[domain] = claim
-
-    source = slices.get("simulation", {"outcome": "inconclusive", "deltas": [], "inferred": False, "seeds": []})
-    transfer = slices.get("engineering", {"outcome": "inconclusive", "deltas": [], "inferred": False, "seeds": []})
+    source = _domain_claim(claims, "simulation")
+    transfer = _domain_claim(claims, "engineering")
     # Source results are reported above and are not an input to transfer.
     integrity = [reason for reason in dict.fromkeys(failures) if reason in {
-        "replay", "baseline_tamper", "judge_swap", "unequal_caps", "custody_mismatch",
+        "replay", "baseline_tamper", "judge_swap", "unequal_caps", "custody_mismatch", "task_mismatch",
     }]
     if integrity:
         outcome = "failed"
@@ -601,7 +686,16 @@ def build_report(
     )
 
 
-def _empty_pair(threshold, baseline, candidate, reasons) -> dict[str, Any]:
+def _task_metadata(task: MechanismTask | None) -> dict[str, Any]:
+    return {} if task is None else {
+        "task_id": task.task_id, "seed": task.seed, "domain": task.domain,
+        "phase": "development" if task.cohort == "development" else "confirmation",
+        "protocol_sha256": hashlib.sha256(task.protocol_bytes).hexdigest(),
+        "metric": "score" if task.domain == "simulation" else "ratio", "direction": "higher",
+    }
+
+
+def _empty_pair(threshold, baseline, candidate, reasons, task=None) -> dict[str, Any]:
     present = baseline or candidate
     return {
         "threshold": threshold,
@@ -616,7 +710,8 @@ def _empty_pair(threshold, baseline, candidate, reasons) -> dict[str, Any]:
         "baseline": None,
         "candidate": None,
         "failures": reasons,
-        "costs": [],
+        "costs": [_costs(run) for run in (baseline, candidate) if run is not None],
+        **_task_metadata(task),
     }
 
 

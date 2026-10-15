@@ -31,9 +31,14 @@ from omp_work.research.mechanism_study import (
     freeze_study,
     gate_structural_admission,
     population_average,
+    validate_study,
     run_controlled,
 )
+from omp_work.research import mechanism_report
 from omp_work.research.mechanism_report import build_report
+from omp_work.jobs.generated_campaign import GeneratedCampaign
+from omp_work.research.recursive_transfer_freshness import PreparedTask
+from omp_work.research.recursive_transfer_evidence import ConsumptionHistory
 from omp_work.research.mechanism_tasks import engineering_task, simulation_task
 from omp_work.research.zlib_source_task import build_corpus
 from omp_work.v1.canonical import sha256
@@ -309,7 +314,7 @@ def test_contradictory_tree_and_runner_scores_cannot_reverse_receipts(mechanism_
     assert report.dossier_reasons == []
     assert _BROKEN.isdisjoint(report.failures), report.failures
     assert report.outcome == "null result"
-    assert report.transfer["inferred"] is True
+    assert report.transfer["inferred"] is False
     assert report.transfer["deltas"] == [0, 0, 0, 0, 0]
     assert all(pair["difference"] == 0 for pair in report.pairs)
     assert report.l2["best_member"] is False
@@ -367,7 +372,8 @@ def test_replay_fails(mechanism_runs):
     first = _report(mechanism_runs, mechanism_runs.population, study=mechanism_runs.study)
     assert first.outcome == "null result"
     second = _report(
-        mechanism_runs, mechanism_runs.population, study=mechanism_runs.study, history=first.history,
+        mechanism_runs, mechanism_runs.population, study=mechanism_runs.study,
+        history=ConsumptionHistory.from_snapshot(json.loads(json.dumps(first.history.snapshot()))),
     )
     assert second.outcome == "failed"
     assert second.ok is False
@@ -394,6 +400,10 @@ def test_judge_swap_fails(mechanism_runs):
     assert report.outcome == "failed"
     assert "judge_swap" in report.failures
     assert report.transfer["inferred"] is False
+    assert len(report.l2["slices"]) == 5
+    assert {claim["protocol_sha256"] for claim in report.l2["slices"]} == {
+        run.protocol_sha256 for run in mechanism_runs.population
+    }
 
 
 @native
@@ -475,8 +485,10 @@ def test_null_study_completes_without_structural_admission(mechanism_runs, nativ
     assert report.dossier_reasons == []
     assert _BROKEN.isdisjoint(report.failures), report.failures
     assert report.transfer["deltas"] == [0, 0, 0, 0, 0]
-    assert report.transfer["inferred"] is True
-    assert report.transfer["stats"]["null_result"] is True
+    assert report.transfer["inferred"] is False
+    assert report.transfer["stats"] is None
+    assert len(report.l2["slices"]) == 5
+    assert len({claim["protocol_sha256"] for claim in report.l2["slices"]}) == 5
     assert report.source["outcome"] == "inconclusive"
     assert report.l3["admitted"] is False
     assert report.l3["reason"] == "confirmation_failed"
@@ -496,3 +508,78 @@ def test_null_study_completes_without_structural_admission(mechanism_runs, nativ
         # Zeros stay in the verified dossier negatives via the transfer deltas.
         [f"engineering paired difference {delta}" for delta in report.transfer["deltas"]]
     )
+
+
+def test_nested_preregistration_edits_cannot_change_execution_caps():
+    study = freeze_study(tasks=(_tiny_engineering(0),))
+    study.caps["node_budget"] = 123
+    study.cohort_sha256["heldout"] = "0" * 64
+    assert study.caps["node_budget"] == 5
+    validate_study(study)
+    with pytest.raises(ValueError, match="study_changed"):
+        validate_study(replace(study, caps_json=json.dumps({**study.caps, "node_budget": 123})))
+    with pytest.raises(ValueError, match="study_changed"):
+        build_report(runs=[], study=replace(study, digest="0" * 64), store=None,
+                     workspace_id=uuid4(), actor_id=uuid4(), work_id=uuid4(), data_dir=REPO)
+
+
+@native
+def test_registered_width_reaches_jailed_policy(mechanism_runs, tmp_path):
+    task = _tiny_engineering(7)
+    source = (
+        "def propose(steps, opened, *, seed=0, width=1):\n"
+        "    return ('b' if width == 3 else 'a'), seed\n"
+    )
+    run = run_controlled(
+        task, role="candidate", family=CANDIDATE_FAMILY, source=source,
+        recipe={"min_metric": 0.5}, caps={**NULL_CAPS, "width": 3}, ctx=mechanism_runs.ctx,
+    )
+    assert run.failure is None
+    assert _steps(run) == ["b"]
+    with pytest.raises(ValueError, match="width"):
+        GeneratedCampaign(task, {"min_metric": 0.5}, tmp_path, width=0)
+
+
+@native
+def test_omitted_frozen_task_remains_in_denominator(mechanism_runs):
+    study = freeze_study(tasks=(*mechanism_runs.study.tasks, _tiny_engineering(5)), caps=NULL_CAPS)
+    report = _report(mechanism_runs, mechanism_runs.population, study=study)
+    assert report.transfer["inferred"] is False
+    assert report.transfer["stats"] is None
+    assert report.outcome == "incomplete comparison"
+    assert len(report.pairs) == 18
+    missing = [pair for pair in report.pairs if pair["seed"] == 5]
+    assert len(missing) == 3
+    assert all(pair["difference"] is None and "missing_member" in pair["failures"] for pair in missing)
+    assert len(report.transfer["deltas"]) == 6
+    assert report.transfer["deltas"].count(None) == 1
+
+
+@native
+@pytest.mark.parametrize("reason", ["missing_managed_trial", "confirmation_mismatch", "metric_mismatch"])
+def test_refused_cohorts_invalidate_all_downstream_metrics(mechanism_runs, monkeypatch, reason):
+    def refuse(cohorts, native, studies):
+        return tuple(PreparedTask(False, (reason,), cohort.dataset_id, None, None, ()) for cohort in cohorts)
+    monkeypatch.setattr(mechanism_report, "prepare_cohorts", refuse)
+    report = _report(mechanism_runs, mechanism_runs.population, study=mechanism_runs.study)
+    assert reason in report.failures
+    assert report.transfer["inferred"] is False
+    assert all(delta is None for delta in report.transfer["deltas"])
+    assert all(pair["difference"] is None for pair in report.pairs)
+    assert all(row["value"] is None for row in report.measurements)
+    assert all(not group["deltas"] for group in report.groups)
+    assert all(reason in group["failures"] for group in report.groups)
+
+
+def test_five_complete_matched_pairs_support_only_local_inference():
+    claim = mechanism_report._slice_claim([
+        {"seed": seed, "difference": delta} for seed, delta in enumerate((1, 2, 3, 4, 5))
+    ])
+    assert claim["inferred"] is True
+    assert claim["stats"]["mean"] == 3
+    assert claim["stats"]["confidence_interval_95"] == pytest.approx([1.03675684, 4.96324316])
+    assert claim["programme_qualification"] is False
+    missing = mechanism_report._slice_claim([*claim["seeds"], {"seed": 5, "difference": None}])
+    assert missing["stats"] is None
+    assert missing["inferred"] is False
+    assert missing["deltas"] == [1, 2, 3, 4, 5, None]

@@ -56,6 +56,7 @@ __all__ = [
     "gate_structural_admission",
     "population_average",
     "run_controlled",
+    "validate_study",
 ]
 
 GENERATORS = mechanism_recipe.FAMILIES
@@ -106,7 +107,7 @@ def freeze_caps(caps: Mapping[str, Any] | None = None) -> dict[str, Any]:
     for key in CAP_KEYS:
         value = raw[key]
         if key in _INT_CAPS:
-            if type(value) is not int or value < 0:
+            if type(value) is not int or value < (1 if key == "width" else 0):
                 raise ValueError(f"{key} must be a nonnegative integer")
             out[key] = value
             continue
@@ -162,11 +163,19 @@ class FrozenStudy:
 
     spec_json: str
     spec_sha256: str
-    caps: dict[str, Any]
+    caps_json: str
     policies: tuple[FrozenPolicy, ...]
     tasks: tuple[MechanismTask, ...]
-    cohort_sha256: dict[str, str]
+    cohorts_json: str
     digest: str
+
+    @property
+    def caps(self) -> dict[str, Any]:
+        return json.loads(self.caps_json)
+
+    @property
+    def cohort_sha256(self) -> dict[str, str]:
+        return json.loads(self.cohorts_json)
 
     def policy(self, family: str, threshold: float) -> FrozenPolicy | None:
         for item in self.policies:
@@ -335,12 +344,22 @@ def freeze_study(
     return FrozenStudy(
         spec_json=spec_json,
         spec_sha256=sha256(spec_map),
-        caps=frozen_caps,
+        caps_json=canonical_json(frozen_caps),
         policies=policies,
         tasks=chosen,
-        cohort_sha256=cohort_sha,
+        cohorts_json=canonical_json(cohort_sha),
         digest=digest,
     )
+
+
+def validate_study(study: FrozenStudy) -> None:
+    """Recheck all preregistered identities at execution and reporting boundaries."""
+    for task in study.tasks:
+        for node in task.nodes:
+            mechanism_tasks.managed_inputs(task, node.id)
+    expected = freeze_study(tasks=study.tasks, caps=study.caps, spec=json.loads(study.spec_json))
+    if study != expected:
+        raise ValueError("study_changed")
 
 
 def assignments(study: FrozenStudy) -> tuple[tuple[FrozenPolicy, MechanismTask], ...]:
@@ -419,6 +438,7 @@ def _run_campaign(
         selection_seconds=float(caps["selection_seconds"]),
         selection_timeout=float(caps["selection_timeout"]),
         selection_attempts=int(caps["selection_attempts"]),
+        width=int(caps["width"]),
     )
     try:
         result = run_research_campaign(
@@ -440,6 +460,7 @@ def run_policy(
     ctx: CampaignContext,
 ) -> MemberRun:
     """Run one frozen population member. Caps are the study caps, not a per-arm choice."""
+    validate_study(study)
     if task.manifest_sha256 not in {item.manifest_sha256 for item in study.tasks}:
         raise ValueError("task_not_frozen")
     if study.policy(policy.family, policy.threshold) != policy:
@@ -460,8 +481,7 @@ def execute(
     task_ids: Sequence[str] | None = None,
 ) -> tuple[MemberRun, ...]:
     """Execute every population member on each selected frozen task."""
-    if study.spec_sha256 != sha256(json.loads(study.spec_json)):
-        raise ValueError("spec_changed")
+    validate_study(study)
     chosen = study.tasks
     if task_ids is not None:
         wanted = set(task_ids)
@@ -573,6 +593,5 @@ def finish(study: FrozenStudy, runs: Sequence[MemberRun], admission: Admission) 
     A null comparison and a refused structural change still complete. The spec
     digest is unchanged by execution.
     """
-    if study.spec_sha256 != sha256(json.loads(study.spec_json)):
-        raise ValueError("spec_changed")
+    validate_study(study)
     return StudyExecution(study, tuple(runs), admission, True)
