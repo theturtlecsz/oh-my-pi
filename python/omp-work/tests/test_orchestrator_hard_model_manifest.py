@@ -1,4 +1,4 @@
-"""Controls-only renewal keeps the model manifest inside a fixed task deadline."""
+"""OMP-595 r2: fixed task authority bounds model launch and renewed worker exits."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 import os
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -112,6 +112,101 @@ def test_controls_only_renewal_keeps_fixed_task_deadline(wiring, monkeypatch):
     assert len(state.posts) == 1
     assert state.revoked == [state.grant["id"]]
     assert seen["outcome"].outcome == "succeeded"
+
+
+def test_exhausted_published_budget_never_launches_worker(wiring):
+    """An elapsed 60s item budget crashes before registering a grant or running."""
+    state = wiring
+    state.request_patch = {"controls": {}}
+
+    def before_run(ctx):
+        # wiring captures state.expiry before this hook; aging sooner would
+        # prevent the fixture from reaching the implementation under test.
+        assert datetime.fromisoformat(state.expiry) > datetime.now(UTC)
+        with psycopg.connect(**ctx.config.ops.connection_kwargs("postgres")) as conn:
+            aged = conn.execute(
+                """
+                WITH RECURSIVE tree(job_id, created_at) AS (
+                    SELECT job_id, created_at FROM omp_jobs.jobs
+                    WHERE workspace_id=%s AND work_id=%s
+                    UNION
+                    SELECT child.job_id, child.created_at
+                    FROM omp_jobs.jobs AS child
+                    JOIN tree ON child.parent_job_id = tree.job_id
+                    WHERE child.workspace_id=%s
+                )
+                UPDATE omp_jobs.jobs
+                SET created_at = clock_timestamp() - interval '120 seconds'
+                WHERE workspace_id=%s AND job_id=(
+                    SELECT job_id FROM tree ORDER BY created_at, job_id LIMIT 1
+                )
+                """,
+                (ctx.workspace_id, ctx.work_id, ctx.workspace_id, ctx.workspace_id),
+            )
+        assert aged.rowcount == 1
+        assert ctx.lease_ok() is True
+        assert operations._task_deadline(ctx) is None
+
+    state.before_run = before_run
+    outcome = run(state)
+    assert outcome.outcome == "crashed"
+    assert outcome.data["code"] == "lease_dead"
+    assert state.posts == []
+    assert state.runs == []
+    assert state.revoked == []
+
+
+def test_live_renewal_preserves_nonzero_worker_exit(wiring):
+    """A renewed live lease leaves exit 1 as worker failure, not lease death."""
+    state = wiring
+    state.request_patch = {"controls": {}}
+    state.exit_code = 1
+    lease_seconds = 2
+
+    def before_run(ctx):
+        initial_expiry = ctx.lease_expires_at()
+        assert initial_expiry is not None
+        with psycopg.connect(**ctx.config.ops.connection_kwargs("postgres")) as conn:
+            updated = conn.execute(
+                """
+                UPDATE omp_jobs.jobs SET lease_seconds=%s
+                WHERE workspace_id=%s AND job_id=%s AND worker_id=%s AND fence=%s
+                  AND status='admitted'
+                """,
+                (lease_seconds, ctx.workspace_id, ctx.lease.job_id,
+                 ctx.lease.worker_id, ctx.lease.fence),
+            )
+        assert updated.rowcount == 1
+        renewed = renew_lease(
+            NativeJobStore(ctx.config.ops),
+            operation_id=str(uuid4()),
+            workspace_id=ctx.workspace_id,
+            actor_id=ctx.principal.actor_id,
+            job_id=str(ctx.lease.job_id),
+            worker_id=ctx.lease.worker_id,
+            fence=ctx.lease.fence,
+        )
+        assert renewed["status"] == "applied"
+        assert datetime.fromisoformat(renewed["job"]["lease_expires_at"]) > initial_expiry
+        assert ctx.lease_expires_at() > initial_expiry
+        assert ctx.lease_ok() is True
+
+    def after_run(ctx, outcome):
+        assert ctx.lease_ok() is True
+        assert ctx.lease_expires_at() > datetime.now(UTC)
+        deadline = operations._task_deadline(ctx)
+        assert deadline == datetime.fromisoformat(state.expiry)
+        assert (deadline - datetime.now(UTC)).total_seconds() > lease_seconds
+        assert outcome.outcome == "crashed"
+        assert outcome.data["exit_code"] == 1
+        assert outcome.data.get("code") != "lease_dead"
+
+    state.before_run = before_run
+    state.after_run = after_run
+    assert run(state).outcome == "crashed"
+    assert len(state.posts) == 1
+    assert len(state.runs) == 1
+    assert state.revoked == [state.grant["id"]]
 
 
 def _persist_controls(ctx, controls: dict[str, int]):
