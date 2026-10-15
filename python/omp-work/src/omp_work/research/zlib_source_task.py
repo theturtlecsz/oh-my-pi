@@ -82,7 +82,7 @@ def sample_production_files(
     """Take a seeded sample of 40 sorted production *.py files."""
     files = production_files(repo_root)
     k = min(len(files), count)
-    rng = random.Random(seed)
+    rng = random.Random(seed)  # nosec B311 - reproducible sampling, not security
     return sorted(rng.sample(files, k))
 
 

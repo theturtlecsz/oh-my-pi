@@ -546,7 +546,7 @@ def _launch(out_arg: str | None, run_arg: str | None) -> int:
         env[skip_accounting.ENV_CHECK] = env.get(skip_accounting.ENV_CHECK) or "work-ledger-integration"
         env[skip_accounting.ENV_ROOT] = env.get(skip_accounting.ENV_ROOT) or str(root)
         env["OMP_WORK_POSTGRES_INTEGRATION"] = "1"
-        child = subprocess.Popen([
+        child = subprocess.Popen([  # nosec B603 - fixed argv list, no shell
             sys.executable, "-m", "pytest", str(_suite_path()),
             "-p", "omp_work.skip_accounting", "-p", "no:cacheprovider",
             "-o", "addopts=", "--maxfail=0", f"--rootdir={root}",

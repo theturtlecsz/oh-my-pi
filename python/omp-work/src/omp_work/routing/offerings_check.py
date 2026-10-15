@@ -388,7 +388,8 @@ def _retain(states: Mapping[str, _Lane], previous: Mapping[str, Any]) -> Snapsho
         if listing is None:
             continue
         models = {model.id: _attrs(model) for model in listing.models}
-        assert state.time is not None
+        if state.time is None:
+            raise AssertionError("a retained listing always carries its freshness time")
         snapshot[name] = {
             "catalog_provider": state.source.catalog_provider,
             "models": models,
