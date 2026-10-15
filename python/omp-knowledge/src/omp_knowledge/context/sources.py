@@ -232,9 +232,9 @@ def procedural_items(
 
     The store file is opened with a ``mode=ro`` SQLite URI, so the retrieval
     never writes to it. Each procedure is read at its ``current_version``;
-    withdrawn procedures become ``withdrawn`` items and a precondition that does
-    not hold omits the procedure entirely. An absent store is a ``missing``
-    item.
+    withdrawn and suspended procedures become ``withdrawn`` items and a
+    precondition that does not hold omits the procedure entirely. An absent
+    store is a ``missing`` item.
     """
     path = Path(db_path)
     if not path.exists():
@@ -277,7 +277,7 @@ def procedural_items(
         steps = tuple(str(step) for step in json.loads(row["steps_json"]))
         text = f"{row['title']}: " + "; ".join(steps)
         ref = f"{row['procedure_id']} @v{row['current_version']}"
-        if row["status"] == "withdrawn":
+        if row["status"] in {"withdrawn", "suspended"}:
             items.append(
                 ContextItem(
                     section="procedural",
@@ -285,7 +285,11 @@ def procedural_items(
                     ref=ref,
                     text=text,
                     status="withdrawn",
-                    detail="procedure withdrawn",
+                    detail=(
+                        "procedure suspended"
+                        if row["status"] == "suspended"
+                        else "procedure withdrawn"
+                    ),
                 )
             )
         else:
