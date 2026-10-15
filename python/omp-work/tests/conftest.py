@@ -15,9 +15,12 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import pytest
+from parallel_safety import pytest_make_parametrize_id, tmp_path
 from omp_work.intake_support_judge import JudgeHook, use_judge_hook
 
 _HOOK_UNIT_TEST_MODULE = "test_intake_support_judge"
+
+__all__ = ["judge_echo_hook", "pytest_make_parametrize_id", "tmp_path"]
 
 
 @pytest.fixture(autouse=True)
