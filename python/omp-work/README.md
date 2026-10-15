@@ -34,4 +34,13 @@ uv run --project python/omp-work omp-work research run --key <KEY> --definition 
 - **States & conclusion**: campaigns transition draft → admitted → running → evaluating → concluded. Terminal outcome is `supported` when all criteria pass across all trials, or `refuted`.
 - **DB flags**: `--config-dir`, `--state-dir`, `--data-dir`, and `--db-port` must all be set or all omitted. Role credentials `omp_work_app` and `omp_work_migrator` from `<config_dir>/credentials/` are used; no host credentials are required. An optional `--harness-dir` sets the unpack destination.
 - **Output**: prints a single JSON object with `campaign_id`, `state: "concluded"`, `outcome`, `reason`, and `trials` (each with `trial_id`, `execution_status`, and `metrics`), exiting 0 on conclusion.
-- **No resume**: each invocation creates and runs a new campaign from draft to concluded; it does not resume prior campaigns.
+- **Search (opt in)**: add `"search": {"policy": "greedy", "budget": 5, "width": 1, "seed": 0, "metric": "ratio"}` and give trials unique `id`, optional `parent`, and positive `cost`. `fixed` follows definition order; `greedy` extends the highest-scoring opened node, stopping when it has no unopened child. Both stop before exceeding budget; five is a cap, not a required execution count. Without explicit search configuration, execution remains fixed.
+- **Reason & evidence**: output includes `decisions`, `best`, and `spent`. Each persisted trial's `reason` encodes policy, selected step, index, observation count, and digest of prior trusted metrics. Selection reads settled, verified evaluator receipts bound to observations, never candidate-reported scores.
+- **Resume**: rerun the same search definition to recover a matching running campaign, or pass `--resume <campaign-uuid>` to select it explicitly. Definition/admission bindings must match. Recovery reuses persisted choices and settled trials without repeating their side effects; concluded campaigns cannot be explicitly resumed.
+- **Compare**: run paired greedy/fixed campaigns on real production-source zlib compression, seeds 0–4, equal five-unit caps:
+
+  ```sh
+  uv run --project python/omp-work python -m omp_work research compare --key <KEY> --repo-root <checkout> --output <report.json> --client-config <client.json>
+  ```
+
+  Comparison accepts the same DB flags, reports corpus hashes, actual decisions/trials/costs, paired effect and 95% Student-t interval, and labels intervals containing zero as a null result. A valid comparison completes the study regardless of outcome. See [host comparison evidence](../../docs/reports/omp-605-adaptive-vs-fixed.md), including measured selection/helper-model costs and local-decision limits.

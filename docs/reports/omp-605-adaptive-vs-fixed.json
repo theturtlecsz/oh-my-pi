@@ -1,0 +1,3550 @@
+{
+  "corpus_hashes": {
+    "0": {
+      "python/omp-work/src/omp_work/client_ingress_probe.py": "1f0121c0665c10b9d3815dc9ed6f95cf2655ee28e213a5d147d0d1b64a1c390d",
+      "python/omp-work/src/omp_work/contracts/v1/artifact_store.py": "55a8bf7ccc4d04d86257ec5d8c2f84d5b509cfaa8b723828a8649974f3dda466",
+      "python/omp-work/src/omp_work/control_plane/gate.py": "e5c57b939a0a38796990b8601cc8bbcf8a4fce0a7089f074514215fe89f7a561",
+      "python/omp-work/src/omp_work/control_plane/locks.py": "afb2f7c59d0917cb143b22c07f130e77655b87012792f66782afb998bbf5e89b",
+      "python/omp-work/src/omp_work/egress_gateway.py": "f4bc0e0af8908db955d41ad046c34943be6c351fd62418dd10f343c2c5dac8e5",
+      "python/omp-work/src/omp_work/egress_research_jail.py": "8109f223a9478a72bad1251905782d4d29f3914f0b83c1c124d265a0516e2949",
+      "python/omp-work/src/omp_work/jobs/__init__.py": "1c1522cd0151003001e072310673ad82e1e78f78b60832f7c4ea3bc8c4021150",
+      "python/omp-work/src/omp_work/jobs/cancel.py": "ad69470c8a4a4d4bc287ffc7cf5d3ff2cd9e2d7900541b2fdd6dd0777f5eaa5b",
+      "python/omp-work/src/omp_work/jobs/managed_trial.py": "1be452ec82071636cda86fc48afae22b8838836275504772cab2c198f0995c1a",
+      "python/omp-work/src/omp_work/jobs/research_trial.py": "f17cadb724ec70c45f44696eed0cb2ac999fcbb1536611c3b0032eb0a7f31858",
+      "python/omp-work/src/omp_work/jobs/worker.py": "16726cfd12ad8c2d897b211e48145bc8d8a1917362580f05f389058e1fa1839a",
+      "python/omp-work/src/omp_work/knowledge_namespace.py": "56dab9c09130c611c57fa0fcceab1db106aacbab9d445d40dcd8af03065a9128",
+      "python/omp-work/src/omp_work/mission_budget.py": "3b44288479f3998d9b9244211ee9e18f29b4252b4899a458529ab31a66243f86",
+      "python/omp-work/src/omp_work/model_proxy_upstream.py": "f89090bfccce1c113235d05d827fc02ee6dbdb56bd66fd0cceb406fab25711f8",
+      "python/omp-work/src/omp_work/nsi6_corpus.py": "370aef9a208666d1d7157aed5734d7d6a9d771c84d0c06854aac8959f452b2d6",
+      "python/omp-work/src/omp_work/operations/artifacts.py": "dc36ec0b15b2bd453b3b8dee17f2968b8078fd897f767c7b23c979c6ae7cd1df",
+      "python/omp-work/src/omp_work/operations/database.py": "4a240100a5aadec5a4b980f29b34c93026dca5e858649bd8683e1d7256a2dde6",
+      "python/omp-work/src/omp_work/operations/stop.py": "68001ee113dfd2c60615d690ba43b51e32e7a1bf5250a5c26caa862219736770",
+      "python/omp-work/src/omp_work/orchestrator/github_pulls.py": "b3390462d37e3bd2968f2ead72041a55bfc120d5d9c07e733b36f7abc8b8db62",
+      "python/omp-work/src/omp_work/orchestrator/qualification.py": "ff8c0e5723cb965ad65ea81e658458fb8ff7b3cb57255ea6d3bd7763a57d5f7c",
+      "python/omp-work/src/omp_work/orchestrator/stages.py": "a25ebced6216a10deb54bd59647e84c4450481a2b5020e5024f25449708a3ba8",
+      "python/omp-work/src/omp_work/orchestrator/verifier.py": "9efeb1fef971eb0adc753278fe7aa1f90fad069a1d07e5877c22b9f4d74442f4",
+      "python/omp-work/src/omp_work/owner_key.py": "2bdf57a9a693f5ea4bdb3c47cf57cfb66112fd3baf32add8fa4e2146a5df778d",
+      "python/omp-work/src/omp_work/parallel_streams.py": "8d25d84b7584bacf2b249aee0d03238f9d2d81cbcca8e708e552f07587ee7819",
+      "python/omp-work/src/omp_work/qualification_counter.py": "da53ea6ebc5901f4518750ef49fe8db9e655627dcd9276d6ce409a776651cde0",
+      "python/omp-work/src/omp_work/research/bundle.py": "f0978ba2d717f4d47afcf7886f7a7ff32c319fd315237744520347936593599f",
+      "python/omp-work/src/omp_work/research/engineering.py": "788b6ca2388e2748be5f34ccd1a320ab5e8078baa60456faf383b412d11de449",
+      "python/omp-work/src/omp_work/research/literature.py": "976fb698ca3ae6366c26bdc7b1e56af6ccb5cd26d75db99778bddf319a11f816",
+      "python/omp-work/src/omp_work/research/mechanism_lab.py": "122ef909db10c924f182f2385ee79f0bd68e3c3f743c5e39fe7073e554e8dd67",
+      "python/omp-work/src/omp_work/research/recursive_transfer_history.py": "cd2a9f2200f350cea2d6c9f0701729e48d3bcf9b65f62231de453f535c456d11",
+      "python/omp-work/src/omp_work/research/zlib_source_task.py": "df61e751de315ad9decf80c0faa487eb456ade378047fa70e3051b9a21b478f7",
+      "python/omp-work/src/omp_work/routing/model_review.py": "a509b8c37dda67e17cf6fd33b6ebd9b3d2db34519d13917faa858392da364de7",
+      "python/omp-work/src/omp_work/routing/role_evidence.py": "bebb50168f6cfc9cb0fe1ef6792824687932b934a81817db9f94128c58525a56",
+      "python/omp-work/src/omp_work/routing/router.py": "ea31c74d12b6f15c977a1044a38d63064ea2d6c2066d2e957d502998f468ba64",
+      "python/omp-work/src/omp_work/standing_change.py": "d542ef6511946fbbcbe6d74f64eec73243c4a6a6dbf5c58834540f1e95b3c99a",
+      "python/omp-work/src/omp_work/standing_mandate.py": "bdf28bf7e931f0c38dc5f561fade456ea6e4888785f2396ac7efb72a6698de5f",
+      "python/omp-work/src/omp_work/v1/agent_stop.py": "185906e79af305858dfd43b90b18fe937d283a7521d4b728031fe4e45db90221",
+      "python/omp-work/src/omp_work/v1/intake_commands.py": "c419f2e6d2add2bef27dbfcc82d07ae65b92eaeac257b0e7d6698338765e6b1e",
+      "python/omp-work/src/omp_work/v1/intake_provenance_closure.py": "104b5e956b2e3863f96909690b8c641f8fafee87291f56c93c5d6b0f787af0a5",
+      "python/omp-work/src/omp_work/v1/mission_standing.py": "f1cd1106a7ae94f4b3506a38429ad9c0f1bde9a05538b0e9d5a0ac4e9b5a13bc"
+    },
+    "1": {
+      "python/omp-work/src/omp_work/__init__.py": "101bae14a5e1e50b661994b4682ca1b1ee903f868beca65b2737134215c3b79f",
+      "python/omp-work/src/omp_work/action_classify.py": "b8cebfe6399940523b60b4b672a9fd9aa5733282dec8e202616a0603cf612a6e",
+      "python/omp-work/src/omp_work/alarm_dispatch.py": "10cc013de4b82cc918aef4e1267fef139010ce8257c5e466081adc69078a9c3a",
+      "python/omp-work/src/omp_work/always_running.py": "6f0f1dd11bccbff61e34ffa324b6b088101b0d382a9d159d8d1853539178a339",
+      "python/omp-work/src/omp_work/budget_headroom.py": "6723c87c5dd4d1a23aefee66ae812139275e465e28d898450e613c29a95a3a91",
+      "python/omp-work/src/omp_work/contracts/r02/__init__.py": "9a6d51e1521e0fed5e2688aaef405eb239b409c2d13b4eb3df2dc24034f78c1c",
+      "python/omp-work/src/omp_work/control_plane/gate.py": "e5c57b939a0a38796990b8601cc8bbcf8a4fce0a7089f074514215fe89f7a561",
+      "python/omp-work/src/omp_work/control_plane/mutation.py": "bd6e4be4d3a0909d7b0630f03eb3240c78c6810097fb99d1fa35c02194c19da8",
+      "python/omp-work/src/omp_work/durability_a1.py": "9d1d3ce749bc21b647287dab599c7a5d6f21ced5e804876015967b3bc5a7a8b8",
+      "python/omp-work/src/omp_work/egress_fetch.py": "bf880f24978a7dcf3750b9bd8bc25eacacf41a2fdb0b72c36f3614006e49b97a",
+      "python/omp-work/src/omp_work/integration/importer.py": "8049e9b5c21e4603bff848543cbf98738f3b9c2dd5763f3bfdeecf1345a7dda9",
+      "python/omp-work/src/omp_work/jobs/budget_relay.py": "bdee41934ee6eb02498051c6f21ed1838cebb293355de07536836ac175620794",
+      "python/omp-work/src/omp_work/jobs/lease.py": "950dd327684671baa0a4e5f0f05e102258a5977750c2670150095b91ab7b28a4",
+      "python/omp-work/src/omp_work/jobs/probe.py": "5d3c79009dc3c4d8a9c488d447e2ffa7c3188902d7a748916022b29ab342b4a8",
+      "python/omp-work/src/omp_work/knowledge_source.py": "aa82b7e0dc3cddc2d5e26c50c8a9b4fb94698f59324581442cb8e3434d13d791",
+      "python/omp-work/src/omp_work/operations/__init__.py": "3c819d912e414a8f5435012c38b0d81bb036911c3b00d8972c80c45374861d6e",
+      "python/omp-work/src/omp_work/operations/backup.py": "1535cdf262e0a2c821425a1979fb35df9e592ba62c01c337b09899a111b16568",
+      "python/omp-work/src/omp_work/orchestrator/candidate_git.py": "f29c733bbd7fa0db1fca967ba2f5be5cab0a438e99d6b72ae879a19bd82cca6b",
+      "python/omp-work/src/omp_work/orchestrator/lesson_context.py": "96f544c451c5871447ecc435a6c26d65c3b0b18046fb441f9ed78d242b89a502",
+      "python/omp-work/src/omp_work/orchestrator/merge_gate.py": "3279c043a196827ac337a628f07f44531f9a9d639628030c0433c6a6345f6dd2",
+      "python/omp-work/src/omp_work/orchestrator/qualification.py": "ff8c0e5723cb965ad65ea81e658458fb8ff7b3cb57255ea6d3bd7763a57d5f7c",
+      "python/omp-work/src/omp_work/orchestrator/verifier.py": "9efeb1fef971eb0adc753278fe7aa1f90fad069a1d07e5877c22b9f4d74442f4",
+      "python/omp-work/src/omp_work/orchestrator/verify_main.py": "0692f47682bf0a1301076b9513eb75e11c30a18dce19ea70660070715b1196f1",
+      "python/omp-work/src/omp_work/qualification_records.py": "15a617adbc6d8f657a95e2fd0bf733d17d580cb5fdaf1faaa0efa90fafebf762",
+      "python/omp-work/src/omp_work/research/capacity.py": "b941c3526f61b83bec9ecb3223670dd0ad07bbc1f7ea2bd6684c03bc13e4eb97",
+      "python/omp-work/src/omp_work/research/hypothesis.py": "bb7ab0d60846f5072fdd899a1938ad191d0377d8aaef94067f4fcc2c690ae5a0",
+      "python/omp-work/src/omp_work/research/managed.py": "7e0fcf0785844d5864a3ba492038e45a8bac8468af4d22379f39fa055c7dc01e",
+      "python/omp-work/src/omp_work/research/recursive_maintenance.py": "ddf0db5b45d8c775dcdd5730ef011a217d3ebd547bbb37852bddc2d729d78068",
+      "python/omp-work/src/omp_work/research/store.py": "c98834a4a875dbfc9849509ea50f59d42a0600a8c6a4decde313a4247dcff8b2",
+      "python/omp-work/src/omp_work/routing/best_of_n.py": "03e63b8c4e6bdb5e51650bb4152ec775f61bb0d06fb1b86c4f4cf28c26c09d97",
+      "python/omp-work/src/omp_work/routing/router.py": "ea31c74d12b6f15c977a1044a38d63064ea2d6c2066d2e957d502998f468ba64",
+      "python/omp-work/src/omp_work/skip_accounting.py": "692114ceda41cbde335a4f07566b07e2d5590bbded7166afe920a1bf1eb4099e",
+      "python/omp-work/src/omp_work/skip_accounting_postgres.py": "bd64c5c2019cd1c293db282fa68b609725377c9e18d001b1d2f763efd25bea4f",
+      "python/omp-work/src/omp_work/standing_policy.py": "c88488efdeca01ca16c3a3e3806fc8e3d35bba02a7cb6c61ba2af935728c2f08",
+      "python/omp-work/src/omp_work/v1/api_models.py": "56203fcbe7cb76202340be4bdcd1824881b654bee941ee7370e8ca28026ce107",
+      "python/omp-work/src/omp_work/v1/decision_records.py": "d34ee924e1c48ef7990d62aef115171efcb58f0d82583aae264b0a1b26bedfd3",
+      "python/omp-work/src/omp_work/v1/intake_provenance_closure.py": "104b5e956b2e3863f96909690b8c641f8fafee87291f56c93c5d6b0f787af0a5",
+      "python/omp-work/src/omp_work/v1/mission_event_store.py": "efcbfb96ca7890387987040e44f93ab7d53a62e2a157fd92380167d73892d269",
+      "python/omp-work/src/omp_work/v1/semantics.py": "cf01ee5730806c23bec6bb4f855bf08e97d915c6072903770db6311b5bde8078",
+      "python/omp-work/src/omp_work/v1/service.py": "b07f86b7a4464dca2badede8695330db3c8ee97d58e1d74e4d17bcbd85bf4a0f"
+    },
+    "2": {
+      "python/omp-work/src/omp_work/budget_headroom.py": "6723c87c5dd4d1a23aefee66ae812139275e465e28d898450e613c29a95a3a91",
+      "python/omp-work/src/omp_work/client_ingress.py": "5ba87fb65c3bbaa69d058a32a5520d5ca087c54560151319a0c7051a29fe3eda",
+      "python/omp-work/src/omp_work/contracts/nsi/v1/models.py": "0e14d66d0e235fb679608a2ee78dacc469491a16c2e43851390a7293bdb2197b",
+      "python/omp-work/src/omp_work/control_plane/__init__.py": "a1dc188264694df5d6affcf4ff7c3a4e03a85945756b4e2a2207e6c25c10a4f1",
+      "python/omp-work/src/omp_work/control_plane/envelope.py": "cb6ed6081817d3cb06714c41a365a1ee9f40f9818fc0e4e14909c2ea64b0961a",
+      "python/omp-work/src/omp_work/egress_store.py": "c94e43558c419a9dd32d1505f221faa8cea51f3c275325d1aa710ad65ee5bb61",
+      "python/omp-work/src/omp_work/enola_store.py": "25e6681de952e00ce64b89608292f17b29abc40e5190659139ece07f476f854b",
+      "python/omp-work/src/omp_work/integration/legacy_artifacts.py": "67fcde9710463bca920159c3df7ffc8c3a70bb49c75dd23054cea3c7689649e5",
+      "python/omp-work/src/omp_work/jobs/cancel.py": "ad69470c8a4a4d4bc287ffc7cf5d3ff2cd9e2d7900541b2fdd6dd0777f5eaa5b",
+      "python/omp-work/src/omp_work/jobs/probe.py": "5d3c79009dc3c4d8a9c488d447e2ffa7c3188902d7a748916022b29ab342b4a8",
+      "python/omp-work/src/omp_work/knowledge_contracts.py": "b2ff574f7e5785f56f014986bf2587b1c10b1be738ef96f7f4760233e04a34ff",
+      "python/omp-work/src/omp_work/knowledge_source.py": "aa82b7e0dc3cddc2d5e26c50c8a9b4fb94698f59324581442cb8e3434d13d791",
+      "python/omp-work/src/omp_work/nsi6_reseal.py": "a8b85fea6f4e49f5d0f926b46d1287aed7ca491193abd76a3f80d904f9ea18bc",
+      "python/omp-work/src/omp_work/nsi_eval.py": "982d6866c84319c42115169b288a442ba1240b1ac87581606c95011c5479fa34",
+      "python/omp-work/src/omp_work/nsi_rollout.py": "77a45491683aa02c899c4c94b9ebd3428a5a7bcb2bd6dd6f573dba28a0a521d8",
+      "python/omp-work/src/omp_work/operations/__init__.py": "3c819d912e414a8f5435012c38b0d81bb036911c3b00d8972c80c45374861d6e",
+      "python/omp-work/src/omp_work/operations/capabilities.py": "272ded3d40233b9fae20fb9c4807c28de201ab117bc6e5830e81c72aa2c7a71d",
+      "python/omp-work/src/omp_work/orchestrator/__init__.py": "8dabe160bd849bf0583c86a1651cae9618934138a31bbd8c91d0d58210bc3690",
+      "python/omp-work/src/omp_work/orchestrator/candidate_git.py": "f29c733bbd7fa0db1fca967ba2f5be5cab0a438e99d6b72ae879a19bd82cca6b",
+      "python/omp-work/src/omp_work/orchestrator/intake_gate.py": "8bd66486811706facc2fd6efefdb2631b2d50dea8448e868e4e4d3646e0d7fc0",
+      "python/omp-work/src/omp_work/orchestrator/pull_request.py": "45762c4a001c9ea409f98ec6ed1a73b797b17b9e831017b9108de61cfcae1d2d",
+      "python/omp-work/src/omp_work/orchestrator/worker_sandbox.py": "6375d2096c6eac568cadff44b8c11414935e6e932c5663c9a9a05aa038afc58d",
+      "python/omp-work/src/omp_work/parallel_streams.py": "8d25d84b7584bacf2b249aee0d03238f9d2d81cbcca8e708e552f07587ee7819",
+      "python/omp-work/src/omp_work/push_http.py": "f505f1750a27ed81d04aabed7dc25a9dcd21f592ca0a5a0b393b1b64187fac90",
+      "python/omp-work/src/omp_work/qualification_snapshot.py": "195c939b6d326159399254ed6fd36f2c7e4c20a005dbb77c7f79500f2a25824f",
+      "python/omp-work/src/omp_work/research/dossier.py": "764197738d31517d8d348dc4ad924f58a45430f5c946cd83920db7b7eb2758bc",
+      "python/omp-work/src/omp_work/research/managed.py": "7e0fcf0785844d5864a3ba492038e45a8bac8468af4d22379f39fa055c7dc01e",
+      "python/omp-work/src/omp_work/research/recursive.py": "5a7c5e5cdb52c3d5cddeccede9ab70988280f1954c1540ce2f5c9e1369001b92",
+      "python/omp-work/src/omp_work/research/recursive_transfer_execution_evidence.py": "8a310be25f8a38168ccefeda45f6180f5c8f8cb8bee94b96ce129edf24d1b1b0",
+      "python/omp-work/src/omp_work/research/recursive_transfer_freshness.py": "5221024f5ca8a81733ecca9ef1b7761080fc5d0baecdc5bffdbeb521b7d60e5c",
+      "python/omp-work/src/omp_work/routing/escalation.py": "b3b9f30616b79b9fca3e578e821df669e13e2f5253a997a9251cfdd33f54bcac",
+      "python/omp-work/src/omp_work/routing/offerings_evaluation.py": "6eccda2242e3017329945a3debbd9b4067dc3506dec935c2d773613188859b28",
+      "python/omp-work/src/omp_work/v1/api_models.py": "56203fcbe7cb76202340be4bdcd1824881b654bee941ee7370e8ca28026ce107",
+      "python/omp-work/src/omp_work/v1/canonical.py": "15512e58dd4444fc7f880fe2cd39275892a454817060a2b75f7bbb7c54477d63",
+      "python/omp-work/src/omp_work/v1/intake_commands.py": "c419f2e6d2add2bef27dbfcc82d07ae65b92eaeac257b0e7d6698338765e6b1e",
+      "python/omp-work/src/omp_work/v1/intake_decisions.py": "accf39c4787acbca8fb6494de79dc154d12d5b8b74984c7cd9add69f86e0dcbe",
+      "python/omp-work/src/omp_work/v1/intake_provenance.py": "c4913315aa10d29bc10d3ab08788b9fb6b7e2cceeb23c70cc687f8274bd69284",
+      "python/omp-work/src/omp_work/v1/mission_event_store.py": "efcbfb96ca7890387987040e44f93ab7d53a62e2a157fd92380167d73892d269",
+      "python/omp-work/src/omp_work/v1/mission_intake.py": "eb23e6e80d56ae2ac4f2e11cbd83105408a4c1430190543a659831ca62699d0b",
+      "python/omp-work/src/omp_work/v1/missions.py": "ded306bc8c812b714201e4128bccbd46700da8e1200925068042e896d72072fc"
+    },
+    "3": {
+      "python/omp-work/src/omp_work/action_tiers.py": "c491e3dc3d341dd0b93af840e037f540b6cbbf95ac13258181706e8ce92b3d01",
+      "python/omp-work/src/omp_work/budget_headroom.py": "6723c87c5dd4d1a23aefee66ae812139275e465e28d898450e613c29a95a3a91",
+      "python/omp-work/src/omp_work/client_ingress_probe.py": "1f0121c0665c10b9d3815dc9ed6f95cf2655ee28e213a5d147d0d1b64a1c390d",
+      "python/omp-work/src/omp_work/contracts/r02/__init__.py": "9a6d51e1521e0fed5e2688aaef405eb239b409c2d13b4eb3df2dc24034f78c1c",
+      "python/omp-work/src/omp_work/economy_effort.py": "094adc1dc7750d2b6d7c9f0a6d3b67e5041061b7d568ce663fdff944752e351e",
+      "python/omp-work/src/omp_work/egress_sandbox.py": "e8cc2e0f9b8ae67a18867cce791d0444fb4d18d96d2912df6a9ba0bbd12cde12",
+      "python/omp-work/src/omp_work/egress_store.py": "c94e43558c419a9dd32d1505f221faa8cea51f3c275325d1aa710ad65ee5bb61",
+      "python/omp-work/src/omp_work/intake_support_corpus.py": "749874c9cf4bc783fd4486434e9d4966f1d06bc263acf738d168115e370598f9",
+      "python/omp-work/src/omp_work/jobs/campaign_completion.py": "5c147d3e3203f2f54a056c0dd37edc8eadc9de9860fd884636993f0c996afaf2",
+      "python/omp-work/src/omp_work/jobs/campaign_decisions.py": "30749a617c7136f23113a2d0122edcf255e44157f829e699321c5bb53849786d",
+      "python/omp-work/src/omp_work/jobs/managed_trial.py": "1be452ec82071636cda86fc48afae22b8838836275504772cab2c198f0995c1a",
+      "python/omp-work/src/omp_work/jobs/worker.py": "16726cfd12ad8c2d897b211e48145bc8d8a1917362580f05f389058e1fa1839a",
+      "python/omp-work/src/omp_work/nsi_eval_postgres.py": "75701e0aec0f9a0a43cffff3e74be6cce44181674da58a652ab7ae4c2226beae",
+      "python/omp-work/src/omp_work/operations/backup.py": "1535cdf262e0a2c821425a1979fb35df9e592ba62c01c337b09899a111b16568",
+      "python/omp-work/src/omp_work/operations/cli.py": "96130e00965d37e2e22c8ba66678f5a471b2902e514a23a8fee05b60332e10ce",
+      "python/omp-work/src/omp_work/orchestrator/qualification.py": "ff8c0e5723cb965ad65ea81e658458fb8ff7b3cb57255ea6d3bd7763a57d5f7c",
+      "python/omp-work/src/omp_work/orchestrator/service.py": "38fb6b5ed9ec473c7e222c2ba59d5ad365751c4e053cda89bacd9529a4ac1a0d",
+      "python/omp-work/src/omp_work/project_store.py": "f2ac077ad80ad229b25f1770bfe26e83a0620c14ffd3c2755c4b3c562181a334",
+      "python/omp-work/src/omp_work/qualification_records.py": "15a617adbc6d8f657a95e2fd0bf733d17d580cb5fdaf1faaa0efa90fafebf762",
+      "python/omp-work/src/omp_work/qualification_snapshot.py": "195c939b6d326159399254ed6fd36f2c7e4c20a005dbb77c7f79500f2a25824f",
+      "python/omp-work/src/omp_work/report_evidence.py": "478541604665736fbded03055b0c184385a87cb431e90cdd262342c93f391dd9",
+      "python/omp-work/src/omp_work/research/__init__.py": "17d5b5e02f5fc4b63816eca557f59c1ccdab38ab1e104985dbecdd5368af0cba",
+      "python/omp-work/src/omp_work/research/dossier.py": "764197738d31517d8d348dc4ad924f58a45430f5c946cd83920db7b7eb2758bc",
+      "python/omp-work/src/omp_work/research/hypothesis.py": "bb7ab0d60846f5072fdd899a1938ad191d0377d8aaef94067f4fcc2c690ae5a0",
+      "python/omp-work/src/omp_work/research/literature.py": "976fb698ca3ae6366c26bdc7b1e56af6ccb5cd26d75db99778bddf319a11f816",
+      "python/omp-work/src/omp_work/research/managed.py": "7e0fcf0785844d5864a3ba492038e45a8bac8468af4d22379f39fa055c7dc01e",
+      "python/omp-work/src/omp_work/research/program.py": "3e4ab54457b84d7ffb4009f37b4efb2889667497693c97e573b8cd1fe70c0edf",
+      "python/omp-work/src/omp_work/research/receipt.py": "f995403daae91b7b04a90615c66c788d7221879d8974b7759c30234f76dffb67",
+      "python/omp-work/src/omp_work/research/recursive.py": "5a7c5e5cdb52c3d5cddeccede9ab70988280f1954c1540ce2f5c9e1369001b92",
+      "python/omp-work/src/omp_work/research/recursive_transfer_execution_evidence.py": "8a310be25f8a38168ccefeda45f6180f5c8f8cb8bee94b96ce129edf24d1b1b0",
+      "python/omp-work/src/omp_work/routing/__init__.py": "864457fa8ab26e3f8fa48483d19f277359bef970b6140de69dc7eaf2f867d1de",
+      "python/omp-work/src/omp_work/routing/offerings_inputs.py": "4d7bf6dca291a11dddcbd467dd8607140afb842735005bbd7e6f1304865c873b",
+      "python/omp-work/src/omp_work/v1/agent_stop.py": "185906e79af305858dfd43b90b18fe937d283a7521d4b728031fe4e45db90221",
+      "python/omp-work/src/omp_work/v1/intake_decisions.py": "accf39c4787acbca8fb6494de79dc154d12d5b8b74984c7cd9add69f86e0dcbe",
+      "python/omp-work/src/omp_work/v1/intake_hold.py": "1f36853f957f1be578474c858be369b5e8bf62b9937980746fe7cff3c5e904fb",
+      "python/omp-work/src/omp_work/v1/intake_provenance_closure.py": "104b5e956b2e3863f96909690b8c641f8fafee87291f56c93c5d6b0f787af0a5",
+      "python/omp-work/src/omp_work/v1/mission_intake.py": "eb23e6e80d56ae2ac4f2e11cbd83105408a4c1430190543a659831ca62699d0b",
+      "python/omp-work/src/omp_work/v1/missions.py": "ded306bc8c812b714201e4128bccbd46700da8e1200925068042e896d72072fc",
+      "python/omp-work/src/omp_work/v1/owner_relay.py": "b6a2822280dafdad5c425979a3667cc10430afa94a6212b3396a4048f571119d",
+      "python/omp-work/src/omp_work/v1/store.py": "ff5052efc3c75d11c4305b6cadc422ea2d600bb0c29bad5e57791cce0e3f279b"
+    },
+    "4": {
+      "python/omp-work/src/omp_work/alarm_dispatch.py": "10cc013de4b82cc918aef4e1267fef139010ce8257c5e466081adc69078a9c3a",
+      "python/omp-work/src/omp_work/always_running.py": "6f0f1dd11bccbff61e34ffa324b6b088101b0d382a9d159d8d1853539178a339",
+      "python/omp-work/src/omp_work/contracts/nsi/v1/validate.py": "a4fed8cdf6b6c2e0b02952150fadaec2d9007e5081c2de18df639e6cf605fec6",
+      "python/omp-work/src/omp_work/contracts/r02/validate.py": "959f4731c8404c050d24abc789139889ee229d59aaad9b18598b467103f5c578",
+      "python/omp-work/src/omp_work/control_plane/adr0004.py": "90d9e14599cc49c31fbc6093615ecb9b7c68526d38ba7426308d9db5a855b7f3",
+      "python/omp-work/src/omp_work/control_plane/envelope.py": "cb6ed6081817d3cb06714c41a365a1ee9f40f9818fc0e4e14909c2ea64b0961a",
+      "python/omp-work/src/omp_work/control_plane/mutation.py": "bd6e4be4d3a0909d7b0630f03eb3240c78c6810097fb99d1fa35c02194c19da8",
+      "python/omp-work/src/omp_work/control_plane/registry.py": "a84557b4bb8f93239a7631f2c34df9d687d788ba4c1a57d67b4ccfc644c1c713",
+      "python/omp-work/src/omp_work/egress_sandbox_helper.py": "e27e8ea69ef9afa99254b36f9aaa76c716961c437485479338aaa55bc6c49b8b",
+      "python/omp-work/src/omp_work/enola_adapter.py": "4f7c7e45ad101383ba6d16f27fe99b5d8fac2ca61b3398e6bf7a6269be0add02",
+      "python/omp-work/src/omp_work/event_push.py": "984f1ec2c8cf8352fa8193e765f5bcee2390202a12caf0bab01b268d18cc8468",
+      "python/omp-work/src/omp_work/intake_support_corpus.py": "749874c9cf4bc783fd4486434e9d4966f1d06bc263acf738d168115e370598f9",
+      "python/omp-work/src/omp_work/integration/legacy_artifacts.py": "67fcde9710463bca920159c3df7ffc8c3a70bb49c75dd23054cea3c7689649e5",
+      "python/omp-work/src/omp_work/jobs/admission.py": "00b445918a3238c3c4b2f8edb4f365c5661f9f9c2184559dd7395f56bb8bf297",
+      "python/omp-work/src/omp_work/jobs/campaign_decisions.py": "30749a617c7136f23113a2d0122edcf255e44157f829e699321c5bb53849786d",
+      "python/omp-work/src/omp_work/jobs/managed_trial.py": "1be452ec82071636cda86fc48afae22b8838836275504772cab2c198f0995c1a",
+      "python/omp-work/src/omp_work/jobs/outbox.py": "9e4eaf0ecfa2c03755f12365d93b01201a40d5af3c80088d18565ebaf586cca6",
+      "python/omp-work/src/omp_work/jobs/process.py": "e09e89230c071367d4a6b9e72904aedf6ebf7cac45253de3b4a3a83b747b8e0e",
+      "python/omp-work/src/omp_work/jobs/projection.py": "df205ddd342a7ce9e8ed078d715e92b35316771ed8fb279eb854eef09d14b2b7",
+      "python/omp-work/src/omp_work/jobs/stage_admission.py": "6bcd8312315283727d14c7e65bf2cffe5f8b0a10794d63796e231ebcdd22243f",
+      "python/omp-work/src/omp_work/jobs/worker.py": "16726cfd12ad8c2d897b211e48145bc8d8a1917362580f05f389058e1fa1839a",
+      "python/omp-work/src/omp_work/knowledge_namespace.py": "56dab9c09130c611c57fa0fcceab1db106aacbab9d445d40dcd8af03065a9128",
+      "python/omp-work/src/omp_work/mission_intake_rules.py": "1a6196750a0ebd31524cf871641461cf0915a2d0df250e5563ad8db390353aba",
+      "python/omp-work/src/omp_work/nsi6_reseal.py": "a8b85fea6f4e49f5d0f926b46d1287aed7ca491193abd76a3f80d904f9ea18bc",
+      "python/omp-work/src/omp_work/nsi_rollout.py": "77a45491683aa02c899c4c94b9ebd3428a5a7bcb2bd6dd6f573dba28a0a521d8",
+      "python/omp-work/src/omp_work/operations/cli.py": "96130e00965d37e2e22c8ba66678f5a471b2902e514a23a8fee05b60332e10ce",
+      "python/omp-work/src/omp_work/operations/config.py": "de3c170fcde050950f2b3ac6760d684eba88203a0207e1ad9aac1a1112e95546",
+      "python/omp-work/src/omp_work/orchestrator/stages.py": "a25ebced6216a10deb54bd59647e84c4450481a2b5020e5024f25449708a3ba8",
+      "python/omp-work/src/omp_work/project_store.py": "f2ac077ad80ad229b25f1770bfe26e83a0620c14ffd3c2755c4b3c562181a334",
+      "python/omp-work/src/omp_work/qualification_ordinary.py": "62697da0229e47a8659e8ad3a609672a4cf0af6715935e99764f73f6979a1ea1",
+      "python/omp-work/src/omp_work/report_evidence.py": "478541604665736fbded03055b0c184385a87cb431e90cdd262342c93f391dd9",
+      "python/omp-work/src/omp_work/research/managed.py": "7e0fcf0785844d5864a3ba492038e45a8bac8468af4d22379f39fa055c7dc01e",
+      "python/omp-work/src/omp_work/research/program.py": "3e4ab54457b84d7ffb4009f37b4efb2889667497693c97e573b8cd1fe70c0edf",
+      "python/omp-work/src/omp_work/research/recursive_benefit.py": "8f42b4ed8dc7eb5751e9e7e58d46b191c5301baf2c9473024aaf5d777b523b13",
+      "python/omp-work/src/omp_work/routing/best_of_n.py": "03e63b8c4e6bdb5e51650bb4152ec775f61bb0d06fb1b86c4f4cf28c26c09d97",
+      "python/omp-work/src/omp_work/routing/offerings_check.py": "7b1f69072b77e3848bcfb873f7c6dec822fe9a8df2c0d5ff83bb7d5b57448915",
+      "python/omp-work/src/omp_work/skip_accounting.py": "692114ceda41cbde335a4f07566b07e2d5590bbded7166afe920a1bf1eb4099e",
+      "python/omp-work/src/omp_work/standing_change.py": "d542ef6511946fbbcbe6d74f64eec73243c4a6a6dbf5c58834540f1e95b3c99a",
+      "python/omp-work/src/omp_work/v1/agent_stop.py": "185906e79af305858dfd43b90b18fe937d283a7521d4b728031fe4e45db90221",
+      "python/omp-work/src/omp_work/v1/mission_event_store.py": "efcbfb96ca7890387987040e44f93ab7d53a62e2a157fd92380167d73892d269"
+    }
+  },
+  "corpus_tree": {
+    "0": "2c514bc55ac005e5a701f111b4c8160daaea6e96dcbf0386c6e5263599e9feb7",
+    "1": "5764ff51d6d737a1df53243ae555b943206c16adedb7e4587808b805b6304a49",
+    "2": "6ff68e5c13e26df6f9fdc888d91ec7a8c04a86adea27b83d138193ef271a2efb",
+    "3": "54f53f4f146e684554f1f988840d8efec862bdb4101a17474d44093bd3e249d3",
+    "4": "52030f508d1be52a97f203eb7cb1ca58ece4d3fa4617f7614fbabb9c021e4275"
+  },
+  "tree": {
+    "a": {
+      "parent_id": null,
+      "children": [
+        "a1",
+        "a2"
+      ],
+      "cost": 1,
+      "candidate_digest": "cd39abc4979ebe1cc5ede2b570d964a127be2b32d578f4575255062f67eb49cd",
+      "metric": null,
+      "infra_error": null
+    },
+    "b": {
+      "parent_id": null,
+      "children": [],
+      "cost": 1,
+      "candidate_digest": "4cc31b1d027bf6d9b04209e448fbdefd1d31b1d062e68bd2ae93b680f131f2b8",
+      "metric": null,
+      "infra_error": null
+    },
+    "c": {
+      "parent_id": null,
+      "children": [],
+      "cost": 1,
+      "candidate_digest": "da01253608866a094b98c9005f52e039505702ee73721f8abad13030b3547541",
+      "metric": null,
+      "infra_error": null
+    },
+    "a1": {
+      "parent_id": "a",
+      "children": [
+        "a1x",
+        "a1y"
+      ],
+      "cost": 1,
+      "candidate_digest": "4cc31b1d027bf6d9b04209e448fbdefd1d31b1d062e68bd2ae93b680f131f2b8",
+      "metric": null,
+      "infra_error": null
+    },
+    "a2": {
+      "parent_id": "a",
+      "children": [],
+      "cost": 1,
+      "candidate_digest": "482bbdb70a0c3d7cce09be2457c20799d8f6d04bab23569f925675be88d8f7ee",
+      "metric": null,
+      "infra_error": null
+    },
+    "a1x": {
+      "parent_id": "a1",
+      "children": [],
+      "cost": 1,
+      "candidate_digest": "da01253608866a094b98c9005f52e039505702ee73721f8abad13030b3547541",
+      "metric": null,
+      "infra_error": null
+    },
+    "a1y": {
+      "parent_id": "a1",
+      "children": [],
+      "cost": 1,
+      "candidate_digest": "d15dc2ec17f4c60ca8ccc426715eb67635e5b1ce8dee5828243748b856ac2e7a",
+      "metric": null,
+      "infra_error": null
+    }
+  },
+  "corpus": {
+    "hashes": {
+      "0": {
+        "python/omp-work/src/omp_work/client_ingress_probe.py": "1f0121c0665c10b9d3815dc9ed6f95cf2655ee28e213a5d147d0d1b64a1c390d",
+        "python/omp-work/src/omp_work/contracts/v1/artifact_store.py": "55a8bf7ccc4d04d86257ec5d8c2f84d5b509cfaa8b723828a8649974f3dda466",
+        "python/omp-work/src/omp_work/control_plane/gate.py": "e5c57b939a0a38796990b8601cc8bbcf8a4fce0a7089f074514215fe89f7a561",
+        "python/omp-work/src/omp_work/control_plane/locks.py": "afb2f7c59d0917cb143b22c07f130e77655b87012792f66782afb998bbf5e89b",
+        "python/omp-work/src/omp_work/egress_gateway.py": "f4bc0e0af8908db955d41ad046c34943be6c351fd62418dd10f343c2c5dac8e5",
+        "python/omp-work/src/omp_work/egress_research_jail.py": "8109f223a9478a72bad1251905782d4d29f3914f0b83c1c124d265a0516e2949",
+        "python/omp-work/src/omp_work/jobs/__init__.py": "1c1522cd0151003001e072310673ad82e1e78f78b60832f7c4ea3bc8c4021150",
+        "python/omp-work/src/omp_work/jobs/cancel.py": "ad69470c8a4a4d4bc287ffc7cf5d3ff2cd9e2d7900541b2fdd6dd0777f5eaa5b",
+        "python/omp-work/src/omp_work/jobs/managed_trial.py": "1be452ec82071636cda86fc48afae22b8838836275504772cab2c198f0995c1a",
+        "python/omp-work/src/omp_work/jobs/research_trial.py": "f17cadb724ec70c45f44696eed0cb2ac999fcbb1536611c3b0032eb0a7f31858",
+        "python/omp-work/src/omp_work/jobs/worker.py": "16726cfd12ad8c2d897b211e48145bc8d8a1917362580f05f389058e1fa1839a",
+        "python/omp-work/src/omp_work/knowledge_namespace.py": "56dab9c09130c611c57fa0fcceab1db106aacbab9d445d40dcd8af03065a9128",
+        "python/omp-work/src/omp_work/mission_budget.py": "3b44288479f3998d9b9244211ee9e18f29b4252b4899a458529ab31a66243f86",
+        "python/omp-work/src/omp_work/model_proxy_upstream.py": "f89090bfccce1c113235d05d827fc02ee6dbdb56bd66fd0cceb406fab25711f8",
+        "python/omp-work/src/omp_work/nsi6_corpus.py": "370aef9a208666d1d7157aed5734d7d6a9d771c84d0c06854aac8959f452b2d6",
+        "python/omp-work/src/omp_work/operations/artifacts.py": "dc36ec0b15b2bd453b3b8dee17f2968b8078fd897f767c7b23c979c6ae7cd1df",
+        "python/omp-work/src/omp_work/operations/database.py": "4a240100a5aadec5a4b980f29b34c93026dca5e858649bd8683e1d7256a2dde6",
+        "python/omp-work/src/omp_work/operations/stop.py": "68001ee113dfd2c60615d690ba43b51e32e7a1bf5250a5c26caa862219736770",
+        "python/omp-work/src/omp_work/orchestrator/github_pulls.py": "b3390462d37e3bd2968f2ead72041a55bfc120d5d9c07e733b36f7abc8b8db62",
+        "python/omp-work/src/omp_work/orchestrator/qualification.py": "ff8c0e5723cb965ad65ea81e658458fb8ff7b3cb57255ea6d3bd7763a57d5f7c",
+        "python/omp-work/src/omp_work/orchestrator/stages.py": "a25ebced6216a10deb54bd59647e84c4450481a2b5020e5024f25449708a3ba8",
+        "python/omp-work/src/omp_work/orchestrator/verifier.py": "9efeb1fef971eb0adc753278fe7aa1f90fad069a1d07e5877c22b9f4d74442f4",
+        "python/omp-work/src/omp_work/owner_key.py": "2bdf57a9a693f5ea4bdb3c47cf57cfb66112fd3baf32add8fa4e2146a5df778d",
+        "python/omp-work/src/omp_work/parallel_streams.py": "8d25d84b7584bacf2b249aee0d03238f9d2d81cbcca8e708e552f07587ee7819",
+        "python/omp-work/src/omp_work/qualification_counter.py": "da53ea6ebc5901f4518750ef49fe8db9e655627dcd9276d6ce409a776651cde0",
+        "python/omp-work/src/omp_work/research/bundle.py": "f0978ba2d717f4d47afcf7886f7a7ff32c319fd315237744520347936593599f",
+        "python/omp-work/src/omp_work/research/engineering.py": "788b6ca2388e2748be5f34ccd1a320ab5e8078baa60456faf383b412d11de449",
+        "python/omp-work/src/omp_work/research/literature.py": "976fb698ca3ae6366c26bdc7b1e56af6ccb5cd26d75db99778bddf319a11f816",
+        "python/omp-work/src/omp_work/research/mechanism_lab.py": "122ef909db10c924f182f2385ee79f0bd68e3c3f743c5e39fe7073e554e8dd67",
+        "python/omp-work/src/omp_work/research/recursive_transfer_history.py": "cd2a9f2200f350cea2d6c9f0701729e48d3bcf9b65f62231de453f535c456d11",
+        "python/omp-work/src/omp_work/research/zlib_source_task.py": "df61e751de315ad9decf80c0faa487eb456ade378047fa70e3051b9a21b478f7",
+        "python/omp-work/src/omp_work/routing/model_review.py": "a509b8c37dda67e17cf6fd33b6ebd9b3d2db34519d13917faa858392da364de7",
+        "python/omp-work/src/omp_work/routing/role_evidence.py": "bebb50168f6cfc9cb0fe1ef6792824687932b934a81817db9f94128c58525a56",
+        "python/omp-work/src/omp_work/routing/router.py": "ea31c74d12b6f15c977a1044a38d63064ea2d6c2066d2e957d502998f468ba64",
+        "python/omp-work/src/omp_work/standing_change.py": "d542ef6511946fbbcbe6d74f64eec73243c4a6a6dbf5c58834540f1e95b3c99a",
+        "python/omp-work/src/omp_work/standing_mandate.py": "bdf28bf7e931f0c38dc5f561fade456ea6e4888785f2396ac7efb72a6698de5f",
+        "python/omp-work/src/omp_work/v1/agent_stop.py": "185906e79af305858dfd43b90b18fe937d283a7521d4b728031fe4e45db90221",
+        "python/omp-work/src/omp_work/v1/intake_commands.py": "c419f2e6d2add2bef27dbfcc82d07ae65b92eaeac257b0e7d6698338765e6b1e",
+        "python/omp-work/src/omp_work/v1/intake_provenance_closure.py": "104b5e956b2e3863f96909690b8c641f8fafee87291f56c93c5d6b0f787af0a5",
+        "python/omp-work/src/omp_work/v1/mission_standing.py": "f1cd1106a7ae94f4b3506a38429ad9c0f1bde9a05538b0e9d5a0ac4e9b5a13bc"
+      },
+      "1": {
+        "python/omp-work/src/omp_work/__init__.py": "101bae14a5e1e50b661994b4682ca1b1ee903f868beca65b2737134215c3b79f",
+        "python/omp-work/src/omp_work/action_classify.py": "b8cebfe6399940523b60b4b672a9fd9aa5733282dec8e202616a0603cf612a6e",
+        "python/omp-work/src/omp_work/alarm_dispatch.py": "10cc013de4b82cc918aef4e1267fef139010ce8257c5e466081adc69078a9c3a",
+        "python/omp-work/src/omp_work/always_running.py": "6f0f1dd11bccbff61e34ffa324b6b088101b0d382a9d159d8d1853539178a339",
+        "python/omp-work/src/omp_work/budget_headroom.py": "6723c87c5dd4d1a23aefee66ae812139275e465e28d898450e613c29a95a3a91",
+        "python/omp-work/src/omp_work/contracts/r02/__init__.py": "9a6d51e1521e0fed5e2688aaef405eb239b409c2d13b4eb3df2dc24034f78c1c",
+        "python/omp-work/src/omp_work/control_plane/gate.py": "e5c57b939a0a38796990b8601cc8bbcf8a4fce0a7089f074514215fe89f7a561",
+        "python/omp-work/src/omp_work/control_plane/mutation.py": "bd6e4be4d3a0909d7b0630f03eb3240c78c6810097fb99d1fa35c02194c19da8",
+        "python/omp-work/src/omp_work/durability_a1.py": "9d1d3ce749bc21b647287dab599c7a5d6f21ced5e804876015967b3bc5a7a8b8",
+        "python/omp-work/src/omp_work/egress_fetch.py": "bf880f24978a7dcf3750b9bd8bc25eacacf41a2fdb0b72c36f3614006e49b97a",
+        "python/omp-work/src/omp_work/integration/importer.py": "8049e9b5c21e4603bff848543cbf98738f3b9c2dd5763f3bfdeecf1345a7dda9",
+        "python/omp-work/src/omp_work/jobs/budget_relay.py": "bdee41934ee6eb02498051c6f21ed1838cebb293355de07536836ac175620794",
+        "python/omp-work/src/omp_work/jobs/lease.py": "950dd327684671baa0a4e5f0f05e102258a5977750c2670150095b91ab7b28a4",
+        "python/omp-work/src/omp_work/jobs/probe.py": "5d3c79009dc3c4d8a9c488d447e2ffa7c3188902d7a748916022b29ab342b4a8",
+        "python/omp-work/src/omp_work/knowledge_source.py": "aa82b7e0dc3cddc2d5e26c50c8a9b4fb94698f59324581442cb8e3434d13d791",
+        "python/omp-work/src/omp_work/operations/__init__.py": "3c819d912e414a8f5435012c38b0d81bb036911c3b00d8972c80c45374861d6e",
+        "python/omp-work/src/omp_work/operations/backup.py": "1535cdf262e0a2c821425a1979fb35df9e592ba62c01c337b09899a111b16568",
+        "python/omp-work/src/omp_work/orchestrator/candidate_git.py": "f29c733bbd7fa0db1fca967ba2f5be5cab0a438e99d6b72ae879a19bd82cca6b",
+        "python/omp-work/src/omp_work/orchestrator/lesson_context.py": "96f544c451c5871447ecc435a6c26d65c3b0b18046fb441f9ed78d242b89a502",
+        "python/omp-work/src/omp_work/orchestrator/merge_gate.py": "3279c043a196827ac337a628f07f44531f9a9d639628030c0433c6a6345f6dd2",
+        "python/omp-work/src/omp_work/orchestrator/qualification.py": "ff8c0e5723cb965ad65ea81e658458fb8ff7b3cb57255ea6d3bd7763a57d5f7c",
+        "python/omp-work/src/omp_work/orchestrator/verifier.py": "9efeb1fef971eb0adc753278fe7aa1f90fad069a1d07e5877c22b9f4d74442f4",
+        "python/omp-work/src/omp_work/orchestrator/verify_main.py": "0692f47682bf0a1301076b9513eb75e11c30a18dce19ea70660070715b1196f1",
+        "python/omp-work/src/omp_work/qualification_records.py": "15a617adbc6d8f657a95e2fd0bf733d17d580cb5fdaf1faaa0efa90fafebf762",
+        "python/omp-work/src/omp_work/research/capacity.py": "b941c3526f61b83bec9ecb3223670dd0ad07bbc1f7ea2bd6684c03bc13e4eb97",
+        "python/omp-work/src/omp_work/research/hypothesis.py": "bb7ab0d60846f5072fdd899a1938ad191d0377d8aaef94067f4fcc2c690ae5a0",
+        "python/omp-work/src/omp_work/research/managed.py": "7e0fcf0785844d5864a3ba492038e45a8bac8468af4d22379f39fa055c7dc01e",
+        "python/omp-work/src/omp_work/research/recursive_maintenance.py": "ddf0db5b45d8c775dcdd5730ef011a217d3ebd547bbb37852bddc2d729d78068",
+        "python/omp-work/src/omp_work/research/store.py": "c98834a4a875dbfc9849509ea50f59d42a0600a8c6a4decde313a4247dcff8b2",
+        "python/omp-work/src/omp_work/routing/best_of_n.py": "03e63b8c4e6bdb5e51650bb4152ec775f61bb0d06fb1b86c4f4cf28c26c09d97",
+        "python/omp-work/src/omp_work/routing/router.py": "ea31c74d12b6f15c977a1044a38d63064ea2d6c2066d2e957d502998f468ba64",
+        "python/omp-work/src/omp_work/skip_accounting.py": "692114ceda41cbde335a4f07566b07e2d5590bbded7166afe920a1bf1eb4099e",
+        "python/omp-work/src/omp_work/skip_accounting_postgres.py": "bd64c5c2019cd1c293db282fa68b609725377c9e18d001b1d2f763efd25bea4f",
+        "python/omp-work/src/omp_work/standing_policy.py": "c88488efdeca01ca16c3a3e3806fc8e3d35bba02a7cb6c61ba2af935728c2f08",
+        "python/omp-work/src/omp_work/v1/api_models.py": "56203fcbe7cb76202340be4bdcd1824881b654bee941ee7370e8ca28026ce107",
+        "python/omp-work/src/omp_work/v1/decision_records.py": "d34ee924e1c48ef7990d62aef115171efcb58f0d82583aae264b0a1b26bedfd3",
+        "python/omp-work/src/omp_work/v1/intake_provenance_closure.py": "104b5e956b2e3863f96909690b8c641f8fafee87291f56c93c5d6b0f787af0a5",
+        "python/omp-work/src/omp_work/v1/mission_event_store.py": "efcbfb96ca7890387987040e44f93ab7d53a62e2a157fd92380167d73892d269",
+        "python/omp-work/src/omp_work/v1/semantics.py": "cf01ee5730806c23bec6bb4f855bf08e97d915c6072903770db6311b5bde8078",
+        "python/omp-work/src/omp_work/v1/service.py": "b07f86b7a4464dca2badede8695330db3c8ee97d58e1d74e4d17bcbd85bf4a0f"
+      },
+      "2": {
+        "python/omp-work/src/omp_work/budget_headroom.py": "6723c87c5dd4d1a23aefee66ae812139275e465e28d898450e613c29a95a3a91",
+        "python/omp-work/src/omp_work/client_ingress.py": "5ba87fb65c3bbaa69d058a32a5520d5ca087c54560151319a0c7051a29fe3eda",
+        "python/omp-work/src/omp_work/contracts/nsi/v1/models.py": "0e14d66d0e235fb679608a2ee78dacc469491a16c2e43851390a7293bdb2197b",
+        "python/omp-work/src/omp_work/control_plane/__init__.py": "a1dc188264694df5d6affcf4ff7c3a4e03a85945756b4e2a2207e6c25c10a4f1",
+        "python/omp-work/src/omp_work/control_plane/envelope.py": "cb6ed6081817d3cb06714c41a365a1ee9f40f9818fc0e4e14909c2ea64b0961a",
+        "python/omp-work/src/omp_work/egress_store.py": "c94e43558c419a9dd32d1505f221faa8cea51f3c275325d1aa710ad65ee5bb61",
+        "python/omp-work/src/omp_work/enola_store.py": "25e6681de952e00ce64b89608292f17b29abc40e5190659139ece07f476f854b",
+        "python/omp-work/src/omp_work/integration/legacy_artifacts.py": "67fcde9710463bca920159c3df7ffc8c3a70bb49c75dd23054cea3c7689649e5",
+        "python/omp-work/src/omp_work/jobs/cancel.py": "ad69470c8a4a4d4bc287ffc7cf5d3ff2cd9e2d7900541b2fdd6dd0777f5eaa5b",
+        "python/omp-work/src/omp_work/jobs/probe.py": "5d3c79009dc3c4d8a9c488d447e2ffa7c3188902d7a748916022b29ab342b4a8",
+        "python/omp-work/src/omp_work/knowledge_contracts.py": "b2ff574f7e5785f56f014986bf2587b1c10b1be738ef96f7f4760233e04a34ff",
+        "python/omp-work/src/omp_work/knowledge_source.py": "aa82b7e0dc3cddc2d5e26c50c8a9b4fb94698f59324581442cb8e3434d13d791",
+        "python/omp-work/src/omp_work/nsi6_reseal.py": "a8b85fea6f4e49f5d0f926b46d1287aed7ca491193abd76a3f80d904f9ea18bc",
+        "python/omp-work/src/omp_work/nsi_eval.py": "982d6866c84319c42115169b288a442ba1240b1ac87581606c95011c5479fa34",
+        "python/omp-work/src/omp_work/nsi_rollout.py": "77a45491683aa02c899c4c94b9ebd3428a5a7bcb2bd6dd6f573dba28a0a521d8",
+        "python/omp-work/src/omp_work/operations/__init__.py": "3c819d912e414a8f5435012c38b0d81bb036911c3b00d8972c80c45374861d6e",
+        "python/omp-work/src/omp_work/operations/capabilities.py": "272ded3d40233b9fae20fb9c4807c28de201ab117bc6e5830e81c72aa2c7a71d",
+        "python/omp-work/src/omp_work/orchestrator/__init__.py": "8dabe160bd849bf0583c86a1651cae9618934138a31bbd8c91d0d58210bc3690",
+        "python/omp-work/src/omp_work/orchestrator/candidate_git.py": "f29c733bbd7fa0db1fca967ba2f5be5cab0a438e99d6b72ae879a19bd82cca6b",
+        "python/omp-work/src/omp_work/orchestrator/intake_gate.py": "8bd66486811706facc2fd6efefdb2631b2d50dea8448e868e4e4d3646e0d7fc0",
+        "python/omp-work/src/omp_work/orchestrator/pull_request.py": "45762c4a001c9ea409f98ec6ed1a73b797b17b9e831017b9108de61cfcae1d2d",
+        "python/omp-work/src/omp_work/orchestrator/worker_sandbox.py": "6375d2096c6eac568cadff44b8c11414935e6e932c5663c9a9a05aa038afc58d",
+        "python/omp-work/src/omp_work/parallel_streams.py": "8d25d84b7584bacf2b249aee0d03238f9d2d81cbcca8e708e552f07587ee7819",
+        "python/omp-work/src/omp_work/push_http.py": "f505f1750a27ed81d04aabed7dc25a9dcd21f592ca0a5a0b393b1b64187fac90",
+        "python/omp-work/src/omp_work/qualification_snapshot.py": "195c939b6d326159399254ed6fd36f2c7e4c20a005dbb77c7f79500f2a25824f",
+        "python/omp-work/src/omp_work/research/dossier.py": "764197738d31517d8d348dc4ad924f58a45430f5c946cd83920db7b7eb2758bc",
+        "python/omp-work/src/omp_work/research/managed.py": "7e0fcf0785844d5864a3ba492038e45a8bac8468af4d22379f39fa055c7dc01e",
+        "python/omp-work/src/omp_work/research/recursive.py": "5a7c5e5cdb52c3d5cddeccede9ab70988280f1954c1540ce2f5c9e1369001b92",
+        "python/omp-work/src/omp_work/research/recursive_transfer_execution_evidence.py": "8a310be25f8a38168ccefeda45f6180f5c8f8cb8bee94b96ce129edf24d1b1b0",
+        "python/omp-work/src/omp_work/research/recursive_transfer_freshness.py": "5221024f5ca8a81733ecca9ef1b7761080fc5d0baecdc5bffdbeb521b7d60e5c",
+        "python/omp-work/src/omp_work/routing/escalation.py": "b3b9f30616b79b9fca3e578e821df669e13e2f5253a997a9251cfdd33f54bcac",
+        "python/omp-work/src/omp_work/routing/offerings_evaluation.py": "6eccda2242e3017329945a3debbd9b4067dc3506dec935c2d773613188859b28",
+        "python/omp-work/src/omp_work/v1/api_models.py": "56203fcbe7cb76202340be4bdcd1824881b654bee941ee7370e8ca28026ce107",
+        "python/omp-work/src/omp_work/v1/canonical.py": "15512e58dd4444fc7f880fe2cd39275892a454817060a2b75f7bbb7c54477d63",
+        "python/omp-work/src/omp_work/v1/intake_commands.py": "c419f2e6d2add2bef27dbfcc82d07ae65b92eaeac257b0e7d6698338765e6b1e",
+        "python/omp-work/src/omp_work/v1/intake_decisions.py": "accf39c4787acbca8fb6494de79dc154d12d5b8b74984c7cd9add69f86e0dcbe",
+        "python/omp-work/src/omp_work/v1/intake_provenance.py": "c4913315aa10d29bc10d3ab08788b9fb6b7e2cceeb23c70cc687f8274bd69284",
+        "python/omp-work/src/omp_work/v1/mission_event_store.py": "efcbfb96ca7890387987040e44f93ab7d53a62e2a157fd92380167d73892d269",
+        "python/omp-work/src/omp_work/v1/mission_intake.py": "eb23e6e80d56ae2ac4f2e11cbd83105408a4c1430190543a659831ca62699d0b",
+        "python/omp-work/src/omp_work/v1/missions.py": "ded306bc8c812b714201e4128bccbd46700da8e1200925068042e896d72072fc"
+      },
+      "3": {
+        "python/omp-work/src/omp_work/action_tiers.py": "c491e3dc3d341dd0b93af840e037f540b6cbbf95ac13258181706e8ce92b3d01",
+        "python/omp-work/src/omp_work/budget_headroom.py": "6723c87c5dd4d1a23aefee66ae812139275e465e28d898450e613c29a95a3a91",
+        "python/omp-work/src/omp_work/client_ingress_probe.py": "1f0121c0665c10b9d3815dc9ed6f95cf2655ee28e213a5d147d0d1b64a1c390d",
+        "python/omp-work/src/omp_work/contracts/r02/__init__.py": "9a6d51e1521e0fed5e2688aaef405eb239b409c2d13b4eb3df2dc24034f78c1c",
+        "python/omp-work/src/omp_work/economy_effort.py": "094adc1dc7750d2b6d7c9f0a6d3b67e5041061b7d568ce663fdff944752e351e",
+        "python/omp-work/src/omp_work/egress_sandbox.py": "e8cc2e0f9b8ae67a18867cce791d0444fb4d18d96d2912df6a9ba0bbd12cde12",
+        "python/omp-work/src/omp_work/egress_store.py": "c94e43558c419a9dd32d1505f221faa8cea51f3c275325d1aa710ad65ee5bb61",
+        "python/omp-work/src/omp_work/intake_support_corpus.py": "749874c9cf4bc783fd4486434e9d4966f1d06bc263acf738d168115e370598f9",
+        "python/omp-work/src/omp_work/jobs/campaign_completion.py": "5c147d3e3203f2f54a056c0dd37edc8eadc9de9860fd884636993f0c996afaf2",
+        "python/omp-work/src/omp_work/jobs/campaign_decisions.py": "30749a617c7136f23113a2d0122edcf255e44157f829e699321c5bb53849786d",
+        "python/omp-work/src/omp_work/jobs/managed_trial.py": "1be452ec82071636cda86fc48afae22b8838836275504772cab2c198f0995c1a",
+        "python/omp-work/src/omp_work/jobs/worker.py": "16726cfd12ad8c2d897b211e48145bc8d8a1917362580f05f389058e1fa1839a",
+        "python/omp-work/src/omp_work/nsi_eval_postgres.py": "75701e0aec0f9a0a43cffff3e74be6cce44181674da58a652ab7ae4c2226beae",
+        "python/omp-work/src/omp_work/operations/backup.py": "1535cdf262e0a2c821425a1979fb35df9e592ba62c01c337b09899a111b16568",
+        "python/omp-work/src/omp_work/operations/cli.py": "96130e00965d37e2e22c8ba66678f5a471b2902e514a23a8fee05b60332e10ce",
+        "python/omp-work/src/omp_work/orchestrator/qualification.py": "ff8c0e5723cb965ad65ea81e658458fb8ff7b3cb57255ea6d3bd7763a57d5f7c",
+        "python/omp-work/src/omp_work/orchestrator/service.py": "38fb6b5ed9ec473c7e222c2ba59d5ad365751c4e053cda89bacd9529a4ac1a0d",
+        "python/omp-work/src/omp_work/project_store.py": "f2ac077ad80ad229b25f1770bfe26e83a0620c14ffd3c2755c4b3c562181a334",
+        "python/omp-work/src/omp_work/qualification_records.py": "15a617adbc6d8f657a95e2fd0bf733d17d580cb5fdaf1faaa0efa90fafebf762",
+        "python/omp-work/src/omp_work/qualification_snapshot.py": "195c939b6d326159399254ed6fd36f2c7e4c20a005dbb77c7f79500f2a25824f",
+        "python/omp-work/src/omp_work/report_evidence.py": "478541604665736fbded03055b0c184385a87cb431e90cdd262342c93f391dd9",
+        "python/omp-work/src/omp_work/research/__init__.py": "17d5b5e02f5fc4b63816eca557f59c1ccdab38ab1e104985dbecdd5368af0cba",
+        "python/omp-work/src/omp_work/research/dossier.py": "764197738d31517d8d348dc4ad924f58a45430f5c946cd83920db7b7eb2758bc",
+        "python/omp-work/src/omp_work/research/hypothesis.py": "bb7ab0d60846f5072fdd899a1938ad191d0377d8aaef94067f4fcc2c690ae5a0",
+        "python/omp-work/src/omp_work/research/literature.py": "976fb698ca3ae6366c26bdc7b1e56af6ccb5cd26d75db99778bddf319a11f816",
+        "python/omp-work/src/omp_work/research/managed.py": "7e0fcf0785844d5864a3ba492038e45a8bac8468af4d22379f39fa055c7dc01e",
+        "python/omp-work/src/omp_work/research/program.py": "3e4ab54457b84d7ffb4009f37b4efb2889667497693c97e573b8cd1fe70c0edf",
+        "python/omp-work/src/omp_work/research/receipt.py": "f995403daae91b7b04a90615c66c788d7221879d8974b7759c30234f76dffb67",
+        "python/omp-work/src/omp_work/research/recursive.py": "5a7c5e5cdb52c3d5cddeccede9ab70988280f1954c1540ce2f5c9e1369001b92",
+        "python/omp-work/src/omp_work/research/recursive_transfer_execution_evidence.py": "8a310be25f8a38168ccefeda45f6180f5c8f8cb8bee94b96ce129edf24d1b1b0",
+        "python/omp-work/src/omp_work/routing/__init__.py": "864457fa8ab26e3f8fa48483d19f277359bef970b6140de69dc7eaf2f867d1de",
+        "python/omp-work/src/omp_work/routing/offerings_inputs.py": "4d7bf6dca291a11dddcbd467dd8607140afb842735005bbd7e6f1304865c873b",
+        "python/omp-work/src/omp_work/v1/agent_stop.py": "185906e79af305858dfd43b90b18fe937d283a7521d4b728031fe4e45db90221",
+        "python/omp-work/src/omp_work/v1/intake_decisions.py": "accf39c4787acbca8fb6494de79dc154d12d5b8b74984c7cd9add69f86e0dcbe",
+        "python/omp-work/src/omp_work/v1/intake_hold.py": "1f36853f957f1be578474c858be369b5e8bf62b9937980746fe7cff3c5e904fb",
+        "python/omp-work/src/omp_work/v1/intake_provenance_closure.py": "104b5e956b2e3863f96909690b8c641f8fafee87291f56c93c5d6b0f787af0a5",
+        "python/omp-work/src/omp_work/v1/mission_intake.py": "eb23e6e80d56ae2ac4f2e11cbd83105408a4c1430190543a659831ca62699d0b",
+        "python/omp-work/src/omp_work/v1/missions.py": "ded306bc8c812b714201e4128bccbd46700da8e1200925068042e896d72072fc",
+        "python/omp-work/src/omp_work/v1/owner_relay.py": "b6a2822280dafdad5c425979a3667cc10430afa94a6212b3396a4048f571119d",
+        "python/omp-work/src/omp_work/v1/store.py": "ff5052efc3c75d11c4305b6cadc422ea2d600bb0c29bad5e57791cce0e3f279b"
+      },
+      "4": {
+        "python/omp-work/src/omp_work/alarm_dispatch.py": "10cc013de4b82cc918aef4e1267fef139010ce8257c5e466081adc69078a9c3a",
+        "python/omp-work/src/omp_work/always_running.py": "6f0f1dd11bccbff61e34ffa324b6b088101b0d382a9d159d8d1853539178a339",
+        "python/omp-work/src/omp_work/contracts/nsi/v1/validate.py": "a4fed8cdf6b6c2e0b02952150fadaec2d9007e5081c2de18df639e6cf605fec6",
+        "python/omp-work/src/omp_work/contracts/r02/validate.py": "959f4731c8404c050d24abc789139889ee229d59aaad9b18598b467103f5c578",
+        "python/omp-work/src/omp_work/control_plane/adr0004.py": "90d9e14599cc49c31fbc6093615ecb9b7c68526d38ba7426308d9db5a855b7f3",
+        "python/omp-work/src/omp_work/control_plane/envelope.py": "cb6ed6081817d3cb06714c41a365a1ee9f40f9818fc0e4e14909c2ea64b0961a",
+        "python/omp-work/src/omp_work/control_plane/mutation.py": "bd6e4be4d3a0909d7b0630f03eb3240c78c6810097fb99d1fa35c02194c19da8",
+        "python/omp-work/src/omp_work/control_plane/registry.py": "a84557b4bb8f93239a7631f2c34df9d687d788ba4c1a57d67b4ccfc644c1c713",
+        "python/omp-work/src/omp_work/egress_sandbox_helper.py": "e27e8ea69ef9afa99254b36f9aaa76c716961c437485479338aaa55bc6c49b8b",
+        "python/omp-work/src/omp_work/enola_adapter.py": "4f7c7e45ad101383ba6d16f27fe99b5d8fac2ca61b3398e6bf7a6269be0add02",
+        "python/omp-work/src/omp_work/event_push.py": "984f1ec2c8cf8352fa8193e765f5bcee2390202a12caf0bab01b268d18cc8468",
+        "python/omp-work/src/omp_work/intake_support_corpus.py": "749874c9cf4bc783fd4486434e9d4966f1d06bc263acf738d168115e370598f9",
+        "python/omp-work/src/omp_work/integration/legacy_artifacts.py": "67fcde9710463bca920159c3df7ffc8c3a70bb49c75dd23054cea3c7689649e5",
+        "python/omp-work/src/omp_work/jobs/admission.py": "00b445918a3238c3c4b2f8edb4f365c5661f9f9c2184559dd7395f56bb8bf297",
+        "python/omp-work/src/omp_work/jobs/campaign_decisions.py": "30749a617c7136f23113a2d0122edcf255e44157f829e699321c5bb53849786d",
+        "python/omp-work/src/omp_work/jobs/managed_trial.py": "1be452ec82071636cda86fc48afae22b8838836275504772cab2c198f0995c1a",
+        "python/omp-work/src/omp_work/jobs/outbox.py": "9e4eaf0ecfa2c03755f12365d93b01201a40d5af3c80088d18565ebaf586cca6",
+        "python/omp-work/src/omp_work/jobs/process.py": "e09e89230c071367d4a6b9e72904aedf6ebf7cac45253de3b4a3a83b747b8e0e",
+        "python/omp-work/src/omp_work/jobs/projection.py": "df205ddd342a7ce9e8ed078d715e92b35316771ed8fb279eb854eef09d14b2b7",
+        "python/omp-work/src/omp_work/jobs/stage_admission.py": "6bcd8312315283727d14c7e65bf2cffe5f8b0a10794d63796e231ebcdd22243f",
+        "python/omp-work/src/omp_work/jobs/worker.py": "16726cfd12ad8c2d897b211e48145bc8d8a1917362580f05f389058e1fa1839a",
+        "python/omp-work/src/omp_work/knowledge_namespace.py": "56dab9c09130c611c57fa0fcceab1db106aacbab9d445d40dcd8af03065a9128",
+        "python/omp-work/src/omp_work/mission_intake_rules.py": "1a6196750a0ebd31524cf871641461cf0915a2d0df250e5563ad8db390353aba",
+        "python/omp-work/src/omp_work/nsi6_reseal.py": "a8b85fea6f4e49f5d0f926b46d1287aed7ca491193abd76a3f80d904f9ea18bc",
+        "python/omp-work/src/omp_work/nsi_rollout.py": "77a45491683aa02c899c4c94b9ebd3428a5a7bcb2bd6dd6f573dba28a0a521d8",
+        "python/omp-work/src/omp_work/operations/cli.py": "96130e00965d37e2e22c8ba66678f5a471b2902e514a23a8fee05b60332e10ce",
+        "python/omp-work/src/omp_work/operations/config.py": "de3c170fcde050950f2b3ac6760d684eba88203a0207e1ad9aac1a1112e95546",
+        "python/omp-work/src/omp_work/orchestrator/stages.py": "a25ebced6216a10deb54bd59647e84c4450481a2b5020e5024f25449708a3ba8",
+        "python/omp-work/src/omp_work/project_store.py": "f2ac077ad80ad229b25f1770bfe26e83a0620c14ffd3c2755c4b3c562181a334",
+        "python/omp-work/src/omp_work/qualification_ordinary.py": "62697da0229e47a8659e8ad3a609672a4cf0af6715935e99764f73f6979a1ea1",
+        "python/omp-work/src/omp_work/report_evidence.py": "478541604665736fbded03055b0c184385a87cb431e90cdd262342c93f391dd9",
+        "python/omp-work/src/omp_work/research/managed.py": "7e0fcf0785844d5864a3ba492038e45a8bac8468af4d22379f39fa055c7dc01e",
+        "python/omp-work/src/omp_work/research/program.py": "3e4ab54457b84d7ffb4009f37b4efb2889667497693c97e573b8cd1fe70c0edf",
+        "python/omp-work/src/omp_work/research/recursive_benefit.py": "8f42b4ed8dc7eb5751e9e7e58d46b191c5301baf2c9473024aaf5d777b523b13",
+        "python/omp-work/src/omp_work/routing/best_of_n.py": "03e63b8c4e6bdb5e51650bb4152ec775f61bb0d06fb1b86c4f4cf28c26c09d97",
+        "python/omp-work/src/omp_work/routing/offerings_check.py": "7b1f69072b77e3848bcfb873f7c6dec822fe9a8df2c0d5ff83bb7d5b57448915",
+        "python/omp-work/src/omp_work/skip_accounting.py": "692114ceda41cbde335a4f07566b07e2d5590bbded7166afe920a1bf1eb4099e",
+        "python/omp-work/src/omp_work/standing_change.py": "d542ef6511946fbbcbe6d74f64eec73243c4a6a6dbf5c58834540f1e95b3c99a",
+        "python/omp-work/src/omp_work/v1/agent_stop.py": "185906e79af305858dfd43b90b18fe937d283a7521d4b728031fe4e45db90221",
+        "python/omp-work/src/omp_work/v1/mission_event_store.py": "efcbfb96ca7890387987040e44f93ab7d53a62e2a157fd92380167d73892d269"
+      }
+    },
+    "tree_sha256": {
+      "0": "2c514bc55ac005e5a701f111b4c8160daaea6e96dcbf0386c6e5263599e9feb7",
+      "1": "5764ff51d6d737a1df53243ae555b943206c16adedb7e4587808b805b6304a49",
+      "2": "6ff68e5c13e26df6f9fdc888d91ec7a8c04a86adea27b83d138193ef271a2efb",
+      "3": "54f53f4f146e684554f1f988840d8efec862bdb4101a17474d44093bd3e249d3",
+      "4": "52030f508d1be52a97f203eb7cb1ca58ece4d3fa4617f7614fbabb9c021e4275"
+    },
+    "tree": {
+      "a": {
+        "parent_id": null,
+        "children": [
+          "a1",
+          "a2"
+        ],
+        "cost": 1,
+        "candidate_digest": "cd39abc4979ebe1cc5ede2b570d964a127be2b32d578f4575255062f67eb49cd",
+        "metric": null,
+        "infra_error": null
+      },
+      "b": {
+        "parent_id": null,
+        "children": [],
+        "cost": 1,
+        "candidate_digest": "4cc31b1d027bf6d9b04209e448fbdefd1d31b1d062e68bd2ae93b680f131f2b8",
+        "metric": null,
+        "infra_error": null
+      },
+      "c": {
+        "parent_id": null,
+        "children": [],
+        "cost": 1,
+        "candidate_digest": "da01253608866a094b98c9005f52e039505702ee73721f8abad13030b3547541",
+        "metric": null,
+        "infra_error": null
+      },
+      "a1": {
+        "parent_id": "a",
+        "children": [
+          "a1x",
+          "a1y"
+        ],
+        "cost": 1,
+        "candidate_digest": "4cc31b1d027bf6d9b04209e448fbdefd1d31b1d062e68bd2ae93b680f131f2b8",
+        "metric": null,
+        "infra_error": null
+      },
+      "a2": {
+        "parent_id": "a",
+        "children": [],
+        "cost": 1,
+        "candidate_digest": "482bbdb70a0c3d7cce09be2457c20799d8f6d04bab23569f925675be88d8f7ee",
+        "metric": null,
+        "infra_error": null
+      },
+      "a1x": {
+        "parent_id": "a1",
+        "children": [],
+        "cost": 1,
+        "candidate_digest": "da01253608866a094b98c9005f52e039505702ee73721f8abad13030b3547541",
+        "metric": null,
+        "infra_error": null
+      },
+      "a1y": {
+        "parent_id": "a1",
+        "children": [],
+        "cost": 1,
+        "candidate_digest": "d15dc2ec17f4c60ca8ccc426715eb67635e5b1ce8dee5828243748b856ac2e7a",
+        "metric": null,
+        "infra_error": null
+      }
+    }
+  },
+  "seeds": [
+    {
+      "seed": 0,
+      "greedy": {
+        "campaign_id": "30bddf07-d84c-449f-86d7-b424e58da0ff",
+        "selected_ids": [
+          "a",
+          "a1",
+          "a1x"
+        ],
+        "trusted_metrics": [
+          {
+            "ratio": 3.4018147053711107
+          },
+          {
+            "ratio": 4.215811468700185
+          },
+          {
+            "ratio": 4.242681234824835
+          }
+        ],
+        "decisions": [
+          {
+            "v": 1,
+            "index": 0,
+            "policy": "greedy",
+            "step_id": "a",
+            "observations_count": 0,
+            "observations_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "rationale": "node=a;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 1,
+            "policy": "greedy",
+            "step_id": "a1",
+            "observations_count": 1,
+            "observations_sha256": "799cd425033706adbb4886b032ce9631bb9a7d0313c60af95d0d220483c0df19",
+            "rationale": "node=a1;parent=a;metric=3.4018147053711107"
+          },
+          {
+            "v": 1,
+            "index": 2,
+            "policy": "greedy",
+            "step_id": "a1x",
+            "observations_count": 2,
+            "observations_sha256": "7922c5ad2a354fb9b529919fb51c33e8a71141cee78a3010fc2d9005772613c5",
+            "rationale": "node=a1x;parent=a1;metric=4.215811468700185"
+          }
+        ],
+        "best": {
+          "step_id": "a1x",
+          "metric": 4.242681234824835
+        },
+        "spent": 3.0,
+        "actual_trials": 3,
+        "actual_cost": 3.0,
+        "best_metric": 4.242681234824835,
+        "trials": [
+          {
+            "trial_id": "ad7ac471-4d29-429d-9710-a7ea25513666",
+            "step_id": "a",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 3.4018147053711107
+            }
+          },
+          {
+            "trial_id": "57fcf084-4409-4959-ad6b-df924e5ca7b6",
+            "step_id": "a1",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.215811468700185
+            }
+          },
+          {
+            "trial_id": "1a99f7d0-1695-439f-9b0c-c3df98ce4fce",
+            "step_id": "a1x",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.242681234824835
+            }
+          }
+        ],
+        "verification": {
+          "state": "concluded",
+          "trial_cap": 5,
+          "receipts": [
+            {
+              "trial_id": "ad7ac471-4d29-429d-9710-a7ea25513666",
+              "job_id": "trial:ad7ac471-4d29-429d-9710-a7ea25513666",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:ad7ac471-4d29-429d-9710-a7ea25513666",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 3.4018147053711107
+                  },
+                  "content_digest": "b3d7380b3c07ec148f9791931a61dce5db2154b92e2c57c2352c3a5e051072e5"
+                },
+                "issuer_component_sha256": "7e402b4c41895ad60e8de3eba7af272a22f8fdacfe42df94d8a7e369c777db83"
+              }
+            },
+            {
+              "trial_id": "57fcf084-4409-4959-ad6b-df924e5ca7b6",
+              "job_id": "trial:57fcf084-4409-4959-ad6b-df924e5ca7b6",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:57fcf084-4409-4959-ad6b-df924e5ca7b6",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 4.215811468700185
+                  },
+                  "content_digest": "179e0699e6a70239b5db29ef89ac827812a81a3278f3f672e778534dcc2d040b"
+                },
+                "issuer_component_sha256": "4440c00737ef8f77ebf9a30ae9d62b38c71fff1b2f4ded3e0d5c23854b0ba941"
+              }
+            },
+            {
+              "trial_id": "1a99f7d0-1695-439f-9b0c-c3df98ce4fce",
+              "job_id": "trial:1a99f7d0-1695-439f-9b0c-c3df98ce4fce",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:1a99f7d0-1695-439f-9b0c-c3df98ce4fce",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 4.242681234824835
+                  },
+                  "content_digest": "dc022465c247d3c0bcd2bdea6141a070dfeaccb02a7d838d4360ecac52dad692"
+                },
+                "issuer_component_sha256": "6123f7b1cef4a8cb1013abdf8b7ea6af4fec6b925de4f09ace8177d4a156860c"
+              }
+            }
+          ],
+          "selection_replay_seconds": 6.285787094384432e-05,
+          "selection_model_cost_usd": 0,
+          "helper_model_cost_usd": 0,
+          "model_calls": 0,
+          "cost_basis": "Measured compute jobs: zero model-call resources, empty settlement usage, and no workspace usage events; deterministic policy replay. No model evaluator or helper."
+        }
+      },
+      "fixed": {
+        "campaign_id": "5b809b49-7404-40e9-a04a-e5af781c3ecb",
+        "selected_ids": [
+          "a",
+          "b",
+          "c",
+          "a1",
+          "a2"
+        ],
+        "trusted_metrics": [
+          {
+            "ratio": 3.4018147053711107
+          },
+          {
+            "ratio": 4.215811468700185
+          },
+          {
+            "ratio": 4.242681234824835
+          },
+          {
+            "ratio": 4.215811468700185
+          },
+          {
+            "ratio": 4.066947623916278
+          }
+        ],
+        "decisions": [
+          {
+            "v": 1,
+            "index": 0,
+            "policy": "fixed",
+            "step_id": "a",
+            "observations_count": 0,
+            "observations_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "rationale": "node=a;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 1,
+            "policy": "fixed",
+            "step_id": "b",
+            "observations_count": 1,
+            "observations_sha256": "ea092870eef66ee57a7602b5f839f7aa7719bfc17cd935a8a86d6bf717f0b580",
+            "rationale": "node=b;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 2,
+            "policy": "fixed",
+            "step_id": "c",
+            "observations_count": 2,
+            "observations_sha256": "cf04be693dd6f235ac1f0fba201a51c697300271df59a255a679290957c76867",
+            "rationale": "node=c;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 3,
+            "policy": "fixed",
+            "step_id": "a1",
+            "observations_count": 3,
+            "observations_sha256": "e228e20df2c30785ae35f782a6e54e1bc25db37430b18341d5766afecd108b71",
+            "rationale": "node=a1;parent=a;metric=3.4018147053711107"
+          },
+          {
+            "v": 1,
+            "index": 4,
+            "policy": "fixed",
+            "step_id": "a2",
+            "observations_count": 4,
+            "observations_sha256": "c087f681ce7447bf941ae260c0b09bd41108b1b4a9d06e717cff228509157689",
+            "rationale": "node=a2;parent=a;metric=3.4018147053711107"
+          }
+        ],
+        "best": {
+          "step_id": "c",
+          "metric": 4.242681234824835
+        },
+        "spent": 5.0,
+        "actual_trials": 5,
+        "actual_cost": 5.0,
+        "best_metric": 4.242681234824835,
+        "trials": [
+          {
+            "trial_id": "9d744844-ae7b-49bf-a096-2561349a40ce",
+            "step_id": "a",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 3.4018147053711107
+            }
+          },
+          {
+            "trial_id": "19a610cb-f3e7-4350-bed8-8ba46803659c",
+            "step_id": "b",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.215811468700185
+            }
+          },
+          {
+            "trial_id": "dcc239a0-44ed-46f5-b7cf-a5c3ccac5af2",
+            "step_id": "c",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.242681234824835
+            }
+          },
+          {
+            "trial_id": "cba260f7-0957-4678-adf0-67c62d04c764",
+            "step_id": "a1",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.215811468700185
+            }
+          },
+          {
+            "trial_id": "384a105c-a937-4815-b466-bf4b45db04c4",
+            "step_id": "a2",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.066947623916278
+            }
+          }
+        ],
+        "verification": {
+          "state": "concluded",
+          "trial_cap": 5,
+          "receipts": [
+            {
+              "trial_id": "9d744844-ae7b-49bf-a096-2561349a40ce",
+              "job_id": "trial:9d744844-ae7b-49bf-a096-2561349a40ce",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:9d744844-ae7b-49bf-a096-2561349a40ce",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 3.4018147053711107
+                  },
+                  "content_digest": "18e22b17f0a410fd427480a58c4ce109de4079ab8a886edc42ac2a26e018bfdb"
+                },
+                "issuer_component_sha256": "7e402b4c41895ad60e8de3eba7af272a22f8fdacfe42df94d8a7e369c777db83"
+              }
+            },
+            {
+              "trial_id": "19a610cb-f3e7-4350-bed8-8ba46803659c",
+              "job_id": "trial:19a610cb-f3e7-4350-bed8-8ba46803659c",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:19a610cb-f3e7-4350-bed8-8ba46803659c",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 4.215811468700185
+                  },
+                  "content_digest": "b29fbdaa2dd446a6c8a2e79bfe448008da158e937a35a5a58a1680bffe7a6a89"
+                },
+                "issuer_component_sha256": "4440c00737ef8f77ebf9a30ae9d62b38c71fff1b2f4ded3e0d5c23854b0ba941"
+              }
+            },
+            {
+              "trial_id": "dcc239a0-44ed-46f5-b7cf-a5c3ccac5af2",
+              "job_id": "trial:dcc239a0-44ed-46f5-b7cf-a5c3ccac5af2",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:dcc239a0-44ed-46f5-b7cf-a5c3ccac5af2",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 4.242681234824835
+                  },
+                  "content_digest": "ad434bb052d13c0dfa88a206220167f0c9553b220e372057655c5d4b7fd5916a"
+                },
+                "issuer_component_sha256": "6123f7b1cef4a8cb1013abdf8b7ea6af4fec6b925de4f09ace8177d4a156860c"
+              }
+            },
+            {
+              "trial_id": "cba260f7-0957-4678-adf0-67c62d04c764",
+              "job_id": "trial:cba260f7-0957-4678-adf0-67c62d04c764",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:cba260f7-0957-4678-adf0-67c62d04c764",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 4.215811468700185
+                  },
+                  "content_digest": "3e13a03b4fa0bd76d0556d170f91d8ce8036b5c9a363c7b6f4a4630402ad1b10"
+                },
+                "issuer_component_sha256": "4440c00737ef8f77ebf9a30ae9d62b38c71fff1b2f4ded3e0d5c23854b0ba941"
+              }
+            },
+            {
+              "trial_id": "384a105c-a937-4815-b466-bf4b45db04c4",
+              "job_id": "trial:384a105c-a937-4815-b466-bf4b45db04c4",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:384a105c-a937-4815-b466-bf4b45db04c4",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 4.066947623916278
+                  },
+                  "content_digest": "0f07291844d5501eb91fd5e0c1b512786d72a572b46e5ba1d9dace834ae29f41"
+                },
+                "issuer_component_sha256": "639d299ce9476942fa26a3221b66d955ac70631cc6a0d33b33f770af73aa2e46"
+              }
+            }
+          ],
+          "selection_replay_seconds": 3.547593951225281e-05,
+          "selection_model_cost_usd": 0,
+          "helper_model_cost_usd": 0,
+          "model_calls": 0,
+          "cost_basis": "Measured compute jobs: zero model-call resources, empty settlement usage, and no workspace usage events; deterministic policy replay. No model evaluator or helper."
+        }
+      },
+      "difference": 0.0,
+      "actual_trials_greedy": 3,
+      "actual_cost_greedy": 3.0,
+      "actual_trials_fixed": 5,
+      "actual_cost_fixed": 5.0
+    },
+    {
+      "seed": 1,
+      "greedy": {
+        "campaign_id": "26e46cff-bce9-4b40-9fe6-88109dce7017",
+        "selected_ids": [
+          "a",
+          "a1",
+          "a1x"
+        ],
+        "trusted_metrics": [
+          {
+            "ratio": 4.000184994169881
+          },
+          {
+            "ratio": 5.045315063069178
+          },
+          {
+            "ratio": 5.098487392556285
+          }
+        ],
+        "decisions": [
+          {
+            "v": 1,
+            "index": 0,
+            "policy": "greedy",
+            "step_id": "a",
+            "observations_count": 0,
+            "observations_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "rationale": "node=a;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 1,
+            "policy": "greedy",
+            "step_id": "a1",
+            "observations_count": 1,
+            "observations_sha256": "35c339a6306495dcef51b143e0f5cc85e6e5ffa97e9936c0b93904caf8e90385",
+            "rationale": "node=a1;parent=a;metric=4.000184994169881"
+          },
+          {
+            "v": 1,
+            "index": 2,
+            "policy": "greedy",
+            "step_id": "a1x",
+            "observations_count": 2,
+            "observations_sha256": "145e21da215aae98b2a48648fa1ebbe6034db15a2bcca7e59aeb8b2c8c6311e4",
+            "rationale": "node=a1x;parent=a1;metric=5.045315063069178"
+          }
+        ],
+        "best": {
+          "step_id": "a1x",
+          "metric": 5.098487392556285
+        },
+        "spent": 3.0,
+        "actual_trials": 3,
+        "actual_cost": 3.0,
+        "best_metric": 5.098487392556285,
+        "trials": [
+          {
+            "trial_id": "7b726d26-fa9a-4d28-89ca-ad27562a7c91",
+            "step_id": "a",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.000184994169881
+            }
+          },
+          {
+            "trial_id": "9b11bf70-89dc-4eb9-9036-96823802cb15",
+            "step_id": "a1",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 5.045315063069178
+            }
+          },
+          {
+            "trial_id": "f5e4bdd9-0e70-4a36-b857-2432f7db62ac",
+            "step_id": "a1x",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 5.098487392556285
+            }
+          }
+        ],
+        "verification": {
+          "state": "concluded",
+          "trial_cap": 5,
+          "receipts": [
+            {
+              "trial_id": "7b726d26-fa9a-4d28-89ca-ad27562a7c91",
+              "job_id": "trial:7b726d26-fa9a-4d28-89ca-ad27562a7c91",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:7b726d26-fa9a-4d28-89ca-ad27562a7c91",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 4.000184994169881
+                  },
+                  "content_digest": "c28fa653629581e7ca2589bd32d26cb87ed0f71c37a57852f01c86bbd3fc8159"
+                },
+                "issuer_component_sha256": "3f42223e57d3c71dc806abfe95c8e1853aa0fd332fa51da24166bb4e7e7647d5"
+              }
+            },
+            {
+              "trial_id": "9b11bf70-89dc-4eb9-9036-96823802cb15",
+              "job_id": "trial:9b11bf70-89dc-4eb9-9036-96823802cb15",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:9b11bf70-89dc-4eb9-9036-96823802cb15",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 5.045315063069178
+                  },
+                  "content_digest": "6ed74cf63e6d3e7b6650209a38884ab67080107487678e26b9057cd62f6e79c7"
+                },
+                "issuer_component_sha256": "579afe02351b0bf4b3c733c6305cd25c974faab5410b9179fa4e23359514ca45"
+              }
+            },
+            {
+              "trial_id": "f5e4bdd9-0e70-4a36-b857-2432f7db62ac",
+              "job_id": "trial:f5e4bdd9-0e70-4a36-b857-2432f7db62ac",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:f5e4bdd9-0e70-4a36-b857-2432f7db62ac",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 5.098487392556285
+                  },
+                  "content_digest": "8b1122e3a02c510fd18728218ae3a143307d7bb1a79a8d139b44a5f7f49557ea"
+                },
+                "issuer_component_sha256": "10c0f72f97a587999f093a71334a54a0875d000de871e98814a3c85965c8b7ce"
+              }
+            }
+          ],
+          "selection_replay_seconds": 4.36779810115695e-05,
+          "selection_model_cost_usd": 0,
+          "helper_model_cost_usd": 0,
+          "model_calls": 0,
+          "cost_basis": "Measured compute jobs: zero model-call resources, empty settlement usage, and no workspace usage events; deterministic policy replay. No model evaluator or helper."
+        }
+      },
+      "fixed": {
+        "campaign_id": "2d2496bf-0e64-4ec7-8a4a-269f528fe121",
+        "selected_ids": [
+          "a",
+          "b",
+          "c",
+          "a1",
+          "a2"
+        ],
+        "trusted_metrics": [
+          {
+            "ratio": 4.000184994169881
+          },
+          {
+            "ratio": 5.045315063069178
+          },
+          {
+            "ratio": 5.098487392556285
+          },
+          {
+            "ratio": 5.045315063069178
+          },
+          {
+            "ratio": 4.918451888613179
+          }
+        ],
+        "decisions": [
+          {
+            "v": 1,
+            "index": 0,
+            "policy": "fixed",
+            "step_id": "a",
+            "observations_count": 0,
+            "observations_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "rationale": "node=a;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 1,
+            "policy": "fixed",
+            "step_id": "b",
+            "observations_count": 1,
+            "observations_sha256": "62261351417dda9ed765bdc955a41715d17f2a187bb7f250354457a8eaf37d0e",
+            "rationale": "node=b;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 2,
+            "policy": "fixed",
+            "step_id": "c",
+            "observations_count": 2,
+            "observations_sha256": "9654dfec0d0c8dd83b7e2eb026152f13379db417abfdbfaa9e4ee712e37633ab",
+            "rationale": "node=c;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 3,
+            "policy": "fixed",
+            "step_id": "a1",
+            "observations_count": 3,
+            "observations_sha256": "ac1481311d2ca6c703d8255e5fb8a917140efc58f9fddc109f14a6368a87b64d",
+            "rationale": "node=a1;parent=a;metric=4.000184994169881"
+          },
+          {
+            "v": 1,
+            "index": 4,
+            "policy": "fixed",
+            "step_id": "a2",
+            "observations_count": 4,
+            "observations_sha256": "decb364e9bf07df77c28fec82660bff112ef799b9a6ae35f627a59b0b0fadfcc",
+            "rationale": "node=a2;parent=a;metric=4.000184994169881"
+          }
+        ],
+        "best": {
+          "step_id": "c",
+          "metric": 5.098487392556285
+        },
+        "spent": 5.0,
+        "actual_trials": 5,
+        "actual_cost": 5.0,
+        "best_metric": 5.098487392556285,
+        "trials": [
+          {
+            "trial_id": "71b098ba-c2e1-4c05-aa4e-fdf82dea5441",
+            "step_id": "a",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.000184994169881
+            }
+          },
+          {
+            "trial_id": "cf26652e-d51c-4023-94bd-7e21ce7dbfc1",
+            "step_id": "b",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 5.045315063069178
+            }
+          },
+          {
+            "trial_id": "e8a9a869-d734-4e56-b6e9-e303f4ea4ac8",
+            "step_id": "c",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 5.098487392556285
+            }
+          },
+          {
+            "trial_id": "05770520-0e56-4f07-8435-4bc218098564",
+            "step_id": "a1",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 5.045315063069178
+            }
+          },
+          {
+            "trial_id": "984228f4-8425-489f-affd-fa4496102550",
+            "step_id": "a2",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.918451888613179
+            }
+          }
+        ],
+        "verification": {
+          "state": "concluded",
+          "trial_cap": 5,
+          "receipts": [
+            {
+              "trial_id": "71b098ba-c2e1-4c05-aa4e-fdf82dea5441",
+              "job_id": "trial:71b098ba-c2e1-4c05-aa4e-fdf82dea5441",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:71b098ba-c2e1-4c05-aa4e-fdf82dea5441",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 4.000184994169881
+                  },
+                  "content_digest": "01ce1f3b39f034426ef5b962e3ca773f04dd9c02c1d32e76736e6cd84bed764b"
+                },
+                "issuer_component_sha256": "3f42223e57d3c71dc806abfe95c8e1853aa0fd332fa51da24166bb4e7e7647d5"
+              }
+            },
+            {
+              "trial_id": "cf26652e-d51c-4023-94bd-7e21ce7dbfc1",
+              "job_id": "trial:cf26652e-d51c-4023-94bd-7e21ce7dbfc1",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:cf26652e-d51c-4023-94bd-7e21ce7dbfc1",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 5.045315063069178
+                  },
+                  "content_digest": "d673a44a7a5eeb50691f4e7595a1ad62e10564956d0216d2f91fb0abdcf739e4"
+                },
+                "issuer_component_sha256": "579afe02351b0bf4b3c733c6305cd25c974faab5410b9179fa4e23359514ca45"
+              }
+            },
+            {
+              "trial_id": "e8a9a869-d734-4e56-b6e9-e303f4ea4ac8",
+              "job_id": "trial:e8a9a869-d734-4e56-b6e9-e303f4ea4ac8",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:e8a9a869-d734-4e56-b6e9-e303f4ea4ac8",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 5.098487392556285
+                  },
+                  "content_digest": "f8c64a248243013104704a7f025ccca554c2b4848d2a54bfa2583e526ceaad48"
+                },
+                "issuer_component_sha256": "10c0f72f97a587999f093a71334a54a0875d000de871e98814a3c85965c8b7ce"
+              }
+            },
+            {
+              "trial_id": "05770520-0e56-4f07-8435-4bc218098564",
+              "job_id": "trial:05770520-0e56-4f07-8435-4bc218098564",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:05770520-0e56-4f07-8435-4bc218098564",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 5.045315063069178
+                  },
+                  "content_digest": "d4b63592566f480401a6115c90c787aeff75d516f2d4e927486b0dc9e806b8ec"
+                },
+                "issuer_component_sha256": "579afe02351b0bf4b3c733c6305cd25c974faab5410b9179fa4e23359514ca45"
+              }
+            },
+            {
+              "trial_id": "984228f4-8425-489f-affd-fa4496102550",
+              "job_id": "trial:984228f4-8425-489f-affd-fa4496102550",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:984228f4-8425-489f-affd-fa4496102550",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 4.918451888613179
+                  },
+                  "content_digest": "204bb76514c164465c230df895ef34f1e28783aa51ff9b9295a662f420fc7d63"
+                },
+                "issuer_component_sha256": "e8c0ae499d96fb23858152e891f4bd470a78d20532dc6c8513c16b1e2d7e8063"
+              }
+            }
+          ],
+          "selection_replay_seconds": 2.7900910936295986e-05,
+          "selection_model_cost_usd": 0,
+          "helper_model_cost_usd": 0,
+          "model_calls": 0,
+          "cost_basis": "Measured compute jobs: zero model-call resources, empty settlement usage, and no workspace usage events; deterministic policy replay. No model evaluator or helper."
+        }
+      },
+      "difference": 0.0,
+      "actual_trials_greedy": 3,
+      "actual_cost_greedy": 3.0,
+      "actual_trials_fixed": 5,
+      "actual_cost_fixed": 5.0
+    },
+    {
+      "seed": 2,
+      "greedy": {
+        "campaign_id": "deeb5022-c699-4f8f-896a-3d425df8c923",
+        "selected_ids": [
+          "a",
+          "a1",
+          "a1x"
+        ],
+        "trusted_metrics": [
+          {
+            "ratio": 3.457122746061223
+          },
+          {
+            "ratio": 4.3014413356812105
+          },
+          {
+            "ratio": 4.330044456115998
+          }
+        ],
+        "decisions": [
+          {
+            "v": 1,
+            "index": 0,
+            "policy": "greedy",
+            "step_id": "a",
+            "observations_count": 0,
+            "observations_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "rationale": "node=a;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 1,
+            "policy": "greedy",
+            "step_id": "a1",
+            "observations_count": 1,
+            "observations_sha256": "c022e50fc4a405c896ce37e0b0ee56fc2258e549cbe2e6215b0bdbf269a065b3",
+            "rationale": "node=a1;parent=a;metric=3.457122746061223"
+          },
+          {
+            "v": 1,
+            "index": 2,
+            "policy": "greedy",
+            "step_id": "a1x",
+            "observations_count": 2,
+            "observations_sha256": "97ccac59e07d80663de76e838196bb86227a03e5bd5d2c090da8e0a43ab57abf",
+            "rationale": "node=a1x;parent=a1;metric=4.3014413356812105"
+          }
+        ],
+        "best": {
+          "step_id": "a1x",
+          "metric": 4.330044456115998
+        },
+        "spent": 3.0,
+        "actual_trials": 3,
+        "actual_cost": 3.0,
+        "best_metric": 4.330044456115998,
+        "trials": [
+          {
+            "trial_id": "747724f1-8c62-47e2-ba44-0e60ec3439c5",
+            "step_id": "a",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 3.457122746061223
+            }
+          },
+          {
+            "trial_id": "0f9813c3-f33c-4ddd-80e6-f7d0ea009aa0",
+            "step_id": "a1",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.3014413356812105
+            }
+          },
+          {
+            "trial_id": "8a887f94-2935-4497-b801-1212da653d00",
+            "step_id": "a1x",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.330044456115998
+            }
+          }
+        ],
+        "verification": {
+          "state": "concluded",
+          "trial_cap": 5,
+          "receipts": [
+            {
+              "trial_id": "747724f1-8c62-47e2-ba44-0e60ec3439c5",
+              "job_id": "trial:747724f1-8c62-47e2-ba44-0e60ec3439c5",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:747724f1-8c62-47e2-ba44-0e60ec3439c5",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 3.457122746061223
+                  },
+                  "content_digest": "8e3dc76e32f91beceab1fae78425bacdbdb04f8ebe0b93283c1545c85dce6fa7"
+                },
+                "issuer_component_sha256": "f0ac538d65055cced5e9ab38d0ed91220498bcde8674958f9b6fb6e71f8f310c"
+              }
+            },
+            {
+              "trial_id": "0f9813c3-f33c-4ddd-80e6-f7d0ea009aa0",
+              "job_id": "trial:0f9813c3-f33c-4ddd-80e6-f7d0ea009aa0",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:0f9813c3-f33c-4ddd-80e6-f7d0ea009aa0",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 4.3014413356812105
+                  },
+                  "content_digest": "284e5337d2b4ebc4d0a2f56e66f74a8105ef4417b1f43556652c7b758383d4e6"
+                },
+                "issuer_component_sha256": "96ad05bd6f5d98bb2bbe970d6378a3089085e684677356de00104b8056662166"
+              }
+            },
+            {
+              "trial_id": "8a887f94-2935-4497-b801-1212da653d00",
+              "job_id": "trial:8a887f94-2935-4497-b801-1212da653d00",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:8a887f94-2935-4497-b801-1212da653d00",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 4.330044456115998
+                  },
+                  "content_digest": "5380446cb7c3a14f327118cb194b67328b9035d967bb6af64be85627e1b3733a"
+                },
+                "issuer_component_sha256": "f31d473311e2b63975fb7743c657a708227648c2a9bb823813abd01be9da102b"
+              }
+            }
+          ],
+          "selection_replay_seconds": 3.9727077819406986e-05,
+          "selection_model_cost_usd": 0,
+          "helper_model_cost_usd": 0,
+          "model_calls": 0,
+          "cost_basis": "Measured compute jobs: zero model-call resources, empty settlement usage, and no workspace usage events; deterministic policy replay. No model evaluator or helper."
+        }
+      },
+      "fixed": {
+        "campaign_id": "a23f9295-6a06-4469-9c50-c6186cb01145",
+        "selected_ids": [
+          "a",
+          "b",
+          "c",
+          "a1",
+          "a2"
+        ],
+        "trusted_metrics": [
+          {
+            "ratio": 3.457122746061223
+          },
+          {
+            "ratio": 4.3014413356812105
+          },
+          {
+            "ratio": 4.330044456115998
+          },
+          {
+            "ratio": 4.3014413356812105
+          },
+          {
+            "ratio": 4.1552931434846005
+          }
+        ],
+        "decisions": [
+          {
+            "v": 1,
+            "index": 0,
+            "policy": "fixed",
+            "step_id": "a",
+            "observations_count": 0,
+            "observations_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "rationale": "node=a;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 1,
+            "policy": "fixed",
+            "step_id": "b",
+            "observations_count": 1,
+            "observations_sha256": "85fc1d57f6aac4dbf4ac9fdf08a2c274953068502fa5e81629172daede6e655b",
+            "rationale": "node=b;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 2,
+            "policy": "fixed",
+            "step_id": "c",
+            "observations_count": 2,
+            "observations_sha256": "50ece163f0e2502fcf184067424db6b80ea03129a0ed8b38cf8d27adb0eadbc3",
+            "rationale": "node=c;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 3,
+            "policy": "fixed",
+            "step_id": "a1",
+            "observations_count": 3,
+            "observations_sha256": "ae2a4a78e8374f5881e5bc0bef8a59fa2bfdc20798550de1698c99572b990119",
+            "rationale": "node=a1;parent=a;metric=3.457122746061223"
+          },
+          {
+            "v": 1,
+            "index": 4,
+            "policy": "fixed",
+            "step_id": "a2",
+            "observations_count": 4,
+            "observations_sha256": "05c64013756374a73b7e15baa4b235d5900cc808fcde90abfcf29f7ca4c09e89",
+            "rationale": "node=a2;parent=a;metric=3.457122746061223"
+          }
+        ],
+        "best": {
+          "step_id": "c",
+          "metric": 4.330044456115998
+        },
+        "spent": 5.0,
+        "actual_trials": 5,
+        "actual_cost": 5.0,
+        "best_metric": 4.330044456115998,
+        "trials": [
+          {
+            "trial_id": "7a459760-235f-4cf9-8178-a429a613c758",
+            "step_id": "a",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 3.457122746061223
+            }
+          },
+          {
+            "trial_id": "97c86697-6928-4f66-85af-0f705d189d06",
+            "step_id": "b",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.3014413356812105
+            }
+          },
+          {
+            "trial_id": "7674127b-34ff-4d2d-829d-0906700a03b4",
+            "step_id": "c",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.330044456115998
+            }
+          },
+          {
+            "trial_id": "97d58bc9-6e78-4eb3-b59c-fcab12c650ed",
+            "step_id": "a1",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.3014413356812105
+            }
+          },
+          {
+            "trial_id": "e3443ecb-95e7-490d-8024-277623fdb67c",
+            "step_id": "a2",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.1552931434846005
+            }
+          }
+        ],
+        "verification": {
+          "state": "concluded",
+          "trial_cap": 5,
+          "receipts": [
+            {
+              "trial_id": "7a459760-235f-4cf9-8178-a429a613c758",
+              "job_id": "trial:7a459760-235f-4cf9-8178-a429a613c758",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:7a459760-235f-4cf9-8178-a429a613c758",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 3.457122746061223
+                  },
+                  "content_digest": "396cd871cf0239174b80d7c496df44d27dffacf17b223b0a1087beddae079d88"
+                },
+                "issuer_component_sha256": "f0ac538d65055cced5e9ab38d0ed91220498bcde8674958f9b6fb6e71f8f310c"
+              }
+            },
+            {
+              "trial_id": "97c86697-6928-4f66-85af-0f705d189d06",
+              "job_id": "trial:97c86697-6928-4f66-85af-0f705d189d06",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:97c86697-6928-4f66-85af-0f705d189d06",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 4.3014413356812105
+                  },
+                  "content_digest": "317ef68b34613f63f10d660753a32d83a9c9bc9707b8f11e1d47b92b462118e8"
+                },
+                "issuer_component_sha256": "96ad05bd6f5d98bb2bbe970d6378a3089085e684677356de00104b8056662166"
+              }
+            },
+            {
+              "trial_id": "7674127b-34ff-4d2d-829d-0906700a03b4",
+              "job_id": "trial:7674127b-34ff-4d2d-829d-0906700a03b4",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:7674127b-34ff-4d2d-829d-0906700a03b4",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 4.330044456115998
+                  },
+                  "content_digest": "d44dc1f7cc709ceef4e9fa8eb0eba35c8d25154e26baca4ca154528c803d23c9"
+                },
+                "issuer_component_sha256": "f31d473311e2b63975fb7743c657a708227648c2a9bb823813abd01be9da102b"
+              }
+            },
+            {
+              "trial_id": "97d58bc9-6e78-4eb3-b59c-fcab12c650ed",
+              "job_id": "trial:97d58bc9-6e78-4eb3-b59c-fcab12c650ed",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:97d58bc9-6e78-4eb3-b59c-fcab12c650ed",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 4.3014413356812105
+                  },
+                  "content_digest": "ed5234dc7ac385e6c934f93f11e483160a115494ad1e75d10bbd6a86c1cf1534"
+                },
+                "issuer_component_sha256": "96ad05bd6f5d98bb2bbe970d6378a3089085e684677356de00104b8056662166"
+              }
+            },
+            {
+              "trial_id": "e3443ecb-95e7-490d-8024-277623fdb67c",
+              "job_id": "trial:e3443ecb-95e7-490d-8024-277623fdb67c",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:e3443ecb-95e7-490d-8024-277623fdb67c",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 4.1552931434846005
+                  },
+                  "content_digest": "2dc1607acf91f53e77ab1a70d361bfa105cd1593d0ecddf73a4aa88c9db487c1"
+                },
+                "issuer_component_sha256": "bcf136e134936dfb5ef470791d0aff2da28e1c7c1a5652ba7d7a210b3001ce41"
+              }
+            }
+          ],
+          "selection_replay_seconds": 2.7699978090822697e-05,
+          "selection_model_cost_usd": 0,
+          "helper_model_cost_usd": 0,
+          "model_calls": 0,
+          "cost_basis": "Measured compute jobs: zero model-call resources, empty settlement usage, and no workspace usage events; deterministic policy replay. No model evaluator or helper."
+        }
+      },
+      "difference": 0.0,
+      "actual_trials_greedy": 3,
+      "actual_cost_greedy": 3.0,
+      "actual_trials_fixed": 5,
+      "actual_cost_fixed": 5.0
+    },
+    {
+      "seed": 3,
+      "greedy": {
+        "campaign_id": "f10ab0a6-f993-49f5-8731-648146cb6a96",
+        "selected_ids": [
+          "a",
+          "a1",
+          "a1x"
+        ],
+        "trusted_metrics": [
+          {
+            "ratio": 3.899785874106806
+          },
+          {
+            "ratio": 5.025718936516549
+          },
+          {
+            "ratio": 5.084468237496013
+          }
+        ],
+        "decisions": [
+          {
+            "v": 1,
+            "index": 0,
+            "policy": "greedy",
+            "step_id": "a",
+            "observations_count": 0,
+            "observations_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "rationale": "node=a;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 1,
+            "policy": "greedy",
+            "step_id": "a1",
+            "observations_count": 1,
+            "observations_sha256": "1924f79fe07aa5e729af8ed0d27ed33b26a522d90b0b2616c6867d6d146628d1",
+            "rationale": "node=a1;parent=a;metric=3.899785874106806"
+          },
+          {
+            "v": 1,
+            "index": 2,
+            "policy": "greedy",
+            "step_id": "a1x",
+            "observations_count": 2,
+            "observations_sha256": "c54ce9dd87d55a419da497ba1909c252aa8c3df56788f5a2eee1aef85c291ecf",
+            "rationale": "node=a1x;parent=a1;metric=5.025718936516549"
+          }
+        ],
+        "best": {
+          "step_id": "a1x",
+          "metric": 5.084468237496013
+        },
+        "spent": 3.0,
+        "actual_trials": 3,
+        "actual_cost": 3.0,
+        "best_metric": 5.084468237496013,
+        "trials": [
+          {
+            "trial_id": "30d249bb-c3c6-4809-a293-fbfd09aef8d8",
+            "step_id": "a",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 3.899785874106806
+            }
+          },
+          {
+            "trial_id": "b29ae8c1-8938-44f7-936b-72fc98890dd0",
+            "step_id": "a1",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 5.025718936516549
+            }
+          },
+          {
+            "trial_id": "bf8f36b8-fcb5-4d79-9146-e1d42aa1c80e",
+            "step_id": "a1x",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 5.084468237496013
+            }
+          }
+        ],
+        "verification": {
+          "state": "concluded",
+          "trial_cap": 5,
+          "receipts": [
+            {
+              "trial_id": "30d249bb-c3c6-4809-a293-fbfd09aef8d8",
+              "job_id": "trial:30d249bb-c3c6-4809-a293-fbfd09aef8d8",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:30d249bb-c3c6-4809-a293-fbfd09aef8d8",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 3.899785874106806
+                  },
+                  "content_digest": "d252a1a2766c06b790c61fbd0446f2aa0f731f51d7f1399c842b5fb744abdced"
+                },
+                "issuer_component_sha256": "89fd2e897e26019224756ceb00a280f588d4671542c56ab39f6a75746ba90bda"
+              }
+            },
+            {
+              "trial_id": "b29ae8c1-8938-44f7-936b-72fc98890dd0",
+              "job_id": "trial:b29ae8c1-8938-44f7-936b-72fc98890dd0",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:b29ae8c1-8938-44f7-936b-72fc98890dd0",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 5.025718936516549
+                  },
+                  "content_digest": "20c50dcd22a3d76ed7ee0e35bdcdc4eb7b1da456a63286112488608542fe2bce"
+                },
+                "issuer_component_sha256": "f464843079c5f949fda96e12cabc670c0e553f06e6b808f43f02a7e26df556bb"
+              }
+            },
+            {
+              "trial_id": "bf8f36b8-fcb5-4d79-9146-e1d42aa1c80e",
+              "job_id": "trial:bf8f36b8-fcb5-4d79-9146-e1d42aa1c80e",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:bf8f36b8-fcb5-4d79-9146-e1d42aa1c80e",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 5.084468237496013
+                  },
+                  "content_digest": "48983036d143e3c2300f4b0d961de37fb925de67f16a4d542dde356d00ed164c"
+                },
+                "issuer_component_sha256": "fe133501a5d6e243f2aed75db1b5082574c6741394687d2e44747a507b916ad1"
+              }
+            }
+          ],
+          "selection_replay_seconds": 4.768790677189827e-05,
+          "selection_model_cost_usd": 0,
+          "helper_model_cost_usd": 0,
+          "model_calls": 0,
+          "cost_basis": "Measured compute jobs: zero model-call resources, empty settlement usage, and no workspace usage events; deterministic policy replay. No model evaluator or helper."
+        }
+      },
+      "fixed": {
+        "campaign_id": "f19a424d-2476-492d-9ce4-5006fb0fb72b",
+        "selected_ids": [
+          "a",
+          "b",
+          "c",
+          "a1",
+          "a2"
+        ],
+        "trusted_metrics": [
+          {
+            "ratio": 3.899785874106806
+          },
+          {
+            "ratio": 5.025718936516549
+          },
+          {
+            "ratio": 5.084468237496013
+          },
+          {
+            "ratio": 5.025718936516549
+          },
+          {
+            "ratio": 4.901086496401863
+          }
+        ],
+        "decisions": [
+          {
+            "v": 1,
+            "index": 0,
+            "policy": "fixed",
+            "step_id": "a",
+            "observations_count": 0,
+            "observations_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "rationale": "node=a;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 1,
+            "policy": "fixed",
+            "step_id": "b",
+            "observations_count": 1,
+            "observations_sha256": "82aca8645449a8396e939ce038e2b2b5005344a6c1cf3e9b3a32d1b76795c576",
+            "rationale": "node=b;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 2,
+            "policy": "fixed",
+            "step_id": "c",
+            "observations_count": 2,
+            "observations_sha256": "76e7e46ef2668bfb099d91ef812a96bfb48c5b20a817f5e7a9a6ef78bedcbded",
+            "rationale": "node=c;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 3,
+            "policy": "fixed",
+            "step_id": "a1",
+            "observations_count": 3,
+            "observations_sha256": "419df210e17152e0b3f58ee12ec362ea3dead987b717502146a30cfd23649133",
+            "rationale": "node=a1;parent=a;metric=3.899785874106806"
+          },
+          {
+            "v": 1,
+            "index": 4,
+            "policy": "fixed",
+            "step_id": "a2",
+            "observations_count": 4,
+            "observations_sha256": "12b9c260270825cf1f41044cf825fa5673c59f8db5d1734d444ffebb2061469f",
+            "rationale": "node=a2;parent=a;metric=3.899785874106806"
+          }
+        ],
+        "best": {
+          "step_id": "c",
+          "metric": 5.084468237496013
+        },
+        "spent": 5.0,
+        "actual_trials": 5,
+        "actual_cost": 5.0,
+        "best_metric": 5.084468237496013,
+        "trials": [
+          {
+            "trial_id": "ad1323a7-9ed6-4a86-adf5-6e06d1c477d1",
+            "step_id": "a",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 3.899785874106806
+            }
+          },
+          {
+            "trial_id": "55e581c0-5464-4c4d-8fe0-f79d359bc563",
+            "step_id": "b",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 5.025718936516549
+            }
+          },
+          {
+            "trial_id": "ead31cb4-b6d0-4ed3-aeb2-5f595482f563",
+            "step_id": "c",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 5.084468237496013
+            }
+          },
+          {
+            "trial_id": "64284ee2-035d-422a-80fc-005a0a229e64",
+            "step_id": "a1",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 5.025718936516549
+            }
+          },
+          {
+            "trial_id": "237e6886-7b86-4f40-a9db-0443c40f2443",
+            "step_id": "a2",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.901086496401863
+            }
+          }
+        ],
+        "verification": {
+          "state": "concluded",
+          "trial_cap": 5,
+          "receipts": [
+            {
+              "trial_id": "ad1323a7-9ed6-4a86-adf5-6e06d1c477d1",
+              "job_id": "trial:ad1323a7-9ed6-4a86-adf5-6e06d1c477d1",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:ad1323a7-9ed6-4a86-adf5-6e06d1c477d1",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 3.899785874106806
+                  },
+                  "content_digest": "d11d0ffe85a508dca6bec4c1a8634e28ce1335697d4ce44db84df459e6c5cf2d"
+                },
+                "issuer_component_sha256": "89fd2e897e26019224756ceb00a280f588d4671542c56ab39f6a75746ba90bda"
+              }
+            },
+            {
+              "trial_id": "55e581c0-5464-4c4d-8fe0-f79d359bc563",
+              "job_id": "trial:55e581c0-5464-4c4d-8fe0-f79d359bc563",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:55e581c0-5464-4c4d-8fe0-f79d359bc563",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 5.025718936516549
+                  },
+                  "content_digest": "8d38b2bbfb31af7bce4f1cef663f186875fb7f2f73f7dfce5b6658dc2127422e"
+                },
+                "issuer_component_sha256": "f464843079c5f949fda96e12cabc670c0e553f06e6b808f43f02a7e26df556bb"
+              }
+            },
+            {
+              "trial_id": "ead31cb4-b6d0-4ed3-aeb2-5f595482f563",
+              "job_id": "trial:ead31cb4-b6d0-4ed3-aeb2-5f595482f563",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:ead31cb4-b6d0-4ed3-aeb2-5f595482f563",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 5.084468237496013
+                  },
+                  "content_digest": "63ba24f51c5aaf5da45189d6e08c00cfd07e52ff5df17e42343c037eb50390f9"
+                },
+                "issuer_component_sha256": "fe133501a5d6e243f2aed75db1b5082574c6741394687d2e44747a507b916ad1"
+              }
+            },
+            {
+              "trial_id": "64284ee2-035d-422a-80fc-005a0a229e64",
+              "job_id": "trial:64284ee2-035d-422a-80fc-005a0a229e64",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:64284ee2-035d-422a-80fc-005a0a229e64",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 5.025718936516549
+                  },
+                  "content_digest": "144e4bc7c6a5f396f2fa6ae139d4f3484dede772b9313e9f6e416c992757a3cc"
+                },
+                "issuer_component_sha256": "f464843079c5f949fda96e12cabc670c0e553f06e6b808f43f02a7e26df556bb"
+              }
+            },
+            {
+              "trial_id": "237e6886-7b86-4f40-a9db-0443c40f2443",
+              "job_id": "trial:237e6886-7b86-4f40-a9db-0443c40f2443",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:237e6886-7b86-4f40-a9db-0443c40f2443",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 4.901086496401863
+                  },
+                  "content_digest": "381d2b84567f94096dc308b281b47bbc87cd885b093f761aafbea8d3b3829b1a"
+                },
+                "issuer_component_sha256": "36641e9ca8917e30554bedfbe1f50abfce57447f30de9bbf2a71cec3c34e68e8"
+              }
+            }
+          ],
+          "selection_replay_seconds": 2.953805960714817e-05,
+          "selection_model_cost_usd": 0,
+          "helper_model_cost_usd": 0,
+          "model_calls": 0,
+          "cost_basis": "Measured compute jobs: zero model-call resources, empty settlement usage, and no workspace usage events; deterministic policy replay. No model evaluator or helper."
+        }
+      },
+      "difference": 0.0,
+      "actual_trials_greedy": 3,
+      "actual_cost_greedy": 3.0,
+      "actual_trials_fixed": 5,
+      "actual_cost_fixed": 5.0
+    },
+    {
+      "seed": 4,
+      "greedy": {
+        "campaign_id": "97fc2fe6-68ad-4942-8e60-febebe0af691",
+        "selected_ids": [
+          "a",
+          "a1",
+          "a1x"
+        ],
+        "trusted_metrics": [
+          {
+            "ratio": 3.457506471095772
+          },
+          {
+            "ratio": 4.257470294593264
+          },
+          {
+            "ratio": 4.288459419902111
+          }
+        ],
+        "decisions": [
+          {
+            "v": 1,
+            "index": 0,
+            "policy": "greedy",
+            "step_id": "a",
+            "observations_count": 0,
+            "observations_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "rationale": "node=a;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 1,
+            "policy": "greedy",
+            "step_id": "a1",
+            "observations_count": 1,
+            "observations_sha256": "8a9d3aa53078eef9dc4f3b53dfe8038a31eaa4422e38be3413bc411cf8e9b64e",
+            "rationale": "node=a1;parent=a;metric=3.457506471095772"
+          },
+          {
+            "v": 1,
+            "index": 2,
+            "policy": "greedy",
+            "step_id": "a1x",
+            "observations_count": 2,
+            "observations_sha256": "18b9421914ebbde2a8e812742bacc64502b168139b734eea956653ce229c1c99",
+            "rationale": "node=a1x;parent=a1;metric=4.257470294593264"
+          }
+        ],
+        "best": {
+          "step_id": "a1x",
+          "metric": 4.288459419902111
+        },
+        "spent": 3.0,
+        "actual_trials": 3,
+        "actual_cost": 3.0,
+        "best_metric": 4.288459419902111,
+        "trials": [
+          {
+            "trial_id": "0e35fa72-c90f-4e37-a1e7-c5f2db1595e1",
+            "step_id": "a",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 3.457506471095772
+            }
+          },
+          {
+            "trial_id": "791b2e5e-e29d-4162-9b4d-f6b74d6dca84",
+            "step_id": "a1",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.257470294593264
+            }
+          },
+          {
+            "trial_id": "4c6f8b45-7f6d-4262-82fb-e29ab5499083",
+            "step_id": "a1x",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.288459419902111
+            }
+          }
+        ],
+        "verification": {
+          "state": "concluded",
+          "trial_cap": 5,
+          "receipts": [
+            {
+              "trial_id": "0e35fa72-c90f-4e37-a1e7-c5f2db1595e1",
+              "job_id": "trial:0e35fa72-c90f-4e37-a1e7-c5f2db1595e1",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:0e35fa72-c90f-4e37-a1e7-c5f2db1595e1",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 3.457506471095772
+                  },
+                  "content_digest": "1f5c84b5c27d28d323eb27089562f4c1d860391ec7435dfcb47116d624dcba8f"
+                },
+                "issuer_component_sha256": "c9804de869f535f79622c7dbf24d5803d5a5cb5008f7b9edb117ab877079a258"
+              }
+            },
+            {
+              "trial_id": "791b2e5e-e29d-4162-9b4d-f6b74d6dca84",
+              "job_id": "trial:791b2e5e-e29d-4162-9b4d-f6b74d6dca84",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:791b2e5e-e29d-4162-9b4d-f6b74d6dca84",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 4.257470294593264
+                  },
+                  "content_digest": "a773b9ebd35dedf3680d357a7901d48521fb24fb923fb0cfc73314536ac62dd6"
+                },
+                "issuer_component_sha256": "b758d6bb02459cbab07459d2d560e4931b3a920fc1804551cb0d79a0e3d810f6"
+              }
+            },
+            {
+              "trial_id": "4c6f8b45-7f6d-4262-82fb-e29ab5499083",
+              "job_id": "trial:4c6f8b45-7f6d-4262-82fb-e29ab5499083",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:4c6f8b45-7f6d-4262-82fb-e29ab5499083",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 4.288459419902111
+                  },
+                  "content_digest": "94b46b562cf5e324a22ab113ad8620a81ef8804c32519676206ad09e5731848f"
+                },
+                "issuer_component_sha256": "874332b0dfe8283c47e4d775cffdee654252bcafbb1ed21727aece0e215ee3e5"
+              }
+            }
+          ],
+          "selection_replay_seconds": 4.567496944218874e-05,
+          "selection_model_cost_usd": 0,
+          "helper_model_cost_usd": 0,
+          "model_calls": 0,
+          "cost_basis": "Measured compute jobs: zero model-call resources, empty settlement usage, and no workspace usage events; deterministic policy replay. No model evaluator or helper."
+        }
+      },
+      "fixed": {
+        "campaign_id": "4b60d3b6-f67a-4dee-847c-5c91c923fdb2",
+        "selected_ids": [
+          "a",
+          "b",
+          "c",
+          "a1",
+          "a2"
+        ],
+        "trusted_metrics": [
+          {
+            "ratio": 3.457506471095772
+          },
+          {
+            "ratio": 4.257470294593264
+          },
+          {
+            "ratio": 4.288459419902111
+          },
+          {
+            "ratio": 4.257470294593264
+          },
+          {
+            "ratio": 4.112884602322896
+          }
+        ],
+        "decisions": [
+          {
+            "v": 1,
+            "index": 0,
+            "policy": "fixed",
+            "step_id": "a",
+            "observations_count": 0,
+            "observations_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "rationale": "node=a;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 1,
+            "policy": "fixed",
+            "step_id": "b",
+            "observations_count": 1,
+            "observations_sha256": "3149d1bc593524670517d9235db17cc424f5849475b789d1ec6c73ee3efcb219",
+            "rationale": "node=b;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 2,
+            "policy": "fixed",
+            "step_id": "c",
+            "observations_count": 2,
+            "observations_sha256": "1168d60f3e2bcd8e8f08a115f1e82ab63fcfa0e78ee88e85992d951921fcddb1",
+            "rationale": "node=c;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 3,
+            "policy": "fixed",
+            "step_id": "a1",
+            "observations_count": 3,
+            "observations_sha256": "f3da9e44b8a363a136112f7d8ed41868ad4c80579cfc84424b3821567a896886",
+            "rationale": "node=a1;parent=a;metric=3.457506471095772"
+          },
+          {
+            "v": 1,
+            "index": 4,
+            "policy": "fixed",
+            "step_id": "a2",
+            "observations_count": 4,
+            "observations_sha256": "3693b4cf6e34fa1ace3fa74ef554e56637e73f3a7e7dcbf51e010d04a715cfbd",
+            "rationale": "node=a2;parent=a;metric=3.457506471095772"
+          }
+        ],
+        "best": {
+          "step_id": "c",
+          "metric": 4.288459419902111
+        },
+        "spent": 5.0,
+        "actual_trials": 5,
+        "actual_cost": 5.0,
+        "best_metric": 4.288459419902111,
+        "trials": [
+          {
+            "trial_id": "5eeb82bc-24e8-4b81-8d17-e68205f166bd",
+            "step_id": "a",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 3.457506471095772
+            }
+          },
+          {
+            "trial_id": "9a36b06b-5a5a-407e-96b7-fe051afa7485",
+            "step_id": "b",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.257470294593264
+            }
+          },
+          {
+            "trial_id": "c2211220-9086-45b3-b468-a6defcad66b8",
+            "step_id": "c",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.288459419902111
+            }
+          },
+          {
+            "trial_id": "025cbe49-0076-4d35-b416-e45af2863d6a",
+            "step_id": "a1",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.257470294593264
+            }
+          },
+          {
+            "trial_id": "96353f34-9bef-4e39-bc55-9d8af5bef50e",
+            "step_id": "a2",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.112884602322896
+            }
+          }
+        ],
+        "verification": {
+          "state": "concluded",
+          "trial_cap": 5,
+          "receipts": [
+            {
+              "trial_id": "5eeb82bc-24e8-4b81-8d17-e68205f166bd",
+              "job_id": "trial:5eeb82bc-24e8-4b81-8d17-e68205f166bd",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:5eeb82bc-24e8-4b81-8d17-e68205f166bd",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 3.457506471095772
+                  },
+                  "content_digest": "9e2f9f75da5db859b3a6319c7c1e82750e4e12fe6b76e6ad449dae8eac5b91de"
+                },
+                "issuer_component_sha256": "c9804de869f535f79622c7dbf24d5803d5a5cb5008f7b9edb117ab877079a258"
+              }
+            },
+            {
+              "trial_id": "9a36b06b-5a5a-407e-96b7-fe051afa7485",
+              "job_id": "trial:9a36b06b-5a5a-407e-96b7-fe051afa7485",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:9a36b06b-5a5a-407e-96b7-fe051afa7485",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 4.257470294593264
+                  },
+                  "content_digest": "4dd061d84ae1a21746d79bffc9c3b92887211cb2e058d7a9cf9dfdbea615831e"
+                },
+                "issuer_component_sha256": "b758d6bb02459cbab07459d2d560e4931b3a920fc1804551cb0d79a0e3d810f6"
+              }
+            },
+            {
+              "trial_id": "c2211220-9086-45b3-b468-a6defcad66b8",
+              "job_id": "trial:c2211220-9086-45b3-b468-a6defcad66b8",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:c2211220-9086-45b3-b468-a6defcad66b8",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 4.288459419902111
+                  },
+                  "content_digest": "41569ed411312e84fdf7cc2541b5410afb9f661bb8295c33ff1783abe049fef6"
+                },
+                "issuer_component_sha256": "874332b0dfe8283c47e4d775cffdee654252bcafbb1ed21727aece0e215ee3e5"
+              }
+            },
+            {
+              "trial_id": "025cbe49-0076-4d35-b416-e45af2863d6a",
+              "job_id": "trial:025cbe49-0076-4d35-b416-e45af2863d6a",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:025cbe49-0076-4d35-b416-e45af2863d6a",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 4.257470294593264
+                  },
+                  "content_digest": "0e63356eccbd0a88f8d373ede6e5744e445957b1f97ac9cd3466c88982213591"
+                },
+                "issuer_component_sha256": "b758d6bb02459cbab07459d2d560e4931b3a920fc1804551cb0d79a0e3d810f6"
+              }
+            },
+            {
+              "trial_id": "96353f34-9bef-4e39-bc55-9d8af5bef50e",
+              "job_id": "trial:96353f34-9bef-4e39-bc55-9d8af5bef50e",
+              "evaluator_receipt": {
+                "role": "evaluator",
+                "evidence": {
+                  "id": "ev-trial:trial:96353f34-9bef-4e39-bc55-9d8af5bef50e",
+                  "kind": "receipt",
+                  "trust": "verified",
+                  "metrics": {
+                    "ratio": 4.112884602322896
+                  },
+                  "content_digest": "c157932f25e660b7c1efdcea5d24b54540abebf21d39de70ab0fb7ca5b41cc25"
+                },
+                "issuer_component_sha256": "9814741e463634c826fcc4d6787c8eae8deaf828929a26078a3e9216ea89ca4b"
+              }
+            }
+          ],
+          "selection_replay_seconds": 2.5233952328562737e-05,
+          "selection_model_cost_usd": 0,
+          "helper_model_cost_usd": 0,
+          "model_calls": 0,
+          "cost_basis": "Measured compute jobs: zero model-call resources, empty settlement usage, and no workspace usage events; deterministic policy replay. No model evaluator or helper."
+        }
+      },
+      "difference": 0.0,
+      "actual_trials_greedy": 3,
+      "actual_cost_greedy": 3.0,
+      "actual_trials_fixed": 5,
+      "actual_cost_fixed": 5.0
+    }
+  ],
+  "per_seed": {
+    "0": {
+      "seed": 0,
+      "greedy": {
+        "campaign_id": "30bddf07-d84c-449f-86d7-b424e58da0ff",
+        "selected_ids": [
+          "a",
+          "a1",
+          "a1x"
+        ],
+        "trusted_metrics": [
+          {
+            "ratio": 3.4018147053711107
+          },
+          {
+            "ratio": 4.215811468700185
+          },
+          {
+            "ratio": 4.242681234824835
+          }
+        ],
+        "decisions": [
+          {
+            "v": 1,
+            "index": 0,
+            "policy": "greedy",
+            "step_id": "a",
+            "observations_count": 0,
+            "observations_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "rationale": "node=a;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 1,
+            "policy": "greedy",
+            "step_id": "a1",
+            "observations_count": 1,
+            "observations_sha256": "799cd425033706adbb4886b032ce9631bb9a7d0313c60af95d0d220483c0df19",
+            "rationale": "node=a1;parent=a;metric=3.4018147053711107"
+          },
+          {
+            "v": 1,
+            "index": 2,
+            "policy": "greedy",
+            "step_id": "a1x",
+            "observations_count": 2,
+            "observations_sha256": "7922c5ad2a354fb9b529919fb51c33e8a71141cee78a3010fc2d9005772613c5",
+            "rationale": "node=a1x;parent=a1;metric=4.215811468700185"
+          }
+        ],
+        "best": {
+          "step_id": "a1x",
+          "metric": 4.242681234824835
+        },
+        "spent": 3.0,
+        "actual_trials": 3,
+        "actual_cost": 3.0,
+        "best_metric": 4.242681234824835,
+        "trials": [
+          {
+            "trial_id": "ad7ac471-4d29-429d-9710-a7ea25513666",
+            "step_id": "a",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 3.4018147053711107
+            }
+          },
+          {
+            "trial_id": "57fcf084-4409-4959-ad6b-df924e5ca7b6",
+            "step_id": "a1",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.215811468700185
+            }
+          },
+          {
+            "trial_id": "1a99f7d0-1695-439f-9b0c-c3df98ce4fce",
+            "step_id": "a1x",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.242681234824835
+            }
+          }
+        ]
+      },
+      "fixed": {
+        "campaign_id": "5b809b49-7404-40e9-a04a-e5af781c3ecb",
+        "selected_ids": [
+          "a",
+          "b",
+          "c",
+          "a1",
+          "a2"
+        ],
+        "trusted_metrics": [
+          {
+            "ratio": 3.4018147053711107
+          },
+          {
+            "ratio": 4.215811468700185
+          },
+          {
+            "ratio": 4.242681234824835
+          },
+          {
+            "ratio": 4.215811468700185
+          },
+          {
+            "ratio": 4.066947623916278
+          }
+        ],
+        "decisions": [
+          {
+            "v": 1,
+            "index": 0,
+            "policy": "fixed",
+            "step_id": "a",
+            "observations_count": 0,
+            "observations_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "rationale": "node=a;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 1,
+            "policy": "fixed",
+            "step_id": "b",
+            "observations_count": 1,
+            "observations_sha256": "ea092870eef66ee57a7602b5f839f7aa7719bfc17cd935a8a86d6bf717f0b580",
+            "rationale": "node=b;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 2,
+            "policy": "fixed",
+            "step_id": "c",
+            "observations_count": 2,
+            "observations_sha256": "cf04be693dd6f235ac1f0fba201a51c697300271df59a255a679290957c76867",
+            "rationale": "node=c;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 3,
+            "policy": "fixed",
+            "step_id": "a1",
+            "observations_count": 3,
+            "observations_sha256": "e228e20df2c30785ae35f782a6e54e1bc25db37430b18341d5766afecd108b71",
+            "rationale": "node=a1;parent=a;metric=3.4018147053711107"
+          },
+          {
+            "v": 1,
+            "index": 4,
+            "policy": "fixed",
+            "step_id": "a2",
+            "observations_count": 4,
+            "observations_sha256": "c087f681ce7447bf941ae260c0b09bd41108b1b4a9d06e717cff228509157689",
+            "rationale": "node=a2;parent=a;metric=3.4018147053711107"
+          }
+        ],
+        "best": {
+          "step_id": "c",
+          "metric": 4.242681234824835
+        },
+        "spent": 5.0,
+        "actual_trials": 5,
+        "actual_cost": 5.0,
+        "best_metric": 4.242681234824835,
+        "trials": [
+          {
+            "trial_id": "9d744844-ae7b-49bf-a096-2561349a40ce",
+            "step_id": "a",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 3.4018147053711107
+            }
+          },
+          {
+            "trial_id": "19a610cb-f3e7-4350-bed8-8ba46803659c",
+            "step_id": "b",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.215811468700185
+            }
+          },
+          {
+            "trial_id": "dcc239a0-44ed-46f5-b7cf-a5c3ccac5af2",
+            "step_id": "c",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.242681234824835
+            }
+          },
+          {
+            "trial_id": "cba260f7-0957-4678-adf0-67c62d04c764",
+            "step_id": "a1",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.215811468700185
+            }
+          },
+          {
+            "trial_id": "384a105c-a937-4815-b466-bf4b45db04c4",
+            "step_id": "a2",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.066947623916278
+            }
+          }
+        ]
+      },
+      "difference": 0.0,
+      "actual_trials_greedy": 3,
+      "actual_cost_greedy": 3.0,
+      "actual_trials_fixed": 5,
+      "actual_cost_fixed": 5.0
+    },
+    "1": {
+      "seed": 1,
+      "greedy": {
+        "campaign_id": "26e46cff-bce9-4b40-9fe6-88109dce7017",
+        "selected_ids": [
+          "a",
+          "a1",
+          "a1x"
+        ],
+        "trusted_metrics": [
+          {
+            "ratio": 4.000184994169881
+          },
+          {
+            "ratio": 5.045315063069178
+          },
+          {
+            "ratio": 5.098487392556285
+          }
+        ],
+        "decisions": [
+          {
+            "v": 1,
+            "index": 0,
+            "policy": "greedy",
+            "step_id": "a",
+            "observations_count": 0,
+            "observations_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "rationale": "node=a;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 1,
+            "policy": "greedy",
+            "step_id": "a1",
+            "observations_count": 1,
+            "observations_sha256": "35c339a6306495dcef51b143e0f5cc85e6e5ffa97e9936c0b93904caf8e90385",
+            "rationale": "node=a1;parent=a;metric=4.000184994169881"
+          },
+          {
+            "v": 1,
+            "index": 2,
+            "policy": "greedy",
+            "step_id": "a1x",
+            "observations_count": 2,
+            "observations_sha256": "145e21da215aae98b2a48648fa1ebbe6034db15a2bcca7e59aeb8b2c8c6311e4",
+            "rationale": "node=a1x;parent=a1;metric=5.045315063069178"
+          }
+        ],
+        "best": {
+          "step_id": "a1x",
+          "metric": 5.098487392556285
+        },
+        "spent": 3.0,
+        "actual_trials": 3,
+        "actual_cost": 3.0,
+        "best_metric": 5.098487392556285,
+        "trials": [
+          {
+            "trial_id": "7b726d26-fa9a-4d28-89ca-ad27562a7c91",
+            "step_id": "a",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.000184994169881
+            }
+          },
+          {
+            "trial_id": "9b11bf70-89dc-4eb9-9036-96823802cb15",
+            "step_id": "a1",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 5.045315063069178
+            }
+          },
+          {
+            "trial_id": "f5e4bdd9-0e70-4a36-b857-2432f7db62ac",
+            "step_id": "a1x",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 5.098487392556285
+            }
+          }
+        ]
+      },
+      "fixed": {
+        "campaign_id": "2d2496bf-0e64-4ec7-8a4a-269f528fe121",
+        "selected_ids": [
+          "a",
+          "b",
+          "c",
+          "a1",
+          "a2"
+        ],
+        "trusted_metrics": [
+          {
+            "ratio": 4.000184994169881
+          },
+          {
+            "ratio": 5.045315063069178
+          },
+          {
+            "ratio": 5.098487392556285
+          },
+          {
+            "ratio": 5.045315063069178
+          },
+          {
+            "ratio": 4.918451888613179
+          }
+        ],
+        "decisions": [
+          {
+            "v": 1,
+            "index": 0,
+            "policy": "fixed",
+            "step_id": "a",
+            "observations_count": 0,
+            "observations_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "rationale": "node=a;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 1,
+            "policy": "fixed",
+            "step_id": "b",
+            "observations_count": 1,
+            "observations_sha256": "62261351417dda9ed765bdc955a41715d17f2a187bb7f250354457a8eaf37d0e",
+            "rationale": "node=b;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 2,
+            "policy": "fixed",
+            "step_id": "c",
+            "observations_count": 2,
+            "observations_sha256": "9654dfec0d0c8dd83b7e2eb026152f13379db417abfdbfaa9e4ee712e37633ab",
+            "rationale": "node=c;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 3,
+            "policy": "fixed",
+            "step_id": "a1",
+            "observations_count": 3,
+            "observations_sha256": "ac1481311d2ca6c703d8255e5fb8a917140efc58f9fddc109f14a6368a87b64d",
+            "rationale": "node=a1;parent=a;metric=4.000184994169881"
+          },
+          {
+            "v": 1,
+            "index": 4,
+            "policy": "fixed",
+            "step_id": "a2",
+            "observations_count": 4,
+            "observations_sha256": "decb364e9bf07df77c28fec82660bff112ef799b9a6ae35f627a59b0b0fadfcc",
+            "rationale": "node=a2;parent=a;metric=4.000184994169881"
+          }
+        ],
+        "best": {
+          "step_id": "c",
+          "metric": 5.098487392556285
+        },
+        "spent": 5.0,
+        "actual_trials": 5,
+        "actual_cost": 5.0,
+        "best_metric": 5.098487392556285,
+        "trials": [
+          {
+            "trial_id": "71b098ba-c2e1-4c05-aa4e-fdf82dea5441",
+            "step_id": "a",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.000184994169881
+            }
+          },
+          {
+            "trial_id": "cf26652e-d51c-4023-94bd-7e21ce7dbfc1",
+            "step_id": "b",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 5.045315063069178
+            }
+          },
+          {
+            "trial_id": "e8a9a869-d734-4e56-b6e9-e303f4ea4ac8",
+            "step_id": "c",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 5.098487392556285
+            }
+          },
+          {
+            "trial_id": "05770520-0e56-4f07-8435-4bc218098564",
+            "step_id": "a1",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 5.045315063069178
+            }
+          },
+          {
+            "trial_id": "984228f4-8425-489f-affd-fa4496102550",
+            "step_id": "a2",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.918451888613179
+            }
+          }
+        ]
+      },
+      "difference": 0.0,
+      "actual_trials_greedy": 3,
+      "actual_cost_greedy": 3.0,
+      "actual_trials_fixed": 5,
+      "actual_cost_fixed": 5.0
+    },
+    "2": {
+      "seed": 2,
+      "greedy": {
+        "campaign_id": "deeb5022-c699-4f8f-896a-3d425df8c923",
+        "selected_ids": [
+          "a",
+          "a1",
+          "a1x"
+        ],
+        "trusted_metrics": [
+          {
+            "ratio": 3.457122746061223
+          },
+          {
+            "ratio": 4.3014413356812105
+          },
+          {
+            "ratio": 4.330044456115998
+          }
+        ],
+        "decisions": [
+          {
+            "v": 1,
+            "index": 0,
+            "policy": "greedy",
+            "step_id": "a",
+            "observations_count": 0,
+            "observations_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "rationale": "node=a;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 1,
+            "policy": "greedy",
+            "step_id": "a1",
+            "observations_count": 1,
+            "observations_sha256": "c022e50fc4a405c896ce37e0b0ee56fc2258e549cbe2e6215b0bdbf269a065b3",
+            "rationale": "node=a1;parent=a;metric=3.457122746061223"
+          },
+          {
+            "v": 1,
+            "index": 2,
+            "policy": "greedy",
+            "step_id": "a1x",
+            "observations_count": 2,
+            "observations_sha256": "97ccac59e07d80663de76e838196bb86227a03e5bd5d2c090da8e0a43ab57abf",
+            "rationale": "node=a1x;parent=a1;metric=4.3014413356812105"
+          }
+        ],
+        "best": {
+          "step_id": "a1x",
+          "metric": 4.330044456115998
+        },
+        "spent": 3.0,
+        "actual_trials": 3,
+        "actual_cost": 3.0,
+        "best_metric": 4.330044456115998,
+        "trials": [
+          {
+            "trial_id": "747724f1-8c62-47e2-ba44-0e60ec3439c5",
+            "step_id": "a",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 3.457122746061223
+            }
+          },
+          {
+            "trial_id": "0f9813c3-f33c-4ddd-80e6-f7d0ea009aa0",
+            "step_id": "a1",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.3014413356812105
+            }
+          },
+          {
+            "trial_id": "8a887f94-2935-4497-b801-1212da653d00",
+            "step_id": "a1x",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.330044456115998
+            }
+          }
+        ]
+      },
+      "fixed": {
+        "campaign_id": "a23f9295-6a06-4469-9c50-c6186cb01145",
+        "selected_ids": [
+          "a",
+          "b",
+          "c",
+          "a1",
+          "a2"
+        ],
+        "trusted_metrics": [
+          {
+            "ratio": 3.457122746061223
+          },
+          {
+            "ratio": 4.3014413356812105
+          },
+          {
+            "ratio": 4.330044456115998
+          },
+          {
+            "ratio": 4.3014413356812105
+          },
+          {
+            "ratio": 4.1552931434846005
+          }
+        ],
+        "decisions": [
+          {
+            "v": 1,
+            "index": 0,
+            "policy": "fixed",
+            "step_id": "a",
+            "observations_count": 0,
+            "observations_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "rationale": "node=a;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 1,
+            "policy": "fixed",
+            "step_id": "b",
+            "observations_count": 1,
+            "observations_sha256": "85fc1d57f6aac4dbf4ac9fdf08a2c274953068502fa5e81629172daede6e655b",
+            "rationale": "node=b;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 2,
+            "policy": "fixed",
+            "step_id": "c",
+            "observations_count": 2,
+            "observations_sha256": "50ece163f0e2502fcf184067424db6b80ea03129a0ed8b38cf8d27adb0eadbc3",
+            "rationale": "node=c;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 3,
+            "policy": "fixed",
+            "step_id": "a1",
+            "observations_count": 3,
+            "observations_sha256": "ae2a4a78e8374f5881e5bc0bef8a59fa2bfdc20798550de1698c99572b990119",
+            "rationale": "node=a1;parent=a;metric=3.457122746061223"
+          },
+          {
+            "v": 1,
+            "index": 4,
+            "policy": "fixed",
+            "step_id": "a2",
+            "observations_count": 4,
+            "observations_sha256": "05c64013756374a73b7e15baa4b235d5900cc808fcde90abfcf29f7ca4c09e89",
+            "rationale": "node=a2;parent=a;metric=3.457122746061223"
+          }
+        ],
+        "best": {
+          "step_id": "c",
+          "metric": 4.330044456115998
+        },
+        "spent": 5.0,
+        "actual_trials": 5,
+        "actual_cost": 5.0,
+        "best_metric": 4.330044456115998,
+        "trials": [
+          {
+            "trial_id": "7a459760-235f-4cf9-8178-a429a613c758",
+            "step_id": "a",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 3.457122746061223
+            }
+          },
+          {
+            "trial_id": "97c86697-6928-4f66-85af-0f705d189d06",
+            "step_id": "b",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.3014413356812105
+            }
+          },
+          {
+            "trial_id": "7674127b-34ff-4d2d-829d-0906700a03b4",
+            "step_id": "c",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.330044456115998
+            }
+          },
+          {
+            "trial_id": "97d58bc9-6e78-4eb3-b59c-fcab12c650ed",
+            "step_id": "a1",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.3014413356812105
+            }
+          },
+          {
+            "trial_id": "e3443ecb-95e7-490d-8024-277623fdb67c",
+            "step_id": "a2",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.1552931434846005
+            }
+          }
+        ]
+      },
+      "difference": 0.0,
+      "actual_trials_greedy": 3,
+      "actual_cost_greedy": 3.0,
+      "actual_trials_fixed": 5,
+      "actual_cost_fixed": 5.0
+    },
+    "3": {
+      "seed": 3,
+      "greedy": {
+        "campaign_id": "f10ab0a6-f993-49f5-8731-648146cb6a96",
+        "selected_ids": [
+          "a",
+          "a1",
+          "a1x"
+        ],
+        "trusted_metrics": [
+          {
+            "ratio": 3.899785874106806
+          },
+          {
+            "ratio": 5.025718936516549
+          },
+          {
+            "ratio": 5.084468237496013
+          }
+        ],
+        "decisions": [
+          {
+            "v": 1,
+            "index": 0,
+            "policy": "greedy",
+            "step_id": "a",
+            "observations_count": 0,
+            "observations_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "rationale": "node=a;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 1,
+            "policy": "greedy",
+            "step_id": "a1",
+            "observations_count": 1,
+            "observations_sha256": "1924f79fe07aa5e729af8ed0d27ed33b26a522d90b0b2616c6867d6d146628d1",
+            "rationale": "node=a1;parent=a;metric=3.899785874106806"
+          },
+          {
+            "v": 1,
+            "index": 2,
+            "policy": "greedy",
+            "step_id": "a1x",
+            "observations_count": 2,
+            "observations_sha256": "c54ce9dd87d55a419da497ba1909c252aa8c3df56788f5a2eee1aef85c291ecf",
+            "rationale": "node=a1x;parent=a1;metric=5.025718936516549"
+          }
+        ],
+        "best": {
+          "step_id": "a1x",
+          "metric": 5.084468237496013
+        },
+        "spent": 3.0,
+        "actual_trials": 3,
+        "actual_cost": 3.0,
+        "best_metric": 5.084468237496013,
+        "trials": [
+          {
+            "trial_id": "30d249bb-c3c6-4809-a293-fbfd09aef8d8",
+            "step_id": "a",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 3.899785874106806
+            }
+          },
+          {
+            "trial_id": "b29ae8c1-8938-44f7-936b-72fc98890dd0",
+            "step_id": "a1",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 5.025718936516549
+            }
+          },
+          {
+            "trial_id": "bf8f36b8-fcb5-4d79-9146-e1d42aa1c80e",
+            "step_id": "a1x",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 5.084468237496013
+            }
+          }
+        ]
+      },
+      "fixed": {
+        "campaign_id": "f19a424d-2476-492d-9ce4-5006fb0fb72b",
+        "selected_ids": [
+          "a",
+          "b",
+          "c",
+          "a1",
+          "a2"
+        ],
+        "trusted_metrics": [
+          {
+            "ratio": 3.899785874106806
+          },
+          {
+            "ratio": 5.025718936516549
+          },
+          {
+            "ratio": 5.084468237496013
+          },
+          {
+            "ratio": 5.025718936516549
+          },
+          {
+            "ratio": 4.901086496401863
+          }
+        ],
+        "decisions": [
+          {
+            "v": 1,
+            "index": 0,
+            "policy": "fixed",
+            "step_id": "a",
+            "observations_count": 0,
+            "observations_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "rationale": "node=a;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 1,
+            "policy": "fixed",
+            "step_id": "b",
+            "observations_count": 1,
+            "observations_sha256": "82aca8645449a8396e939ce038e2b2b5005344a6c1cf3e9b3a32d1b76795c576",
+            "rationale": "node=b;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 2,
+            "policy": "fixed",
+            "step_id": "c",
+            "observations_count": 2,
+            "observations_sha256": "76e7e46ef2668bfb099d91ef812a96bfb48c5b20a817f5e7a9a6ef78bedcbded",
+            "rationale": "node=c;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 3,
+            "policy": "fixed",
+            "step_id": "a1",
+            "observations_count": 3,
+            "observations_sha256": "419df210e17152e0b3f58ee12ec362ea3dead987b717502146a30cfd23649133",
+            "rationale": "node=a1;parent=a;metric=3.899785874106806"
+          },
+          {
+            "v": 1,
+            "index": 4,
+            "policy": "fixed",
+            "step_id": "a2",
+            "observations_count": 4,
+            "observations_sha256": "12b9c260270825cf1f41044cf825fa5673c59f8db5d1734d444ffebb2061469f",
+            "rationale": "node=a2;parent=a;metric=3.899785874106806"
+          }
+        ],
+        "best": {
+          "step_id": "c",
+          "metric": 5.084468237496013
+        },
+        "spent": 5.0,
+        "actual_trials": 5,
+        "actual_cost": 5.0,
+        "best_metric": 5.084468237496013,
+        "trials": [
+          {
+            "trial_id": "ad1323a7-9ed6-4a86-adf5-6e06d1c477d1",
+            "step_id": "a",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 3.899785874106806
+            }
+          },
+          {
+            "trial_id": "55e581c0-5464-4c4d-8fe0-f79d359bc563",
+            "step_id": "b",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 5.025718936516549
+            }
+          },
+          {
+            "trial_id": "ead31cb4-b6d0-4ed3-aeb2-5f595482f563",
+            "step_id": "c",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 5.084468237496013
+            }
+          },
+          {
+            "trial_id": "64284ee2-035d-422a-80fc-005a0a229e64",
+            "step_id": "a1",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 5.025718936516549
+            }
+          },
+          {
+            "trial_id": "237e6886-7b86-4f40-a9db-0443c40f2443",
+            "step_id": "a2",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.901086496401863
+            }
+          }
+        ]
+      },
+      "difference": 0.0,
+      "actual_trials_greedy": 3,
+      "actual_cost_greedy": 3.0,
+      "actual_trials_fixed": 5,
+      "actual_cost_fixed": 5.0
+    },
+    "4": {
+      "seed": 4,
+      "greedy": {
+        "campaign_id": "97fc2fe6-68ad-4942-8e60-febebe0af691",
+        "selected_ids": [
+          "a",
+          "a1",
+          "a1x"
+        ],
+        "trusted_metrics": [
+          {
+            "ratio": 3.457506471095772
+          },
+          {
+            "ratio": 4.257470294593264
+          },
+          {
+            "ratio": 4.288459419902111
+          }
+        ],
+        "decisions": [
+          {
+            "v": 1,
+            "index": 0,
+            "policy": "greedy",
+            "step_id": "a",
+            "observations_count": 0,
+            "observations_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "rationale": "node=a;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 1,
+            "policy": "greedy",
+            "step_id": "a1",
+            "observations_count": 1,
+            "observations_sha256": "8a9d3aa53078eef9dc4f3b53dfe8038a31eaa4422e38be3413bc411cf8e9b64e",
+            "rationale": "node=a1;parent=a;metric=3.457506471095772"
+          },
+          {
+            "v": 1,
+            "index": 2,
+            "policy": "greedy",
+            "step_id": "a1x",
+            "observations_count": 2,
+            "observations_sha256": "18b9421914ebbde2a8e812742bacc64502b168139b734eea956653ce229c1c99",
+            "rationale": "node=a1x;parent=a1;metric=4.257470294593264"
+          }
+        ],
+        "best": {
+          "step_id": "a1x",
+          "metric": 4.288459419902111
+        },
+        "spent": 3.0,
+        "actual_trials": 3,
+        "actual_cost": 3.0,
+        "best_metric": 4.288459419902111,
+        "trials": [
+          {
+            "trial_id": "0e35fa72-c90f-4e37-a1e7-c5f2db1595e1",
+            "step_id": "a",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 3.457506471095772
+            }
+          },
+          {
+            "trial_id": "791b2e5e-e29d-4162-9b4d-f6b74d6dca84",
+            "step_id": "a1",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.257470294593264
+            }
+          },
+          {
+            "trial_id": "4c6f8b45-7f6d-4262-82fb-e29ab5499083",
+            "step_id": "a1x",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.288459419902111
+            }
+          }
+        ]
+      },
+      "fixed": {
+        "campaign_id": "4b60d3b6-f67a-4dee-847c-5c91c923fdb2",
+        "selected_ids": [
+          "a",
+          "b",
+          "c",
+          "a1",
+          "a2"
+        ],
+        "trusted_metrics": [
+          {
+            "ratio": 3.457506471095772
+          },
+          {
+            "ratio": 4.257470294593264
+          },
+          {
+            "ratio": 4.288459419902111
+          },
+          {
+            "ratio": 4.257470294593264
+          },
+          {
+            "ratio": 4.112884602322896
+          }
+        ],
+        "decisions": [
+          {
+            "v": 1,
+            "index": 0,
+            "policy": "fixed",
+            "step_id": "a",
+            "observations_count": 0,
+            "observations_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "rationale": "node=a;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 1,
+            "policy": "fixed",
+            "step_id": "b",
+            "observations_count": 1,
+            "observations_sha256": "3149d1bc593524670517d9235db17cc424f5849475b789d1ec6c73ee3efcb219",
+            "rationale": "node=b;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 2,
+            "policy": "fixed",
+            "step_id": "c",
+            "observations_count": 2,
+            "observations_sha256": "1168d60f3e2bcd8e8f08a115f1e82ab63fcfa0e78ee88e85992d951921fcddb1",
+            "rationale": "node=c;parent=none;metric=none"
+          },
+          {
+            "v": 1,
+            "index": 3,
+            "policy": "fixed",
+            "step_id": "a1",
+            "observations_count": 3,
+            "observations_sha256": "f3da9e44b8a363a136112f7d8ed41868ad4c80579cfc84424b3821567a896886",
+            "rationale": "node=a1;parent=a;metric=3.457506471095772"
+          },
+          {
+            "v": 1,
+            "index": 4,
+            "policy": "fixed",
+            "step_id": "a2",
+            "observations_count": 4,
+            "observations_sha256": "3693b4cf6e34fa1ace3fa74ef554e56637e73f3a7e7dcbf51e010d04a715cfbd",
+            "rationale": "node=a2;parent=a;metric=3.457506471095772"
+          }
+        ],
+        "best": {
+          "step_id": "c",
+          "metric": 4.288459419902111
+        },
+        "spent": 5.0,
+        "actual_trials": 5,
+        "actual_cost": 5.0,
+        "best_metric": 4.288459419902111,
+        "trials": [
+          {
+            "trial_id": "5eeb82bc-24e8-4b81-8d17-e68205f166bd",
+            "step_id": "a",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 3.457506471095772
+            }
+          },
+          {
+            "trial_id": "9a36b06b-5a5a-407e-96b7-fe051afa7485",
+            "step_id": "b",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.257470294593264
+            }
+          },
+          {
+            "trial_id": "c2211220-9086-45b3-b468-a6defcad66b8",
+            "step_id": "c",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.288459419902111
+            }
+          },
+          {
+            "trial_id": "025cbe49-0076-4d35-b416-e45af2863d6a",
+            "step_id": "a1",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.257470294593264
+            }
+          },
+          {
+            "trial_id": "96353f34-9bef-4e39-bc55-9d8af5bef50e",
+            "step_id": "a2",
+            "execution_status": "completed",
+            "metrics": {
+              "ratio": 4.112884602322896
+            }
+          }
+        ]
+      },
+      "difference": 0.0,
+      "actual_trials_greedy": 3,
+      "actual_cost_greedy": 3.0,
+      "actual_trials_fixed": 5,
+      "actual_cost_fixed": 5.0
+    }
+  },
+  "paired_differences": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "differences": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "missing_scores": [],
+  "mean": 0.0,
+  "sample_stdev": 0.0,
+  "margin": 0.0,
+  "confidence_interval_95": [
+    0.0,
+    0.0
+  ],
+  "ci_lower": 0.0,
+  "ci_upper": 0.0,
+  "null_result": true,
+  "outcome": "null result",
+  "conclusion": "null result",
+  "verification": {
+    "cli_elapsed_seconds": 27.251470159972087,
+    "concluded_campaigns": 10,
+    "workspace_model_usage_events": 0,
+    "selection_sensitivity": {
+      "seed": 0,
+      "decision_index": 2,
+      "child": "a1",
+      "parent": "a",
+      "observed_child_metric": 4.215811468700185,
+      "parent_metric": 3.4018147053711107,
+      "counterfactual_child_metric": 2.4018147053711107,
+      "persisted_next_choice": "a1x",
+      "changed_next_choice": "a2"
+    },
+    "scope": "Five seeds on one production-source compression task: local decision only, not programme qualification.",
+    "adaptive_default": "off; greedy requires explicit search.policy",
+    "cost_units": "Trial cost is unit compute reservation, not dollars; selection replay seconds exclude CLI/DB overhead. Model costs are recorded USD charges."
+  }
+}
