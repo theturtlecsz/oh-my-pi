@@ -3,7 +3,7 @@
   "assetId": "ecc-wp3-postgres-patterns",
   "upstreamPath": "skills/postgres-patterns/SKILL.md",
   "upstreamSha256": "9c8c391ae9e9aa87faa7ca091e1d395c97766df14080d0bfbea8a97721776163",
-  "adaptedSha256": "cff934d64ae6c0ecd4eede6e0d86e5a6e2bec74089f45f81cde33fa763a4593e",
+  "adaptedSha256": "f0211e2bd1dad39b729598d3717e65312650bea5b51496492d0faf22003f286a",
   "edits": [
     {
       "reason": "Adapt pinned guidance to native rulebook use and existing project scope without operational automation or unavailable references.",
@@ -290,7 +290,7 @@
         "",
         "## Related",
         "",
-        "Read [migration safety](ecc-wp3-database-migrations.md) through `rule://ecc-wp3-database-migrations` for concurrent indexes, backfills, and schema evolution. Included guidance above covers indexing, RLS, pagination, and queue locking without an external reviewer or skill.",
+        "Read [migration safety](../database-migrations/SKILL.md) through `rule://ecc-wp3-database-migrations` for concurrent indexes, backfills, and schema evolution. Included guidance above covers indexing, RLS, pagination, and queue locking without an external reviewer or skill.",
         "",
         "---",
         "",

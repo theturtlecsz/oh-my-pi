@@ -3,7 +3,7 @@
   "assetId": "ecc-wp3-python-coding-style",
   "upstreamPath": "rules/python/coding-style.md",
   "upstreamSha256": "f9d6d7a39c5f5ea809579fecac591f390fa9264c088c7e209d464d5244747003",
-  "adaptedSha256": "a576f36a9dcaf7caf43b936c2ee2b95ec2f8590fcd8a0b3a9a64eaa29ccdfb95",
+  "adaptedSha256": "9f99ba946cbcaa8809dafa94b7b4dd47a76f704a95c5aa937c4ceb575df81e93",
   "edits": [
     {
       "reason": "Adapt pinned guidance to native rulebook use and existing project scope without operational automation or unavailable references.",
@@ -60,7 +60,7 @@
         "---",
         "# Python Coding Style",
         "",
-        "> This file extends [common/coding-style.md](ecc-wp3-common-coding-style.md) with Python specific content.",
+        "> This file extends [common/coding-style.md](../common/coding-style.md) with Python specific content.",
         "",
         "## Standards",
         "",

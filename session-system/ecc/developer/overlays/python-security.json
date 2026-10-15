@@ -3,7 +3,7 @@
   "assetId": "ecc-wp3-python-security",
   "upstreamPath": "rules/python/security.md",
   "upstreamSha256": "6bbbb6c800cdfef23c3f9a5055ce31096a7724b51f0d528935f6c32970639453",
-  "adaptedSha256": "14b77e006863d258144c1279e859676a8c796673a34a9b70e9fd460ed3868384",
+  "adaptedSha256": "3f54b8e0f54f9437803e3f5b1759eb51c763607b9d4f3bbe3181a3436bec3fbc",
   "edits": [
     {
       "reason": "Adapt pinned guidance to native rulebook use and existing project scope without operational automation or unavailable references.",
@@ -48,7 +48,7 @@
         "---",
         "# Python Security",
         "",
-        "> This file extends [common/security.md](ecc-wp3-common-security.md) with Python specific content.",
+        "> This file extends [common/security.md](../common/security.md) with Python specific content.",
         "",
         "## Secret Management",
         "",

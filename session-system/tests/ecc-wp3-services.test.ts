@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as path from "node:path";
 import { sha256Hex } from "../ecc/adapter/hash";
 import { applyOverlay, loadOverlay } from "../ecc/adapter/overlay";
+import { buildIndexFromManifest, transformAsset } from "../ecc/adapter/transform";
 import type { ManifestAsset } from "../ecc/adapter/types";
 
 const eccRoot = path.resolve(import.meta.dir, "../ecc");
@@ -15,6 +16,32 @@ const expectedSources = [
 	"skills/database-migrations/SKILL.md",
 ];
 
+const commonDependencies: ManifestAsset[] = [
+	"coding-style",
+	"patterns",
+	"testing",
+	"security",
+].map(stem => ({
+	id: `ecc-wp3-common-${stem}`,
+	pack: "engineering",
+	upstream: {
+		repository: "https://github.com/affaan-m/ECC.git",
+		commit: "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+		path: `rules/common/${stem}.md`,
+		sha256: "",
+	},
+	target: { path: `.omp/rules/ecc-wp3-common-${stem}.md`, scope: "project" },
+	adaptation: { kind: "rule-metadata", transformVersion: 1 },
+	activation: { state: "inactive", mode: "rulebook" },
+	dependencies: [],
+	disposition: "supported-with-adaptation",
+	reason: "",
+	qualification: { mechanicalTests: [], behavioralTrial: null, qualifiedRelease: null },
+	rollback: { removeOwnedArtifactOnly: true },
+}));
+
+const index = buildIndexFromManifest([...assets, ...commonDependencies]);
+
 async function render(asset: ManifestAsset): Promise<string> {
 	const original = await Bun.file(path.join(eccRoot, "mirror", asset.upstream.path)).text();
 	expect(sha256Hex(original)).toBe(asset.upstream.sha256);
@@ -25,7 +52,8 @@ async function render(asset: ManifestAsset): Promise<string> {
 				sha256Hex(original),
 			)
 		: original;
-	return edited;
+	const result = transformAsset(asset, new TextEncoder().encode(edited), { index });
+	return new TextDecoder().decode(result.files[0].bytes);
 }
 
 async function body(id: string): Promise<string> {
@@ -152,5 +180,16 @@ describe("WP3 Python and PostgreSQL native rules", () => {
 			expect(() => applyOverlay(stale, overlay, sha256Hex(stale))).toThrow("upstream sha256 mismatch");
 			expect(() => applyOverlay(stale, overlay, asset.upstream.sha256)).toThrow("adapted sha256 mismatch");
 		}
+	});
+
+	test("reference closure verifies declared dependencies and catches missing targets", async () => {
+		const emptyIndex = buildIndexFromManifest(assets);
+		const pythonAsset = assets.find(a => a.id === "ecc-wp3-python-coding-style")!;
+		const original = await Bun.file(path.join(eccRoot, "mirror", pythonAsset.upstream.path)).text();
+		const overlay = await loadOverlay(pythonAsset.adaptation.overlay!, eccRoot, pythonAsset.id, pythonAsset.upstream.path);
+		const edited = applyOverlay(original, overlay, sha256Hex(original));
+		expect(() => transformAsset(pythonAsset, new TextEncoder().encode(edited), { index: emptyIndex })).toThrow(
+			/Reference closure error/,
+		);
 	});
 });

@@ -3,7 +3,7 @@
   "assetId": "ecc-wp3-python-testing",
   "upstreamPath": "rules/python/testing.md",
   "upstreamSha256": "92655aa5047ee456501ad6605c428680bac6433965f89ce531fe79627004e8c6",
-  "adaptedSha256": "6fbd976aaebf69504f1cc6251beb942899c9397c4035c9bdcc478b18cc668020",
+  "adaptedSha256": "53e14c32b66fd69f454068a82126a589a8c323d054d7f64bd5daca14628c893e",
   "edits": [
     {
       "reason": "Adapt pinned guidance to native rulebook use and existing project scope without operational automation or unavailable references.",
@@ -56,7 +56,7 @@
         "---",
         "# Python Testing",
         "",
-        "> This file extends [common/testing.md](ecc-wp3-common-testing.md) with Python specific content.",
+        "> This file extends [common/testing.md](../common/testing.md) with Python specific content.",
         "",
         "## Framework",
         "",
