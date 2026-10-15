@@ -18,7 +18,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isInstallable, readAssetSource, readMirrorFile } from "./catalog";
+import { ECC_ROOT, isInstallable, loadManifest, readAssetSource, readMirrorFile } from "./catalog";
 import { sha256Hex } from "./hash";
 import { lockAssetsById, lockFromPlan, readLock, writeLock } from "./lock";
 import { loadOverlay } from "./overlay";
@@ -125,6 +125,15 @@ async function readIfExists(filePath: string): Promise<string | null> {
 	}
 }
 
+async function readBytesIfExists(filePath: string): Promise<Uint8Array | null> {
+	try {
+		return await Bun.file(filePath).bytes();
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+		throw err;
+	}
+}
+
 /**
  * Verify a completed plan's files against the destination filesystem without
  * writing, returning the conflicts (existing files that are not owned).
@@ -219,10 +228,7 @@ async function removeRetiredFiles(
 		for (const file of asset.files) {
 			if (protectedPaths.has(file.path)) continue;
 			const destination = path.join(options.projectRoot, file.path);
-			const onDisk = await Bun.file(destination).bytes().catch((err: NodeJS.ErrnoException) => {
-				if (err.code === "ENOENT") return null;
-				throw err;
-			});
+			const onDisk = await readBytesIfExists(destination);
 			if (onDisk === null || sha256Hex(onDisk) !== file.sha256) {
 				skipped.push(file.path);
 				continue;
@@ -333,18 +339,47 @@ export async function remove(options: AdapterOptions): Promise<InstallResult> {
 	const lock = await readLock(lockPath);
 	if (!lock) return { status: "removed", written: [], removed: [], skipped: [], conflicts: [] };
 
+	let manifest: Manifest;
+	try {
+		manifest = await loadManifest(options.eccRoot);
+	} catch {
+		manifest = await loadManifest(ECC_ROOT);
+	}
+	const declared = new Set(manifest.assets.map(asset => asset.id));
+
+	// Active assets refuse remove if any owned file was modified locally.
+	// Check non-retired assets before making any filesystem modifications.
+	for (const asset of lock.assets) {
+		if (!declared.has(asset.id)) continue;
+		for (const file of asset.files) {
+			const destination = path.join(options.projectRoot, file.path);
+			const onDisk = await readBytesIfExists(destination);
+			if (onDisk !== null && sha256Hex(onDisk) !== file.sha256) {
+				throw new InstallError(`refusing to remove modified file '${file.path}'`);
+			}
+		}
+	}
+
 	const removed: string[] = [];
 	const skipped: string[] = [];
 	const directories = new Set<string>();
+	const seen = new Set<string>();
 	for (const asset of lock.assets) {
+		const isRetired = !declared.has(asset.id);
 		for (const file of asset.files) {
+			if (seen.has(file.path)) continue;
+			seen.add(file.path);
 			const destination = path.join(options.projectRoot, file.path);
-			const existing = await readIfExists(destination);
-			if (existing === null) {
+			const onDisk = await readBytesIfExists(destination);
+			if (onDisk === null) {
 				skipped.push(file.path);
 				continue;
 			}
-			if (sha256Hex(existing) !== file.sha256) {
+			if (sha256Hex(onDisk) !== file.sha256) {
+				if (isRetired) {
+					skipped.push(file.path);
+					continue;
+				}
 				throw new InstallError(`refusing to remove modified file '${file.path}'`);
 			}
 			await fs.rm(destination);

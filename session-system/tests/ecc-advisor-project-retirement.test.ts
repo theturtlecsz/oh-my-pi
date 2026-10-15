@@ -32,8 +32,18 @@ async function makeProject(): Promise<string> {
 }
 
 const lockFile = (project: string): string => path.join(project, ".omp", "ecc", "adapted.lock.json");
-const run = (command: "install" | "update", project: string) =>
+const run = (command: "install" | "update" | "remove", project: string) =>
 	runEccCli({ command, project, eccRoot: ECC_ROOT }) as Promise<InstallResult>;
+
+async function expectRemoveIdempotent(project: string): Promise<void> {
+	expect(await readLock(lockFile(project))).toBeNull();
+	const again = await run("remove", project);
+	expect(again.status).toBe("removed");
+	expect(again.written).toEqual([]);
+	expect(again.removed).toEqual([]);
+	expect(again.skipped).toEqual([]);
+	expect(again.conflicts).toEqual([]);
+}
 
 /** Install current ECC, then graft the legacy advisor onto the project's lock. */
 async function legacyProject(options: { roster?: string | null; owned?: boolean } = {}): Promise<string> {
@@ -197,5 +207,163 @@ describe("update retires lock assets absent from the manifest", () => {
 		await expect(run("update", project)).rejects.toThrow(/modified owned file/);
 		expect(await Bun.file(target).text()).toBe("local edit\n");
 		expect(await Bun.file(path.join(project, legacy.watchdog.path)).text()).toBe(legacy.watchdog.text);
+	});
+});
+
+describe("remove retires lock assets absent from the manifest", () => {
+	test("unchanged owned roster is deleted, status is removed, lock file is removed, repeat remove is idempotent", async () => {
+		const project = await legacyProject();
+		const userFile = path.join(project, ".omp", "rules", "user-rule.md");
+		await Bun.write(userFile, "mine\n");
+		const before = (await readLock(lockFile(project)))!;
+		const allOwnedFiles = before.assets.flatMap(a => a.files.map(f => f.path));
+
+		const result = await run("remove", project);
+		expect(result.status).toBe("removed");
+		expect(result.written).toEqual([]);
+		expect(new Set(result.removed)).toEqual(new Set(allOwnedFiles));
+		expect(result.removed).toContain(legacy.watchdog.path);
+		expect(result.skipped).toEqual([]);
+		expect(await Bun.file(path.join(project, legacy.watchdog.path)).exists()).toBe(false);
+		expect(await Bun.file(userFile).text()).toBe("mine\n");
+		// .omp survives the prune: it still holds user files.
+		expect((await fs.stat(path.join(project, ".omp"))).isDirectory()).toBe(true);
+		expect(await readLock(lockFile(project))).toBeNull();
+
+		await expectRemoveIdempotent(project);
+	});
+
+	test("enabled/edited roster is kept, reported skipped, and lock file is removed", async () => {
+		const edited = legacy.watchdog.text.replace("enabled: false", "enabled: true");
+		expect(edited).not.toBe(legacy.watchdog.text);
+		const project = await legacyProject({ roster: edited });
+		const before = (await readLock(lockFile(project)))!;
+		const activeFiles = before.assets.filter(a => a.id !== RETIRED_ID).flatMap(a => a.files.map(f => f.path));
+
+		const result = await run("remove", project);
+		expect(result.status).toBe("removed");
+		expect(result.written).toEqual([]);
+		expect(new Set(result.removed)).toEqual(new Set(activeFiles));
+		expect(result.removed).not.toContain(legacy.watchdog.path);
+		expect(result.skipped).toContain(legacy.watchdog.path);
+		expect(await Bun.file(path.join(project, legacy.watchdog.path)).text()).toBe(edited);
+		expect(await readLock(lockFile(project))).toBeNull();
+
+		await expectRemoveIdempotent(project);
+		expect(await Bun.file(path.join(project, legacy.watchdog.path)).text()).toBe(edited);
+	});
+
+	test("roster with project advisors and comments is kept byte-for-byte", async () => {
+		const mixed = `# my advisors\nadvisors:\n  - name: Mine\n    enabled: true\n${legacy.watchdog.text}`;
+		const project = await legacyProject({ roster: mixed });
+		const before = (await readLock(lockFile(project)))!;
+		const activeFiles = before.assets.filter(a => a.id !== RETIRED_ID).flatMap(a => a.files.map(f => f.path));
+
+		const result = await run("remove", project);
+		expect(result.status).toBe("removed");
+		expect(result.written).toEqual([]);
+		expect(new Set(result.removed)).toEqual(new Set(activeFiles));
+		expect(result.removed).not.toContain(legacy.watchdog.path);
+		expect(result.skipped).toContain(legacy.watchdog.path);
+		expect(await Bun.file(path.join(project, legacy.watchdog.path)).text()).toBe(mixed);
+		expect(await readLock(lockFile(project))).toBeNull();
+
+		await expectRemoveIdempotent(project);
+		expect(await Bun.file(path.join(project, legacy.watchdog.path)).text()).toBe(mixed);
+	});
+
+	test("missing roster does not throw and is reported skipped", async () => {
+		const project = await legacyProject({ roster: null });
+		const before = (await readLock(lockFile(project)))!;
+		const activeFiles = before.assets.filter(a => a.id !== RETIRED_ID).flatMap(a => a.files.map(f => f.path));
+
+		const result = await run("remove", project);
+		expect(result.status).toBe("removed");
+		expect(result.written).toEqual([]);
+		expect(new Set(result.removed)).toEqual(new Set(activeFiles));
+		expect(result.removed).not.toContain(legacy.watchdog.path);
+		expect(result.skipped).toContain(legacy.watchdog.path);
+		expect(await Bun.file(path.join(project, legacy.watchdog.path)).exists()).toBe(false);
+		expect(await readLock(lockFile(project))).toBeNull();
+
+		await expectRemoveIdempotent(project);
+	});
+
+	test("roster not owned by the lock is never deleted", async () => {
+		const project = await legacyProject({ owned: false });
+		const before = (await readLock(lockFile(project)))!;
+		const activeFiles = before.assets.flatMap(a => a.files.map(f => f.path));
+
+		const result = await run("remove", project);
+		expect(result.status).toBe("removed");
+		expect(result.written).toEqual([]);
+		expect(new Set(result.removed)).toEqual(new Set(activeFiles));
+		expect(result.removed).not.toContain(legacy.watchdog.path);
+		expect(result.skipped).not.toContain(legacy.watchdog.path);
+		expect(await Bun.file(path.join(project, legacy.watchdog.path)).text()).toBe(legacy.watchdog.text);
+		expect(await readLock(lockFile(project))).toBeNull();
+
+		await expectRemoveIdempotent(project);
+		expect(await Bun.file(path.join(project, legacy.watchdog.path)).text()).toBe(legacy.watchdog.text);
+	});
+
+	test("retirement in remove prunes emptied directories deepest first but keeps .omp", async () => {
+		const project = await legacyProject();
+		const deep = ".omp/retired/nested/old.md";
+		const bytes = "old\n";
+		await Bun.write(path.join(project, deep), bytes);
+		const lock = (await readLock(lockFile(project)))!;
+		const retired = lock.assets.find(a => a.id === RETIRED_ID)!;
+		retired.files.push({ path: deep, sha256: sha256Hex(bytes), mode: "644" });
+		await writeLock(lockFile(project), lock);
+
+		const result = await run("remove", project);
+		expect(result.removed).toContain(deep);
+		expect(result.removed).toContain(legacy.watchdog.path);
+		expect(await Bun.file(path.join(project, ".omp", "retired")).exists()).toBe(false);
+		expect((await fs.stat(path.join(project, ".omp"))).isDirectory()).toBe(true);
+		expect(await readLock(lockFile(project))).toBeNull();
+	});
+
+	test("modified active asset still refuses remove and retired roster stays", async () => {
+		const project = await legacyProject();
+		const lock = (await readLock(lockFile(project)))!;
+		const active = lock.assets.find(a => a.id !== RETIRED_ID)!;
+		const target = path.join(project, active.files[0].path);
+		await Bun.write(target, "local edit\n");
+		await expect(run("remove", project)).rejects.toThrow(/refusing to remove modified file/);
+		expect(await Bun.file(target).text()).toBe("local edit\n");
+		expect(await Bun.file(path.join(project, legacy.watchdog.path)).text()).toBe(legacy.watchdog.text);
+		expect(await readLock(lockFile(project))).not.toBeNull();
+	});
+
+	test("retirement in remove compares raw bytes and deletes unchanged retired binary files", async () => {
+		const project = await legacyProject();
+		const lock = (await readLock(lockFile(project)))!;
+		const retiredBinary = ".omp/retired/binary.bin";
+		const binary = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
+		await Bun.write(path.join(project, retiredBinary), binary);
+		const retired = lock.assets.find(a => a.id === RETIRED_ID)!;
+		retired.files.push({ path: retiredBinary, sha256: sha256Hex(binary), mode: "644" });
+		await writeLock(lockFile(project), lock);
+
+		const result = await run("remove", project);
+		expect(result.status).toBe("removed");
+		expect(result.removed).toContain(retiredBinary);
+		expect(await Bun.file(path.join(project, retiredBinary)).exists()).toBe(false);
+		expect(await readLock(lockFile(project))).toBeNull();
+	});
+
+	test("retirement in remove falls back to ECC_ROOT when options.eccRoot lacks manifest", async () => {
+		const project = await legacyProject();
+		const fixtureEccRoot = await makeProject();
+		const result = (await runEccCli({
+			command: "remove",
+			project,
+			eccRoot: fixtureEccRoot,
+		})) as InstallResult;
+		expect(result.status).toBe("removed");
+		expect(result.removed).toContain(legacy.watchdog.path);
+		expect(await readLock(lockFile(project))).toBeNull();
 	});
 });
