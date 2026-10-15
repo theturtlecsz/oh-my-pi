@@ -7,6 +7,7 @@ import json
 import tarfile
 import threading
 import zlib
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -16,7 +17,7 @@ from omp_work.operations.artifacts import bytes_sha256
 from omp_work.research import mechanism_tasks as mt
 from test_research_runner import _unshare_probe_fails
 
-pytestmark = pytest.mark.skipif(_unshare_probe_fails(), reason="unshare probe failed")
+_needs_jail = pytest.mark.skipif(_unshare_probe_fails(), reason="unshare probe failed")
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -59,7 +60,7 @@ def _custom_tar(task: mt.MechanismTask, node_id: str, candidate_py: str) -> byte
 
 def _expected_score(task: mt.MechanismTask, node_id: str) -> float:
     spec = json.loads(task.sealed)
-    params = mt._SIM_PARAMS[node_id]
+    params = task.manifest["candidate_parameters"][node_id]
     x = list(spec["start"])
     for _ in range(params["iters"]):
         x = [
@@ -81,6 +82,7 @@ def engineering() -> tuple[mt.MechanismTask, ...]:
     return mt.engineering_cohort(REPO_ROOT)
 
 
+@_needs_jail
 def test_simulation_score_is_evaluator_recomputed_not_reported() -> None:
     task = mt.development_cohort()[0]
     scores = {}
@@ -95,6 +97,7 @@ def test_simulation_score_is_evaluator_recomputed_not_reported() -> None:
     assert scores["b"] > scores["a"]
 
 
+@_needs_jail
 def test_engineering_ratio_is_evaluator_recomputed(engineering) -> None:
     task = engineering[0]
     ratios = {}
@@ -107,6 +110,7 @@ def test_engineering_ratio_is_evaluator_recomputed(engineering) -> None:
     assert ratios["c"] > ratios["a"]
 
 
+@_needs_jail
 def test_corrupt_and_empty_compression_fail(engineering) -> None:
     task = engineering[0]
     corrupt = _custom_tar(
@@ -135,6 +139,7 @@ def test_corrupt_and_empty_compression_fail(engineering) -> None:
         assert not result.metrics
 
 
+@_needs_jail
 def test_truncated_stream_that_is_not_the_original_fails(engineering) -> None:
     task = engineering[0]
     wrong = _custom_tar(
@@ -151,6 +156,7 @@ def test_truncated_stream_that_is_not_the_original_fails(engineering) -> None:
     assert _run(task, "b", candidate_tar=wrong).verdict == "evaluator_failed"
 
 
+@_needs_jail
 def test_missing_output_fails_candidate() -> None:
     task = mt.development_cohort()[1]
     silent = _custom_tar(task, "a", "print('METRIC score=1.0')\n")
@@ -159,6 +165,7 @@ def test_missing_output_fails_candidate() -> None:
     assert not result.metrics
 
 
+@_needs_jail
 def test_binding_mismatch_is_refused() -> None:
     first, second = mt.development_cohort()[:2]
     # Candidate bytes of one task checked against another task's sealed bytes.
@@ -167,6 +174,7 @@ def test_binding_mismatch_is_refused() -> None:
     assert not result.metrics
 
 
+@_needs_jail
 def test_non_finite_coordinates_fail() -> None:
     task = mt.development_cohort()[0]
     nan = _custom_tar(
@@ -226,3 +234,58 @@ def test_fixture_tasks_never_count_as_real_evidence() -> None:
     assert fixture.manifest["evidence_class"] == "fixture"
     with pytest.raises(ValueError, match="fixture"):
         mt.cohort_manifest([fixture])
+
+
+def test_manifest_snapshot_cannot_drift_with_caller_edits() -> None:
+    provenance = {"files": {"prod.py": "a" * 64}, "sampling": {"paths": ["prod.py"]}}
+    task = mt.engineering_task(0, b"opaque production bytes", provenance)
+    original = task.manifest
+    provenance["files"]["prod.py"] = "b" * 64
+    provenance["sampling"]["paths"].append("other.py")
+    view = task.manifest
+    view["search"]["budget"] = 500
+    view["candidate_parameters"]["a"]["level"] = 0
+    view["tree"][0]["cost"] = 99
+    view["provenance"]["files"].clear()
+    assert task.manifest == original
+    assert bytes_sha256(task.manifest_bytes).hexdigest() == task.manifest_sha256
+
+
+@pytest.mark.parametrize("domain", ["simulation", "engineering"])
+def test_execution_uses_frozen_bytes_after_generator_changes(monkeypatch, domain) -> None:
+    task = (
+        mt.simulation_task(0, "development")
+        if domain == "simulation"
+        else mt.engineering_task(0, b"opaque production bytes", {})
+    )
+    before = mt.managed_inputs(task, "a")
+    monkeypatch.setitem(mt._SIM_PARAMS["a"], "iters", 1)
+    monkeypatch.setattr(mt, "_SIM_CANDIDATE", "raise SystemExit(1)")
+    monkeypatch.setattr(mt, "_ZLIB_CANDIDATE", "raise SystemExit(1)")
+    monkeypatch.setattr(mt, "_SIM_EVALUATOR", "raise SystemExit(1)")
+    monkeypatch.setattr(mt, "_ZLIB_EVALUATOR", "raise SystemExit(1)")
+    monkeypatch.setattr(mt, "TIMEOUT_SECONDS", 1)
+    # Even mutation of a previously returned protocol must not affect later runs.
+    before.protocol.tolerance[before.protocol.primary] = 0.5
+    after = mt.managed_inputs(task, "a")
+    manifest = task.manifest
+    assert after.candidate_tar == before.candidate_tar
+    assert after.evaluator_script == before.evaluator_script
+    assert after.confirmation == before.confirmation
+    assert after.candidate_digest == manifest["candidate_tar_sha256"]["a"]
+    assert bytes_sha256(after.evaluator_script).hexdigest() == manifest["evaluator_sha256"]
+    assert bytes_sha256(after.protocol.protocol_bytes()).hexdigest() == manifest["protocol_sha256"]
+    assert after.protocol.tolerance == {}
+
+
+def test_managed_inputs_refuse_bytes_that_do_not_match_manifest() -> None:
+    task = mt.simulation_task(0, "development")
+    for changes in (
+        {"candidate_tars": (("a", b"different archive"),)},
+        {"evaluator_script": b"different evaluator"},
+        {"protocol_bytes": b"{}"},
+        {"sealed": b"different confirmation"},
+        {"manifest_bytes": b"{}"},
+    ):
+        with pytest.raises(ValueError, match="frozen task manifest"):
+            mt.managed_inputs(replace(task, **changes), "a")

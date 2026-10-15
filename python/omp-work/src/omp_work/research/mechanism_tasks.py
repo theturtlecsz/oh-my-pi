@@ -201,11 +201,19 @@ class MechanismTask:
     seed: int
     content_sha256: str
     evidence_class: str
-    manifest: Mapping[str, Any]
+    manifest_bytes: bytes = field(repr=False)
     manifest_sha256: str
     sealed: bytes = field(repr=False)
     payload: bytes = field(repr=False)
     nodes: tuple[ZlibNode, ...] = field(repr=False)
+    candidate_tars: tuple[tuple[str, bytes], ...] = field(repr=False)
+    evaluator_script: bytes = field(repr=False)
+    protocol_bytes: bytes = field(repr=False)
+
+    @property
+    def manifest(self) -> dict[str, Any]:
+        """Detached JSON view; edits cannot change the frozen canonical bytes."""
+        return json.loads(self.manifest_bytes)
 
     @property
     def real_evidence(self) -> bool:
@@ -271,19 +279,24 @@ def _evaluator_bytes(domain: str) -> bytes:
     return (_SIM_EVALUATOR if domain == "simulation" else _ZLIB_EVALUATOR).encode()
 
 
-def _candidate_files(task: MechanismTask, node: ZlibNode) -> dict[str, bytes]:
-    binding = {"task_id": task.task_id, "task_sha256": task.content_sha256}
-    params = {**_node_params(task.domain, node), "binding": binding}
+def _candidate_files(
+    domain: str,
+    binding: Mapping[str, str],
+    params: Mapping[str, Any],
+    sealed: bytes,
+    payload: bytes,
+) -> dict[str, bytes]:
+    params = {**params, "binding": binding}
     files = {"params.json": canonical_json(params).encode()}
-    if task.domain == "simulation":
+    if domain == "simulation":
         files["candidate.py"] = _SIM_CANDIDATE.encode()
-        problem = json.loads(task.sealed)
+        problem = json.loads(sealed)
         files["problem.json"] = canonical_json(
             {"weights": problem["weights"], "shift": problem["shift"], "start": problem["start"]}
         ).encode()
     else:
         files["candidate.py"] = _ZLIB_CANDIDATE.encode()
-        files["source.bin"] = task.payload
+        files["source.bin"] = payload
     return files
 
 
@@ -310,22 +323,14 @@ def _freeze(
         raise ValueError("pool nodes must carry unit cost")
     evaluator = _evaluator_bytes(domain)
     protocol = _protocol(domain, sealed)
-    draft = MechanismTask(
-        task_id=task_id,
-        domain=domain,
-        cohort=cohort,
-        seed=seed,
-        content_sha256=content_sha256,
-        evidence_class=evidence_class,
-        manifest={},
-        manifest_sha256="",
-        sealed=sealed,
-        payload=payload,
-        nodes=nodes,
-    )
     topology = [{"id": n.id, "parent": n.parent, "cost": n.cost} for n in nodes]
     parameters = {n.id: _node_params(domain, n) for n in nodes}
-    candidate_digests = {n.id: _hex(_tar(_candidate_files(draft, n))) for n in nodes}
+    binding = {"task_id": task_id, "task_sha256": content_sha256}
+    candidate_tars = tuple(
+        (n.id, _tar(_candidate_files(domain, binding, parameters[n.id], sealed, payload)))
+        for n in nodes
+    )
+    candidate_digests = {node_id: _hex(tar) for node_id, tar in candidate_tars}
     manifest = {
         "task_id": task_id,
         "domain": domain,
@@ -349,11 +354,14 @@ def _freeze(
         seed=seed,
         content_sha256=content_sha256,
         evidence_class=evidence_class,
-        manifest=manifest,
+        manifest_bytes=canonical_json(manifest).encode(),
         manifest_sha256=sha256(manifest),
         sealed=sealed,
         payload=payload,
         nodes=nodes,
+        candidate_tars=candidate_tars,
+        evaluator_script=evaluator,
+        protocol_bytes=protocol.protocol_bytes(),
     )
 
 
@@ -457,14 +465,23 @@ def cohort_manifest(tasks: Sequence[MechanismTask]) -> dict[str, Any]:
 
 def managed_inputs(task: MechanismTask, node_id: str) -> ManagedInputs:
     """Inputs for ``evaluate_candidate`` running pool node ``node_id`` on ``task``."""
-    node = next((n for n in task.nodes if n.id == node_id), None)
-    if node is None:
+    tar = next((data for name, data in task.candidate_tars if name == node_id), None)
+    if tar is None:
         raise ValueError(f"unknown pool node: {node_id}")
-    tar = _tar(_candidate_files(task, node))
+    manifest = task.manifest
+    digest = _hex(tar)
+    if (
+        _hex(task.manifest_bytes) != task.manifest_sha256
+        or digest != manifest["candidate_tar_sha256"][node_id]
+        or _hex(task.evaluator_script) != manifest["evaluator_sha256"]
+        or _hex(task.protocol_bytes) != manifest["protocol_sha256"]
+        or _hex(task.sealed) != manifest["sealed_sha256"]
+    ):
+        raise ValueError("managed inputs differ from frozen task manifest")
     return ManagedInputs(
-        protocol=_protocol(task.domain, task.sealed),
+        protocol=EvaluationProtocol.model_validate_json(task.protocol_bytes),
         candidate_tar=tar,
-        candidate_digest=_hex(tar),
-        evaluator_script=_evaluator_bytes(task.domain),
+        candidate_digest=digest,
+        evaluator_script=task.evaluator_script,
         confirmation=task.sealed,
     )
