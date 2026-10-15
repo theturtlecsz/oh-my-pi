@@ -1,0 +1,2686 @@
+{
+  "status": "candidate",
+  "rules_path": "evals/intake_behaviour/candidates/RULES.md",
+  "cases": [
+    {
+      "id": "ready-complete",
+      "provenance": {
+        "kind": "synthetic",
+        "source_path": "evals/nsi6/v1/inputs/cases.json",
+        "source_case_id": "ready-complete",
+        "original_request": "The --json export emits valid JSON while default output remains a human table.\nIf deployment is reverted, the previous exporter remains usable without changing stored stats.\nUnauthenticated requests cannot export private workspace stats.\nA storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+        "source_origin": {
+          "kind": "authored",
+          "task": "OMP-523-s02"
+        }
+      },
+      "input": {
+        "request": "The --json export emits valid JSON while default output remains a human table.\nIf deployment is reverted, the previous exporter remains usable without changing stored stats.\nUnauthenticated requests cannot export private workspace stats.\nA storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+        "evidence": {
+          "draft": {
+            "archetype": "small_code_change",
+            "source": {
+              "text": "The --json export emits valid JSON while default output remains a human table.\nIf deployment is reverted, the previous exporter remains usable without changing stored stats.\nUnauthenticated requests cannot export private workspace stats.\nA storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+              "sha256": "416362b201fc9b81cf1152f6bc2550ecab2d6e1a5bd51368e395c6f0ebecd263",
+              "spans": [
+                {
+                  "id": "span-export",
+                  "start": 0,
+                  "end": 78,
+                  "exact_text_sha256": "c5989777e0e6f747ca44bd10e9eccbcd0f9c8895e7fca3d850e2f1db1669707b"
+                },
+                {
+                  "id": "span-rollback",
+                  "start": 79,
+                  "end": 173,
+                  "exact_text_sha256": "2b295c8e504f1356caca77090eee319469a21cb79ddf6d19bfd1f737925f593a"
+                },
+                {
+                  "id": "span-security",
+                  "start": 174,
+                  "end": 237,
+                  "exact_text_sha256": "6650c681c3ab6b5a126311ace77a8c9d6bec38511a702ca74e4d2a86f3e40bf4"
+                },
+                {
+                  "id": "span-failure",
+                  "start": 238,
+                  "end": 333,
+                  "exact_text_sha256": "57d2f5ff8436a4d62c162ba31122265277c61cb1d42f8252cd274d18bcfabd0e"
+                }
+              ]
+            },
+            "goal": {
+              "id": "goal-export",
+              "statement": "Add --json to workspace stats export",
+              "source_span_ids": [
+                "span-export"
+              ]
+            },
+            "constraints": [
+              {
+                "id": "c-export",
+                "statement": "The --json export emits valid JSON while default output remains a human table.",
+                "source_span_ids": [
+                  "span-export"
+                ],
+                "key": "export",
+                "value": {
+                  "kind": "known",
+                  "value": true
+                },
+                "polarity": "positive"
+              },
+              {
+                "id": "c-rollback",
+                "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                "source_span_ids": [
+                  "span-rollback"
+                ],
+                "key": "rollback",
+                "value": {
+                  "kind": "known",
+                  "value": true
+                },
+                "polarity": "positive"
+              },
+              {
+                "id": "c-security",
+                "statement": "Unauthenticated requests cannot export private workspace stats.",
+                "source_span_ids": [
+                  "span-security"
+                ],
+                "key": "security",
+                "value": {
+                  "kind": "known",
+                  "value": true
+                },
+                "polarity": "positive"
+              },
+              {
+                "id": "c-failure",
+                "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                "source_span_ids": [
+                  "span-failure"
+                ],
+                "key": "failure",
+                "value": {
+                  "kind": "known",
+                  "value": true
+                },
+                "polarity": "positive"
+              }
+            ],
+            "unknowns": [],
+            "acceptance_criteria": [
+              {
+                "id": "ac-export",
+                "statement": "The --json export emits valid JSON while default output remains a human table.",
+                "source_span_ids": [
+                  "span-export"
+                ],
+                "observable_outcome": "The --json export emits valid JSON while default output remains a human table.",
+                "oracle": "automated_test"
+              },
+              {
+                "id": "ac-rollback",
+                "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                "source_span_ids": [
+                  "span-rollback"
+                ],
+                "observable_outcome": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                "oracle": "automated_test"
+              },
+              {
+                "id": "ac-security",
+                "statement": "Unauthenticated requests cannot export private workspace stats.",
+                "source_span_ids": [
+                  "span-security"
+                ],
+                "observable_outcome": "Unauthenticated requests cannot export private workspace stats.",
+                "oracle": "automated_test"
+              },
+              {
+                "id": "ac-failure",
+                "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                "source_span_ids": [
+                  "span-failure"
+                ],
+                "observable_outcome": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                "oracle": "automated_test"
+              }
+            ]
+          }
+        }
+      },
+      "gold": {
+        "stratum": "complete_control",
+        "missing_target": null,
+        "expected_question_targets": [],
+        "expected_draft_inclusion": [
+          {
+            "id": "export",
+            "statement": "The --json export emits valid JSON while default output remains a human table."
+          },
+          {
+            "id": "rollback",
+            "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats."
+          },
+          {
+            "id": "security",
+            "statement": "Unauthenticated requests cannot export private workspace stats."
+          },
+          {
+            "id": "failure",
+            "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr."
+          }
+        ],
+        "readiness": "READY_FOR_RATIFICATION",
+        "rationale": "Export, rollback, private-data access and read-failure outcomes each have an observable test; no material owner decision remains.",
+        "silent_adjudication": "not_applicable",
+        "claim_support_challenges": {
+          "source_path": "evals/intake_support/v2/inputs/pairs.json",
+          "ids": [],
+          "status": "blocked_missing_omp631_v2"
+        }
+      }
+    },
+    {
+      "id": "omitted-rollback",
+      "provenance": {
+        "kind": "synthetic",
+        "source_path": "evals/nsi6/v1/inputs/cases.json",
+        "source_case_id": "omitted-rollback",
+        "original_request": "The --json export emits valid JSON while default output remains a human table.\nIf deployment is reverted, the previous exporter remains usable without changing stored stats.\nUnauthenticated requests cannot export private workspace stats.\nA storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+        "source_origin": {
+          "kind": "mutation",
+          "base_case_id": "ready-complete",
+          "mutations": [
+            {
+              "path": [
+                "bounded",
+                "draft",
+                "constraints"
+              ],
+              "before": [
+                {
+                  "id": "c-export",
+                  "statement": "The --json export emits valid JSON while default output remains a human table.",
+                  "source_span_ids": [
+                    "span-export"
+                  ],
+                  "key": "export",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-rollback",
+                  "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "source_span_ids": [
+                    "span-rollback"
+                  ],
+                  "key": "rollback",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-security",
+                  "statement": "Unauthenticated requests cannot export private workspace stats.",
+                  "source_span_ids": [
+                    "span-security"
+                  ],
+                  "key": "security",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-failure",
+                  "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "source_span_ids": [
+                    "span-failure"
+                  ],
+                  "key": "failure",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                }
+              ],
+              "after": [
+                {
+                  "id": "c-export",
+                  "statement": "The --json export emits valid JSON while default output remains a human table.",
+                  "source_span_ids": [
+                    "span-export"
+                  ],
+                  "key": "export",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-security",
+                  "statement": "Unauthenticated requests cannot export private workspace stats.",
+                  "source_span_ids": [
+                    "span-security"
+                  ],
+                  "key": "security",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-failure",
+                  "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "source_span_ids": [
+                    "span-failure"
+                  ],
+                  "key": "failure",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                }
+              ]
+            },
+            {
+              "path": [
+                "bounded",
+                "draft",
+                "acceptance_criteria"
+              ],
+              "before": [
+                {
+                  "id": "ac-export",
+                  "statement": "The --json export emits valid JSON while default output remains a human table.",
+                  "source_span_ids": [
+                    "span-export"
+                  ],
+                  "observable_outcome": "The --json export emits valid JSON while default output remains a human table.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-rollback",
+                  "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "source_span_ids": [
+                    "span-rollback"
+                  ],
+                  "observable_outcome": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-security",
+                  "statement": "Unauthenticated requests cannot export private workspace stats.",
+                  "source_span_ids": [
+                    "span-security"
+                  ],
+                  "observable_outcome": "Unauthenticated requests cannot export private workspace stats.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-failure",
+                  "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "source_span_ids": [
+                    "span-failure"
+                  ],
+                  "observable_outcome": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "oracle": "automated_test"
+                }
+              ],
+              "after": [
+                {
+                  "id": "ac-export",
+                  "statement": "The --json export emits valid JSON while default output remains a human table.",
+                  "source_span_ids": [
+                    "span-export"
+                  ],
+                  "observable_outcome": "The --json export emits valid JSON while default output remains a human table.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-security",
+                  "statement": "Unauthenticated requests cannot export private workspace stats.",
+                  "source_span_ids": [
+                    "span-security"
+                  ],
+                  "observable_outcome": "Unauthenticated requests cannot export private workspace stats.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-failure",
+                  "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "source_span_ids": [
+                    "span-failure"
+                  ],
+                  "observable_outcome": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "oracle": "automated_test"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "input": {
+        "request": "The --json export emits valid JSON while default output remains a human table.\nIf deployment is reverted, the previous exporter remains usable without changing stored stats.\nUnauthenticated requests cannot export private workspace stats.\nA storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+        "evidence": {
+          "draft": {
+            "archetype": "small_code_change",
+            "source": {
+              "text": "The --json export emits valid JSON while default output remains a human table.\nIf deployment is reverted, the previous exporter remains usable without changing stored stats.\nUnauthenticated requests cannot export private workspace stats.\nA storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+              "sha256": "416362b201fc9b81cf1152f6bc2550ecab2d6e1a5bd51368e395c6f0ebecd263",
+              "spans": [
+                {
+                  "id": "span-export",
+                  "start": 0,
+                  "end": 78,
+                  "exact_text_sha256": "c5989777e0e6f747ca44bd10e9eccbcd0f9c8895e7fca3d850e2f1db1669707b"
+                },
+                {
+                  "id": "span-rollback",
+                  "start": 79,
+                  "end": 173,
+                  "exact_text_sha256": "2b295c8e504f1356caca77090eee319469a21cb79ddf6d19bfd1f737925f593a"
+                },
+                {
+                  "id": "span-security",
+                  "start": 174,
+                  "end": 237,
+                  "exact_text_sha256": "6650c681c3ab6b5a126311ace77a8c9d6bec38511a702ca74e4d2a86f3e40bf4"
+                },
+                {
+                  "id": "span-failure",
+                  "start": 238,
+                  "end": 333,
+                  "exact_text_sha256": "57d2f5ff8436a4d62c162ba31122265277c61cb1d42f8252cd274d18bcfabd0e"
+                }
+              ]
+            },
+            "goal": {
+              "id": "goal-export",
+              "statement": "Add --json to workspace stats export",
+              "source_span_ids": [
+                "span-export"
+              ]
+            },
+            "constraints": [
+              {
+                "id": "c-export",
+                "statement": "The --json export emits valid JSON while default output remains a human table.",
+                "source_span_ids": [
+                  "span-export"
+                ],
+                "key": "export",
+                "value": {
+                  "kind": "known",
+                  "value": true
+                },
+                "polarity": "positive"
+              },
+              {
+                "id": "c-security",
+                "statement": "Unauthenticated requests cannot export private workspace stats.",
+                "source_span_ids": [
+                  "span-security"
+                ],
+                "key": "security",
+                "value": {
+                  "kind": "known",
+                  "value": true
+                },
+                "polarity": "positive"
+              },
+              {
+                "id": "c-failure",
+                "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                "source_span_ids": [
+                  "span-failure"
+                ],
+                "key": "failure",
+                "value": {
+                  "kind": "known",
+                  "value": true
+                },
+                "polarity": "positive"
+              }
+            ],
+            "unknowns": [],
+            "acceptance_criteria": [
+              {
+                "id": "ac-export",
+                "statement": "The --json export emits valid JSON while default output remains a human table.",
+                "source_span_ids": [
+                  "span-export"
+                ],
+                "observable_outcome": "The --json export emits valid JSON while default output remains a human table.",
+                "oracle": "automated_test"
+              },
+              {
+                "id": "ac-security",
+                "statement": "Unauthenticated requests cannot export private workspace stats.",
+                "source_span_ids": [
+                  "span-security"
+                ],
+                "observable_outcome": "Unauthenticated requests cannot export private workspace stats.",
+                "oracle": "automated_test"
+              },
+              {
+                "id": "ac-failure",
+                "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                "source_span_ids": [
+                  "span-failure"
+                ],
+                "observable_outcome": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                "oracle": "automated_test"
+              }
+            ]
+          }
+        }
+      },
+      "gold": {
+        "stratum": "stated_draft_omission",
+        "missing_target": "rollback",
+        "expected_question_targets": [
+          "rollback"
+        ],
+        "expected_draft_inclusion": [
+          {
+            "id": "export",
+            "statement": "The --json export emits valid JSON while default output remains a human table."
+          },
+          {
+            "id": "rollback",
+            "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats."
+          },
+          {
+            "id": "security",
+            "statement": "Unauthenticated requests cannot export private workspace stats."
+          },
+          {
+            "id": "failure",
+            "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr."
+          }
+        ],
+        "readiness": "NEEDS_SPEC",
+        "rationale": "Owner source requires rollback; draft contains neither its claim nor its criterion. Empty unknowns cannot establish readiness.",
+        "silent_adjudication": "not_applicable",
+        "claim_support_challenges": {
+          "source_path": "evals/intake_support/v2/inputs/pairs.json",
+          "ids": [],
+          "status": "blocked_missing_omp631_v2"
+        }
+      }
+    },
+    {
+      "id": "omitted-security",
+      "provenance": {
+        "kind": "synthetic",
+        "source_path": "evals/nsi6/v1/inputs/cases.json",
+        "source_case_id": "omitted-security",
+        "original_request": "The --json export emits valid JSON while default output remains a human table.\nIf deployment is reverted, the previous exporter remains usable without changing stored stats.\nUnauthenticated requests cannot export private workspace stats.\nA storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+        "source_origin": {
+          "kind": "mutation",
+          "base_case_id": "ready-complete",
+          "mutations": [
+            {
+              "path": [
+                "bounded",
+                "draft",
+                "constraints"
+              ],
+              "before": [
+                {
+                  "id": "c-export",
+                  "statement": "The --json export emits valid JSON while default output remains a human table.",
+                  "source_span_ids": [
+                    "span-export"
+                  ],
+                  "key": "export",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-rollback",
+                  "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "source_span_ids": [
+                    "span-rollback"
+                  ],
+                  "key": "rollback",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-security",
+                  "statement": "Unauthenticated requests cannot export private workspace stats.",
+                  "source_span_ids": [
+                    "span-security"
+                  ],
+                  "key": "security",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-failure",
+                  "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "source_span_ids": [
+                    "span-failure"
+                  ],
+                  "key": "failure",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                }
+              ],
+              "after": [
+                {
+                  "id": "c-export",
+                  "statement": "The --json export emits valid JSON while default output remains a human table.",
+                  "source_span_ids": [
+                    "span-export"
+                  ],
+                  "key": "export",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-rollback",
+                  "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "source_span_ids": [
+                    "span-rollback"
+                  ],
+                  "key": "rollback",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-failure",
+                  "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "source_span_ids": [
+                    "span-failure"
+                  ],
+                  "key": "failure",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                }
+              ]
+            },
+            {
+              "path": [
+                "bounded",
+                "draft",
+                "acceptance_criteria"
+              ],
+              "before": [
+                {
+                  "id": "ac-export",
+                  "statement": "The --json export emits valid JSON while default output remains a human table.",
+                  "source_span_ids": [
+                    "span-export"
+                  ],
+                  "observable_outcome": "The --json export emits valid JSON while default output remains a human table.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-rollback",
+                  "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "source_span_ids": [
+                    "span-rollback"
+                  ],
+                  "observable_outcome": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-security",
+                  "statement": "Unauthenticated requests cannot export private workspace stats.",
+                  "source_span_ids": [
+                    "span-security"
+                  ],
+                  "observable_outcome": "Unauthenticated requests cannot export private workspace stats.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-failure",
+                  "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "source_span_ids": [
+                    "span-failure"
+                  ],
+                  "observable_outcome": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "oracle": "automated_test"
+                }
+              ],
+              "after": [
+                {
+                  "id": "ac-export",
+                  "statement": "The --json export emits valid JSON while default output remains a human table.",
+                  "source_span_ids": [
+                    "span-export"
+                  ],
+                  "observable_outcome": "The --json export emits valid JSON while default output remains a human table.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-rollback",
+                  "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "source_span_ids": [
+                    "span-rollback"
+                  ],
+                  "observable_outcome": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-failure",
+                  "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "source_span_ids": [
+                    "span-failure"
+                  ],
+                  "observable_outcome": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "oracle": "automated_test"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "input": {
+        "request": "The --json export emits valid JSON while default output remains a human table.\nIf deployment is reverted, the previous exporter remains usable without changing stored stats.\nUnauthenticated requests cannot export private workspace stats.\nA storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+        "evidence": {
+          "draft": {
+            "archetype": "small_code_change",
+            "source": {
+              "text": "The --json export emits valid JSON while default output remains a human table.\nIf deployment is reverted, the previous exporter remains usable without changing stored stats.\nUnauthenticated requests cannot export private workspace stats.\nA storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+              "sha256": "416362b201fc9b81cf1152f6bc2550ecab2d6e1a5bd51368e395c6f0ebecd263",
+              "spans": [
+                {
+                  "id": "span-export",
+                  "start": 0,
+                  "end": 78,
+                  "exact_text_sha256": "c5989777e0e6f747ca44bd10e9eccbcd0f9c8895e7fca3d850e2f1db1669707b"
+                },
+                {
+                  "id": "span-rollback",
+                  "start": 79,
+                  "end": 173,
+                  "exact_text_sha256": "2b295c8e504f1356caca77090eee319469a21cb79ddf6d19bfd1f737925f593a"
+                },
+                {
+                  "id": "span-security",
+                  "start": 174,
+                  "end": 237,
+                  "exact_text_sha256": "6650c681c3ab6b5a126311ace77a8c9d6bec38511a702ca74e4d2a86f3e40bf4"
+                },
+                {
+                  "id": "span-failure",
+                  "start": 238,
+                  "end": 333,
+                  "exact_text_sha256": "57d2f5ff8436a4d62c162ba31122265277c61cb1d42f8252cd274d18bcfabd0e"
+                }
+              ]
+            },
+            "goal": {
+              "id": "goal-export",
+              "statement": "Add --json to workspace stats export",
+              "source_span_ids": [
+                "span-export"
+              ]
+            },
+            "constraints": [
+              {
+                "id": "c-export",
+                "statement": "The --json export emits valid JSON while default output remains a human table.",
+                "source_span_ids": [
+                  "span-export"
+                ],
+                "key": "export",
+                "value": {
+                  "kind": "known",
+                  "value": true
+                },
+                "polarity": "positive"
+              },
+              {
+                "id": "c-rollback",
+                "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                "source_span_ids": [
+                  "span-rollback"
+                ],
+                "key": "rollback",
+                "value": {
+                  "kind": "known",
+                  "value": true
+                },
+                "polarity": "positive"
+              },
+              {
+                "id": "c-failure",
+                "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                "source_span_ids": [
+                  "span-failure"
+                ],
+                "key": "failure",
+                "value": {
+                  "kind": "known",
+                  "value": true
+                },
+                "polarity": "positive"
+              }
+            ],
+            "unknowns": [],
+            "acceptance_criteria": [
+              {
+                "id": "ac-export",
+                "statement": "The --json export emits valid JSON while default output remains a human table.",
+                "source_span_ids": [
+                  "span-export"
+                ],
+                "observable_outcome": "The --json export emits valid JSON while default output remains a human table.",
+                "oracle": "automated_test"
+              },
+              {
+                "id": "ac-rollback",
+                "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                "source_span_ids": [
+                  "span-rollback"
+                ],
+                "observable_outcome": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                "oracle": "automated_test"
+              },
+              {
+                "id": "ac-failure",
+                "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                "source_span_ids": [
+                  "span-failure"
+                ],
+                "observable_outcome": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                "oracle": "automated_test"
+              }
+            ]
+          }
+        }
+      },
+      "gold": {
+        "stratum": "stated_draft_omission",
+        "missing_target": "security",
+        "expected_question_targets": [
+          "security"
+        ],
+        "expected_draft_inclusion": [
+          {
+            "id": "export",
+            "statement": "The --json export emits valid JSON while default output remains a human table."
+          },
+          {
+            "id": "rollback",
+            "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats."
+          },
+          {
+            "id": "security",
+            "statement": "Unauthenticated requests cannot export private workspace stats."
+          },
+          {
+            "id": "failure",
+            "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr."
+          }
+        ],
+        "readiness": "NEEDS_SPEC",
+        "rationale": "Owner source requires security; draft contains neither its claim nor its criterion. Empty unknowns cannot establish readiness.",
+        "silent_adjudication": "not_applicable",
+        "claim_support_challenges": {
+          "source_path": "evals/intake_support/v2/inputs/pairs.json",
+          "ids": [],
+          "status": "blocked_missing_omp631_v2"
+        }
+      }
+    },
+    {
+      "id": "omitted-failure",
+      "provenance": {
+        "kind": "synthetic",
+        "source_path": "evals/nsi6/v1/inputs/cases.json",
+        "source_case_id": "omitted-failure",
+        "original_request": "The --json export emits valid JSON while default output remains a human table.\nIf deployment is reverted, the previous exporter remains usable without changing stored stats.\nUnauthenticated requests cannot export private workspace stats.\nA storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+        "source_origin": {
+          "kind": "mutation",
+          "base_case_id": "ready-complete",
+          "mutations": [
+            {
+              "path": [
+                "bounded",
+                "draft",
+                "constraints"
+              ],
+              "before": [
+                {
+                  "id": "c-export",
+                  "statement": "The --json export emits valid JSON while default output remains a human table.",
+                  "source_span_ids": [
+                    "span-export"
+                  ],
+                  "key": "export",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-rollback",
+                  "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "source_span_ids": [
+                    "span-rollback"
+                  ],
+                  "key": "rollback",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-security",
+                  "statement": "Unauthenticated requests cannot export private workspace stats.",
+                  "source_span_ids": [
+                    "span-security"
+                  ],
+                  "key": "security",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-failure",
+                  "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "source_span_ids": [
+                    "span-failure"
+                  ],
+                  "key": "failure",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                }
+              ],
+              "after": [
+                {
+                  "id": "c-export",
+                  "statement": "The --json export emits valid JSON while default output remains a human table.",
+                  "source_span_ids": [
+                    "span-export"
+                  ],
+                  "key": "export",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-rollback",
+                  "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "source_span_ids": [
+                    "span-rollback"
+                  ],
+                  "key": "rollback",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-security",
+                  "statement": "Unauthenticated requests cannot export private workspace stats.",
+                  "source_span_ids": [
+                    "span-security"
+                  ],
+                  "key": "security",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                }
+              ]
+            },
+            {
+              "path": [
+                "bounded",
+                "draft",
+                "acceptance_criteria"
+              ],
+              "before": [
+                {
+                  "id": "ac-export",
+                  "statement": "The --json export emits valid JSON while default output remains a human table.",
+                  "source_span_ids": [
+                    "span-export"
+                  ],
+                  "observable_outcome": "The --json export emits valid JSON while default output remains a human table.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-rollback",
+                  "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "source_span_ids": [
+                    "span-rollback"
+                  ],
+                  "observable_outcome": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-security",
+                  "statement": "Unauthenticated requests cannot export private workspace stats.",
+                  "source_span_ids": [
+                    "span-security"
+                  ],
+                  "observable_outcome": "Unauthenticated requests cannot export private workspace stats.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-failure",
+                  "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "source_span_ids": [
+                    "span-failure"
+                  ],
+                  "observable_outcome": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "oracle": "automated_test"
+                }
+              ],
+              "after": [
+                {
+                  "id": "ac-export",
+                  "statement": "The --json export emits valid JSON while default output remains a human table.",
+                  "source_span_ids": [
+                    "span-export"
+                  ],
+                  "observable_outcome": "The --json export emits valid JSON while default output remains a human table.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-rollback",
+                  "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "source_span_ids": [
+                    "span-rollback"
+                  ],
+                  "observable_outcome": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-security",
+                  "statement": "Unauthenticated requests cannot export private workspace stats.",
+                  "source_span_ids": [
+                    "span-security"
+                  ],
+                  "observable_outcome": "Unauthenticated requests cannot export private workspace stats.",
+                  "oracle": "automated_test"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "input": {
+        "request": "The --json export emits valid JSON while default output remains a human table.\nIf deployment is reverted, the previous exporter remains usable without changing stored stats.\nUnauthenticated requests cannot export private workspace stats.\nA storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+        "evidence": {
+          "draft": {
+            "archetype": "small_code_change",
+            "source": {
+              "text": "The --json export emits valid JSON while default output remains a human table.\nIf deployment is reverted, the previous exporter remains usable without changing stored stats.\nUnauthenticated requests cannot export private workspace stats.\nA storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+              "sha256": "416362b201fc9b81cf1152f6bc2550ecab2d6e1a5bd51368e395c6f0ebecd263",
+              "spans": [
+                {
+                  "id": "span-export",
+                  "start": 0,
+                  "end": 78,
+                  "exact_text_sha256": "c5989777e0e6f747ca44bd10e9eccbcd0f9c8895e7fca3d850e2f1db1669707b"
+                },
+                {
+                  "id": "span-rollback",
+                  "start": 79,
+                  "end": 173,
+                  "exact_text_sha256": "2b295c8e504f1356caca77090eee319469a21cb79ddf6d19bfd1f737925f593a"
+                },
+                {
+                  "id": "span-security",
+                  "start": 174,
+                  "end": 237,
+                  "exact_text_sha256": "6650c681c3ab6b5a126311ace77a8c9d6bec38511a702ca74e4d2a86f3e40bf4"
+                },
+                {
+                  "id": "span-failure",
+                  "start": 238,
+                  "end": 333,
+                  "exact_text_sha256": "57d2f5ff8436a4d62c162ba31122265277c61cb1d42f8252cd274d18bcfabd0e"
+                }
+              ]
+            },
+            "goal": {
+              "id": "goal-export",
+              "statement": "Add --json to workspace stats export",
+              "source_span_ids": [
+                "span-export"
+              ]
+            },
+            "constraints": [
+              {
+                "id": "c-export",
+                "statement": "The --json export emits valid JSON while default output remains a human table.",
+                "source_span_ids": [
+                  "span-export"
+                ],
+                "key": "export",
+                "value": {
+                  "kind": "known",
+                  "value": true
+                },
+                "polarity": "positive"
+              },
+              {
+                "id": "c-rollback",
+                "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                "source_span_ids": [
+                  "span-rollback"
+                ],
+                "key": "rollback",
+                "value": {
+                  "kind": "known",
+                  "value": true
+                },
+                "polarity": "positive"
+              },
+              {
+                "id": "c-security",
+                "statement": "Unauthenticated requests cannot export private workspace stats.",
+                "source_span_ids": [
+                  "span-security"
+                ],
+                "key": "security",
+                "value": {
+                  "kind": "known",
+                  "value": true
+                },
+                "polarity": "positive"
+              }
+            ],
+            "unknowns": [],
+            "acceptance_criteria": [
+              {
+                "id": "ac-export",
+                "statement": "The --json export emits valid JSON while default output remains a human table.",
+                "source_span_ids": [
+                  "span-export"
+                ],
+                "observable_outcome": "The --json export emits valid JSON while default output remains a human table.",
+                "oracle": "automated_test"
+              },
+              {
+                "id": "ac-rollback",
+                "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                "source_span_ids": [
+                  "span-rollback"
+                ],
+                "observable_outcome": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                "oracle": "automated_test"
+              },
+              {
+                "id": "ac-security",
+                "statement": "Unauthenticated requests cannot export private workspace stats.",
+                "source_span_ids": [
+                  "span-security"
+                ],
+                "observable_outcome": "Unauthenticated requests cannot export private workspace stats.",
+                "oracle": "automated_test"
+              }
+            ]
+          }
+        }
+      },
+      "gold": {
+        "stratum": "stated_draft_omission",
+        "missing_target": "failure",
+        "expected_question_targets": [
+          "failure"
+        ],
+        "expected_draft_inclusion": [
+          {
+            "id": "export",
+            "statement": "The --json export emits valid JSON while default output remains a human table."
+          },
+          {
+            "id": "rollback",
+            "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats."
+          },
+          {
+            "id": "security",
+            "statement": "Unauthenticated requests cannot export private workspace stats."
+          },
+          {
+            "id": "failure",
+            "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr."
+          }
+        ],
+        "readiness": "NEEDS_SPEC",
+        "rationale": "Owner source requires failure; draft contains neither its claim nor its criterion. Empty unknowns cannot establish readiness.",
+        "silent_adjudication": "not_applicable",
+        "claim_support_challenges": {
+          "source_path": "evals/intake_support/v2/inputs/pairs.json",
+          "ids": [],
+          "status": "blocked_missing_omp631_v2"
+        }
+      }
+    },
+    {
+      "id": "ambiguous-scope",
+      "provenance": {
+        "kind": "synthetic",
+        "source_path": "evals/nsi6/v1/inputs/cases.json",
+        "source_case_id": "ambiguous-scope",
+        "original_request": "The --json export emits valid JSON while default output remains a human table.\nIf deployment is reverted, the previous exporter remains usable without changing stored stats.\nUnauthenticated requests cannot export private workspace stats.\nA storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+        "source_origin": {
+          "kind": "mutation",
+          "base_case_id": "ready-complete",
+          "mutations": [
+            {
+              "path": [
+                "bounded",
+                "draft",
+                "goal"
+              ],
+              "before": {
+                "id": "goal-export",
+                "statement": "Add --json to workspace stats export",
+                "source_span_ids": [
+                  "span-export"
+                ]
+              },
+              "after": {
+                "id": "goal-export",
+                "statement": "Improve stats everywhere",
+                "source_span_ids": [
+                  "span-export"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "input": {
+        "request": "The --json export emits valid JSON while default output remains a human table.\nIf deployment is reverted, the previous exporter remains usable without changing stored stats.\nUnauthenticated requests cannot export private workspace stats.\nA storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+        "evidence": {
+          "draft": {
+            "archetype": "small_code_change",
+            "source": {
+              "text": "The --json export emits valid JSON while default output remains a human table.\nIf deployment is reverted, the previous exporter remains usable without changing stored stats.\nUnauthenticated requests cannot export private workspace stats.\nA storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+              "sha256": "416362b201fc9b81cf1152f6bc2550ecab2d6e1a5bd51368e395c6f0ebecd263",
+              "spans": [
+                {
+                  "id": "span-export",
+                  "start": 0,
+                  "end": 78,
+                  "exact_text_sha256": "c5989777e0e6f747ca44bd10e9eccbcd0f9c8895e7fca3d850e2f1db1669707b"
+                },
+                {
+                  "id": "span-rollback",
+                  "start": 79,
+                  "end": 173,
+                  "exact_text_sha256": "2b295c8e504f1356caca77090eee319469a21cb79ddf6d19bfd1f737925f593a"
+                },
+                {
+                  "id": "span-security",
+                  "start": 174,
+                  "end": 237,
+                  "exact_text_sha256": "6650c681c3ab6b5a126311ace77a8c9d6bec38511a702ca74e4d2a86f3e40bf4"
+                },
+                {
+                  "id": "span-failure",
+                  "start": 238,
+                  "end": 333,
+                  "exact_text_sha256": "57d2f5ff8436a4d62c162ba31122265277c61cb1d42f8252cd274d18bcfabd0e"
+                }
+              ]
+            },
+            "goal": {
+              "id": "goal-export",
+              "statement": "Improve stats everywhere",
+              "source_span_ids": [
+                "span-export"
+              ]
+            },
+            "constraints": [
+              {
+                "id": "c-export",
+                "statement": "The --json export emits valid JSON while default output remains a human table.",
+                "source_span_ids": [
+                  "span-export"
+                ],
+                "key": "export",
+                "value": {
+                  "kind": "known",
+                  "value": true
+                },
+                "polarity": "positive"
+              },
+              {
+                "id": "c-rollback",
+                "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                "source_span_ids": [
+                  "span-rollback"
+                ],
+                "key": "rollback",
+                "value": {
+                  "kind": "known",
+                  "value": true
+                },
+                "polarity": "positive"
+              },
+              {
+                "id": "c-security",
+                "statement": "Unauthenticated requests cannot export private workspace stats.",
+                "source_span_ids": [
+                  "span-security"
+                ],
+                "key": "security",
+                "value": {
+                  "kind": "known",
+                  "value": true
+                },
+                "polarity": "positive"
+              },
+              {
+                "id": "c-failure",
+                "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                "source_span_ids": [
+                  "span-failure"
+                ],
+                "key": "failure",
+                "value": {
+                  "kind": "known",
+                  "value": true
+                },
+                "polarity": "positive"
+              }
+            ],
+            "unknowns": [],
+            "acceptance_criteria": [
+              {
+                "id": "ac-export",
+                "statement": "The --json export emits valid JSON while default output remains a human table.",
+                "source_span_ids": [
+                  "span-export"
+                ],
+                "observable_outcome": "The --json export emits valid JSON while default output remains a human table.",
+                "oracle": "automated_test"
+              },
+              {
+                "id": "ac-rollback",
+                "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                "source_span_ids": [
+                  "span-rollback"
+                ],
+                "observable_outcome": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                "oracle": "automated_test"
+              },
+              {
+                "id": "ac-security",
+                "statement": "Unauthenticated requests cannot export private workspace stats.",
+                "source_span_ids": [
+                  "span-security"
+                ],
+                "observable_outcome": "Unauthenticated requests cannot export private workspace stats.",
+                "oracle": "automated_test"
+              },
+              {
+                "id": "ac-failure",
+                "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                "source_span_ids": [
+                  "span-failure"
+                ],
+                "observable_outcome": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                "oracle": "automated_test"
+              }
+            ]
+          }
+        }
+      },
+      "gold": {
+        "stratum": "ambiguous_scope",
+        "missing_target": "scope",
+        "expected_question_targets": [
+          "scope"
+        ],
+        "expected_draft_inclusion": [
+          {
+            "id": "export",
+            "statement": "The --json export emits valid JSON while default output remains a human table."
+          },
+          {
+            "id": "rollback",
+            "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats."
+          },
+          {
+            "id": "security",
+            "statement": "Unauthenticated requests cannot export private workspace stats."
+          },
+          {
+            "id": "failure",
+            "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr."
+          },
+          {
+            "id": "scope",
+            "statement": "Bound work to --json workspace export; do not silently select interfaces."
+          }
+        ],
+        "readiness": "NEEDS_SPEC",
+        "rationale": "Everywhere could include CLI, HTTP or dashboard. Bound work to --json workspace export; do not silently select interfaces.",
+        "silent_adjudication": "not_applicable",
+        "claim_support_challenges": {
+          "source_path": "evals/intake_support/v2/inputs/pairs.json",
+          "ids": [],
+          "status": "blocked_missing_omp631_v2"
+        }
+      }
+    },
+    {
+      "id": "silent-omitted-rollback",
+      "provenance": {
+        "kind": "synthetic",
+        "source_path": "evals/nsi6/v1/inputs/cases.json",
+        "source_case_id": "silent-omitted-rollback",
+        "original_request": "The --json export emits valid JSON while default output remains a human table.\nIf deployment is reverted, the previous exporter remains usable without changing stored stats.\nUnauthenticated requests cannot export private workspace stats.\nA storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+        "source_origin": {
+          "kind": "mutation",
+          "base_case_id": "ready-complete",
+          "mutations": [
+            {
+              "path": [
+                "bounded",
+                "draft",
+                "source"
+              ],
+              "before": {
+                "text": "The --json export emits valid JSON while default output remains a human table.\nIf deployment is reverted, the previous exporter remains usable without changing stored stats.\nUnauthenticated requests cannot export private workspace stats.\nA storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                "sha256": "416362b201fc9b81cf1152f6bc2550ecab2d6e1a5bd51368e395c6f0ebecd263",
+                "spans": [
+                  {
+                    "id": "span-export",
+                    "start": 0,
+                    "end": 78,
+                    "exact_text_sha256": "c5989777e0e6f747ca44bd10e9eccbcd0f9c8895e7fca3d850e2f1db1669707b"
+                  },
+                  {
+                    "id": "span-rollback",
+                    "start": 79,
+                    "end": 173,
+                    "exact_text_sha256": "2b295c8e504f1356caca77090eee319469a21cb79ddf6d19bfd1f737925f593a"
+                  },
+                  {
+                    "id": "span-security",
+                    "start": 174,
+                    "end": 237,
+                    "exact_text_sha256": "6650c681c3ab6b5a126311ace77a8c9d6bec38511a702ca74e4d2a86f3e40bf4"
+                  },
+                  {
+                    "id": "span-failure",
+                    "start": 238,
+                    "end": 333,
+                    "exact_text_sha256": "57d2f5ff8436a4d62c162ba31122265277c61cb1d42f8252cd274d18bcfabd0e"
+                  }
+                ]
+              },
+              "after": {
+                "text": "The --json export emits valid JSON while default output remains a human table.\nUnauthenticated requests cannot export private workspace stats.\nA storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                "sha256": "357ef2186587ad2d6d7791d4eb3f0143f61ace1abc67d35d9380c4e6f6a9bcfe",
+                "spans": [
+                  {
+                    "id": "span-export",
+                    "start": 0,
+                    "end": 78,
+                    "exact_text_sha256": "c5989777e0e6f747ca44bd10e9eccbcd0f9c8895e7fca3d850e2f1db1669707b"
+                  },
+                  {
+                    "id": "span-security",
+                    "start": 79,
+                    "end": 142,
+                    "exact_text_sha256": "6650c681c3ab6b5a126311ace77a8c9d6bec38511a702ca74e4d2a86f3e40bf4"
+                  },
+                  {
+                    "id": "span-failure",
+                    "start": 143,
+                    "end": 238,
+                    "exact_text_sha256": "57d2f5ff8436a4d62c162ba31122265277c61cb1d42f8252cd274d18bcfabd0e"
+                  }
+                ]
+              }
+            },
+            {
+              "path": [
+                "bounded",
+                "draft",
+                "constraints"
+              ],
+              "before": [
+                {
+                  "id": "c-export",
+                  "statement": "The --json export emits valid JSON while default output remains a human table.",
+                  "source_span_ids": [
+                    "span-export"
+                  ],
+                  "key": "export",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-rollback",
+                  "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "source_span_ids": [
+                    "span-rollback"
+                  ],
+                  "key": "rollback",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-security",
+                  "statement": "Unauthenticated requests cannot export private workspace stats.",
+                  "source_span_ids": [
+                    "span-security"
+                  ],
+                  "key": "security",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-failure",
+                  "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "source_span_ids": [
+                    "span-failure"
+                  ],
+                  "key": "failure",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                }
+              ],
+              "after": [
+                {
+                  "id": "c-export",
+                  "statement": "The --json export emits valid JSON while default output remains a human table.",
+                  "source_span_ids": [
+                    "span-export"
+                  ],
+                  "key": "export",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-security",
+                  "statement": "Unauthenticated requests cannot export private workspace stats.",
+                  "source_span_ids": [
+                    "span-security"
+                  ],
+                  "key": "security",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-failure",
+                  "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "source_span_ids": [
+                    "span-failure"
+                  ],
+                  "key": "failure",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                }
+              ]
+            },
+            {
+              "path": [
+                "bounded",
+                "draft",
+                "acceptance_criteria"
+              ],
+              "before": [
+                {
+                  "id": "ac-export",
+                  "statement": "The --json export emits valid JSON while default output remains a human table.",
+                  "source_span_ids": [
+                    "span-export"
+                  ],
+                  "observable_outcome": "The --json export emits valid JSON while default output remains a human table.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-rollback",
+                  "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "source_span_ids": [
+                    "span-rollback"
+                  ],
+                  "observable_outcome": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-security",
+                  "statement": "Unauthenticated requests cannot export private workspace stats.",
+                  "source_span_ids": [
+                    "span-security"
+                  ],
+                  "observable_outcome": "Unauthenticated requests cannot export private workspace stats.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-failure",
+                  "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "source_span_ids": [
+                    "span-failure"
+                  ],
+                  "observable_outcome": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "oracle": "automated_test"
+                }
+              ],
+              "after": [
+                {
+                  "id": "ac-export",
+                  "statement": "The --json export emits valid JSON while default output remains a human table.",
+                  "source_span_ids": [
+                    "span-export"
+                  ],
+                  "observable_outcome": "The --json export emits valid JSON while default output remains a human table.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-security",
+                  "statement": "Unauthenticated requests cannot export private workspace stats.",
+                  "source_span_ids": [
+                    "span-security"
+                  ],
+                  "observable_outcome": "Unauthenticated requests cannot export private workspace stats.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-failure",
+                  "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "source_span_ids": [
+                    "span-failure"
+                  ],
+                  "observable_outcome": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "oracle": "automated_test"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "input": {
+        "request": "The --json export emits valid JSON while default output remains a human table.\nUnauthenticated requests cannot export private workspace stats.\nA storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+        "evidence": {
+          "draft": {
+            "archetype": "small_code_change",
+            "source": {
+              "text": "The --json export emits valid JSON while default output remains a human table.\nUnauthenticated requests cannot export private workspace stats.\nA storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+              "sha256": "357ef2186587ad2d6d7791d4eb3f0143f61ace1abc67d35d9380c4e6f6a9bcfe",
+              "spans": [
+                {
+                  "id": "span-export",
+                  "start": 0,
+                  "end": 78,
+                  "exact_text_sha256": "c5989777e0e6f747ca44bd10e9eccbcd0f9c8895e7fca3d850e2f1db1669707b"
+                },
+                {
+                  "id": "span-security",
+                  "start": 79,
+                  "end": 142,
+                  "exact_text_sha256": "6650c681c3ab6b5a126311ace77a8c9d6bec38511a702ca74e4d2a86f3e40bf4"
+                },
+                {
+                  "id": "span-failure",
+                  "start": 143,
+                  "end": 238,
+                  "exact_text_sha256": "57d2f5ff8436a4d62c162ba31122265277c61cb1d42f8252cd274d18bcfabd0e"
+                }
+              ]
+            },
+            "goal": {
+              "id": "goal-export",
+              "statement": "Add --json to workspace stats export",
+              "source_span_ids": [
+                "span-export"
+              ]
+            },
+            "constraints": [
+              {
+                "id": "c-export",
+                "statement": "The --json export emits valid JSON while default output remains a human table.",
+                "source_span_ids": [
+                  "span-export"
+                ],
+                "key": "export",
+                "value": {
+                  "kind": "known",
+                  "value": true
+                },
+                "polarity": "positive"
+              },
+              {
+                "id": "c-security",
+                "statement": "Unauthenticated requests cannot export private workspace stats.",
+                "source_span_ids": [
+                  "span-security"
+                ],
+                "key": "security",
+                "value": {
+                  "kind": "known",
+                  "value": true
+                },
+                "polarity": "positive"
+              },
+              {
+                "id": "c-failure",
+                "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                "source_span_ids": [
+                  "span-failure"
+                ],
+                "key": "failure",
+                "value": {
+                  "kind": "known",
+                  "value": true
+                },
+                "polarity": "positive"
+              }
+            ],
+            "unknowns": [],
+            "acceptance_criteria": [
+              {
+                "id": "ac-export",
+                "statement": "The --json export emits valid JSON while default output remains a human table.",
+                "source_span_ids": [
+                  "span-export"
+                ],
+                "observable_outcome": "The --json export emits valid JSON while default output remains a human table.",
+                "oracle": "automated_test"
+              },
+              {
+                "id": "ac-security",
+                "statement": "Unauthenticated requests cannot export private workspace stats.",
+                "source_span_ids": [
+                  "span-security"
+                ],
+                "observable_outcome": "Unauthenticated requests cannot export private workspace stats.",
+                "oracle": "automated_test"
+              },
+              {
+                "id": "ac-failure",
+                "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                "source_span_ids": [
+                  "span-failure"
+                ],
+                "observable_outcome": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                "oracle": "automated_test"
+              }
+            ]
+          }
+        }
+      },
+      "gold": {
+        "stratum": "silent_source_omission",
+        "missing_target": "rollback",
+        "expected_question_targets": [
+          "rollback"
+        ],
+        "expected_draft_inclusion": [
+          {
+            "id": "export",
+            "statement": "The --json export emits valid JSON while default output remains a human table."
+          },
+          {
+            "id": "rollback",
+            "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats."
+          },
+          {
+            "id": "security",
+            "statement": "Unauthenticated requests cannot export private workspace stats."
+          },
+          {
+            "id": "failure",
+            "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr."
+          }
+        ],
+        "readiness": "NEEDS_SPEC",
+        "rationale": "Export changes private-data/deployment/storage boundaries. rollback behavior is absent from source, claims and criteria; independently restored in corrected draft, not inferred from unknown markers.",
+        "silent_adjudication": "pending_chris",
+        "claim_support_challenges": {
+          "source_path": "evals/intake_support/v2/inputs/pairs.json",
+          "ids": [],
+          "status": "blocked_missing_omp631_v2"
+        }
+      }
+    },
+    {
+      "id": "silent-omitted-security",
+      "provenance": {
+        "kind": "synthetic",
+        "source_path": "evals/nsi6/v1/inputs/cases.json",
+        "source_case_id": "silent-omitted-security",
+        "original_request": "The --json export emits valid JSON while default output remains a human table.\nIf deployment is reverted, the previous exporter remains usable without changing stored stats.\nUnauthenticated requests cannot export private workspace stats.\nA storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+        "source_origin": {
+          "kind": "mutation",
+          "base_case_id": "ready-complete",
+          "mutations": [
+            {
+              "path": [
+                "bounded",
+                "draft",
+                "source"
+              ],
+              "before": {
+                "text": "The --json export emits valid JSON while default output remains a human table.\nIf deployment is reverted, the previous exporter remains usable without changing stored stats.\nUnauthenticated requests cannot export private workspace stats.\nA storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                "sha256": "416362b201fc9b81cf1152f6bc2550ecab2d6e1a5bd51368e395c6f0ebecd263",
+                "spans": [
+                  {
+                    "id": "span-export",
+                    "start": 0,
+                    "end": 78,
+                    "exact_text_sha256": "c5989777e0e6f747ca44bd10e9eccbcd0f9c8895e7fca3d850e2f1db1669707b"
+                  },
+                  {
+                    "id": "span-rollback",
+                    "start": 79,
+                    "end": 173,
+                    "exact_text_sha256": "2b295c8e504f1356caca77090eee319469a21cb79ddf6d19bfd1f737925f593a"
+                  },
+                  {
+                    "id": "span-security",
+                    "start": 174,
+                    "end": 237,
+                    "exact_text_sha256": "6650c681c3ab6b5a126311ace77a8c9d6bec38511a702ca74e4d2a86f3e40bf4"
+                  },
+                  {
+                    "id": "span-failure",
+                    "start": 238,
+                    "end": 333,
+                    "exact_text_sha256": "57d2f5ff8436a4d62c162ba31122265277c61cb1d42f8252cd274d18bcfabd0e"
+                  }
+                ]
+              },
+              "after": {
+                "text": "The --json export emits valid JSON while default output remains a human table.\nIf deployment is reverted, the previous exporter remains usable without changing stored stats.\nA storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                "sha256": "bce5d49a792aef5342627a31ee6088625b04f6f14c2b7e337b8140183763ba31",
+                "spans": [
+                  {
+                    "id": "span-export",
+                    "start": 0,
+                    "end": 78,
+                    "exact_text_sha256": "c5989777e0e6f747ca44bd10e9eccbcd0f9c8895e7fca3d850e2f1db1669707b"
+                  },
+                  {
+                    "id": "span-rollback",
+                    "start": 79,
+                    "end": 173,
+                    "exact_text_sha256": "2b295c8e504f1356caca77090eee319469a21cb79ddf6d19bfd1f737925f593a"
+                  },
+                  {
+                    "id": "span-failure",
+                    "start": 174,
+                    "end": 269,
+                    "exact_text_sha256": "57d2f5ff8436a4d62c162ba31122265277c61cb1d42f8252cd274d18bcfabd0e"
+                  }
+                ]
+              }
+            },
+            {
+              "path": [
+                "bounded",
+                "draft",
+                "constraints"
+              ],
+              "before": [
+                {
+                  "id": "c-export",
+                  "statement": "The --json export emits valid JSON while default output remains a human table.",
+                  "source_span_ids": [
+                    "span-export"
+                  ],
+                  "key": "export",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-rollback",
+                  "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "source_span_ids": [
+                    "span-rollback"
+                  ],
+                  "key": "rollback",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-security",
+                  "statement": "Unauthenticated requests cannot export private workspace stats.",
+                  "source_span_ids": [
+                    "span-security"
+                  ],
+                  "key": "security",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-failure",
+                  "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "source_span_ids": [
+                    "span-failure"
+                  ],
+                  "key": "failure",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                }
+              ],
+              "after": [
+                {
+                  "id": "c-export",
+                  "statement": "The --json export emits valid JSON while default output remains a human table.",
+                  "source_span_ids": [
+                    "span-export"
+                  ],
+                  "key": "export",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-rollback",
+                  "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "source_span_ids": [
+                    "span-rollback"
+                  ],
+                  "key": "rollback",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-failure",
+                  "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "source_span_ids": [
+                    "span-failure"
+                  ],
+                  "key": "failure",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                }
+              ]
+            },
+            {
+              "path": [
+                "bounded",
+                "draft",
+                "acceptance_criteria"
+              ],
+              "before": [
+                {
+                  "id": "ac-export",
+                  "statement": "The --json export emits valid JSON while default output remains a human table.",
+                  "source_span_ids": [
+                    "span-export"
+                  ],
+                  "observable_outcome": "The --json export emits valid JSON while default output remains a human table.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-rollback",
+                  "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "source_span_ids": [
+                    "span-rollback"
+                  ],
+                  "observable_outcome": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-security",
+                  "statement": "Unauthenticated requests cannot export private workspace stats.",
+                  "source_span_ids": [
+                    "span-security"
+                  ],
+                  "observable_outcome": "Unauthenticated requests cannot export private workspace stats.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-failure",
+                  "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "source_span_ids": [
+                    "span-failure"
+                  ],
+                  "observable_outcome": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "oracle": "automated_test"
+                }
+              ],
+              "after": [
+                {
+                  "id": "ac-export",
+                  "statement": "The --json export emits valid JSON while default output remains a human table.",
+                  "source_span_ids": [
+                    "span-export"
+                  ],
+                  "observable_outcome": "The --json export emits valid JSON while default output remains a human table.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-rollback",
+                  "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "source_span_ids": [
+                    "span-rollback"
+                  ],
+                  "observable_outcome": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-failure",
+                  "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "source_span_ids": [
+                    "span-failure"
+                  ],
+                  "observable_outcome": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "oracle": "automated_test"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "input": {
+        "request": "The --json export emits valid JSON while default output remains a human table.\nIf deployment is reverted, the previous exporter remains usable without changing stored stats.\nA storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+        "evidence": {
+          "draft": {
+            "archetype": "small_code_change",
+            "source": {
+              "text": "The --json export emits valid JSON while default output remains a human table.\nIf deployment is reverted, the previous exporter remains usable without changing stored stats.\nA storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+              "sha256": "bce5d49a792aef5342627a31ee6088625b04f6f14c2b7e337b8140183763ba31",
+              "spans": [
+                {
+                  "id": "span-export",
+                  "start": 0,
+                  "end": 78,
+                  "exact_text_sha256": "c5989777e0e6f747ca44bd10e9eccbcd0f9c8895e7fca3d850e2f1db1669707b"
+                },
+                {
+                  "id": "span-rollback",
+                  "start": 79,
+                  "end": 173,
+                  "exact_text_sha256": "2b295c8e504f1356caca77090eee319469a21cb79ddf6d19bfd1f737925f593a"
+                },
+                {
+                  "id": "span-failure",
+                  "start": 174,
+                  "end": 269,
+                  "exact_text_sha256": "57d2f5ff8436a4d62c162ba31122265277c61cb1d42f8252cd274d18bcfabd0e"
+                }
+              ]
+            },
+            "goal": {
+              "id": "goal-export",
+              "statement": "Add --json to workspace stats export",
+              "source_span_ids": [
+                "span-export"
+              ]
+            },
+            "constraints": [
+              {
+                "id": "c-export",
+                "statement": "The --json export emits valid JSON while default output remains a human table.",
+                "source_span_ids": [
+                  "span-export"
+                ],
+                "key": "export",
+                "value": {
+                  "kind": "known",
+                  "value": true
+                },
+                "polarity": "positive"
+              },
+              {
+                "id": "c-rollback",
+                "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                "source_span_ids": [
+                  "span-rollback"
+                ],
+                "key": "rollback",
+                "value": {
+                  "kind": "known",
+                  "value": true
+                },
+                "polarity": "positive"
+              },
+              {
+                "id": "c-failure",
+                "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                "source_span_ids": [
+                  "span-failure"
+                ],
+                "key": "failure",
+                "value": {
+                  "kind": "known",
+                  "value": true
+                },
+                "polarity": "positive"
+              }
+            ],
+            "unknowns": [],
+            "acceptance_criteria": [
+              {
+                "id": "ac-export",
+                "statement": "The --json export emits valid JSON while default output remains a human table.",
+                "source_span_ids": [
+                  "span-export"
+                ],
+                "observable_outcome": "The --json export emits valid JSON while default output remains a human table.",
+                "oracle": "automated_test"
+              },
+              {
+                "id": "ac-rollback",
+                "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                "source_span_ids": [
+                  "span-rollback"
+                ],
+                "observable_outcome": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                "oracle": "automated_test"
+              },
+              {
+                "id": "ac-failure",
+                "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                "source_span_ids": [
+                  "span-failure"
+                ],
+                "observable_outcome": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                "oracle": "automated_test"
+              }
+            ]
+          }
+        }
+      },
+      "gold": {
+        "stratum": "silent_source_omission",
+        "missing_target": "security",
+        "expected_question_targets": [
+          "security"
+        ],
+        "expected_draft_inclusion": [
+          {
+            "id": "export",
+            "statement": "The --json export emits valid JSON while default output remains a human table."
+          },
+          {
+            "id": "rollback",
+            "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats."
+          },
+          {
+            "id": "security",
+            "statement": "Unauthenticated requests cannot export private workspace stats."
+          },
+          {
+            "id": "failure",
+            "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr."
+          }
+        ],
+        "readiness": "NEEDS_SPEC",
+        "rationale": "Export changes private-data/deployment/storage boundaries. security behavior is absent from source, claims and criteria; independently restored in corrected draft, not inferred from unknown markers.",
+        "silent_adjudication": "pending_chris",
+        "claim_support_challenges": {
+          "source_path": "evals/intake_support/v2/inputs/pairs.json",
+          "ids": [],
+          "status": "blocked_missing_omp631_v2"
+        }
+      }
+    },
+    {
+      "id": "silent-omitted-failure",
+      "provenance": {
+        "kind": "synthetic",
+        "source_path": "evals/nsi6/v1/inputs/cases.json",
+        "source_case_id": "silent-omitted-failure",
+        "original_request": "The --json export emits valid JSON while default output remains a human table.\nIf deployment is reverted, the previous exporter remains usable without changing stored stats.\nUnauthenticated requests cannot export private workspace stats.\nA storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+        "source_origin": {
+          "kind": "mutation",
+          "base_case_id": "ready-complete",
+          "mutations": [
+            {
+              "path": [
+                "bounded",
+                "draft",
+                "source"
+              ],
+              "before": {
+                "text": "The --json export emits valid JSON while default output remains a human table.\nIf deployment is reverted, the previous exporter remains usable without changing stored stats.\nUnauthenticated requests cannot export private workspace stats.\nA storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                "sha256": "416362b201fc9b81cf1152f6bc2550ecab2d6e1a5bd51368e395c6f0ebecd263",
+                "spans": [
+                  {
+                    "id": "span-export",
+                    "start": 0,
+                    "end": 78,
+                    "exact_text_sha256": "c5989777e0e6f747ca44bd10e9eccbcd0f9c8895e7fca3d850e2f1db1669707b"
+                  },
+                  {
+                    "id": "span-rollback",
+                    "start": 79,
+                    "end": 173,
+                    "exact_text_sha256": "2b295c8e504f1356caca77090eee319469a21cb79ddf6d19bfd1f737925f593a"
+                  },
+                  {
+                    "id": "span-security",
+                    "start": 174,
+                    "end": 237,
+                    "exact_text_sha256": "6650c681c3ab6b5a126311ace77a8c9d6bec38511a702ca74e4d2a86f3e40bf4"
+                  },
+                  {
+                    "id": "span-failure",
+                    "start": 238,
+                    "end": 333,
+                    "exact_text_sha256": "57d2f5ff8436a4d62c162ba31122265277c61cb1d42f8252cd274d18bcfabd0e"
+                  }
+                ]
+              },
+              "after": {
+                "text": "The --json export emits valid JSON while default output remains a human table.\nIf deployment is reverted, the previous exporter remains usable without changing stored stats.\nUnauthenticated requests cannot export private workspace stats.",
+                "sha256": "42b986bf4c3d0303eca948a87db73d265ca6e99d6818510175edd6b056203e40",
+                "spans": [
+                  {
+                    "id": "span-export",
+                    "start": 0,
+                    "end": 78,
+                    "exact_text_sha256": "c5989777e0e6f747ca44bd10e9eccbcd0f9c8895e7fca3d850e2f1db1669707b"
+                  },
+                  {
+                    "id": "span-rollback",
+                    "start": 79,
+                    "end": 173,
+                    "exact_text_sha256": "2b295c8e504f1356caca77090eee319469a21cb79ddf6d19bfd1f737925f593a"
+                  },
+                  {
+                    "id": "span-security",
+                    "start": 174,
+                    "end": 237,
+                    "exact_text_sha256": "6650c681c3ab6b5a126311ace77a8c9d6bec38511a702ca74e4d2a86f3e40bf4"
+                  }
+                ]
+              }
+            },
+            {
+              "path": [
+                "bounded",
+                "draft",
+                "constraints"
+              ],
+              "before": [
+                {
+                  "id": "c-export",
+                  "statement": "The --json export emits valid JSON while default output remains a human table.",
+                  "source_span_ids": [
+                    "span-export"
+                  ],
+                  "key": "export",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-rollback",
+                  "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "source_span_ids": [
+                    "span-rollback"
+                  ],
+                  "key": "rollback",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-security",
+                  "statement": "Unauthenticated requests cannot export private workspace stats.",
+                  "source_span_ids": [
+                    "span-security"
+                  ],
+                  "key": "security",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-failure",
+                  "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "source_span_ids": [
+                    "span-failure"
+                  ],
+                  "key": "failure",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                }
+              ],
+              "after": [
+                {
+                  "id": "c-export",
+                  "statement": "The --json export emits valid JSON while default output remains a human table.",
+                  "source_span_ids": [
+                    "span-export"
+                  ],
+                  "key": "export",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-rollback",
+                  "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "source_span_ids": [
+                    "span-rollback"
+                  ],
+                  "key": "rollback",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                },
+                {
+                  "id": "c-security",
+                  "statement": "Unauthenticated requests cannot export private workspace stats.",
+                  "source_span_ids": [
+                    "span-security"
+                  ],
+                  "key": "security",
+                  "value": {
+                    "kind": "known",
+                    "value": true
+                  },
+                  "polarity": "positive"
+                }
+              ]
+            },
+            {
+              "path": [
+                "bounded",
+                "draft",
+                "acceptance_criteria"
+              ],
+              "before": [
+                {
+                  "id": "ac-export",
+                  "statement": "The --json export emits valid JSON while default output remains a human table.",
+                  "source_span_ids": [
+                    "span-export"
+                  ],
+                  "observable_outcome": "The --json export emits valid JSON while default output remains a human table.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-rollback",
+                  "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "source_span_ids": [
+                    "span-rollback"
+                  ],
+                  "observable_outcome": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-security",
+                  "statement": "Unauthenticated requests cannot export private workspace stats.",
+                  "source_span_ids": [
+                    "span-security"
+                  ],
+                  "observable_outcome": "Unauthenticated requests cannot export private workspace stats.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-failure",
+                  "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "source_span_ids": [
+                    "span-failure"
+                  ],
+                  "observable_outcome": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr.",
+                  "oracle": "automated_test"
+                }
+              ],
+              "after": [
+                {
+                  "id": "ac-export",
+                  "statement": "The --json export emits valid JSON while default output remains a human table.",
+                  "source_span_ids": [
+                    "span-export"
+                  ],
+                  "observable_outcome": "The --json export emits valid JSON while default output remains a human table.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-rollback",
+                  "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "source_span_ids": [
+                    "span-rollback"
+                  ],
+                  "observable_outcome": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                  "oracle": "automated_test"
+                },
+                {
+                  "id": "ac-security",
+                  "statement": "Unauthenticated requests cannot export private workspace stats.",
+                  "source_span_ids": [
+                    "span-security"
+                  ],
+                  "observable_outcome": "Unauthenticated requests cannot export private workspace stats.",
+                  "oracle": "automated_test"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "input": {
+        "request": "The --json export emits valid JSON while default output remains a human table.\nIf deployment is reverted, the previous exporter remains usable without changing stored stats.\nUnauthenticated requests cannot export private workspace stats.",
+        "evidence": {
+          "draft": {
+            "archetype": "small_code_change",
+            "source": {
+              "text": "The --json export emits valid JSON while default output remains a human table.\nIf deployment is reverted, the previous exporter remains usable without changing stored stats.\nUnauthenticated requests cannot export private workspace stats.",
+              "sha256": "42b986bf4c3d0303eca948a87db73d265ca6e99d6818510175edd6b056203e40",
+              "spans": [
+                {
+                  "id": "span-export",
+                  "start": 0,
+                  "end": 78,
+                  "exact_text_sha256": "c5989777e0e6f747ca44bd10e9eccbcd0f9c8895e7fca3d850e2f1db1669707b"
+                },
+                {
+                  "id": "span-rollback",
+                  "start": 79,
+                  "end": 173,
+                  "exact_text_sha256": "2b295c8e504f1356caca77090eee319469a21cb79ddf6d19bfd1f737925f593a"
+                },
+                {
+                  "id": "span-security",
+                  "start": 174,
+                  "end": 237,
+                  "exact_text_sha256": "6650c681c3ab6b5a126311ace77a8c9d6bec38511a702ca74e4d2a86f3e40bf4"
+                }
+              ]
+            },
+            "goal": {
+              "id": "goal-export",
+              "statement": "Add --json to workspace stats export",
+              "source_span_ids": [
+                "span-export"
+              ]
+            },
+            "constraints": [
+              {
+                "id": "c-export",
+                "statement": "The --json export emits valid JSON while default output remains a human table.",
+                "source_span_ids": [
+                  "span-export"
+                ],
+                "key": "export",
+                "value": {
+                  "kind": "known",
+                  "value": true
+                },
+                "polarity": "positive"
+              },
+              {
+                "id": "c-rollback",
+                "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                "source_span_ids": [
+                  "span-rollback"
+                ],
+                "key": "rollback",
+                "value": {
+                  "kind": "known",
+                  "value": true
+                },
+                "polarity": "positive"
+              },
+              {
+                "id": "c-security",
+                "statement": "Unauthenticated requests cannot export private workspace stats.",
+                "source_span_ids": [
+                  "span-security"
+                ],
+                "key": "security",
+                "value": {
+                  "kind": "known",
+                  "value": true
+                },
+                "polarity": "positive"
+              }
+            ],
+            "unknowns": [],
+            "acceptance_criteria": [
+              {
+                "id": "ac-export",
+                "statement": "The --json export emits valid JSON while default output remains a human table.",
+                "source_span_ids": [
+                  "span-export"
+                ],
+                "observable_outcome": "The --json export emits valid JSON while default output remains a human table.",
+                "oracle": "automated_test"
+              },
+              {
+                "id": "ac-rollback",
+                "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                "source_span_ids": [
+                  "span-rollback"
+                ],
+                "observable_outcome": "If deployment is reverted, the previous exporter remains usable without changing stored stats.",
+                "oracle": "automated_test"
+              },
+              {
+                "id": "ac-security",
+                "statement": "Unauthenticated requests cannot export private workspace stats.",
+                "source_span_ids": [
+                  "span-security"
+                ],
+                "observable_outcome": "Unauthenticated requests cannot export private workspace stats.",
+                "oracle": "automated_test"
+              }
+            ]
+          }
+        }
+      },
+      "gold": {
+        "stratum": "silent_source_omission",
+        "missing_target": "failure",
+        "expected_question_targets": [
+          "failure"
+        ],
+        "expected_draft_inclusion": [
+          {
+            "id": "export",
+            "statement": "The --json export emits valid JSON while default output remains a human table."
+          },
+          {
+            "id": "rollback",
+            "statement": "If deployment is reverted, the previous exporter remains usable without changing stored stats."
+          },
+          {
+            "id": "security",
+            "statement": "Unauthenticated requests cannot export private workspace stats."
+          },
+          {
+            "id": "failure",
+            "statement": "A storage read failure exits nonzero, emits no partial JSON, and reports the failure on stderr."
+          }
+        ],
+        "readiness": "NEEDS_SPEC",
+        "rationale": "Export changes private-data/deployment/storage boundaries. failure behavior is absent from source, claims and criteria; independently restored in corrected draft, not inferred from unknown markers.",
+        "silent_adjudication": "pending_chris",
+        "claim_support_challenges": {
+          "source_path": "evals/intake_support/v2/inputs/pairs.json",
+          "ids": [],
+          "status": "blocked_missing_omp631_v2"
+        }
+      }
+    }
+  ],
+  "real_history_slots": [
+    {
+      "id": "chris-history-01",
+      "status": "awaiting_chris",
+      "provenance": {
+        "kind": "unfilled_real_history",
+        "source_record": null,
+        "request_author": null,
+        "requested_at": null,
+        "supplied_by": null,
+        "original_request": null,
+        "redactions": [],
+        "mutations": []
+      },
+      "input": null,
+      "gold": null
+    },
+    {
+      "id": "chris-history-02",
+      "status": "awaiting_chris",
+      "provenance": {
+        "kind": "unfilled_real_history",
+        "source_record": null,
+        "request_author": null,
+        "requested_at": null,
+        "supplied_by": null,
+        "original_request": null,
+        "redactions": [],
+        "mutations": []
+      },
+      "input": null,
+      "gold": null
+    },
+    {
+      "id": "chris-history-03",
+      "status": "awaiting_chris",
+      "provenance": {
+        "kind": "unfilled_real_history",
+        "source_record": null,
+        "request_author": null,
+        "requested_at": null,
+        "supplied_by": null,
+        "original_request": null,
+        "redactions": [],
+        "mutations": []
+      },
+      "input": null,
+      "gold": null
+    },
+    {
+      "id": "chris-history-04",
+      "status": "awaiting_chris",
+      "provenance": {
+        "kind": "unfilled_real_history",
+        "source_record": null,
+        "request_author": null,
+        "requested_at": null,
+        "supplied_by": null,
+        "original_request": null,
+        "redactions": [],
+        "mutations": []
+      },
+      "input": null,
+      "gold": null
+    },
+    {
+      "id": "chris-history-05",
+      "status": "awaiting_chris",
+      "provenance": {
+        "kind": "unfilled_real_history",
+        "source_record": null,
+        "request_author": null,
+        "requested_at": null,
+        "supplied_by": null,
+        "original_request": null,
+        "redactions": [],
+        "mutations": []
+      },
+      "input": null,
+      "gold": null
+    }
+  ]
+}
