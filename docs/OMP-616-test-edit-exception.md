@@ -1,0 +1,1 @@
+Chris approves OMP-616: replace fixed-parent temp setup with mkdtemp/mkdtempSync in packages/utils/test/{dirs-python-gateway,profiles,spacing}.test.ts and packages/coding-agent/test/{settings-reload-cwd,lsp-format-options}.test.ts. Remove redundant root mkdir and unused imports only. No assertions, test names or counts change.
