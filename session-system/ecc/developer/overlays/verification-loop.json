@@ -1,0 +1,338 @@
+{
+  "schemaVersion": 1,
+  "assetId": "ecc-wp3-verification-loop",
+  "upstreamPath": "skills/verification-loop/SKILL.md",
+  "upstreamSha256": "f0d56107f79e607d4de6c5543b8edfb1b58ab9ae4019b39831689cd91116543e",
+  "adaptedSha256": "fced0f1b5ec6cbc3ffdc057c1b1422087646006ead14fa9587e5cff7f185ebbc",
+  "edits": [
+    {
+      "reason": "Replace Claude-specific config, helper paths, and absent surfaces with OMP equivalents",
+      "find": [
+        "name: verification-loop",
+        "description: \"A comprehensive verification system for Claude Code sessions. Use when verifying a Claude Code session's work before claiming it is complete.\""
+      ],
+      "replace": [
+        "name: verification-loop",
+        "description: \"Focused verification of a coding session's work against the checks its approved scope names. Use when verifying work before claiming it is complete.\""
+      ]
+    },
+    {
+      "reason": "Replace Claude-specific config, helper paths, and absent surfaces with OMP equivalents",
+      "find": [
+        "",
+        "A comprehensive verification system for Claude Code sessions."
+      ],
+      "replace": [
+        "",
+        "A focused verification loop for omp coding sessions. The approved scope supplies the checks; run those with the project's own runners and report what actually ran."
+      ]
+    },
+    {
+      "reason": "Drop PR and quality-gate triggers; the approved scope supplies the checks",
+      "find": [
+        "- After completing a feature or significant code change",
+        "- Before creating a PR",
+        "- When you want to ensure quality gates pass"
+      ],
+      "replace": [
+        "- After completing a feature or significant code change",
+        "- When the approved scope's checks need to run against the candidate"
+      ]
+    },
+    {
+      "reason": "Use project runners; OMP uses bun check, focused bun test, and bun run test:rs",
+      "find": [
+        "",
+        "### Phase 1: Build Verification",
+        "```bash",
+        "# Check if project builds",
+        "npm run build 2>&1 | tail -20",
+        "# OR",
+        "pnpm build 2>&1 | tail -20",
+        "```"
+      ],
+      "replace": [
+        "",
+        "Run the phases the approved scope names, in order, with the project's own runners. Stop and fix at the first failing phase. Resolve commands from the project's scripts, lockfile, and AGENTS.md; do not assume a package manager."
+      ]
+    },
+    {
+      "reason": "Use project runners; OMP uses bun check, focused bun test, and bun run test:rs",
+      "find": [
+        "",
+        "If build fails, STOP and fix before continuing.",
+        "",
+        "### Phase 2: Type Check",
+        "```bash",
+        "set -o pipefail",
+        "# TypeScript projects",
+        "npx --no-install tsc --noEmit 2>&1 | head -30"
+      ],
+      "replace": [
+        "",
+        "In the OMP repository: `bun check` for types and lint (never `tsc`), `bun run test:rs` for Rust, and `bun test <file>` for the focused TypeScript tests of the changed area. Do not run the full suite or a gate script unless the scope names it."
+      ]
+    },
+    {
+      "reason": "Use project runners; OMP uses bun check, focused bun test, and bun run test:rs",
+      "find": [
+        "",
+        "# Python projects",
+        "pyright . 2>&1 | head -30",
+        "```"
+      ],
+      "replace": [
+        "",
+        "### Phase 1: Build",
+        "Run the project's build command if the scope names one and keep the tail of the output."
+      ]
+    },
+    {
+      "reason": "Focus verification on the approved scope's checks and report only what ran",
+      "find": [
+        "",
+        "Report all type errors. Fix critical ones before continuing."
+      ],
+      "replace": [
+        "",
+        "If the build fails, STOP and fix before continuing."
+      ]
+    },
+    {
+      "reason": "Focus verification on the approved scope's checks and report only what ran",
+      "find": [
+        "",
+        "### Phase 3: Lint Check"
+      ],
+      "replace": [
+        "",
+        "### Phase 2: Types and Lint"
+      ]
+    },
+    {
+      "reason": "Use project runners; OMP uses bun check, focused bun test, and bun run test:rs",
+      "find": [
+        "```bash",
+        "# JavaScript/TypeScript",
+        "npm run lint 2>&1 | head -30",
+        "",
+        "# Python",
+        "ruff check . 2>&1 | head -30"
+      ],
+      "replace": [
+        "```bash",
+        "set -o pipefail",
+        "bun check 2>&1 | head -30"
+      ]
+    },
+    {
+      "reason": "Remove coverage targets; the approved scope supplies the checks",
+      "find": [
+        "",
+        "### Phase 4: Test Suite",
+        "```bash",
+        "# Run tests with coverage",
+        "npm run test -- --coverage 2>&1 | tail -50"
+      ],
+      "replace": [
+        "",
+        "Other projects: the type checker and linter their own scripts define (for example `pyright .` and `ruff check .` for Python). Report all errors. Fix critical ones before continuing."
+      ]
+    },
+    {
+      "reason": "Remove coverage targets; the approved scope supplies the checks",
+      "find": [
+        "",
+        "# Check coverage threshold",
+        "# Target: 80% minimum"
+      ],
+      "replace": [
+        "",
+        "### Phase 3: Focused Tests",
+        "```bash",
+        "bun test path/to/changed.test.ts 2>&1 | tail -50"
+      ]
+    },
+    {
+      "reason": "Focus verification on the approved scope's checks and report only what ran",
+      "find": [
+        "",
+        "Report:",
+        "- Total tests: X"
+      ],
+      "replace": [
+        "",
+        "Run the test files that cover the change, not the whole suite. Report:",
+        "- Tests run: X"
+      ]
+    },
+    {
+      "reason": "Remove coverage targets; the approved scope supplies the checks",
+      "find": [
+        "- Failed: X",
+        "- Coverage: X%"
+      ],
+      "replace": [
+        "- Failed: X"
+      ]
+    },
+    {
+      "reason": "Focus verification on the approved scope's checks and report only what ran",
+      "find": [
+        "",
+        "### Phase 5: Security Scan"
+      ],
+      "replace": [
+        "",
+        "### Phase 4: Security Scan"
+      ]
+    },
+    {
+      "reason": "Remove git checkpoints, commits, and pushes",
+      "find": [
+        "```bash",
+        "# Check for secrets",
+        "grep -rn \"sk-\" --include=\"*.ts\" --include=\"*.js\" . 2>/dev/null | head -10",
+        "grep -rn \"api_key\" --include=\"*.ts\" --include=\"*.js\" . 2>/dev/null | head -10",
+        "",
+        "# Check for console.log",
+        "grep -rn \"console.log\" --include=\"*.ts\" --include=\"*.tsx\" src/ 2>/dev/null | head -10"
+      ],
+      "replace": [
+        "```bash",
+        "# Changed files only",
+        "git diff --name-only | xargs -r grep -nE \"sk-|api_key\" 2>/dev/null | head -10",
+        "git diff --name-only | xargs -r grep -n \"console.log\" 2>/dev/null | head -10"
+      ]
+    },
+    {
+      "reason": "Focus verification on the approved scope's checks and report only what ran",
+      "find": [
+        "",
+        "### Phase 6: Diff Review"
+      ],
+      "replace": [
+        "",
+        "### Phase 5: Diff Review"
+      ]
+    },
+    {
+      "reason": "Remove git checkpoints, commits, and pushes",
+      "find": [
+        "# Show what changed"
+      ],
+      "replace": [
+        "# Show what changed",
+        "git status --short"
+      ]
+    },
+    {
+      "reason": "Remove git checkpoints, commits, and pushes",
+      "find": [
+        "git diff --stat",
+        "git diff HEAD~1 --name-only"
+      ],
+      "replace": [
+        "git diff --stat"
+      ]
+    },
+    {
+      "reason": "Focus verification on the approved scope's checks and report only what ran",
+      "find": [
+        "",
+        "After running all phases, produce a verification report:"
+      ],
+      "replace": [
+        "",
+        "After the phases run, report only what ran:"
+      ]
+    },
+    {
+      "reason": "Focus verification on the approved scope's checks and report only what ran",
+      "find": [
+        "```",
+        "VERIFICATION REPORT",
+        "=================="
+      ],
+      "replace": [
+        "```",
+        "VERIFICATION",
+        "============"
+      ]
+    },
+    {
+      "reason": "Align wording with the scoped, evidence-based OMP flow",
+      "find": [
+        "",
+        "Build:     [PASS/FAIL]"
+      ],
+      "replace": [
+        "",
+        "Build:     [PASS/FAIL/NOT RUN]"
+      ]
+    },
+    {
+      "reason": "Remove coverage targets; the approved scope supplies the checks",
+      "find": [
+        "Lint:      [PASS/FAIL] (X warnings)",
+        "Tests:     [PASS/FAIL] (X/Y passed, Z% coverage)"
+      ],
+      "replace": [
+        "Lint:      [PASS/FAIL] (X warnings)",
+        "Tests:     [PASS/FAIL] (X/Y passed)"
+      ]
+    },
+    {
+      "reason": "Focus verification on the approved scope's checks and report only what ran",
+      "find": [
+        "",
+        "Overall:   [READY/NOT READY] for PR"
+      ],
+      "replace": [
+        "",
+        "Overall:   [PASS/NOT PASS] against the approved scope"
+      ]
+    },
+    {
+      "reason": "Replace Claude-specific config, helper paths, and absent surfaces with OMP equivalents",
+      "find": [
+        "2. ...",
+        "```",
+        ""
+      ],
+      "replace": [
+        "2. ...",
+        "```",
+        "",
+        "## Evidence and Completion",
+        "",
+        "Post the report as the candidate's check evidence: `work action:\"append_evidence\"` with `kind:\"verification\"` during `/summary`. Independent review stays with the existing `run_audit` auditor; this loop adds no reviewer and no gate. Only the owner's `/done` closes the item.",
+        "",
+        "If a check method misled you, log an observation in `~/.agents/skill-observations/log.md`. Observations are never promoted to rules automatically.",
+        ""
+      ]
+    },
+    {
+      "reason": "Focus verification on the approved scope's checks and report only what ran",
+      "find": [
+        "",
+        "For long sessions, run verification every 15 minutes or after major changes:"
+      ],
+      "replace": [
+        "",
+        "For long sessions, rerun the focused check for the changed area after each coherent change:"
+      ]
+    },
+    {
+      "reason": "Align wording with the scoped, evidence-based OMP flow",
+      "find": [
+        "- Before moving to next task",
+        "",
+        "Run: /verify"
+      ],
+      "replace": [
+        "- Before moving to next task"
+      ]
+    }
+  ]
+}

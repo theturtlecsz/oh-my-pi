@@ -1,0 +1,150 @@
+[
+  {
+    "id": "ecc-wp3-search-first",
+    "pack": "engineering",
+    "upstream": {
+      "repository": "https://github.com/affaan-m/ECC.git",
+      "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+      "path": "skills/search-first/SKILL.md",
+      "sha256": "d66d744228b9cf860acf35f8a90cbbe8195e61367860da9d3632f9fc65706733"
+    },
+    "target": {
+      "path": ".omp/rules/ecc-wp3-search-first.md",
+      "scope": "project"
+    },
+    "adaptation": {
+      "kind": "rule-metadata",
+      "transformVersion": 1,
+      "overlay": "developer/overlays/search-first.json"
+    },
+    "activation": {
+      "state": "inactive",
+      "mode": "rulebook",
+      "description": "Research reuse candidates before custom implementation; record inspected, adopted and custom rationale in native intake and plan."
+    },
+    "dependencies": [],
+    "disposition": "supported-with-adaptation",
+    "reason": "Apply complete-source overlay before native rule metadata translation. Replaces researcher/Agent interfaces and Claude paths with granted OMP discovery tools. Research comparison and adopt/extend/compose/build decisions live in native intake Decisions and approved plan; no helper dependencies remain.",
+    "qualification": {
+      "mechanicalTests": [
+        "session-system/tests/ecc-wp3-planning.test.ts"
+      ],
+      "behavioralTrial": null,
+      "qualifiedRelease": null
+    },
+    "rollback": {
+      "removeOwnedArtifactOnly": true
+    }
+  },
+  {
+    "id": "ecc-wp3-intent-driven-development",
+    "pack": "engineering",
+    "upstream": {
+      "repository": "https://github.com/affaan-m/ECC.git",
+      "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+      "path": "skills/intent-driven-development/SKILL.md",
+      "sha256": "e34045f7b3bf6a6fbd364f85c7bc81d8208e18bb929ceff80bbc987f78aadea8"
+    },
+    "target": {
+      "path": ".omp/rules/ecc-wp3-intent-driven-development.md",
+      "scope": "project"
+    },
+    "adaptation": {
+      "kind": "rule-metadata",
+      "transformVersion": 1,
+      "overlay": "developer/overlays/intent-driven-development.json"
+    },
+    "activation": {
+      "state": "inactive",
+      "mode": "rulebook",
+      "description": "Clarify observable acceptance criteria, assumptions and relevant risks within native intake and plan."
+    },
+    "dependencies": [],
+    "disposition": "supported-with-adaptation",
+    "reason": "Apply complete-source overlay before native rule metadata translation. Moves quick/full acceptance criteria, revisions and risk evidence into native intake and approved plan records. Removes separate acceptance files and additional confirmation gates; no template or helper dependency remains.",
+    "qualification": {
+      "mechanicalTests": [
+        "session-system/tests/ecc-wp3-planning.test.ts"
+      ],
+      "behavioralTrial": null,
+      "qualifiedRelease": null
+    },
+    "rollback": {
+      "removeOwnedArtifactOnly": true
+    }
+  },
+  {
+    "id": "ecc-wp3-contract-first",
+    "pack": "engineering",
+    "upstream": {
+      "repository": "https://github.com/affaan-m/ECC.git",
+      "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+      "path": "skills/contract-first/SKILL.md",
+      "sha256": "dc23ee49437e4d914ea9a9e37eec0dfe59dc16b11fcbc3a6e5c72f25dbd3cc5c"
+    },
+    "target": {
+      "path": ".omp/rules/ecc-wp3-contract-first.md",
+      "scope": "project"
+    },
+    "adaptation": {
+      "kind": "rule-metadata",
+      "transformVersion": 1,
+      "overlay": "developer/overlays/contract-first.json"
+    },
+    "activation": {
+      "state": "inactive",
+      "mode": "rulebook",
+      "description": "Plan consumer/provider boundaries with one authoritative schema and serialized contract verification."
+    },
+    "dependencies": [],
+    "disposition": "supported-with-adaptation",
+    "reason": "Apply complete-source overlay before native rule metadata translation. Retains one authoritative repository schema and consumer/provider verification. Removes related-skill dependencies and assumed generator commands; boundary details live in the approved native plan under existing authority.",
+    "qualification": {
+      "mechanicalTests": [
+        "session-system/tests/ecc-wp3-planning.test.ts"
+      ],
+      "behavioralTrial": null,
+      "qualifiedRelease": null
+    },
+    "rollback": {
+      "removeOwnedArtifactOnly": true
+    }
+  },
+  {
+    "id": "ecc-wp3-product-capability",
+    "pack": "engineering",
+    "upstream": {
+      "repository": "https://github.com/affaan-m/ECC.git",
+      "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+      "path": "skills/product-capability/SKILL.md",
+      "sha256": "c26114356edb15f0340e5af66b6f4444892bdf376b053a7152312fd04d22aced"
+    },
+    "target": {
+      "path": ".omp/rules/ecc-wp3-product-capability.md",
+      "scope": "project"
+    },
+    "adaptation": {
+      "kind": "rule-metadata",
+      "transformVersion": 1,
+      "overlay": "developer/overlays/product-capability.json"
+    },
+    "activation": {
+      "state": "inactive",
+      "mode": "rulebook",
+      "description": "Translate product intent into constraints, invariants, interfaces and readiness in native intake and plan."
+    },
+    "dependencies": [],
+    "disposition": "supported-with-adaptation",
+    "reason": "Apply complete-source overlay before native rule metadata translation. Replaces capability manifest/template and ECC lane dependencies with native intake constraints and approved plan implementation contracts. Existing product artifacts are optional evidence, not new required files.",
+    "qualification": {
+      "mechanicalTests": [
+        "session-system/tests/ecc-wp3-planning.test.ts"
+      ],
+      "behavioralTrial": null,
+      "qualifiedRelease": null
+    },
+    "rollback": {
+      "removeOwnedArtifactOnly": true
+    }
+  }
+]
