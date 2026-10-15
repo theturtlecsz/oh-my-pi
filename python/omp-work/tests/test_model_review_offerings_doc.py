@@ -18,6 +18,16 @@ path, a path on an ``omp-cli`` lane, a discovery proof that is not a fresh
 provider read, a retrieval timestamp that is not UTC — a reader copies a
 capture the timer refuses or the check leaves unchecked, while the doc still
 shows it as the format. The tests parse every json block in the section.
+
+OMP-615-s09-s05-s05: the section documents the ``offerings-notices.v1`` capture
+format. If the notices example drifts from ``parse_notices`` — a lane missing from
+``providers``, a missing notices or status dimension, invalid coverage or notice
+type, a non-UTC timestamp, an items key present when not published, or a status
+value present when not published — a reader copies a notices capture the check
+leaves unchecked or refuses as malformed. The tests parse the notices json block,
+assert providers keys match the documented sources lanes, verify at least one
+dimension is not_published with items/value None, and verify at least one checked
+notices dimension carries an item.
 """
 
 from __future__ import annotations
@@ -36,7 +46,12 @@ from omp_work.__main__ import main
 from omp_work.operations.offerings_timer import install_timer
 from omp_work.operations.stop import default_systemd_dir
 from omp_work.routing.offerings_evaluation import default_record_dir
-from omp_work.routing.offerings_inputs import OfferingsInputError, parse_listing, parse_sources
+from omp_work.routing.offerings_inputs import (
+    OfferingsInputError,
+    parse_listing,
+    parse_notices,
+    parse_sources,
+)
 
 from test_offerings_evaluation_cli import install_stub, now, records_of, write_captures
 
@@ -241,14 +256,23 @@ def test_documented_captures_parse_and_install_timer_accepts_the_sources(tmp_pat
     blocks = _json_blocks(_section(_DOC.read_text(encoding="utf-8"), _SECTION))
     sources_raw: list[str] = []
     listings_raw: list[str] = []
+    notices_raw: list[str] = []
     for block in blocks:
         try:
             parse_sources(block)
         except OfferingsInputError:
-            listings_raw.append(block)
+            pass
         else:
             sources_raw.append(block)
+            continue
+        try:
+            parse_notices(block)
+        except OfferingsInputError:
+            listings_raw.append(block)
+        else:
+            notices_raw.append(block)
     assert len(sources_raw) == 1
+    assert len(notices_raw) == 1
     sources = parse_sources(sources_raw[0])
     assert {lane.kind for lane in sources.lanes.values()} == {"omp-cli", "listing-file"}
 
@@ -295,3 +319,81 @@ def test_documented_captures_parse_and_install_timer_accepts_the_sources(tmp_pat
             assert listing.provenance["success"] is True
             assert listing.provenance["retrieved_at"].utcoffset() == timedelta(0)
     assert used == set(range(len(listings_raw)))
+
+
+def test_notices_rules_name_the_coverage_and_the_gap_cases():
+    prose = _prose(_section(_DOC.read_text(encoding="utf-8"), _SECTION))
+    for phrase in (
+        "offerings-notices.v1",
+        "The owner refreshes every lane's notices and status daily from the provider's public pages,",
+        "writes `not_published` with a fresh source and `retrieved_at`, so absence stays dated evidence;",
+        "the timer never refreshes captures.",
+        "leaves that lane unchecked (`check_gap`).",
+    ):
+        assert phrase in prose, phrase
+    for token in (
+        "lane missing from the capture",
+        "missing notices or status dimension",
+        "unreadable or malformed notices file",
+        "over 36h before the check or future-dated",
+    ):
+        assert token in prose, token
+
+
+def test_documented_notices_parse_and_cover_the_sources_lanes():
+    blocks = _json_blocks(_section(_DOC.read_text(encoding="utf-8"), _SECTION))
+    sources_raw: list[str] = []
+    notices_raw: list[str] = []
+    for block in blocks:
+        try:
+            parse_sources(block)
+        except OfferingsInputError:
+            pass
+        else:
+            sources_raw.append(block)
+            continue
+        try:
+            parse_notices(block)
+        except OfferingsInputError:
+            pass
+        else:
+            notices_raw.append(block)
+    assert len(sources_raw) == 1
+    assert len(notices_raw) == 1
+
+    sources = parse_sources(sources_raw[0])
+    notices = parse_notices(notices_raw[0])
+
+    assert set(notices.providers.keys()) == set(sources.lanes.keys())
+
+    not_published_dims: list[object] = []
+    checked_items_count = 0
+
+    for lane_name, lane in notices.providers.items():
+        assert lane.notices is not None, f"lane {lane_name} missing notices dimension"
+        assert lane.status is not None, f"lane {lane_name} missing status dimension"
+
+        assert lane.notices.retrieved_at.utcoffset() == timedelta(0)
+        assert lane.notices.source
+        if lane.notices.coverage == "not_published":
+            assert lane.notices.items is None
+            not_published_dims.append(lane.notices)
+        elif lane.notices.coverage == "checked":
+            assert lane.notices.items is not None
+            checked_items_count += len(lane.notices.items)
+            for item in lane.notices.items:
+                assert item.model
+                assert item.type in {"retirement", "deprecation", "failure"}
+                assert item.url
+                assert item.published is not None
+
+        assert lane.status.retrieved_at.utcoffset() == timedelta(0)
+        assert lane.status.source
+        if lane.status.coverage == "not_published":
+            assert lane.status.value is None
+            not_published_dims.append(lane.status)
+        elif lane.status.coverage == "checked":
+            assert lane.status.value in {"operational", "degraded", "outage"}
+
+    assert len(not_published_dims) >= 1
+    assert checked_items_count >= 1

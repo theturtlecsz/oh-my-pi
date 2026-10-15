@@ -198,6 +198,77 @@ unreadable, or when `retrieved_at` is over 36h old or future-dated. A CLI
 lane's `fetchedAt` is held to that same age. The check never fabricates a
 time. Times come only from the capture or from `omp`.
 
+The notices capture at the path named by `--sources` is `offerings-notices.v1`.
+`version` is that literal. `providers` maps each lane name from the sources
+file (not its `catalog_provider`) to its covered dimensions: `notices` and
+`status`.
+
+A `notices` dimension records published retirement, deprecation, or service
+failure notices. `coverage` is `checked` or `not_published`. `source` names the
+public page inspected, and `retrieved_at` is an ISO-8601 UTC timestamp from the
+capture. When `checked`, `items` is an array of notice objects with `model`,
+`type` (`retirement`, `deprecation`, or `failure`), `url`, `published`
+(`YYYY-MM-DD`), and `effective` (`YYYY-MM-DD` or `null`). When `not_published`,
+the `items` key is absent.
+
+A `status` dimension records provider service health. `coverage` is `checked`
+or `not_published`. `source` names the provider status page, and `retrieved_at`
+is an ISO-8601 UTC timestamp from the capture. When `checked`, `value` is
+`operational`, `degraded`, or `outage`. When `not_published`, the `value` key is
+absent.
+
+A lane missing from the capture, a missing notices or status dimension, an
+unreadable or malformed notices file, or a dimension retrieved over 36h before
+the check or future-dated leaves that lane unchecked (`check_gap`). The owner
+refreshes every lane's notices and status daily from the provider's public pages,
+and where a provider publishes none writes `not_published` with a fresh source
+and `retrieved_at`, so absence stays dated evidence; the timer never refreshes
+captures.
+
+Shape example covering the documented `gemini_flash` and `kimi` lanes:
+
+```json
+{
+  "version": "offerings-notices.v1",
+  "providers": {
+    "gemini_flash": {
+      "notices": {
+        "coverage": "checked",
+        "source": "https://ai.google.dev/gemini-api/docs/models/gemini",
+        "retrieved_at": "2026-10-14T12:00:00Z",
+        "items": [
+          {
+            "model": "gemini-3.8-flash-high",
+            "type": "deprecation",
+            "url": "https://ai.google.dev/gemini-api/docs/deprecations",
+            "published": "2026-10-01",
+            "effective": "2026-12-01"
+          }
+        ]
+      },
+      "status": {
+        "coverage": "checked",
+        "source": "https://status.cloud.google.com",
+        "retrieved_at": "2026-10-14T12:00:00Z",
+        "value": "operational"
+      }
+    },
+    "kimi": {
+      "notices": {
+        "coverage": "not_published",
+        "source": "https://platform.moonshot.cn/docs",
+        "retrieved_at": "2026-10-14T12:00:00Z"
+      },
+      "status": {
+        "coverage": "not_published",
+        "source": "https://status.moonshot.cn",
+        "retrieved_at": "2026-10-14T12:00:00Z"
+      }
+    }
+  }
+}
+```
+
 ## Written rubric
 
 | Axis | Required evidence and decision |
