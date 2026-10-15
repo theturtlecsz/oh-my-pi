@@ -19,6 +19,7 @@ import tempfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
+from weakref import WeakKeyDictionary
 
 __all__ = [
     "COMMAND_TIMEOUT_SECONDS",
@@ -43,7 +44,6 @@ ROOT_PREFIX = "omp-skip-pg-"
 STORAGE_MODE = 0o755
 PROBE_NAME = ".omp-storage-probe"
 
-_ALLOCATION_MINT = object()
 
 REQUIRED_TOOLS: tuple[str, ...] = (
     "initdb",
@@ -280,26 +280,9 @@ def _rollback(path: Path, rmtree: Callable[[Path], None]) -> OSError | None:
     return None
 
 
-class _Allocation:
-    """Immutable identity of one factory allocation; its only mint is ``OwnedTemp.create``.
-
-    ``root`` is fixed at construction and ``consumed`` flips once, so cleanup authority
-    can neither be redirected nor replayed against a path that was later reused.
-    """
-
-    __slots__ = ("consumed", "root")
-
-    def __init__(self, mint: object, root: Path) -> None:
-        if mint is not _ALLOCATION_MINT:
-            raise TypeError("allocations are minted by OwnedTemp.create only")
-        object.__setattr__(self, "root", root)
-        object.__setattr__(self, "consumed", False)
-
-    def __setattr__(self, name: str, value: object) -> None:
-        if name == "consumed" and value is True and not self.consumed:
-            object.__setattr__(self, name, value)
-            return
-        raise AttributeError(f"_Allocation.{name} is read-only")
+# Factory authority lives outside handle fields: construction, reinitialization and
+# copying cannot register a root or restore a consumed entry. Paths are immutable.
+_OWNED_ROOTS: WeakKeyDictionary[OwnedTemp, Path] = WeakKeyDictionary()
 
 
 class OwnedTemp:
@@ -315,15 +298,10 @@ class OwnedTemp:
         root: Path,
         tmpdir: Path,
         basetemp: Path,
-        *,
-        _allocation: _Allocation | None = None,
     ) -> None:
         self._root = Path(root)
         self._tmpdir = Path(tmpdir)
         self._basetemp = Path(basetemp)
-        if _allocation is not None and not isinstance(_allocation, _Allocation):
-            raise TypeError("ownership is granted by OwnedTemp.create only")
-        self._allocation = _allocation
 
     @property
     def root(self) -> Path:
@@ -339,7 +317,7 @@ class OwnedTemp:
 
     @property
     def is_owned(self) -> bool:
-        return self._allocation is not None and not self._allocation.consumed
+        return self in _OWNED_ROOTS
 
     def __repr__(self) -> str:
         return f"OwnedTemp(root={self._root!r}, tmpdir={self._tmpdir!r}, basetemp={self._basetemp!r})"
@@ -408,12 +386,9 @@ class OwnedTemp:
                     stderr=str(failure),
                 ) from exc
             raise
-        return cls(
-            root=root,
-            tmpdir=tmpdir,
-            basetemp=basetemp,
-            _allocation=_Allocation(_ALLOCATION_MINT, root),
-        )
+        owned = cls(root=root, tmpdir=tmpdir, basetemp=basetemp)
+        _OWNED_ROOTS[owned] = root
+        return owned
 
     def cleanup(self, *, rmtree: Callable[[Path], None] = _remove_tree) -> None:
         """Remove the allocated root once; unowned or already-consumed handles do nothing.
@@ -422,18 +397,23 @@ class OwnedTemp:
         is already absent counts as removed. Real removal errors raise
         ``PrerequisiteError`` and leave authority intact for a retry.
         """
-        allocation = self._allocation
-        if allocation is None or allocation.consumed:
+        root = _OWNED_ROOTS.get(self)
+        if root is None:
             return
-        root = allocation.root
         try:
             rmtree(root)
         except OSError as exc:
-            if not os.path.lexists(root):
-                allocation.consumed = True
+            try:
+                root.lstat()
+            except FileNotFoundError:
+                del _OWNED_ROOTS[self]
                 return
+            except OSError:
+                # Inspection failure does not establish absence. Preserve removal's
+                # original OS error, including its exception chain.
+                pass
             raise _operation_error("remove", root, exc) from exc
-        allocation.consumed = True
+        del _OWNED_ROOTS[self]
 
     def env(self) -> dict[str, str]:
         """Environment exposing this root's ``TMPDIR``; merge into a spawned child's env."""

@@ -469,9 +469,11 @@ def test_reassignment_and_copies_cannot_redirect_or_duplicate_authority(tmp_path
         for dup in (copy.copy(owned), copy.deepcopy(owned)):
             dup.cleanup()
             assert owned.is_owned
-        assert owned._allocation is not None
-        with pytest.raises(AttributeError):
-            owned._allocation.root = sentinel  # type: ignore[misc]
+        # Even a copied field dictionary cannot mint factory authority.
+        forged = sap.OwnedTemp(sentinel, sentinel, sentinel)
+        forged.__dict__.update(owned.__dict__)
+        forged.cleanup()
+        assert owned.is_owned
         removed: list[Path] = []
         owned.cleanup(rmtree=lambda p: (removed.append(p), shutil.rmtree(p))[1])
         assert sentinel.is_dir()
@@ -526,6 +528,68 @@ def test_cleanup_removal_error_surfaces_chained_and_keeps_authority(tmp_path: Pa
         assert "remove" in err.detail and str(owned.root) in err.detail and "device busy" in err.detail
         assert isinstance(err.__cause__, OSError)
         assert owned.root.exists() and owned.is_owned
+        owned.cleanup()
+        assert not owned.root.exists()
+    finally:
+        shutil.rmtree(owned.root, ignore_errors=True)
+
+
+@pytest.mark.parametrize("consumed", [False, True])
+def test_reinitialization_cannot_redirect_or_rearm_cleanup(tmp_path: Path, consumed: bool) -> None:
+    owned = make_owned(tmp_path)
+    root = owned.root
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    (unrelated / "sentinel").write_text("keep")
+    try:
+        if consumed:
+            owned.cleanup()
+            root.mkdir()
+            (root / "sentinel").write_text("reused")
+        owned.__init__(unrelated, unrelated, unrelated)
+        calls: list[Path] = []
+
+        def remove(path: Path) -> None:
+            calls.append(path)
+            shutil.rmtree(path)
+
+        owned.cleanup(rmtree=remove)
+        assert (unrelated / "sentinel").read_text() == "keep"
+        if consumed:
+            assert calls == []
+            assert (root / "sentinel").read_text() == "reused"
+        else:
+            assert calls == [root]
+            assert not root.exists()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_cleanup_inspection_permission_error_preserves_removal_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owned = make_owned(tmp_path)
+    removal_error = PermissionError(errno.EACCES, "removal denied", str(owned.root))
+    original_lstat = Path.lstat
+
+    def denied(path: Path, *args: Any, **kwargs: Any) -> os.stat_result:
+        if path == owned.root:
+            raise PermissionError(errno.EACCES, "inspection denied", str(path))
+        return original_lstat(path, *args, **kwargs)
+
+    def remove(path: Path) -> None:
+        raise removal_error
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "lstat", denied)
+            with pytest.raises(PrerequisiteError) as info:
+                owned.cleanup(rmtree=remove)
+        err = info.value
+        assert err.exit_code == 2 and err.cause == "owned_temp_remove_failed"
+        assert "remove" in err.detail and str(owned.root) in err.detail and "removal denied" in err.detail
+        assert err.__cause__ is removal_error
+        assert owned.is_owned and owned.root.exists()
         owned.cleanup()
         assert not owned.root.exists()
     finally:
