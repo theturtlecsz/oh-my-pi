@@ -18,7 +18,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType
@@ -1248,9 +1248,9 @@ class OrchestratorHandler:
                 self._record_decision(step_index, chosen, None)
             outcome = self._intake_hold(stage)
             if outcome is None:
+                before = self._intake_head(stage)
                 outcome = self._operate(job, step_index, stage, facts)
-                if outcome.outcome == "succeeded":
-                    outcome = self._intake_hold(stage) or outcome
+                outcome = self._intake_advanced(stage, before, outcome)
             self.record(step_index, _outcome_body(self.mission_id, step_index, stage, outcome))
             produced = outcome
             facts = self._facts(self.steps(), step_index, stage, outcome)
@@ -1278,6 +1278,39 @@ class OrchestratorHandler:
         outcome = produced
         self._record_decision(step_index, chosen, outcome)
         self._apply(job, step_index, chosen, outcome)
+
+    def _intake_head(self, stage: str) -> intake_gate.Head | None:
+        """Committed head read on its own short cursor; never held across execution."""
+        if stage in {"intake", "confirm"}:
+            return None
+        if self.mission_id is None:
+            raise AssertionError("mission_id is None")
+        workspace_id = self.config.workspace_id
+        with intake_gate.cursor(
+            self.store, workspace_id=workspace_id, actor_id=self.principal.actor_id,
+        ) as cur:
+            return intake_gate.read_head(cur, workspace_id=workspace_id, mission_id=self.mission_id)
+
+    def _intake_advanced(
+        self, stage: str, before: intake_gate.Head | None, outcome: Outcome,
+    ) -> Outcome:
+        """Hold the binding when the head moved during the operation; keep its committed effects."""
+        if stage in {"intake", "confirm"}:
+            return outcome
+        after = self._intake_head(stage)
+        if after == before:
+            return outcome
+        if self.mission_id is None:
+            raise AssertionError("mission_id is None")
+        workspace_id = self.config.workspace_id
+        code = intake_gate.INTAKE_REVISION_ADVANCED
+        with intake_gate.cursor(
+            self.store, workspace_id=workspace_id, actor_id=self.principal.actor_id,
+        ) as cur:
+            intake_binding.hold(cur, workspace_id=workspace_id, mission_id=self.mission_id, code=code)
+        if outcome.outcome != "succeeded":
+            return outcome
+        return replace(outcome, outcome="failed", data={**outcome.data, "stage": stage, "code": code})
 
     def _intake_hold(self, stage: str) -> Outcome | None:
         """Fence operations with committed intake checks, never an execution-spanning lock."""
