@@ -1027,3 +1027,13 @@ Optional bundle `supervisor` proof requires `kind: deterministic_software`,
 7. Run CLI offline against retained files. It exits 1 naming role/reason on first
    mismatch; exit 0 requires complete agreement for all six roles. Changed policy
    requires new decision and receipts. Never rewrite policy to make evidence pass.
+
+## OMP-623: oh-my-pi-test.sh unit-test command
+
+Status: **PENDING — owner applies in OMP-623-s04**.
+
+`oh-my-pi-test.sh` line labelled "work-ledger unit tests" must run exactly the same command as CI step "Run Work Ledger unit tests" and `catalog()` in `skip_accounting_report.py`:
+
+```
+uv run --project python/omp-work --extra dev pytest -n 4 python/omp-work/tests
+```

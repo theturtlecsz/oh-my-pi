@@ -186,7 +186,7 @@ def catalog(root: Path) -> list[dict[str, Any]]:
         {
             "name": "work-ledger unit tests",
             "source": "package.json does not define this command. .github/workflows/ci.yml job work_ledger_postgres step 'Run Work Ledger unit tests', and oh-my-pi-test.sh label 'work-ledger unit tests', both run it.",
-            "command": "uv run --project python/omp-work --extra dev pytest python/omp-work/tests",
+            "command": "uv run --project python/omp-work --extra dev pytest -n 4 python/omp-work/tests",
             "env": [],
             "files": ["python/omp-work/tests"],
             "prerequisites": [
@@ -194,6 +194,7 @@ def catalog(root: Path) -> list[dict[str, Any]]:
                 "OMP_INSTALLED_RELEASE and OMP_INSTALLED_MANIFEST_SHA256 are not set",
                 "OMP584_FLOOD_SOURCE is not set",
                 "no -x, so a failing node does not leave the rest of the session unreported",
+                "pytest-xdist, because the command passes -n 4",
             ],
             "covers": "selected nodes that do not skip under those unset variables",
             "does_not_cover": (
@@ -214,6 +215,7 @@ def catalog(root: Path) -> list[dict[str, Any]]:
                 "CI installs postgresql-18 and postgresql-client-18 when pg_config's major version is not 18",
                 "OMP_WORK_POSTGRES_INTEGRATION=1",
                 "modules that also skip on unshare, including the M1 DB module, still require a successful namespace probe",
+                "pytest-xdist, because the command passes -n 4",
             ],
             "covers": (
                 "nodes in the allowlist whose skip conditions are satisfied. "
