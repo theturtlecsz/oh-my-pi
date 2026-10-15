@@ -1,0 +1,1538 @@
+sha=bbde1300157c2239ceb105d05d53d43eb9c77a12 bun=1.4.2
+== 2026-10-15T10:02:05Z load=15.57 18.24 21.25 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [26.95s]
+== 2026-10-15T10:02:23Z load=13.21 17.51 20.95 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [17.70s]
+== 2026-10-15T10:02:52Z load=17.47 18.11 21.05 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [29.46s]
+== 2026-10-15T10:03:24Z load=22.46 19.24 21.32 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [31.63s]
+== 2026-10-15T10:03:53Z load=21.06 19.21 21.24 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [28.94s]
+== 2026-10-15T10:04:21Z load=19.72 19.05 21.13 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [27.66s]
+== 2026-10-15T10:04:44Z load=16.63 18.40 20.86 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [22.68s]
+== 2026-10-15T10:05:07Z load=15.69 18.08 20.70 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [22.94s]
+== 2026-10-15T10:05:29Z load=14.48 17.60 20.48 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [22.53s]
+== 2026-10-15T10:05:51Z load=13.36 17.14 20.26 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [21.89s]
+== 2026-10-15T10:06:16Z load=15.40 17.34 20.24 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [25.20s]
+== 2026-10-15T10:06:41Z load=16.96 17.51 20.22 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [24.83s]
+== 2026-10-15T10:07:15Z load=24.52 19.18 20.67 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [33.05s]
+== 2026-10-15T10:08:22Z load=36.02 23.86 22.21 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [66.76s]
+== 2026-10-15T10:08:51Z load=32.27 24.26 22.40 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [28.92s]
+== 2026-10-15T10:09:18Z load=27.48 23.80 22.30 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [26.94s]
+== 2026-10-15T10:09:50Z load=26.68 24.01 22.43 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [31.84s]
+== 2026-10-15T10:10:26Z load=27.76 24.57 22.67 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [36.15s]
+== 2026-10-15T10:10:58Z load=25.78 24.38 22.67 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [31.71s]
+== 2026-10-15T10:11:22Z load=22.72 23.77 22.51 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [23.89s]
+== 2026-10-15T10:11:45Z load=19.57 22.95 22.27 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [22.91s]
+== 2026-10-15T10:12:04Z load=18.74 22.54 22.15 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [19.74s]
+== 2026-10-15T10:12:24Z load=17.70 22.02 21.99 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [19.60s]
+== 2026-10-15T10:12:43Z load=14.77 21.08 21.68 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [19.11s]
+== 2026-10-15T10:13:01Z load=13.11 20.41 21.45 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [18.05s]
+== 2026-10-15T10:13:20Z load=12.15 19.72 21.20 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [19.08s]
+== 2026-10-15T10:13:40Z load=12.02 19.17 20.98 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [19.81s]
+== 2026-10-15T10:13:58Z load=9.53 18.15 20.61 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [17.70s]
+== 2026-10-15T10:14:15Z load=8.08 17.41 20.33 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [16.55s]
+== 2026-10-15T10:14:32Z load=7.32 16.79 20.08 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [16.95s]
+== 2026-10-15T10:14:49Z load=6.24 15.92 19.72 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [17.23s]
+== 2026-10-15T10:15:06Z load=5.61 15.31 19.46 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [16.83s]
+== 2026-10-15T10:15:23Z load=4.99 14.54 19.12 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [17.13s]
+== 2026-10-15T10:15:40Z load=8.94 14.89 19.15 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [17.30s]
+== 2026-10-15T10:16:02Z load=11.39 15.12 19.14 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [21.50s]
+== 2026-10-15T10:16:21Z load=10.12 14.59 18.88 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [18.81s]
+== 2026-10-15T10:16:39Z load=8.95 14.03 18.61 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [18.56s]
+== 2026-10-15T10:16:58Z load=8.75 13.66 18.39 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [18.95s]
+== 2026-10-15T10:17:17Z load=8.10 13.28 18.19 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [18.75s]
+== 2026-10-15T10:17:35Z load=7.23 12.74 17.91 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [18.27s]
+== 2026-10-15T10:17:54Z load=8.32 12.61 17.75 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [18.71s]
+== 2026-10-15T10:18:13Z load=8.04 12.26 17.52 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [18.86s]
+== 2026-10-15T10:18:32Z load=7.65 11.97 17.34 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [19.20s]
+== 2026-10-15T10:18:52Z load=7.48 11.65 17.12 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [19.48s]
+== 2026-10-15T10:19:11Z load=7.00 11.26 16.88 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [18.79s]
+== 2026-10-15T10:19:31Z load=7.44 11.08 16.70 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [20.32s]
+== 2026-10-15T10:19:50Z load=7.29 10.83 16.50 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [19.18s]
+== 2026-10-15T10:20:07Z load=6.42 10.46 16.29 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [17.02s]
+== 2026-10-15T10:20:31Z load=9.20 10.77 16.23 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [23.62s]
+== 2026-10-15T10:20:58Z load=12.92 11.51 16.30 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [27.10s]
+== 2026-10-15T10:21:25Z load=13.55 11.80 16.27 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [26.64s]
+== 2026-10-15T10:21:48Z load=13.79 12.04 16.23 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [23.30s]
+== 2026-10-15T10:22:09Z load=12.51 11.85 16.08 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [21.12s]
+== 2026-10-15T10:22:27Z load=10.77 11.50 15.90 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [17.43s]
+== 2026-10-15T10:22:44Z load=9.27 11.11 15.68 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [17.27s]
+== 2026-10-15T10:23:03Z load=8.63 10.88 15.53 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [18.55s]
+== 2026-10-15T10:23:21Z load=8.05 10.61 15.34 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [17.83s]
+== 2026-10-15T10:23:38Z load=7.03 10.21 15.11 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [17.68s]
+== 2026-10-15T10:23:55Z load=5.90 9.81 14.89 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [16.58s]
+== 2026-10-15T10:24:12Z load=5.40 9.51 14.71 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [16.98s]
+== 2026-10-15T10:24:29Z load=4.49 9.03 14.45 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [16.88s]
+== 2026-10-15T10:24:46Z load=3.99 8.70 14.25 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [16.56s]
+== 2026-10-15T10:25:02Z load=3.54 8.37 14.06 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [16.74s]
+== 2026-10-15T10:25:19Z load=3.36 8.02 13.82 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [16.77s]
+== 2026-10-15T10:25:36Z load=3.05 7.73 13.63 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [16.38s]
+== 2026-10-15T10:25:53Z load=3.02 7.50 13.46 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [16.93s]
+== 2026-10-15T10:26:10Z load=3.34 7.28 13.26 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [16.83s]
+== 2026-10-15T10:26:27Z load=3.41 7.10 13.11 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [16.98s]
+== 2026-10-15T10:26:44Z load=4.37 7.09 12.97 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [17.50s]
+== 2026-10-15T10:27:00Z load=3.55 6.78 12.78 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [16.27s]
+== 2026-10-15T10:27:21Z load=4.88 6.85 12.67 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [20.47s]
+== 2026-10-15T10:27:40Z load=4.87 6.73 12.50 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [18.95s]
+== 2026-10-15T10:28:03Z load=8.12 7.34 12.55 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [23.30s]
+== 2026-10-15T10:28:27Z load=9.07 7.61 12.53 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [23.65s]
+== 2026-10-15T10:29:02Z load=15.96 9.63 13.03 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [34.93s]
+== 2026-10-15T10:29:26Z load=16.43 10.25 13.15 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [24.47s]
+== 2026-10-15T10:29:55Z load=17.81 11.22 13.38 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [28.19s]
+== 2026-10-15T10:30:20Z load=19.39 12.14 13.63 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [25.56s]
+== 2026-10-15T10:30:45Z load=16.20 11.98 13.53 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [24.25s]
+== 2026-10-15T10:31:12Z load=17.16 12.57 13.69 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [26.99s]
+== 2026-10-15T10:31:40Z load=18.48 13.30 13.90 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [27.69s]
+== 2026-10-15T10:32:10Z load=24.96 15.31 14.55 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [30.32s]
+== 2026-10-15T10:32:35Z load=23.73 15.77 14.72 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [25.50s]
+== 2026-10-15T10:33:05Z load=26.76 17.14 15.20 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [29.78s]
+== 2026-10-15T10:33:42Z load=29.75 18.93 15.87 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [36.94s]
+== 2026-10-15T10:34:36Z load=41.25 23.70 17.66 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [53.03s]
+== 2026-10-15T10:35:45Z load=57.79 31.82 20.89 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [69.18s]
+== 2026-10-15T10:36:57Z load=62.94 39.63 24.46 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [71.45s]
+== 2026-10-15T10:38:00Z load=55.91 42.22 26.39 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [63.06s]
+== 2026-10-15T10:38:42Z load=44.76 41.07 26.67 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [41.51s]
+== 2026-10-15T10:39:14Z load=35.16 39.18 26.57 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [32.02s]
+== 2026-10-15T10:39:39Z load=27.93 37.16 26.24 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [25.39s]
+== 2026-10-15T10:40:01Z load=23.83 35.62 25.97 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [21.73s]
+== 2026-10-15T10:40:23Z load=20.50 34.11 25.67 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [21.49s]
+== 2026-10-15T10:40:41Z load=16.47 32.30 25.26 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [18.09s]
+== 2026-10-15T10:41:05Z load=14.28 30.50 24.85 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [24.05s]
+== 2026-10-15T10:41:24Z load=12.33 28.99 24.47 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [19.44s]
+== 2026-10-15T10:41:45Z load=10.98 27.60 24.11 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [20.11s]
+== 2026-10-15T10:42:04Z load=9.89 26.28 23.75 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [19.19s]
+== 2026-10-15T10:42:23Z load=9.47 25.13 23.42 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [19.53s]
+== 2026-10-15T10:42:41Z load=8.05 24.04 23.09 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [17.24s]
+== 2026-10-15T10:42:59Z load=7.49 22.89 22.73 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [18.48s]
+== 2026-10-15T10:43:18Z load=7.40 22.11 22.48 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [18.39s]
+== 2026-10-15T10:43:37Z load=7.09 21.08 22.13 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [19.07s]
+== 2026-10-15T10:43:56Z load=9.79 20.75 22.00 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [19.29s]
+== 2026-10-15T10:44:24Z load=11.48 20.13 21.75 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [27.69s]
+== 2026-10-15T10:44:51Z load=17.91 20.78 21.92 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [26.82s]
+== 2026-10-15T10:45:24Z load=21.80 21.58 22.15 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [33.48s]
+== 2026-10-15T10:45:50Z load=21.41 21.50 22.11 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [26.16s]
+== 2026-10-15T10:46:30Z load=27.04 22.89 22.55 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [39.82s]
+== 2026-10-15T10:47:16Z load=34.21 25.51 23.46 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [45.76s]
+== 2026-10-15T10:48:00Z load=35.48 27.08 24.09 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [44.06s]
+== 2026-10-15T10:48:38Z load=36.62 28.28 24.60 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [37.55s]
+== 2026-10-15T10:49:09Z load=30.91 27.86 24.60 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [31.18s]
+== 2026-10-15T10:49:38Z load=28.81 27.58 24.59 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [28.40s]
+== 2026-10-15T10:50:05Z load=25.10 26.74 24.40 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [26.99s]
+== 2026-10-15T10:50:29Z load=21.76 25.84 24.17 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [24.48s]
+== 2026-10-15T10:51:11Z load=27.76 26.87 24.59 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [41.27s]
+== 2026-10-15T10:51:49Z load=31.28 27.81 25.00 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [37.76s]
+== 2026-10-15T10:52:40Z load=40.75 30.85 26.18 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [51.03s]
+== 2026-10-15T10:53:13Z load=35.95 30.73 26.29 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [32.78s]
+== 2026-10-15T10:53:33Z load=27.92 29.27 25.93 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [20.66s]
+== 2026-10-15T10:53:52Z load=22.96 28.11 25.60 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [18.64s]
+== 2026-10-15T10:54:11Z load=18.08 26.66 25.18 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [18.71s]
+== 2026-10-15T10:54:28Z load=15.32 25.63 24.86 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [16.96s]
+== 2026-10-15T10:54:45Z load=11.69 24.13 24.38 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [16.89s]
+== 2026-10-15T10:55:08Z load=17.65 24.55 24.52 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [23.49s]
+== 2026-10-15T10:55:30Z load=18.31 24.21 24.40 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [21.63s]
+== 2026-10-15T10:55:55Z load=18.11 23.70 24.23 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [24.63s]
+== 2026-10-15T10:56:19Z load=16.39 22.84 23.93 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [24.14s]
+== 2026-10-15T10:56:53Z load=19.73 23.02 23.95 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [34.17s]
+== 2026-10-15T10:57:20Z load=18.01 22.29 23.68 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [27.04s]
+== 2026-10-15T10:57:52Z load=22.62 23.03 23.88 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [31.62s]
+== 2026-10-15T10:58:23Z load=21.81 22.80 23.78 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [30.81s]
+== 2026-10-15T10:58:50Z load=19.41 22.17 23.54 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [26.97s]
+== 2026-10-15T10:59:17Z load=18.35 21.65 23.33 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [27.25s]
+== 2026-10-15T10:59:46Z load=20.51 21.86 23.35 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [28.30s]
+== 2026-10-15T11:00:14Z load=19.89 21.56 23.20 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [27.82s]
+== 2026-10-15T11:00:37Z load=18.31 21.10 23.01 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [22.81s]
+== 2026-10-15T11:01:16Z load=27.44 23.01 23.57 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [39.24s]
+== 2026-10-15T11:02:01Z load=39.16 26.76 24.81 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [45.42s]
+== 2026-10-15T11:02:45Z load=40.88 28.91 25.63 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [43.32s]
+== 2026-10-15T11:03:41Z load=49.00 33.30 27.33 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [55.51s]
+== 2026-10-15T11:04:54Z load=53.25 38.10 29.48 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [72.84s]
+== 2026-10-15T11:05:57Z load=51.02 40.35 30.80 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [62.32s]
+== 2026-10-15T11:06:44Z load=43.74 40.00 31.18 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [47.15s]
+== 2026-10-15T11:07:22Z load=37.60 38.99 31.18 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [38.22s]
+== 2026-10-15T11:07:51Z load=30.72 37.22 30.84 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [28.43s]
+== 2026-10-15T11:08:17Z load=25.20 35.41 30.41 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [25.91s]
+== 2026-10-15T11:08:41Z load=21.12 33.63 29.95 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [23.75s]
+== 2026-10-15T11:09:10Z load=22.95 32.80 29.79 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [29.55s]
+== 2026-10-15T11:09:36Z load=20.45 31.48 29.43 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [26.05s]
+== 2026-10-15T11:10:00Z load=17.10 29.82 28.94 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [23.09s]
+== 2026-10-15T11:10:22Z load=15.01 28.52 28.53 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [22.40s]
+== 2026-10-15T11:10:46Z load=14.20 27.25 28.11 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [24.24s]
+== 2026-10-15T11:11:07Z load=13.98 26.32 27.78 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [20.35s]
+== 2026-10-15T11:11:28Z load=13.22 25.33 27.43 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [21.17s]
+== 2026-10-15T11:11:59Z load=16.32 24.83 27.18 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [30.93s]
+== 2026-10-15T11:12:24Z load=14.82 23.80 26.78 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [25.18s]
+== 2026-10-15T11:12:47Z load=13.50 22.91 26.42 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [22.18s]
+== 2026-10-15T11:13:11Z load=15.21 22.52 26.20 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [24.41s]
+== 2026-10-15T11:13:34Z load=15.19 21.97 25.92 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [22.54s]
+== 2026-10-15T11:13:56Z load=13.17 21.08 25.54 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [22.04s]
+== 2026-10-15T11:14:16Z load=15.13 20.94 25.40 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [20.23s]
+== 2026-10-15T11:15:06Z load=35.91 25.37 26.65 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [49.91s]
+== 2026-10-15T11:16:04Z load=41.17 29.10 27.88 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [58.04s]
+== 2026-10-15T11:16:44Z load=41.83 30.66 28.44 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [39.11s]
+== 2026-10-15T11:17:21Z load=38.49 31.12 28.69 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [37.74s]
+== 2026-10-15T11:17:49Z load=30.69 30.02 28.40 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [27.76s]
+== 2026-10-15T11:18:13Z load=25.89 28.95 28.08 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [23.20s]
+== 2026-10-15T11:18:46Z load=31.62 30.03 28.48 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [33.18s]
+== 2026-10-15T11:19:20Z load=31.52 30.21 28.59 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [34.04s]
+== 2026-10-15T11:19:50Z load=27.78 29.46 28.40 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [30.36s]
+== 2026-10-15T11:20:20Z load=24.35 28.51 28.12 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [29.84s]
+== 2026-10-15T11:20:46Z load=21.15 27.44 27.77 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [25.21s]
+== 2026-10-15T11:21:08Z load=19.43 26.62 27.50 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [22.07s]
+== 2026-10-15T11:21:33Z load=20.53 26.31 27.37 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [25.35s]
+== 2026-10-15T11:22:08Z load=25.71 26.76 27.47 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [34.07s]
+== 2026-10-15T11:23:01Z load=41.61 31.01 28.88 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [53.32s]
+== 2026-10-15T11:23:44Z load=37.43 31.59 29.19 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [42.77s]
+== 2026-10-15T11:24:15Z load=31.46 30.75 28.99 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [30.60s]
+== 2026-10-15T11:24:41Z load=27.22 29.85 28.74 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [26.25s]
+== 2026-10-15T11:25:03Z load=22.48 28.59 28.35 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [22.48s]
+== 2026-10-15T11:25:25Z load=20.71 27.62 28.03 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [21.59s]
+== 2026-10-15T11:25:48Z load=17.80 26.51 27.66 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [23.17s]
+== 2026-10-15T11:26:20Z load=20.04 26.25 27.53 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [31.71s]
+== 2026-10-15T11:27:00Z load=18.87 25.18 27.12 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+warn: Bun.serve() timed out a request after 10 seconds. Pass `idleTimeout` to configure.
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [39.14s]
+== 2026-10-15T11:27:23Z load=16.52 24.25 26.77 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [23.48s]
+== 2026-10-15T11:27:43Z load=13.57 23.09 26.33 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [19.64s]
+== 2026-10-15T11:28:29Z load=33.21 26.67 27.37 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [46.01s]
+== 2026-10-15T11:29:25Z load=38.66 29.63 28.36 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [55.47s]
+== 2026-10-15T11:30:06Z load=35.72 30.02 28.55 overlap=0 rc=0
+
+bun test v1.4.2 (744846f84)
+
+ 100 pass
+ 0 fail
+ 646 expect() calls
+Ran 100 tests across 1 file. [40.83s]
