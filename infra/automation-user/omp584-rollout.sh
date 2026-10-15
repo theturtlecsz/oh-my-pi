@@ -336,8 +336,8 @@ omp584_activate() (
     # Always scan once: scheduling delays must not skip already-written proof.
     python3 - "$OMP584_FLOOD_DIR/flood.log" "$offset" "$code_sha256" "$rules_sha256" "$target_commit" \
                "$OMP584_STAGE/matched_record.json" "$OMP584_EVIDENCE_DIR/reload.log" \
-               "${OMP584_POLL_TIMEOUT:-3}" <<'PY' || return 1
-import sys, json, pathlib, time
+               "${OMP584_POLL_TIMEOUT:-}" "$OMP584_FLOOD_DIR/flood.json" <<'PY' || return 1
+import sys, json, math, pathlib, time
 
 log_path = pathlib.Path(sys.argv[1])
 offset = int(sys.argv[2])
@@ -349,7 +349,19 @@ expected = {
 }
 record_out = pathlib.Path(sys.argv[6])
 reload_out = pathlib.Path(sys.argv[7])
-deadline = time.monotonic() + float(sys.argv[8])
+if sys.argv[8]:
+    timeout = float(sys.argv[8])
+else:
+    # Wait two flood poll intervals; missing/invalid poll_seconds uses flood's 5 s default.
+    try:
+        config = json.loads(pathlib.Path(sys.argv[9]).read_text())
+    except (OSError, ValueError):
+        config = {}
+    poll = config.get("poll_seconds") if isinstance(config, dict) else None
+    if isinstance(poll, bool) or not isinstance(poll, (int, float)) or not math.isfinite(poll) or poll <= 0:
+        poll = 5
+    timeout = 2 * poll
+deadline = time.monotonic() + timeout
 
 
 def scan():

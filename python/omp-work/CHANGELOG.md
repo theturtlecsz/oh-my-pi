@@ -90,6 +90,7 @@
 
 ### Fixed
 
+- OMP-584 activation now waits two flood poll intervals (10 seconds when configuration is absent or invalid) for reload proof unless an explicit timeout is set ([#627](https://github.com/can1357/oh-my-pi/issues/627)).
 - Intake changes hold mission execution: editing an intake revision pauses every later stage and grants no execution until a PASS exists for the current revision, then the mission rebinds to the new revision and receipt, and an authorized terminal abandon still ends a held mission ([#603](https://github.com/can1357/oh-my-pi/issues/603)).
 - omp584-rollout.sh installs only the missing OMP-584 parts into the flood.py it finds. It refuses, by name, parts it cannot classify or apply, and reports when nothing needs installing (OMP-622).
 - Test suite binds egress `record.sock` under a short `tmp_path` so `pytest -n N` no longer overflows the AF_UNIX path limit ([#623](https://github.com/can1357/oh-my-pi/issues/623)).
