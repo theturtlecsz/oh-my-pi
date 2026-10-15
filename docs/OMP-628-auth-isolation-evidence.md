@@ -1,10 +1,13 @@
 # OMP-628 auth isolation evidence
 
-Scope: OMP-628-s01-s01-s02-s01, ledger OMP-628 r1. This revision extends only
-this evidence document and its fork-inventory row. Source and tests remain
-unchanged. All controls, commands, results and log observations below predate
-this revision and are retained as historical evidence from OMP-628-s01-s01-s01.
-No new test runs are claimed; this docs-only audit does not establish acceptance.
+Scope: OMP-628-s01-s01-s02-s03, ledger OMP-628 r1. This revision consumes
+s02's SDK fix and default-session regression, extends the s01 audit, and changes
+only this document and its fork-inventory row. SDK source was temporarily
+reversed for the negative control and restored byte-for-byte in `finally`;
+tests and fixtures were unchanged. Historical controls, bisect results and
+master-report dispositions remain below. New execution evidence appears under
+“s03 reversal and restored verification”; historical pending scope is superseded
+there, not presented as the current SDK behavior.
 
 ## Cause and call path
 
@@ -17,7 +20,7 @@ refresh can mutate the caller-owned auth after the scan finishes and before a
 later case selects the pinned row. Agent-dir skill discovery and the persistent
 skill-description cache decide whether that background work starts at all.
 
-Production path traced:
+Pre-fix production path traced (historical):
 
 1. `security/coordinator.ts:createDefaultSecuritySession` passes the host's
    `authStorage` and `modelRegistry` to `createAgentSession`, without a private
@@ -308,9 +311,10 @@ bun test test/security/coordinator-auth-isolation.test.ts test/security/contract
 Exit 0: 60 pass, 0 fail, 207 assertions across 11 files. Final standalone command
 above also passes after formatting and cleanup-barrier refinements.
 
-## r1 scope and pending acceptance
+## Historical s01 r1 scope and pending acceptance
 
-Source read for this audit: `packages/coding-agent/src/sdk.ts` catalog
+The following records the s01 audit before s02; its pending work is addressed
+by the s02 fix and s03 verification below. Source read for that audit: `packages/coding-agent/src/sdk.ts` catalog
 construction and disposal, `src/security/coordinator.ts` default session, and
 `src/security/auth.ts` selection/resolver (all `src/` paths in this paragraph
 are under `packages/coding-agent/`). SDK constructs the catalog with
@@ -355,7 +359,182 @@ Other background-auth consumers and unrelated report findings remain outside
 this narrow audit. No source repair, new test, changelog, runner, contract or
 external-system change is made here.
 
-## r1 master-report selection and dispositions
+## s03 reversal and restored verification
+
+Executed 2026-10-15 on branch `OMP-628-s01-s01-s02-s03`, starting at
+`5cb802da7c`, Bun `1.4.2 (744846f84)`. The s02 fix makes
+`SkillDescriptionCatalog` omit `compress` when `options.getApiKey` is supplied;
+ordinary sessions still construct the real compressor. This removes the
+unpinned background consumer from caller-owned auth sessions rather than
+weakening exact-account selection or hiding a disabled row. Shared SQLite auth
+and refresh timing remain the cause described above; a private foreground
+resolver alone did not constrain compression's separate registry cascade.
+
+### Negative control and restoration
+
+Only this expression in `packages/coding-agent/src/sdk.ts` was temporarily
+reversed; comments, tests, fixtures and all other source stayed unchanged:
+
+```ts
+// Fixed
+...(options.getApiKey ? {} : { compress: createSkillDescriptionCompressor(modelRegistry, settings) }),
+// Reversed
+compress: createSkillDescriptionCompressor(modelRegistry, settings),
+```
+
+An in-memory Python `try`/`finally` saved the original bytes, replaced that one
+expression, ran the command below through `subprocess.run` (120-second outer
+watchdog; no test timeout changed), and restored the saved bytes in `finally`.
+The watchdog did not fire. No scratch source or test instrumentation was added.
+
+From `packages/coding-agent`:
+
+```sh
+bun test test/security/coordinator-auth-isolation.test.ts
+```
+
+Two preliminary reversal invocations were invalid proofs: the first stopped at
+missing workspace module `@oh-my-pi/pi-natives/vcs`; after
+`bun install --frozen-lockfile`, the second stopped at a missing native addon.
+Each reported 0 pass, 1 fail, 1 error and restored SDK bytes in `finally`.
+`bash session-system/refresh-natives.sh` installed the package-matching 18.4.8
+binaries. Both prerequisite commands exited 0 without tracked changes. No test
+environment overrides, fixtures, retries, assertions or timeouts were changed
+to obtain the following result.
+
+The third reversal invocation executed all five cases and exited 1:
+
+```text
+436 | expect(compressorFactory).not.toHaveBeenCalled();
+error: expect(received).not.toHaveBeenCalled()
+Expected number of calls: 0
+Received number of calls: 1
+(fail) coordinator shared-auth isolation controls > the default security session keeps pinned auth out of background compression
+4 pass
+1 fail
+38 expect() calls
+Ran 5 tests across 1 file. [1028.00ms]
+```
+
+This is the forbidden background-auth path assertion, reached after real
+publication, not an early scan failure or hang. Ordering follows the unchanged
+regression's awaited barriers and assertions, all before line 436:
+
+1. Cold-cache compression invokes the call-through factory and captures its work
+   in `pending`. Unpinned registry `getApiKey` is held at `authGate` before the
+   underlying auth runs; the foreground session uses pinned `oauth.accessById`.
+2. The foreground calls real `security_publish`'s wrapper. It records entry,
+   resolves `publicationEntered`, then opens `authGate`. Only publication entry
+   permits the captured compression auth request to proceed.
+3. The test awaits publication entry, releases the fixture refresh rejection,
+   then joins `Promise.allSettled(pending)` while publication's return is held.
+   Thus captured compression/auth/refresh settles before publication release.
+4. `publicationRelease` opens; real publication executes canonical bundle,
+   SARIF and store writes, and its wrapper joins captured work again before
+   returning. The coordinator wait then reaches its terminal state.
+5. Assertions pass for publication entry, exactly one publication call, terminal
+   `completed` with one finding, and stored bundle `completed` with one finding.
+   Only then does the zero-compressor assertion fail (one call).
+6. Cleanup releases every gate, joins pending work and coordinator drain,
+   disposes captured sessions, unregisters them, restores spies and closes the
+   private fixture. The earlier SDK-disposal control also passed, independently
+   asserting real 401/refresh soft-disable and failed pinned selection.
+
+The negative control stops at the first forbidden-compressor assertion; later
+zero-unpinned-call and durable-identity assertions are not claimed as executed
+in that failing case. Barrier ordering proves captured auth was joined before
+completed publication and failure. The unchanged fixture restricts compression
+to the local mock transport; no external provider response is claimed.
+
+All three reversals restored identical SDK SHA-256 before/after:
+`7aeffe606b0032181723b8a13a0985e77b02ec12232c0182178e7520365bf299`.
+Byte equality was asserted in `finally`; `git diff -- packages/coding-agent/src/sdk.ts`
+was empty after restoration. No source or test change is part of this revision.
+
+### Restored standalone results
+
+Each command ran individually from `packages/coding-agent`, after restoration:
+
+| Command | Exit | Pass / fail | Assertions | Reported time |
+| --- | --- | --- | --- | --- |
+| `bun test test/security/coordinator-auth-isolation.test.ts` | 0 | 5 / 0 | 55 | 1117.00ms |
+| `bun test test/security/coordinator.test.ts` | 0 | 7 / 0 | 28 | 1010.00ms |
+| `bun test test/security/auth.test.ts` | 0 | 8 / 0 | 26 | 763.00ms |
+
+The restored regression reaches the later assertions: no compressor or unpinned
+request, pinned access used, default session disposed/unregistered, and next
+preflight preserves the full durable account identity.
+
+### Twenty consecutive chunk invocations
+
+From `packages/coding-agent`, one loop, stopping on first failure:
+
+```sh
+for run in {1..20}; do bun test test/security/{contracts,coordinator,gate,history,importers-store,preflight,publication,remediation,seeded-fixture,slash-command}.test.ts --parallel=1 || exit; done
+```
+
+Loop exited 0. Every invocation reported 56 pass, 0 fail, 176 assertions across
+10 files. No failed run was discarded or counter reset.
+
+| Run | Exit | Pass / fail | Reported time |
+| --- | --- | --- | --- |
+| 1 | 0 | 56 / 0 | 3.55s |
+| 2 | 0 | 56 / 0 | 3.57s |
+| 3 | 0 | 56 / 0 | 3.58s |
+| 4 | 0 | 56 / 0 | 3.57s |
+| 5 | 0 | 56 / 0 | 3.49s |
+| 6 | 0 | 56 / 0 | 3.92s |
+| 7 | 0 | 56 / 0 | 3.65s |
+| 8 | 0 | 56 / 0 | 3.60s |
+| 9 | 0 | 56 / 0 | 3.42s |
+| 10 | 0 | 56 / 0 | 3.37s |
+| 11 | 0 | 56 / 0 | 3.39s |
+| 12 | 0 | 56 / 0 | 3.33s |
+| 13 | 0 | 56 / 0 | 3.38s |
+| 14 | 0 | 56 / 0 | 3.42s |
+| 15 | 0 | 56 / 0 | 3.48s |
+| 16 | 0 | 56 / 0 | 3.64s |
+| 17 | 0 | 56 / 0 | 3.48s |
+| 18 | 0 | 56 / 0 | 3.48s |
+| 19 | 0 | 56 / 0 | 3.58s |
+| 20 | 0 | 56 / 0 | 3.49s |
+
+### Static check and scope conclusion
+
+From repository root, `bun run ci:check:full` exited 0. It ran `check:ts`:
+oxlint, oxfmt checks, sequential workspace package type checks and the
+session-system runtime type check. Oxlint emitted warnings in existing files;
+no errors or formatting failures occurred. No unrelated files were repaired.
+This is the explicitly requested static check, not the full test suite or gate
+script; neither full test suite nor gate script ran in this revision.
+
+The s02 source fix plus these s03 runs now supply the formerly pending narrow
+acceptance evidence: unchanged coordinator file passes alone, and its unchanged
+10-file chunk passes 20 consecutive invocations with `--parallel=1`. The reversal
+proves this regression detects the unpinned compressor after completed
+publication with captured auth joined; restoration proves the passing path
+preserves pinned credentials for a subsequent preflight. This does not promote
+any historical deferred master-report disposition or claim isolation of other
+background-auth consumers. No tests, source, contracts, runners, skips,
+retries, timeouts, changelogs or external systems were changed in the deliverable.
+
+### Inventory and deliverable verification
+
+From repository root:
+
+```sh
+bun scripts/upstream-inventory.ts --write
+bun scripts/upstream-inventory.ts
+```
+
+Both exited 0: the writer produced 6399 rows; the read-only check passed.
+The evidence row's behavior description was refreshed to include the reversal,
+restoration, standalone results, 20-run sequence and static check, while retaining
+historical controls and all 30 dispositions. Inventory paths are unique; no
+union-merge duplicate required removal. Only this evidence document and its
+inventory row differ from the starting commit. No scratch artifacts remain.
+
+## Historical s01 r1 master-report selection and dispositions
 
 Read-only input: `/home/ompbot/master-report/master.json`. Current verdict means
 the literal report value at audit time, not a fresh adjudication of its pinned
