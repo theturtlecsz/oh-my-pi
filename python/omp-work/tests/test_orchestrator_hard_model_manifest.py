@@ -1,4 +1,4 @@
-"""OMP-595 r2: fixed task authority bounds model launch and renewed worker exits."""
+"""OMP-595 r2: fixed task authority and cleanup bound model worker lifetimes."""
 
 from __future__ import annotations
 
@@ -207,6 +207,64 @@ def test_live_renewal_preserves_nonzero_worker_exit(wiring):
     assert len(state.posts) == 1
     assert len(state.runs) == 1
     assert state.revoked == [state.grant["id"]]
+
+
+@pytest.mark.parametrize("failure_at", ["manifest_write", "sandbox"])
+def test_post_grant_exception_revokes_and_removes_manifest(wiring, monkeypatch, failure_at):
+    """Local write/launch failures must not leak a live grant or its manifest."""
+    state = wiring
+    paths: list[Path] = []
+    sandbox_entries: list[Path] = []
+    manifest_fd: int | None = None
+    failure = RuntimeError(f"post-grant {failure_at} failure")
+
+    with monkeypatch.context() as patches:
+        def before_run(ctx):
+            del ctx
+            mkstemp = operations.tempfile.mkstemp
+            dump = operations.json.dump
+
+            def capture_manifest(*args, **kwargs):
+                nonlocal manifest_fd
+                fd, name = mkstemp(*args, **kwargs)
+                if kwargs.get("prefix") == "omp-worker-":
+                    manifest_fd = fd
+                    paths.append(Path(name))
+                return fd, name
+
+            def write_manifest(doc, stream, *args, **kwargs):
+                if (
+                    failure_at == "manifest_write"
+                    and manifest_fd is not None
+                    and getattr(stream, "name", None) == manifest_fd
+                ):
+                    raise failure
+                return dump(doc, stream, *args, **kwargs)
+
+            def fail_sandbox(*args, **kwargs):
+                path = kwargs["manifest_path"]
+                sandbox_entries.append(path)
+                assert failure_at == "sandbox", "manifest write failure entered sandbox"
+                assert paths == [path]
+                manifest = json.loads(path.read_text(encoding="utf-8"))
+                assert manifest["model"]["proxy"]["baseUrl"] == state.url
+                raise failure
+
+            patches.setattr(operations.tempfile, "mkstemp", capture_manifest)
+            patches.setattr(operations.json, "dump", write_manifest)
+            patches.setattr(operations, "_sandbox", fail_sandbox)
+
+        state.before_run = before_run
+        with pytest.raises(RuntimeError, match=f"^post-grant {failure_at} failure$") as raised:
+            run(state)
+
+    assert raised.value is failure
+    assert len(state.posts) == 1
+    assert state.revoked == [state.grant["id"]]
+    assert len(paths) == 1
+    assert not paths[0].exists()
+    assert sandbox_entries == (paths if failure_at == "sandbox" else [])
+    assert state.runs == []
 
 
 def _persist_controls(ctx, controls: dict[str, int]):
