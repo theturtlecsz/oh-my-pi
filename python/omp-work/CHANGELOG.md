@@ -87,6 +87,7 @@
 
 ### Fixed
 
+- omp584-rollout.sh installs only the missing OMP-584 parts into the flood.py it finds. It refuses, by name, parts it cannot classify or apply, and reports when nothing needs installing (OMP-622).
 - Test suite binds egress `record.sock` under a short `tmp_path` so `pytest -n N` no longer overflows the AF_UNIX path limit ([#623](https://github.com/can1357/oh-my-pi/issues/623)).
 - NSI-6 pin drift names changed sources and the reseal command (OMP-621).
 - Orchestrator admission compares qualification proof with the configured running release, a missing stage handler fails closed, an audit pass without a stored independent acceptance cannot complete, and a checkpoint is delivered only after a confirmed signed push of the exact rendered payload (OMP-594).
