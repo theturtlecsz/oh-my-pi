@@ -73,6 +73,9 @@ def build_report(
     usage = _Usage()
     false_supports = 0
     abstains = 0
+    per_pair: list[dict[str, str]] = []
+    false_support_pairs: list[dict[str, str]] = []
+    timeout_pairs: list[dict[str, str]] = []
     for pair in rows:
         view = judge_input(pair)
         receipt = judge.judge_link(
@@ -86,6 +89,19 @@ def build_report(
         )
         abstains += receipt.verdict == "abstain"
         false_supports += receipt.verdict == "supports" and pair.gold != "supports"
+        outcome = {
+            "id": view["id"],
+            "gold": pair.gold,
+            "verdict": receipt.verdict,
+            "claim": view["claim_text"],
+            "passage": view["passage"],
+            "context": view["context"],
+        }
+        per_pair.append(outcome)
+        if receipt.verdict == "supports" and pair.gold != "supports":
+            false_support_pairs.append(outcome)
+        if receipt.verdict == "timeout":
+            timeout_pairs.append(outcome)
     n_neg = len(negatives)
     fs_low, fs_high = wilson(false_supports, n_neg)
     ab_low, ab_high = wilson(abstains, len(rows))
@@ -104,6 +120,11 @@ def build_report(
         "abstain_wilson_high": ab_high,
         "input_tokens": None if usage.unknown else usage.input_tokens,
         "output_tokens": None if usage.unknown else usage.output_tokens,
+        "per_pair": per_pair,
+        "false_support_pairs": false_support_pairs,
+        "timeouts": len(timeout_pairs),
+        "timeout_rate": len(timeout_pairs) / len(rows),
+        "timeout_pairs": timeout_pairs,
     }
 
 
