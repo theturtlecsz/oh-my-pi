@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import sqlite3
 import sys
+from types import SimpleNamespace
 from uuid import UUID
 
 import httpx
@@ -22,15 +23,25 @@ import pytest
 
 from omp_work import egress_sandbox
 from omp_work.orchestrator import model_proxy_client, operations, worker_sandbox
+from omp_work.orchestrator.service import submit
 from omp_work.v1.canonical import sha256
-from orchestrator_e2e_support import SimulatedCrash, crash_after_command, tick_until
+from orchestrator_e2e_support import (
+    SimulatedCrash,
+    crash_after_command,
+    open_e2e_world,
+    open_worker,
+    seed_published_budget,
+    tick_until,
+)
 from test_orchestrator_audit_stage import (
     _attempts,
+    _audit_ctx,
     _expire_lease,
     _launches,
     _outcomes,
     _steps,
     _tick_to_push,
+    restore_registry,
 )
 from test_orchestrator_worker_wiring import wiring, run
 from test_orchestrator_worker_context import context, token_counter, enable_learning
@@ -201,27 +212,67 @@ def test_unconfigured_context_keeps_worker_output_uncaptured(delivery):
 
 
 @pytest.fixture
-def audited(context, tmp_path, monkeypatch):
-    """A world that reaches a real audited close with one uncited delivery.
+def audited(service, token_counter, tmp_path, monkeypatch, restore_registry):
+    """A pass-verifier ``open_e2e_world`` that reaches a real audited close.
 
-    ``run_sandboxed`` is intercepted only for worker launches that name
-    ``OMP_WORKER_MANIFEST``: each emits a valid context-delivery event, writes
-    the permitted ``feature.txt`` into ``kwargs["worktree"]``, and returns 0.
-    Every other call — the evaluate test command and the verifier — passes
-    through to the pristine ``egress_sandbox.run_sandboxed``, so the verifier
-    really runs and writes its own signed verdict and report. The worker argv
-    is absolute and names ``orchestrator-worker`` (from ``wiring``); the real
-    context and learning CLIs are wired, so the delivered lesson is a supply.
+    The world registers the real operations, points ``model_proxy_url`` at a
+    loopback address, uses an absolute worker argv ending ``orchestrator-worker``
+    and seeds the published budget; ``register``/``revoke_task`` are stubbed
+    locally with a valid grant descriptor. ``run_sandboxed`` is intercepted only
+    for calls whose env names ``OMP_WORKER_MANIFEST``: those emit a valid
+    context-delivery event, write the permitted ``feature.txt`` into
+    ``kwargs["worktree"]`` and return 0. Every other call (evaluate, verifier)
+    passes through to the saved real ``run_sandboxed`` with the same arguments.
     """
-    state = context
+    knowledge = Path(__file__).resolve().parents[2] / "omp-knowledge" / "src"
+    monkeypatch.syspath_prepend(str(knowledge))
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join((str(knowledge), str(Path(__file__).resolve().parents[1] / "src"))))
+    for key in list(os.environ):
+        if key.startswith("OMP_KNOWLEDGE_"):
+            monkeypatch.delenv(key)
+    world = open_e2e_world(
+        service, tmp_path, monkeypatch, verifier_mode="pass", worker_mode="ok",
+        extra_capability=None, operations=("omp_work.orchestrator.operations:register",),
+    )
+    executable = tmp_path / "omp"
+    executable.write_text("stand-in")
+    executable.chmod(0o700)
+    world.request = dataclasses.replace(
+        world.request, worker_argv=(str(executable), "orchestrator-worker")
+    )
+    settings = tmp_path / "context.json"
+    settings.write_text(json.dumps({
+        "command": [sys.executable, "-m", "omp_knowledge.context"],
+        "token_cmd": [sys.executable, str(token_counter)],
+        "state_dir": str(tmp_path / "context-state"), "encoding": "test-words", "token_budget": 100000,
+    }))
+    world.config = configure_context_cli(
+        dataclasses.replace(world.config, model_proxy_url="http://127.0.0.1:9"), settings
+    )
+    submitted = submit(world.config, world.request)
+    work_id = UUID(str(submitted["work_id"]))
+    tree = world.store.read(world.workspace_id, OWNER, "tree", "")
+    item = next(row for row in tree["items"] if str(row["work_id"]) == str(work_id))
+    seed_published_budget(service, world.workspace_id, work_id, UUID(str(item["revision"]["revision_id"])))
+    state = SimpleNamespace(world=world, work_id=work_id, settings=settings, deliveries=[], revoked=[])
+    state.worker = open_worker(world)
     state.learning_dir = enable_learning(state, tmp_path)
     handler = state.worker.handlers["*"]
     handler.config = configure_learning_cli(
-        configure_context_cli(handler.config, state.settings),
-        state.learning_dir, handler.config.learning_bearer_file,
+        handler.config, state.learning_dir, handler.config.learning_bearer_file
     )
+
+    descriptor = {"api": "google-generative-ai", "id": "gemini-test",
+                  "limits": {"context_tokens": 1000, "max_output_tokens": 100}}
+
+    def register(capability, url, payload):
+        return {"id": "grant-1", "model_token": "model-token", "descriptor": descriptor}
+
+    def revoke(capability, url, task_id):
+        state.revoked.append(task_id)
+        return {"refused": 0, "spent_usd": "0"}
+
     real_sandbox = egress_sandbox.run_sandboxed
-    state.deliveries = []
 
     def intercept(argv, identity, recorder, workdir, env, timeout, **kwargs):
         manifest_path = env.get("OMP_WORKER_MANIFEST")
@@ -240,7 +291,23 @@ def audited(context, tmp_path, monkeypatch):
         (Path(kwargs["worktree"]) / "feature.txt").write_text("feature implemented\n")
         return 0
 
+    monkeypatch.setattr(model_proxy_client, "register", register)
+    monkeypatch.setattr(model_proxy_client, "revoke_task", revoke)
     monkeypatch.setattr(worker_sandbox, "run_sandboxed", intercept)
+    state.audit_runs = []
+    run_audit = operations.run_audit
+
+    def audit(live):
+        """Rebuild the audit context from the recorded steps and run the audit."""
+        ctx = _audit_ctx(world, work_id)
+        ctx._handler._job_id = str(live.lease.job_id)
+        ctx.lease = live.lease
+        state.audit_runs.append(ctx)
+        return run_audit(ctx)
+
+    # Every new handler re-runs ``operations.register()``, so patch the name it reads.
+    monkeypatch.setattr(operations, "run_audit", audit)
+    operations.register()
     return state
 
 
@@ -249,11 +316,6 @@ def supply_snapshot(state):
             "worker_job_id", "compiled_context_hash", "prompt_hash")
     rows = learning_rows(state, "supplies")
     return [{key: row[key] for key in keys} for row in sorted(rows, key=lambda row: row["supply_id"])]
-
-
-def mission_work_id(world):
-    tree = world.store.read(world.workspace_id, OWNER, "tree", "")
-    return UUID(str(next(row for row in tree["items"] if row.get("work_id"))["work_id"]))
 
 
 def implement_job(world):
@@ -284,25 +346,31 @@ def test_supplies_survive_audited_close_and_audit_resume(audited, variant, monke
     while the original launch row stays.
     """
     state = audited
-    world, worker = state.world, state.worker
+    world, worker, work_id = state.world, state.worker, state.work_id
     _tick_to_push(world, worker)
-    work_id = mission_work_id(world)
     job_id = implement_job(world)
     before = supply_snapshot(state)
     assert len(before) == len(state.deliveries) == 1
+    original_launches = []
 
-    if variant == "normal":
-        tick_to_audited(world, worker)
-    else:
-        command_type = {
-            "audit_ready": "seal_audit_manifest",
-            "auditor_in_flight": "reserve_auditor_launch",
+    if variant != "normal":
+        command_type, reached, launched = {
+            "audit_ready": ("seal_audit_manifest", "audit_ready", 0),
+            "auditor_in_flight": ("reserve_auditor_launch", "auditor_in_flight", 1),
         }[variant]
         crash_after_command(monkeypatch, command_type)
         with pytest.raises(SimulatedCrash):
             worker.tick()
+        # The crash left the close attempt in the state the variant names.
+        (crashed,) = _attempts(world, work_id)
+        assert crashed["state"] == reached
+        original_launches = _launches(world, work_id)
+        assert len(original_launches) == launched
+        assert len(state.audit_runs) == 1
         _expire_lease(world)
-        tick_to_audited(world, worker)
+
+    tick_to_audited(world, worker)
+    assert len(state.audit_runs) == (1 if variant == "normal" else 2)
 
     audit_outcome = _outcomes(world, "audit")[-1]
     assert audit_outcome["outcome"] == "succeeded"
@@ -319,7 +387,8 @@ def test_supplies_survive_audited_close_and_audit_resume(audited, variant, monke
         # the original launch row is retained.
         assert attempt["launch_count"] == 2
         assert attempt["cancelled_launch_count"] == 1
-        assert len(launches) == 2
+        assert [row["launch_id"] for row in launches][:1] == [row["launch_id"] for row in original_launches]
+        assert [row["launch_number"] for row in launches] == [1, 2]
     else:
         assert attempt["launch_count"] == 1
         assert attempt["cancelled_launch_count"] == 0
@@ -327,6 +396,7 @@ def test_supplies_survive_audited_close_and_audit_resume(audited, variant, monke
 
     # One worker launch, one delivery: the close never re-ran or re-delivered.
     assert len(state.deliveries) == 1
+    assert state.revoked == ["grant-1"]
     assert supply_snapshot(state) == before
     for row in before:
         assert row["procedure_id"] == "context-lesson"
