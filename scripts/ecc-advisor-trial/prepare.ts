@@ -82,7 +82,8 @@ export interface PrepareCaseOptions {
 
 /**
  * Prepare a detached worktree at <work>/tree for a trial case, install ECC assets,
- * enable the ECC Database Reviewer roster entry, and write <out>/prompt.md.
+ * and write <out>/prompt.md. The ECC database advisor asset is retired, so no
+ * roster entry is enabled here.
  */
 export async function prepareCase(options: PrepareCaseOptions): Promise<{ promptPath: string; treeDir: string }> {
 	const repoDir = options.repoDir ?? process.cwd();
@@ -129,9 +130,6 @@ export async function prepareCase(options: PrepareCaseOptions): Promise<{ prompt
 
 	const eccRoot = options.eccRoot ? path.resolve(options.eccRoot) : ECC_ROOT;
 	await runEccCli({ command: "install", project: treeDir, eccRoot });
-
-	const watchdogPath = path.join(treeDir, ".omp", "WATCHDOG.yml");
-	await enableRosterEntry(watchdogPath, ADVISOR_NAME);
 
 	const diff = await gitRepo.diffText({
 		base: `${caseItem.commit}^`,

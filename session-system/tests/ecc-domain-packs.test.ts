@@ -27,7 +27,7 @@ const expectedPacks = {
 		...skillPaths("python-patterns", "python-testing"),
 		"agents/python-reviewer.md",
 	],
-	postgresql: [...skillPaths("postgres-patterns", "database-migrations"), "agents/database-reviewer.md"],
+	postgresql: [...skillPaths("postgres-patterns", "database-migrations")],
 	security: [
 		...["common", "rust", "typescript", "python"].map(language => `rules/${language}/security.md`),
 		"agents/security-reviewer.md",
@@ -38,7 +38,7 @@ const installedIds: Record<string, string[]> = {
 	rust: ["ecc-common-coding-style", "ecc-rust-coding-style"],
 	typescript: [],
 	python: [],
-	postgresql: ["ecc-database-reviewer"],
+	postgresql: [],
 	security: [],
 };
 const tempDirs: string[] = [];
