@@ -45,7 +45,7 @@ def test_selected_rules_load_from_staged_copy(tmp_path, monkeypatch, helper, rul
 
 
 @pytest.mark.parametrize("with_rules", [False, True])
-def test_start_metrics_suite_with_selected_source(tmp_path, with_rules):
+def test_start_metrics_suite_with_selected_source(tmp_path, monkeypatch, with_rules):
     source = tmp_path / "source"
     source.mkdir()
     fixture = Path(__file__).parent / "fixtures" / "omp622" / "flood-4fb53b8.py.txt"
@@ -54,13 +54,21 @@ def test_start_metrics_suite_with_selected_source(tmp_path, with_rules):
         (source / "planner-independence.md").write_text("Selected deployment rules.\n")
         code += '\nPLANNER_RULES_BYTES = Path(__file__).with_name("planner-independence.md").read_bytes()\n'
     (source / "flood.py").write_text(code)
+    # Gate options belong to the parent run. Reusing its basetemp would let
+    # nested pytest delete the selected source before staging it.
+    monkeypatch.setenv("PYTEST_ADDOPTS", f"--basetemp={tmp_path}")
+    child_env = {key: value for key, value in os.environ.items() if not key.startswith("PYTEST_")}
     result = subprocess.run(
-        [sys.executable, "-m", "pytest", str(Path(metrics.__file__)), "-q"],
-        env={**os.environ, "OMP584_FLOOD_SOURCE": str(source)},
+        [sys.executable, "-m", "pytest", str(Path(metrics.__file__)), "-q",
+         "--basetemp", str(tmp_path / "child-basetemp")],
+        env={**child_env, "OMP584_FLOOD_SOURCE": str(source)},
         capture_output=True, text=True, timeout=60,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "7 passed" in result.stdout
+    assert (source / "flood.py").read_text() == code
+    if with_rules:
+        assert (source / "planner-independence.md").read_text() == "Selected deployment rules.\n"
 
 
 @pytest.mark.parametrize("helper", [planner_rollout, provenance, exact])
