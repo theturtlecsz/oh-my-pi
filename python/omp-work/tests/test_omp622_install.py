@@ -5,6 +5,7 @@ and a loaded record of the committed file hashes and HEAD onto flood.log.
 """
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import os
@@ -18,6 +19,7 @@ from omp622_rollout_helpers import (
     FIXTURE,
     checkout_snapshot,
     create_checkout,
+    file_snapshot,
     run_script,
 )
 
@@ -197,3 +199,82 @@ def test_all_parts_installed_rules_absent(tmp_path: Path) -> None:
     assert (source / RULES_NAME).read_bytes() == asset_rules
     assert git_bytes(source, env, "show", f"HEAD:{RULES_NAME}") == asset_rules
     assert_rollout(source, env, evidence, ACTIVATED_AT)
+
+
+def test_incremental_install(tmp_path: Path) -> None:
+    """Install only missing planner code and rules, preserve operator dirt, and prove activation."""
+    source, env = create_checkout(tmp_path)
+    evidence = tmp_path / "evidence"
+    before_flood = (source / "flood.py").read_bytes()
+    before_head = git(source, env, "rev-parse", "HEAD").stdout.strip()
+    (source / "staged.txt").write_text("operator staged content\n")
+    git(source, env, "add", "--", "staged.txt")
+    (source / "staged.txt").write_text("operator staged plus unstaged content\n")
+    (source / "unrelated.txt").write_text("operator unstaged content\n")
+    (source / "untracked.txt").write_text("operator untracked content\n")
+    dirt_paths = ("staged.txt", "unrelated.txt", "untracked.txt")
+    snapshot = file_snapshot(source)
+    before_files = {name: snapshot[name] for name in dirt_paths}
+    before_cached = git_bytes(source, env, "diff", "--cached", "--binary")
+    before_unstaged = git_bytes(source, env, "diff", "--binary", "--", *dirt_paths)
+    before_status = git_bytes(source, env, "status", "--porcelain", "--", *dirt_paths)
+    write_older_log(source)
+    install_hook(source)
+
+    result = run_script(source, evidence, env=env, timeout=600)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert git(source, env, "rev-parse", "HEAD^").stdout.strip() == before_head
+    names = set(git(source, env, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").stdout.splitlines())
+    assert names == {"flood.py", RULES_NAME}
+    installed_flood = (source / "flood.py").read_bytes()
+    assert git_bytes(source, env, "show", "HEAD:flood.py") == installed_flood
+    matcher = difflib.SequenceMatcher(
+        a=before_flood.splitlines(keepends=True),
+        b=installed_flood.splitlines(keepends=True),
+        autojunk=False,
+    )
+    inserted = []
+    for tag, _, _, j1, j2 in matcher.get_opcodes():
+        assert tag in ("equal", "insert"), "Previously installed code or operator edit changed"
+        if tag == "insert":
+            inserted.extend(matcher.b[j1:j2])
+    patch = (ASSETS / "omp584-planner-prompt.patch").read_bytes()
+    expected_inserted = [
+        line[1:].replace(LEGACY_NAME, CANONICAL_NAME)
+        for line in patch.splitlines(keepends=True)
+        if line.startswith(b"+") and not line.startswith(b"+++")
+    ]
+    assert inserted == expected_inserted
+    asset_rules = (ASSETS / "omp584-planner-rules.md").read_bytes()
+    assert (source / RULES_NAME).read_bytes() == asset_rules
+    assert git_bytes(source, env, "show", f"HEAD:{RULES_NAME}") == asset_rules
+    after_files = file_snapshot(source)
+    assert {name: after_files[name] for name in dirt_paths} == before_files
+    assert git_bytes(source, env, "diff", "--cached", "--binary") == before_cached
+    assert git_bytes(source, env, "diff", "--binary", "--", *dirt_paths) == before_unstaged
+    assert git_bytes(source, env, "status", "--porcelain", "--", *dirt_paths) == before_status
+    assert (source / "flood.log").read_text().startswith(OLD_LOG)
+    assert_rollout(source, env, evidence, ACTIVATED_AT)
+    loaded = json.loads((source / "flood.log").read_text().split(" loaded ", 1)[1])
+    assert json.loads((evidence / "rollout.json").read_text())["matched_record"] == loaded
+    assert "old log line" not in (evidence / "reload.log").read_text()
+
+
+def test_wrong_code_hash(tmp_path: Path) -> None:
+    """A loaded record for different code cannot publish successful rollout evidence."""
+    source, env = create_checkout(tmp_path)
+    evidence = tmp_path / "evidence"
+    write_older_log(source)
+    install_hook(source, code_sha="0" * 64)
+    env["OMP584_POLL_TIMEOUT"] = "1"
+
+    result = run_script(source, evidence, env=env, timeout=600)
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "Activation timeout" in result.stderr
+    loaded = json.loads((source / "flood.log").read_text().split(" loaded ", 1)[1])
+    assert loaded["code_sha256"] == "0" * 64 != file_sha256(source / "flood.py")
+    assert loaded["rules_sha256"] == file_sha256(source / RULES_NAME)
+    assert loaded["external_head"] == git(source, env, "rev-parse", "HEAD").stdout.strip()
+    assert not (evidence / "rollout.json").exists()
