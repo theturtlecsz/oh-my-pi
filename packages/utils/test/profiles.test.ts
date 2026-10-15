@@ -59,9 +59,8 @@ describe("profile directories", () => {
 		originalXdgDataHome = process.env.XDG_DATA_HOME;
 		originalXdgStateHome = process.env.XDG_STATE_HOME;
 		originalXdgCacheHome = process.env.XDG_CACHE_HOME;
-		tempRoot = path.join(os.tmpdir(), "pi-utils-profiles", Snowflake.next());
+		tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "pi-utils-profiles-"));
 		configDir = `.omp-profile-test-${Snowflake.next()}`;
-		await fs.mkdir(tempRoot, { recursive: true });
 		process.env.PI_CONFIG_DIR = configDir;
 		// Other suites that run before this one (e.g. dirs-python-gateway) may have
 		// called `setAgentDir`, which permanently mutates the module-level
