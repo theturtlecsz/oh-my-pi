@@ -87,6 +87,7 @@
 
 ### Fixed
 
+- Test suite binds egress `record.sock` under a short `tmp_path` so `pytest -n N` no longer overflows the AF_UNIX path limit ([#623](https://github.com/can1357/oh-my-pi/issues/623)).
 - NSI-6 pin drift names changed sources and the reseal command (OMP-621).
 - Orchestrator admission compares qualification proof with the configured running release, a missing stage handler fails closed, an audit pass without a stored independent acceptance cannot complete, and a checkpoint is delivered only after a confirmed signed push of the exact rendered payload (OMP-594).
 - Verifier runtime roots now reject resolved `/work` and descendants, the worktree, roots inside or containing it, and existing forbidden roots while allowing trees under another directory named `work`; jailed `PYTHONPATH` entries follow the same `/work` and worktree rule. On proc mount `EPERM`/`EACCES`, the shim drops bounding and inheritable capability sets and sets `no_new_privs` in `unshare` before mounting an empty read-only tmpfs; `execvp` launches the payload directly instead of `setpriv`, so `setpriv` never reads `/proc`.
