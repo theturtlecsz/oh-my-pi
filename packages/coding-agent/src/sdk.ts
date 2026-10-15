@@ -3670,9 +3670,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// constructed) and refreshed on every later rebuild via
 		// `setAdvisorMemoryPrompt`.
 		let advisorMemoryPrompt: string | undefined;
+		// A caller-supplied `getApiKey` owns this session's request auth and pins it
+		// to one exact credential. Background skill-description compression resolves
+		// its own smol/tiny model through the *unpinned* registry cascade, so it
+		// could 401-refresh a credential the caller pinned and mutate shared auth
+		// after this session is disposed. Omit the compressor under that ownership;
+		// render keeps the deterministic preview. Ordinary sessions keep compression.
 		const skillDescriptions = new SkillDescriptionCatalog({
 			dbPath: path.join(agentDir, "skill-descriptions.db"),
-			compress: createSkillDescriptionCompressor(modelRegistry, settings),
+			...(options.getApiKey ? {} : { compress: createSkillDescriptionCompressor(modelRegistry, settings) }),
 		});
 		let latestDegradations: InstructionPrepDegradation[] = [];
 		const rebuildSystemPrompt = async (
