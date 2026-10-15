@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -6,7 +6,7 @@ import { ptree } from "@oh-my-pi/pi-utils";
 import { withTempAgentDir } from "./ci-test-ts.ts";
 
 const repoRoot = path.join(import.meta.dir, "..");
-const CHILD_TIMEOUT_MS = 90_000;
+const CHILD_TIMEOUT_MS = 60_000;
 
 // Old fixed-name roots under os.tmpdir() that earlier tests created directly.
 const BLOCKED_NAMES = [
@@ -52,7 +52,7 @@ async function runBunTest(
 		});
 		return { exitCode: result.exitCode ?? 1, output: `${result.stdout}\n${result.stderr}` };
 	} catch (err) {
-		return { exitCode: 124, output: `child failed or timed out: ${String(err)}` };
+		throw new Error(`Child failed or timed out (${pkg}: ${files.join(", ")}): ${String(err)}`, { cause: err });
 	}
 }
 
@@ -62,7 +62,9 @@ function expectPass(label: string, result: RunResult): void {
 	}
 }
 
-async function withBlockedTmp<T>(fn: (root: string, env: Record<string, string | undefined>) => Promise<T>): Promise<T> {
+async function withBlockedTmp<T>(
+	fn: (root: string, env: Record<string, string | undefined>) => Promise<T>,
+): Promise<T> {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "tti-"));
 	try {
 		await fs.chmod(root, 0o700);
@@ -98,10 +100,13 @@ describe.skipIf(process.platform === "win32")("test temp-root isolation under un
 			}, env);
 
 			const control = await runBunTest("coding-agent", [SETUP_BAIL_FILE], env);
-			expect(control.exitCode).not.toBe(0);
 			const blocked = path.join(root, "omp-local");
-			expect(control.output).toContain(blocked);
-			expect(control.output).toMatch(/EACCES|permission denied/i);
+			const permissionFailure = control.output
+				.split("\n")
+				.some(line => line.includes(blocked) && /EACCES|permission denied/i.test(line));
+			if (control.exitCode === 0 || !permissionFailure) {
+				throw new Error(`Expected setup-bail EACCES at ${blocked} (exit ${control.exitCode}):\n${control.output}`);
+			}
 		});
 		// root is removed on every outcome
 	}, 300_000);
