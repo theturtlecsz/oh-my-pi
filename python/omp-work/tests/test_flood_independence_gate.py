@@ -48,14 +48,14 @@ STAGE_DIR = ROOT / "infra" / "automation-user" / "omp584-flood-stage"
 
 
 def _support_files(src_dir: Path) -> list[str]:
-    """Sibling .py modules flood.py may import, carried beside it into the temp stage.
-
-    flood.py ships as one stdlib-only module; the glob is defensive so a staged source that
-    splits a helper out still executes. Non-Python assets are not needed by the running copy.
-    """
+    """Sibling Python modules and planner rules required by the staged source."""
     if not src_dir.is_dir():
         return []
-    return sorted(f.name for f in src_dir.iterdir() if f.is_file() and f.suffix == ".py" and f.name != "flood.py")
+    return sorted(
+        f.name for f in src_dir.iterdir()
+        if f.is_file() and f.name != "flood.py"
+        and (f.suffix == ".py" or f.name in ("planner-independence.md", "omp584-planner-rules.md"))
+    )
 
 
 def _snapshot(path: Path) -> tuple[str, int]:

@@ -87,7 +87,8 @@ def candidate(tmp_path, monkeypatch):
     for p in source.iterdir():
         if p.is_file() and p.suffix in (".py", ".md"):
             shutil.copy2(p, directory / p.name)
-    shutil.copyfile(ASSETS / RULES, directory / RULES)
+    if not (directory / RULES).is_file():
+        shutil.copyfile(ASSETS / RULES, directory / RULES)
     init_repo(directory)
     compose(directory, PATCHES)
     path = directory / "flood.py"

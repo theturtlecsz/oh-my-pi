@@ -30,6 +30,10 @@ def stage(tmp_path: Path) -> Path:
     if not source and not candidate.is_file():
         pytest.skip("no deployed flood.py to test (set OMP584_FLOOD_SOURCE)")
     shutil.copy(candidate, dest / "flood.py")
+    for name in ("planner-independence.md", "omp584-planner-rules.md"):
+        sibling = candidate.with_name(name)
+        if sibling.is_file():
+            shutil.copy(sibling, dest / name)
     return dest / "flood.py"
 
 
