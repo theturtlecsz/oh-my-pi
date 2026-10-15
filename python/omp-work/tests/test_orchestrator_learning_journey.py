@@ -609,18 +609,6 @@ def test_orchestrator_learning_journey(service, tmp_path, monkeypatch, binary) -
                 assert _rows(learning_dir, "supplies") == []
                 assert _procedure(learning_dir)["status"] == "active"
 
-                sweeps_before = _sweep_calls(commands)
-                _use_config(world, worker, disabled_config)
-                disabled, disabled_prompts = _launch(
-                    worker, world, service, calls, fresh=True
-                )
-                _succeeded(disabled, disabled_prompts, commands)
-                assert _sweep_calls(commands) == sweeps_before
-                assert all(LESSON_TITLE not in text for text in disabled_prompts)
-                assert all(procedure_id not in text for text in disabled_prompts)
-                assert "lesson_supply_ids" not in disabled["data"]
-                assert _rows(learning_dir, "supplies") == []
-
                 store = LearningStore(learning_dir)
                 try:
                     promotion.record_journey_pass(
@@ -642,6 +630,18 @@ def test_orchestrator_learning_journey(service, tmp_path, monkeypatch, binary) -
                     )
                 finally:
                     store.close()
+
+                sweeps_before = _sweep_calls(commands)
+                _use_config(world, worker, disabled_config)
+                disabled, disabled_prompts = _launch(
+                    worker, world, service, calls, fresh=True
+                )
+                _succeeded(disabled, disabled_prompts, commands)
+                assert _sweep_calls(commands) == sweeps_before
+                assert all(LESSON_TITLE not in text for text in disabled_prompts)
+                assert all(procedure_id not in text for text in disabled_prompts)
+                assert "lesson_supply_ids" not in disabled["data"]
+                assert _rows(learning_dir, "supplies") == []
 
                 _use_config(world, worker, learning_config)
                 approved, approved_prompts = _launch(
@@ -749,10 +749,7 @@ def test_orchestrator_learning_journey(service, tmp_path, monkeypatch, binary) -
                 sweeps_before = _sweep_calls(commands)
                 recorded_before = len(commands)
 
-                def suspended(_view) -> bool:
-                    return _procedure(learning_dir)["status"] == "suspended"
-
-                tick_until(worker, world, suspended, limit=8)
+                worker.tick()
                 assert _procedure(learning_dir)["status"] == "suspended"
                 assert _sweep_calls(commands) > sweeps_before
                 sweep_results = [
