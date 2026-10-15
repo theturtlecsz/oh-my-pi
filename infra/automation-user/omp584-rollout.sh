@@ -500,6 +500,17 @@ omp584_main() (
     omp584_preflight "$@" || exit $?
     trap 'if [[ -n "${OMP584_STAGE:-}" ]]; then rm -rf -- "$OMP584_STAGE"; fi' EXIT
     omp584_stage || exit $?
+    # Empty applied-parts means every code part was already installed. Install
+    # nothing only when the checkout is already the canonical rules deployment.
+    # A missing applied-parts file keeps qualification, commit, and activation.
+    if [[ -f "$OMP584_STAGE/applied-parts" && ! -s "$OMP584_STAGE/applied-parts" ]] \
+        && [[ -f "$OMP584_FLOOD_DIR/planner-independence.md" ]] \
+        && ! grep -F -q -- 'with_name("omp584-planner-rules.md")' "$OMP584_FLOOD_DIR/flood.py" \
+        && cmp -s -- "$OMP584_FLOOD_DIR/planner-independence.md" "$OMP584_ASSETS/omp584-planner-rules.md"
+    then
+        echo 'omp584: all parts already installed; nothing to install'
+        exit 0
+    fi
     omp584_verify || exit $?
     omp584_install || exit $?
     echo "Deployment committed; activation verification pending. Evidence: $OMP584_EVIDENCE_DIR" >&2
