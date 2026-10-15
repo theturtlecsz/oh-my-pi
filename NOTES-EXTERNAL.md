@@ -1037,3 +1037,12 @@ Status: **PENDING — owner applies in OMP-623-s04**.
 ```
 uv run --project python/omp-work --extra dev pytest -n 4 python/omp-work/tests
 ```
+
+## OMP-595-s07-s05-s02 handoff
+
+External coordination with orch-worker-20261011 cannot be sent from this isolated,
+credential-free task. Proposed handoff: this lane changes only
+`python/omp-work/tests/test_orchestrator_renewed_model_authority.py` and its inventory
+row, proving real JobWorker renewal through the existing settled-response gate.
+Production renewal, cancellation, proxy, sandbox and pre-item helpers remain
+unchanged. Starting revision: `94b5d4d76d`. Active-lane acknowledgment is not claimed.

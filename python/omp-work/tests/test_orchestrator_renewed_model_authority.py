@@ -9,8 +9,9 @@ import os
 import subprocess
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,6 +21,7 @@ from uuid import UUID
 import httpx
 import psycopg
 import pytest
+from omp_work.jobs import worker as jobs_worker
 from omp_work.jobs.worker import JobWorker
 from omp_work.model_proxy import ProxyConfig, create_app
 from omp_work.orchestrator import worker_sandbox
@@ -47,7 +49,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 _GATE_TIMEOUT_S = 30.0
-_LEASE_SECONDS = 4
+_LEASE_SECONDS = 10
 
 # Concrete authority configured by this fixture's gemini_route defaults. These are
 # independent expected values, not the descriptor the fixture itself produced.
@@ -100,6 +102,15 @@ class RenewalGate:
         self.released_at: datetime | None = None
         self.calls_at_release: int | None = None
         self.renewals_at_release: int | None = None
+        self.claims: dict[str, dict[str, Any]] = {}
+        self.launch_expiry: datetime | None = None
+        self.observed_row: dict[str, Any] | None = None
+        self.first_receipts: list[dict[str, Any]] = []
+        self.first_usage: list[dict[str, Any]] = []
+        self.second_row: dict[str, Any] | None = None
+        self.lock_free = False
+        self.ticker: threading.Thread | None = None
+        self.feature_path: Path | None = None
         self.stop = threading.Event()
 
     def record_grant(self, payload: dict[str, Any]) -> None:
@@ -107,23 +118,44 @@ class RenewalGate:
         self.job_id = str(payload["job_id"])
         self.worker_id = str(payload["worker_id"])
         self.fence = int(payload["fence"])
-        with psycopg.connect(
-            **self.db_kwargs, autocommit=True, row_factory=dict_row
-        ) as conn:
-            row = conn.execute(
-                "SELECT lease_expires_at, worker_id, fence FROM omp_jobs.jobs WHERE workspace_id=%s AND job_id=%s",
-                (self.workspace_id, self.job_id),
-            ).fetchone()
-        assert row is not None
-        assert row["worker_id"] == self.worker_id
-        assert row["fence"] == self.fence
-        self.initial_lease = row["lease_expires_at"]
-        self.original_expiry = row["lease_expires_at"]
+        claim = self.claims[self.job_id]
+        assert claim["worker_id"] == self.worker_id
+        assert claim["fence"] == self.fence
+        assert claim["lease_seconds"] == _LEASE_SECONDS
+        self.original_expiry = datetime.fromisoformat(claim["lease_expires_at"])
+        self.initial_lease = self.original_expiry
 
     def mark_call1_committed(self) -> None:
         self.hold_started_at = datetime.now(UTC)
         self.calls_at_hold = len(self.provider_calls)
         self.renewals_at_hold = self._count_renewals()
+        assert self.hold_started_at < self.original_expiry
+        # Separate connections see only committed budget settlement; no proxy or
+        # provider transaction is used to keep the worker parked.
+        with psycopg.connect(
+            **self.db_kwargs, autocommit=True, row_factory=dict_row
+        ) as conn:
+            self.first_receipts = conn.execute(
+                "SELECT * FROM omp_jobs.operations WHERE workspace_id=%s AND kind='model_call_receipt'",
+                (self.workspace_id,),
+            ).fetchall()
+            self.first_usage = conn.execute(
+                "SELECT * FROM omp_jobs.usage_events WHERE workspace_id=%s",
+                (self.workspace_id,),
+            ).fetchall()
+            assert len(self.first_receipts) == len(self.first_usage) == 1
+            assert self.first_receipts[0]["result"]["settlement"]["measurement"] == "measured"
+            assert self.first_usage[0]["measurement"] == "measured"
+            try:
+                conn.execute("BEGIN")
+                row = conn.execute(
+                    "SELECT job_id FROM omp_jobs.jobs WHERE workspace_id=%s AND job_id=%s FOR UPDATE NOWAIT",
+                    (self.workspace_id, self.job_id),
+                ).fetchone()
+                assert row is not None
+                self.lock_free = True
+            finally:
+                conn.execute("ROLLBACK")
 
     def _count_renewals(self) -> int:
         with psycopg.connect(
@@ -147,10 +179,8 @@ class RenewalGate:
                     raise TimeoutError(
                         "timed out waiting for DB renewal past original expiry"
                     )
-                now = datetime.now(UTC)
-                past_expiry = now > self.original_expiry
                 job_row = conn.execute(
-                    "SELECT lease_expires_at, worker_id, fence FROM omp_jobs.jobs WHERE workspace_id=%s AND job_id=%s",
+                    "SELECT status, lease_expires_at, worker_id, fence, clock_timestamp() AS observed_at FROM omp_jobs.jobs WHERE workspace_id=%s AND job_id=%s",
                     (self.workspace_id, self.job_id),
                 ).fetchone()
                 renewals = conn.execute(
@@ -163,11 +193,17 @@ class RenewalGate:
                     and job_row["fence"] == self.fence
                     and job_row["lease_expires_at"] > self.original_expiry
                     and len(renewals) > self.renewals_at_hold
-                    and past_expiry
+                    and job_row["status"] == "admitted"
+                    and job_row["lease_expires_at"] > job_row["observed_at"]
+                    and job_row["observed_at"] > self.original_expiry
                 ):
                     # Requiring a renewal committed inside the hold window proves the
                     # held worker kept its lease past the original expiry without a
                     # second provider call and without waiting on a job lock.
+                    assert self.ticker is not None and self.ticker.is_alive()
+                    assert self.feature_path is not None and not self.feature_path.exists()
+                    assert len(self.provider_calls) == 1
+                    self.observed_row = dict(job_row)
                     self.renewed_expiry = job_row["lease_expires_at"]
                     self.renewals = list(renewals)
                     self.calls_at_release = len(self.provider_calls)
@@ -219,6 +255,14 @@ class HoldFirstProxyResponse:
         if is_model:
             self._model_calls += 1
         hold = is_model and self._model_calls == 1
+        if is_model and self._model_calls == 2:
+            with psycopg.connect(
+                **self.gate.db_kwargs, autocommit=True, row_factory=dict_row
+            ) as conn:
+                self.gate.second_row = conn.execute(
+                    "SELECT status, worker_id, fence, lease_expires_at, clock_timestamp() AS observed_at FROM omp_jobs.jobs WHERE workspace_id=%s AND job_id=%s",
+                    (self.gate.workspace_id, self.gate.job_id),
+                ).fetchone()
 
         async def receive_recorded() -> Any:
             message = await receive()
@@ -283,7 +327,11 @@ class RenewedWorld:
             )
 
         try:
-            tick_until(self.worker, self.world, implemented, limit=60)
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                ticker = executor.submit(
+                    tick_until, self.worker, self.world, implemented, limit=60
+                )
+                ticker.result(timeout=180 + _GATE_TIMEOUT_S)
         finally:
             if self.proxy.errors:
                 raise ExceptionGroup("proxy server failed", self.proxy.errors)
@@ -385,6 +433,16 @@ def renewed_world(service: Any, tmp_path: Path, monkeypatch: Any, binary: Any):
     db_kwargs = service.config.connection_kwargs("postgres")
     gate = RenewalGate(db_kwargs)
 
+    real_claim = jobs_worker.claim_job
+
+    def observe_claim(*args: Any, **kwargs: Any) -> Any:
+        result = real_claim(*args, **kwargs)
+        if result.get("job") is not None:
+            job = result["job"]
+            gate.claims[str(job["job_id"])] = dict(job)
+        return result
+
+    monkeypatch.setattr(jobs_worker, "claim_job", observe_claim)
     manifests: list[dict[str, Any]] = []
     real_sandbox = worker_sandbox.run_sandboxed
 
@@ -401,7 +459,11 @@ def renewed_world(service: Any, tmp_path: Path, monkeypatch: Any, binary: Any):
         if manifest_path:
             manifest_file = Path(manifest_path)
             assert manifest_file.stat().st_mode & 0o777 == 0o600
-            manifests.append(json.loads(manifest_file.read_text(encoding="utf-8")))
+            manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+            manifests.append(manifest)
+            gate.launch_expiry = datetime.fromisoformat(manifest["lease_expires_at"])
+            gate.ticker = threading.current_thread()
+            gate.feature_path = Path(kwargs["worktree"]) / "feature.txt"
         kwargs["ro_binds"] = (*kwargs.get("ro_binds", ()), str(shim), str(native))
         return real_sandbox(argv, identity, recorder, workdir, env, timeout, **kwargs)
 
@@ -473,10 +535,34 @@ def renewed_world(service: Any, tmp_path: Path, monkeypatch: Any, binary: Any):
                 release.set()
 
 
-def test_renewed_model_authority(renewed_world: RenewedWorld):
+def test_renewed_model_authority(renewed_world: RenewedWorld, record_property: Any):
     """Real worker calls provider before/after original interval under proven renewal."""
+    revision = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=Path(__file__).resolve().parents[3],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    record_property("tested_git_revision", revision)
+    print(f"renewed model authority tested_git_revision={revision}")
     state = renewed_world
     outcome = state.run()
+    record_property(
+        "renewal_evidence",
+        json.dumps(
+            {
+                "original_expiry": state.gate.original_expiry,
+                "launch_expiry": state.gate.launch_expiry,
+                "worker_id": state.gate.worker_id,
+                "fence": state.gate.fence,
+                "renewal_observation": state.gate.observed_row,
+                "second_request": state.gate.second_row,
+                "provider_call_times": [call[4] for call in state.calls],
+            },
+            default=str,
+        ),
+    )
 
     # 1. Success and allowed edit
     assert outcome["outcome"] == "succeeded"
@@ -562,6 +648,28 @@ def test_renewed_model_authority(renewed_world: RenewedWorld):
     assert call1_time < state.gate.original_expiry
     assert call2_time > state.gate.original_expiry
     assert state.gate.renewed_expiry > state.gate.original_expiry
+    assert state.gate.launch_expiry >= state.gate.original_expiry
+    assert state.gate.second_row is not None
+    assert state.gate.second_row["status"] == "admitted"
+    assert state.gate.second_row["worker_id"] == state.gate.worker_id
+    assert state.gate.second_row["fence"] == state.gate.fence
+    assert state.gate.second_row["lease_expires_at"] > state.gate.second_row["observed_at"]
+    assert state.gate.lock_free
+    assert state.gate.observed_row is not None
+    assert call2_time > state.gate.observed_row["observed_at"]
+    assert call2_time > state.gate.released_at
+    assert not state.calls[0][3]  # Provider returned without a provider-side hold.
+    with psycopg.connect(
+        **state.gate.db_kwargs, autocommit=True, row_factory=dict_row
+    ) as conn:
+        oldest = conn.execute(
+            "SELECT min(created_at) AS oldest FROM omp_jobs.jobs WHERE workspace_id=%s",
+            (state.world.workspace_id,),
+        ).fetchone()["oldest"]
+    assert datetime.fromisoformat(manifest["task_deadline"]) == oldest + timedelta(
+        seconds=180
+    )
+    assert datetime.fromisoformat(manifest["task_deadline"]) > state.gate.launch_expiry
 
     # The hold began after the first call committed and ended only after the renewed
     # lease passed the original expiry. While held, exactly the first provider call had
