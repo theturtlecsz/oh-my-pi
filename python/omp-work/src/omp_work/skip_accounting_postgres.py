@@ -249,6 +249,43 @@ def _operation_error(operation: str, path: Path, exc: OSError) -> PrerequisiteEr
     )
 
 
+def _child_error(
+    child: Any, operation: str, root: Path, exc: OSError | subprocess.TimeoutExpired
+) -> PrerequisiteError:
+    pid = getattr(child, "pid", None)
+    label = f"child {child!r}" if pid is None else f"child pid {pid}"
+    return PrerequisiteError(
+        f"owned_temp_child_{operation}_failed",
+        f"{operation} {label} while cleaning {root}: {exc}; storage retained",
+        stderr=str(exc),
+    )
+
+
+def _end_child(child: Any, root: Path) -> None:
+    """Terminate if live, then reap with bounded waits, escalating to kill on timeout."""
+    wait_op = "wait"
+    try:
+        wait_op = "poll"
+        if child.poll() is None:
+            wait_op = "terminate"
+            child.terminate()
+        wait_op = "wait"
+        child.wait(timeout=COMMAND_TIMEOUT_SECONDS)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    except OSError as exc:
+        raise _child_error(child, wait_op, root, exc) from exc
+    try:
+        child.kill()
+    except OSError as exc:
+        raise _child_error(child, "kill", root, exc) from exc
+    try:
+        child.wait(timeout=COMMAND_TIMEOUT_SECONDS)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        raise _child_error(child, "wait_after_kill", root, exc) from exc
+
+
 def _require_searchable(root: Path, searchable: Callable[[Path], int]) -> None:
     """Raise unless every resolved ancestor of ``root`` grants other-search (o+x).
 
@@ -390,8 +427,18 @@ class OwnedTemp:
         _OWNED_ROOTS[owned] = root
         return owned
 
-    def cleanup(self, *, rmtree: Callable[[Path], None] = _remove_tree) -> None:
+    def cleanup(
+        self,
+        children: Sequence[Any] = (),
+        *,
+        rmtree: Callable[[Path], None] = _remove_tree,
+    ) -> None:
         """Remove the allocated root once; unowned or already-consumed handles do nothing.
+
+        ``children`` are Popen-like direct children using this storage. Each is terminated
+        if live (killed after ``COMMAND_TIMEOUT_SECONDS``) and reaped, exited ones too.
+        Any child failure raises ``PrerequisiteError`` and retains storage and authority;
+        removal happens only after every child has ended.
 
         Authority is the factory allocation, never this handle's path fields. A root that
         is already absent counts as removed. Real removal errors raise
@@ -400,6 +447,15 @@ class OwnedTemp:
         root = _OWNED_ROOTS.get(self)
         if root is None:
             return
+        first_failure: PrerequisiteError | None = None
+        for child in children:
+            try:
+                _end_child(child, root)
+            except PrerequisiteError as exc:
+                if first_failure is None:
+                    first_failure = exc
+        if first_failure is not None:
+            raise first_failure
         try:
             rmtree(root)
         except OSError as exc:

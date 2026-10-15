@@ -594,3 +594,184 @@ def test_cleanup_inspection_permission_error_preserves_removal_failure(
         assert not owned.root.exists()
     finally:
         shutil.rmtree(owned.root, ignore_errors=True)
+
+
+class ChildDouble:
+    """Popen-like child recording every call into a shared trace."""
+
+    def __init__(
+        self,
+        name: str,
+        trace: list[str],
+        *,
+        exited: bool = False,
+        fail: dict[str, BaseException] | None = None,
+        wait_results: list[BaseException | None] | None = None,
+    ) -> None:
+        self.name = name
+        self.pid = 4242
+        self.trace = trace
+        self.exited = exited
+        self.fail = fail or {}
+        self.wait_results = list(wait_results or [])
+
+    def _step(self, op: str) -> None:
+        self.trace.append(f"{self.name}.{op}")
+        if op in self.fail:
+            raise self.fail[op]
+
+    def poll(self) -> int | None:
+        self._step("poll")
+        return 0 if self.exited else None
+
+    def terminate(self) -> None:
+        self._step("terminate")
+
+    def kill(self) -> None:
+        self._step("kill")
+
+    def wait(self, timeout: float | None = None) -> int:
+        assert timeout == sap.COMMAND_TIMEOUT_SECONDS
+        self.trace.append(f"{self.name}.wait")
+        if self.wait_results:
+            result = self.wait_results.pop(0)
+            if result is not None:
+                raise result
+        elif "wait" in self.fail:
+            raise self.fail["wait"]
+        return 0
+
+
+def timeout() -> subprocess.TimeoutExpired:
+    return subprocess.TimeoutExpired("child", sap.COMMAND_TIMEOUT_SECONDS)
+
+
+def test_cleanup_children_terminate_wait_then_remove(tmp_path: Path) -> None:
+    owned = make_owned(tmp_path)
+    trace: list[str] = []
+    try:
+        owned.cleanup([ChildDouble("a", trace)], rmtree=lambda p: (trace.append("rmtree"), shutil.rmtree(p))[1])
+        assert trace == ["a.poll", "a.terminate", "a.wait", "rmtree"]
+        assert not owned.root.exists() and not owned.is_owned
+    finally:
+        shutil.rmtree(owned.root, ignore_errors=True)
+
+
+def test_cleanup_children_timeout_escalates_to_kill_then_bounded_wait(tmp_path: Path) -> None:
+    owned = make_owned(tmp_path)
+    trace: list[str] = []
+    child = ChildDouble("a", trace, wait_results=[timeout(), None])
+    try:
+        owned.cleanup([child], rmtree=lambda p: (trace.append("rmtree"), shutil.rmtree(p))[1])
+        assert trace == ["a.poll", "a.terminate", "a.wait", "a.kill", "a.wait", "rmtree"]
+    finally:
+        shutil.rmtree(owned.root, ignore_errors=True)
+
+
+def test_cleanup_children_exited_reaped_and_all_reaped_before_removal(tmp_path: Path) -> None:
+    owned = make_owned(tmp_path)
+    trace: list[str] = []
+    children = [ChildDouble("a", trace, exited=True), ChildDouble("b", trace), ChildDouble("c", trace)]
+    try:
+        owned.cleanup(children, rmtree=lambda p: (trace.append("rmtree"), shutil.rmtree(p))[1])
+        assert trace == [
+            "a.poll", "a.wait",
+            "b.poll", "b.terminate", "b.wait",
+            "c.poll", "c.terminate", "c.wait",
+            "rmtree",
+        ]  # fmt: skip
+    finally:
+        shutil.rmtree(owned.root, ignore_errors=True)
+
+
+def test_cleanup_empty_children_removes_storage(tmp_path: Path) -> None:
+    owned = make_owned(tmp_path)
+    try:
+        owned.cleanup([])
+        assert not owned.root.exists() and not owned.is_owned
+    finally:
+        shutil.rmtree(owned.root, ignore_errors=True)
+
+
+@pytest.mark.parametrize(
+    ("operation", "kwargs", "expected"),
+    [
+        ("poll", {"fail": {"poll": OSError(errno.EIO, "poll boom")}}, ["a.poll"]),
+        ("terminate", {"fail": {"terminate": PermissionError(errno.EPERM, "term boom")}}, ["a.poll", "a.terminate"]),
+        ("wait", {"wait_results": [OSError(errno.ECHILD, "wait boom")]}, ["a.poll", "a.terminate", "a.wait"]),
+        (
+            "kill",
+            {"wait_results": [timeout()], "fail": {"kill": OSError(errno.EPERM, "kill boom")}},
+            ["a.poll", "a.terminate", "a.wait", "a.kill"],
+        ),
+        (
+            "wait_after_kill",
+            {"wait_results": [timeout(), OSError(errno.ECHILD, "post boom")]},
+            ["a.poll", "a.terminate", "a.wait", "a.kill", "a.wait"],
+        ),
+        (
+            "wait_after_kill",
+            {"wait_results": [timeout(), timeout()]},
+            ["a.poll", "a.terminate", "a.wait", "a.kill", "a.wait"],
+        ),
+    ],
+)
+def test_cleanup_child_failure_retains_storage_with_context(
+    tmp_path: Path, operation: str, kwargs: dict[str, Any], expected: list[str],
+) -> None:
+    owned = make_owned(tmp_path)
+    (owned.root / "sentinel").write_text("keep")
+    trace: list[str] = []
+    removed: list[Path] = []
+    child = ChildDouble("a", trace, **kwargs)
+    try:
+        with pytest.raises(PrerequisiteError) as info:
+            owned.cleanup([child], rmtree=removed.append)
+        err = info.value
+        assert err.exit_code == 2 and err.cause == f"owned_temp_child_{operation}_failed"
+        assert "4242" in err.detail and str(owned.root) in err.detail and operation in err.detail
+        assert isinstance(err.__cause__, (OSError, subprocess.TimeoutExpired))
+        assert str(err.__cause__) in err.detail
+        assert trace == expected and removed == []
+        assert (owned.root / "sentinel").read_text() == "keep" and owned.is_owned
+        # Authority retained: a retry with healthy children removes storage.
+        owned.cleanup([ChildDouble("b", [])])
+        assert not owned.root.exists()
+    finally:
+        shutil.rmtree(owned.root, ignore_errors=True)
+
+
+def test_cleanup_failed_child_does_not_skip_later_children(tmp_path: Path) -> None:
+    owned = make_owned(tmp_path)
+    trace: list[str] = []
+    bad = ChildDouble("a", trace, fail={"terminate": OSError(errno.EPERM, "nope")})
+    good = ChildDouble("b", trace)
+    try:
+        with pytest.raises(PrerequisiteError):
+            owned.cleanup([bad, good], rmtree=lambda p: trace.append("rmtree"))
+        assert trace == ["a.poll", "a.terminate", "b.poll", "b.terminate", "b.wait"]
+        assert owned.root.exists()
+    finally:
+        shutil.rmtree(owned.root, ignore_errors=True)
+
+
+def test_cleanup_consumed_handle_ignores_children(tmp_path: Path) -> None:
+    owned = make_owned(tmp_path)
+    owned.cleanup()
+    trace: list[str] = []
+    owned.cleanup([ChildDouble("a", trace)])
+    assert trace == []
+
+
+def test_cleanup_reaps_real_child(tmp_path: Path) -> None:
+    owned = make_owned(tmp_path)
+    child = subprocess.Popen(["sleep", "30"])
+    try:
+        owned.cleanup([child])
+        assert child.returncode is not None
+        assert not owned.root.exists()
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=sap.COMMAND_TIMEOUT_SECONDS)
+        shutil.rmtree(owned.root, ignore_errors=True)
