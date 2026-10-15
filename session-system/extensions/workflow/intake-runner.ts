@@ -38,7 +38,7 @@ import skillText from "../../skills/intake/SKILL.md" with { type: "text" };
 import draftInstructions from "./nsi6-draft.md" with { type: "text" };
 import repairTemplate from "./nsi6-repair.md" with { type: "text" };
 import sourceTemplate from "./nsi6-source.md" with { type: "text" };
-import typedCompleteness from "./typed-completeness.md" with { type: "text" };
+import typedCompleteness from "../../skills/intake/references/typed-completeness.md" with { type: "text" };
 
 export type IntakeArm = "current" | "typed";
 
