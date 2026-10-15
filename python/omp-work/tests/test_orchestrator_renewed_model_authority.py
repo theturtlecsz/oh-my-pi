@@ -22,6 +22,7 @@ import httpx
 import psycopg
 import pytest
 from omp_work.jobs import worker as jobs_worker
+from omp_work.jobs.budget import item_budget, root_work_id
 from omp_work.jobs.worker import JobWorker
 from omp_work.model_proxy import ProxyConfig, create_app
 from omp_work.orchestrator import worker_sandbox
@@ -55,6 +56,22 @@ _LEASE_SECONDS = 10
 # independent expected values, not the descriptor the fixture itself produced.
 _EXPECTED_CONTEXT_TOKENS = 100_000
 _EXPECTED_MAX_OUTPUT_TOKENS = 1000
+_EXPECTED_THINKING_TOKENS = 500
+# Durable item wall-clock ceiling seeded by the fixture; the task deadline is the
+# item tree's exact oldest job plus this, independent of the lease.
+_EXPECTED_ITEM_SECONDS = 180
+# Durable item ceilings: the grant/descriptor token cap is the published item
+# budget, never the in-memory request scope object.
+_EXPECTED_ITEM_TOKENS = 200_000
+_EXPECTED_TASK_USD = Decimal("2.00")
+# Bounds the proxy admits and records in each receipt fingerprint's prepared
+# block: the whole context is reserved as input, and max_output_tokens is
+# output (1000) + thinking (500).
+_EXPECTED_PREPARED_INPUT = 100_000
+_EXPECTED_PREPARED_OUTPUT = 1500
+_EXPECTED_PREPARED_TOTAL = 101_500
+# rate = max(input 0.30, cache 0.03) USD/M; (0.30 * 100000 + 2.50 * 1500) / 1e6.
+_EXPECTED_PREPARED_USD = Decimal("0.03375")
 # Cost of one measured call: 10 input tokens at 0.30 USD/M and 5 output tokens at
 # 2.50 USD/M. Two consumed calls total 0.000031.
 _PER_CALL_USD = Decimal("0.0000155")
@@ -104,6 +121,7 @@ class RenewalGate:
         self.renewals_at_release: int | None = None
         self.claims: dict[str, dict[str, Any]] = {}
         self.launch_expiry: datetime | None = None
+        self.launch_env: dict[str, str] | None = None
         self.observed_row: dict[str, Any] | None = None
         self.first_receipts: list[dict[str, Any]] = []
         self.first_usage: list[dict[str, Any]] = []
@@ -462,6 +480,7 @@ def renewed_world(service: Any, tmp_path: Path, monkeypatch: Any, binary: Any):
             manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
             manifests.append(manifest)
             gate.launch_expiry = datetime.fromisoformat(manifest["lease_expires_at"])
+            gate.launch_env = dict(env) if env else {}
             gate.ticker = threading.current_thread()
             gate.feature_path = Path(kwargs["worktree"]) / "feature.txt"
         kwargs["ro_binds"] = (*kwargs.get("ro_binds", ()), str(shim), str(native))
@@ -590,52 +609,91 @@ def test_renewed_model_authority(renewed_world: RenewedWorld, record_property: A
     assert manifest["model"]["id"] == "gemini-3.8-flash-high"
     assert manifest["model"]["api"] == "google-generative-ai"
 
-    # Fixed candidate
+    # Fixed candidate: the launch manifest names the orchestrator's actual planned
+    # candidate, not a substitute minted for the renewed attempt.
     candidate_id = manifest["candidate_id"]
-    assert candidate_id and isinstance(candidate_id, str)
+    assert candidate_id == str(orchestrator._ids(state.world.mission_id, "plan-candidate"))
 
-    # Fixed scopes
+    # Fixed scopes: capability is the lone candidate reader bound to the one
+    # workspace, candidate and lease identity that the grant carried.
     assert manifest["allowed_paths"] == ["feature.txt"]
     cap_dir = state.world.config.ops.config_dir / "capabilities"
     cap_files = list(cap_dir.glob(f"task-{state.world.mission_id}-*-implement.json"))
     assert len(cap_files) == 1
     task_cap = json.loads(cap_files[0].read_text(encoding="utf-8"))
+    assert task_cap["actor_kind"] == "task-agent"
     assert task_cap["scopes"] == ["work.candidate.read"]
+    assert task_cap["workspaces"] == [str(state.world.workspace_id)]
     assert task_cap["candidate_ids"] == [candidate_id]
+    assert len(task_cap["candidate_ids"]) == 1
+    assert task_cap["job_id"] == grant_payload["job_id"]
+    assert task_cap["worker_id"] == state.gate.worker_id
+    assert task_cap["fence"] == state.gate.fence
+
+    # The capability and the grant expire at the same fixed task deadline, which
+    # outlives the (renewable) initial lease, so renewal cannot move either.
     assert task_cap["expires_at"] == manifest["task_deadline"]
+    assert datetime.fromisoformat(grant_payload["expires_at"]) == datetime.fromisoformat(
+        manifest["task_deadline"]
+    )
 
-    # Fixed USD ceiling
-    assert Decimal(grant_payload["ceiling_usd"]) == Decimal("2.00")
+    # Fixed USD ceiling, and the durable item budget behind it.
+    assert Decimal(grant_payload["ceiling_usd"]) == _EXPECTED_TASK_USD
 
-    # Fixed token ceiling and concrete output/context caps: independent expected
-    # limits, not the descriptor the fixture produced, and the caps actually sent
-    # to the provider on both calls (a dropped cap or a limit change across
-    # renewal would fail here).
-    assert state.world.request.scope.budget_policy.tokens == 200_000
+    # Concrete output/context caps: independent expected limits, not the descriptor
+    # the fixture produced.
     assert manifest["model"]["limits"]["context_window"] == _EXPECTED_CONTEXT_TOKENS
     assert manifest["model"]["limits"]["max_output_tokens"] == _EXPECTED_MAX_OUTPUT_TOKENS
-    # Raw worker wire requests retain scoped credentials and tool results; the
-    # upstream log alone cannot prove what the worker sent before normalization.
+
+    # The token ceiling is the published item budget, not an in-memory request
+    # object: it is read back from the durable ``intake_publication`` receipt.
+    with psycopg.connect(
+        **state.gate.db_kwargs, autocommit=True, row_factory=dict_row
+    ) as conn:
+        with conn.cursor() as cur:
+            root = root_work_id(
+                cur, state.world.workspace_id, str(grant_payload["job_id"])
+            )
+            assert root is not None
+            item = item_budget(cur, state.world.workspace_id, root)
+    assert item is not None
+    assert item.tokens == _EXPECTED_ITEM_TOKENS
+    assert item.wall_clock_seconds == _EXPECTED_ITEM_SECONDS
+
+    # Raw worker wire requests: the worker's own outbound caps, before any proxy
+    # normalization, and the pinned proxy route. A missing or lowered worker cap
+    # is visible here even though the proxy would otherwise insert its default.
     assert len(state.worker_requests) == 2
     for request in state.worker_requests:
         assert request.status == 200
-        assert request.path.endswith("/models/gemini-3.8-flash-high:streamGenerateContent")
+        assert request.path == "/models/gemini-3.8-flash-high:streamGenerateContent"
         assert request.query == b"alt=sse"
         assert dict(request.headers)[b"x-goog-api-key"] == model_token.encode()
         assert b"data: " in request.response_body
+        body = json.loads(request.request_body)
+        worker_config = body["generationConfig"]
+        assert worker_config["maxOutputTokens"] == _EXPECTED_MAX_OUTPUT_TOKENS
+        worker_thinking = worker_config.get("thinkingConfig", {})
+        assert worker_thinking.get("thinkingBudget", 0) <= _EXPECTED_THINKING_TOKENS
     second_body = json.loads(state.worker_requests[1].request_body)
     assert any(
         part.get("functionResponse", {}).get("name") == "write"
         for row in second_body["contents"]
         for part in row.get("parts", [])
     )
+
+    # Recorded provider requests: the proxy's normalized wire body pins the same
+    # concrete limits and route on both calls, and never lets effective thinking
+    # exceed the configured cap.
     provider_calls = state.calls
     assert len(provider_calls) == 2
     for path, body, _headers, _held, _at in provider_calls:
-        assert path.endswith(":streamGenerateContent?alt=sse")
+        assert path == "/v1beta/models/gemini-3.8-flash-high:streamGenerateContent?alt=sse"
         config = body["generationConfig"]
         assert config["maxOutputTokens"] == _EXPECTED_MAX_OUTPUT_TOKENS
-        assert config["thinkingConfig"]["thinkingBudget"] == 500
+        thinking = config["thinkingConfig"]["thinkingBudget"]
+        assert thinking == _EXPECTED_THINKING_TOKENS
+        assert thinking <= _EXPECTED_THINKING_TOKENS
 
     # 3. Proven renewal under same worker/fence; calls before and after original interval
     assert len(state.calls) == 2
@@ -667,9 +725,18 @@ def test_renewed_model_authority(renewed_world: RenewedWorld, record_property: A
             (state.world.workspace_id,),
         ).fetchone()["oldest"]
     assert datetime.fromisoformat(manifest["task_deadline"]) == oldest + timedelta(
-        seconds=180
+        seconds=_EXPECTED_ITEM_SECONDS
     )
     assert datetime.fromisoformat(manifest["task_deadline"]) > state.gate.launch_expiry
+
+    # The worker jail was launched with the scoped task capability token and the
+    # pinned proxy route, never the control or provider secret.
+    assert state.gate.launch_env is not None
+    assert state.gate.launch_env["OMP_TASK_TOKEN"] == task_cap["token"]
+    assert state.gate.launch_env["OMP_MODEL_TOKEN"] == model_token
+    assert state.gate.launch_env["OMP_MODEL_PROXY_URL"] == state.proxy_url
+    assert CONTROL_TOKEN not in state.gate.launch_env.values()
+    assert PROVIDER_KEY not in state.gate.launch_env.values()
 
     # The hold began after the first call committed and ended only after the renewed
     # lease passed the original expiry. While held, exactly the first provider call had
@@ -709,6 +776,7 @@ def test_renewed_model_authority(renewed_world: RenewedWorld, record_property: A
 
     seen_spend: set[str] = set()
     seen_usage: set[str] = set()
+    prepared_routes: list[dict[str, Any]] = []
     for receipt in receipts:
         settlement = receipt["result"]["settlement"]
         assert settlement["measurement"] == "measured"
@@ -717,6 +785,33 @@ def test_renewed_model_authority(renewed_world: RenewedWorld, record_property: A
         assert settlement["output_tokens"] == 5
         assert settlement["cache_tokens"] == 0
         assert Decimal(str(settlement["actual_usd"])) == _PER_CALL_USD
+
+        # Each durable receipt fingerprints the exact admitted bound it charged:
+        # the whole context reserved as input, output (1000) + thinking (500), and
+        # the rate-derived USD ceiling. These are read from the receipt, so a call
+        # that admitted different bounds across the renewal fails here.
+        fingerprint = receipt["result"]["fingerprint"]
+        prepared = fingerprint["prepared"]
+        assert prepared["max_input_tokens"] == _EXPECTED_PREPARED_INPUT
+        assert prepared["max_output_tokens"] == _EXPECTED_PREPARED_OUTPUT
+        assert (
+            prepared["max_input_tokens"] + prepared["max_output_tokens"]
+            == _EXPECTED_PREPARED_TOTAL
+        )
+        assert Decimal(str(prepared["max_usd"])) == _EXPECTED_PREPARED_USD
+        assert prepared["route"]["model"] == "gemini-3.8-flash-high"
+        assert prepared["route"]["context_tokens"] == _EXPECTED_CONTEXT_TOKENS
+        assert prepared["route"]["max_output_tokens"] == _EXPECTED_MAX_OUTPUT_TOKENS
+        assert prepared["route"]["thinking_tokens"] == _EXPECTED_THINKING_TOKENS
+        assert prepared["url"] == (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            "gemini-3.8-flash-high:streamGenerateContent?alt=sse"
+        )
+        assert Decimal(str(fingerprint["task_ceiling_usd"])) == _EXPECTED_TASK_USD
+        assert fingerprint["job_id"] == grant_payload["job_id"]
+        assert fingerprint["worker_id"] == state.gate.worker_id
+        assert fingerprint["fence"] == state.gate.fence
+        prepared_routes.append(prepared["route"])
 
         # Each receipt carries the settlement identity that keys its spend row
         # (record_id = identity[:16] bytes) and its usage event (request_id).
@@ -748,6 +843,12 @@ def test_renewed_model_authority(renewed_world: RenewedWorld, record_property: A
 
     assert len(seen_spend) == 2
     assert len(seen_usage) == 2
+
+    # The two receipts were admitted on opposite sides of the original lease
+    # expiry (call 1 before, call 2 after). Their fingerprints must carry byte-identical
+    # routes/rates and the same task ceiling: renewal changes neither authority nor price.
+    assert state.calls[0][4] < state.gate.original_expiry < state.calls[1][4]
+    assert prepared_routes[0] == prepared_routes[1]
 
     total_usage_usd = sum(
         (Decimal(str(event["price_usd"])) for event in usage_events), Decimal()
