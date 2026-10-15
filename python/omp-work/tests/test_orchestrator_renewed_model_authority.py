@@ -11,26 +11,32 @@ import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 import psycopg
 import pytest
+from omp_work import model_proxy
 from omp_work.jobs import worker as jobs_worker
 from omp_work.jobs.budget import item_budget, root_work_id
+from omp_work.jobs.cancel import cancel_job
 from omp_work.jobs.worker import JobWorker
 from omp_work.model_proxy import ProxyConfig, create_app
-from omp_work.orchestrator import worker_sandbox
+from omp_work.model_proxy_budget import ModelProxyBudget
+from omp_work.orchestrator import model_proxy_client, worker_sandbox
 from omp_work.orchestrator import service as orchestrator
 from omp_work.orchestrator.service import OrchestratorHandler, submit
 from omp_work.v1.canonical import sha256
+from omp_work.v1.models import CommandEnvelope, OperationState
 from omp_work.v1.server import create_app as work_app
+from omp_work.v1.store import PostgresWorkStore
 from orchestrator_e2e_support import open_e2e_world, open_worker, tick_until
 from psycopg.rows import dict_row
 from test_item_budget_alerts import _seed_budget
