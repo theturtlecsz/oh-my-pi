@@ -23,9 +23,12 @@ from psycopg.rows import dict_row
 import pytest
 from omp_work.contracts.nsi.v1 import models as nsi
 from omp_work.intake_repository import append_revision, lock_revision, read_revision, revision_hashes
-from omp_work.intake_support import SourceSpan
+from omp_work.intake_support import SourceSpan, render_claim_text
 from omp_work.intake_support_judge import Completion, JudgeHook, use_judge_hook
 from omp_work.operations.jobs_migrate import apply_jobs_migrations
+from omp_work.v1.api_models import IntakeRecordView
+from omp_work.v1.canonical import text_sha256
+from omp_work.v1.intake_commands import read_intake_view
 from test_nsi2_claims import (
     claim_command,
     envelope,
@@ -33,7 +36,7 @@ from test_nsi2_claims import (
     http_intake,  # noqa: F401
 )
 from test_nsi2_repository import connection, revision_body
-from test_workflow_service import OWNER, _command, service  # noqa: F401
+from test_workflow_service import OWNER, _command, _owner_headers, service  # noqa: F401
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1",
@@ -148,18 +151,44 @@ def test_echo_write_needs_no_budget_completion_or_usage(service, http_intake):
         ("supports", "supported"),
         ("contradicts", "contested"),
         ("neither", "unsupported"),
+        ("abstain", "unsupported"),
+        ("timeout", "unsupported"),
+        ("evidence-unavailable", "unsupported"),
     ],
 )
 def test_budget_scripted_verdict_derives_status_and_stores_receipt(
     service, http_intake, verdict: str, expected_status: str,
 ):
-    """Budget + scripted supports/contradicts/neither => supported/contested/unsupported; DB stores caller+receipt."""
+    """Budget + scripted verdict => status and stored receipt across all six verdicts.
+
+    GET head and pinned revision verify every state/binding against DB receipt and computed inputs;
+    only supports agrees. Includes nonzero byte span with Unicode context.
+    """
     workspace_id, mission_id = http_intake
-    _start_and_evidence(service, workspace_id, mission_id)
+    assert _command(
+        service, workspace_id,
+        envelope(workspace_id, mission_id).command.model_dump(mode="json"),
+    )[0] == 200
+    context_text = "prefix: aé🙂 suffix"
+    ev_cmd = evidence_command(OWNER, "owner", text=context_text)
+    assert _command(service, workspace_id, ev_cmd)[0] == 200
+
     _seed_budget(service, workspace_id, mission_id)
     complete = _scripted(verdict)
+    passage = "aé🙂"
+    span = {
+        "artifact_id": "artifact-added",
+        "start_byte": 8,
+        "end_byte": 15,
+        "quote": passage,
+    }
+    cmd = claim_command(
+        OWNER, "owner",
+        evidence=[span],
+        evidence_links=[{"span": span, "relation": "supports"}],
+    )
     with use_judge_hook(JudgeHook(complete=complete)):
-        status, body = _command(service, workspace_id, claim_command(OWNER, "owner"))
+        status, body = _command(service, workspace_id, cmd)
     assert status == 200
     assert len(complete.seen) == 1
     assert _usage_count(service, workspace_id) == 1
@@ -180,7 +209,8 @@ def test_budget_scripted_verdict_derives_status_and_stores_receipt(
     assert receipt.input_tokens == 7
     assert receipt.output_tokens == 3
     assert receipt.usage_id is not None
-    assert receipt.source_span == SourceSpan(start=link.start_byte, end=link.end_byte)
+    assert receipt.source_span == SourceSpan(start=8, end=15)
+    assert receipt.source_span.start > 0
 
     usage = _usage_row(service, receipt.usage_id)
     assert usage is not None
@@ -188,6 +218,78 @@ def test_budget_scripted_verdict_derives_status_and_stores_receipt(
     assert usage["measurement"] == "measured"
     assert usage["input_tokens"] == 7
     assert usage["output_tokens"] == 3
+
+    # Computed inputs
+    claim_payload_data = cmd["payload"]["claim"]
+    claim_text = render_claim_text({
+        "subject_id": claim_payload_data["subject"]["id"],
+        "predicate_id": claim_payload_data["predicate_id"],
+        "predicate_title": "Depends on",
+        "value": claim_payload_data["value"],
+        "modality": claim_payload_data["modality"],
+        "polarity": claim_payload_data["polarity"],
+    })
+    expected_claim_sha256 = text_sha256(claim_text)
+    expected_passage_sha256 = text_sha256(passage)
+    expected_context_sha256 = text_sha256(context_text)
+
+    # GET head and pinned revision (both HTTP and read_intake_view)
+    head_resp = service.client.get(
+        f"/v1/workspaces/{workspace_id}/intake/{RUN_ID}",
+        headers=_owner_headers(workspace_id),
+    )
+    assert head_resp.status_code == 200
+    head_view = IntakeRecordView.model_validate(head_resp.json())
+
+    pinned_resp = service.client.get(
+        f"/v1/workspaces/{workspace_id}/intake/{RUN_ID}?revision=3",
+        headers=_owner_headers(workspace_id),
+    )
+    assert pinned_resp.status_code == 200
+    pinned_view = IntakeRecordView.model_validate(pinned_resp.json())
+
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        direct_head = read_intake_view(cur, workspace_id, RUN_ID)
+        direct_pinned = read_intake_view(cur, workspace_id, f"{RUN_ID}@3")
+
+    for view in (head_view, pinned_view, direct_head, direct_pinned):
+        assert len(view.evidence_links) == 1
+        assert len(view.support_judgments) == 1
+        judgment = view.support_judgments[0]
+
+        # Verify against DB receipt
+        assert judgment.claim_id == link.claim_id
+        assert judgment.artifact_id == link.artifact_id
+        assert judgment.model_id == receipt.model_id
+        assert judgment.start_byte == receipt.source_span.start
+        assert judgment.end_byte == receipt.source_span.end
+        assert judgment.caller_relation == link.relation
+        assert judgment.verdict == receipt.verdict
+        assert judgment.source_revision == receipt.source_revision
+        assert judgment.model_version == receipt.model_version
+        assert judgment.prompt_version == receipt.prompt_version
+        assert judgment.rule_version == receipt.rule_version
+        assert judgment.passage_sha256 == receipt.passage_sha256
+        assert judgment.claim_text_sha256 == receipt.claim_text_sha256
+        assert judgment.context_sha256 == receipt.context_sha256
+
+        # Verify against computed inputs
+        assert judgment.start_byte == 8
+        assert judgment.end_byte == 15
+        assert judgment.start_byte > 0
+        assert judgment.caller_relation == "supports"
+        assert judgment.verdict == verdict
+        assert judgment.claim_text_sha256 == expected_claim_sha256
+        assert judgment.passage_sha256 == expected_passage_sha256
+        assert judgment.context_sha256 == expected_context_sha256
+        assert judgment.source_revision == expected_context_sha256
+
+        # Disagreement: only supports agrees
+        if verdict == "supports":
+            assert not judgment.disagreement
+        else:
+            assert judgment.disagreement
+        assert judgment.disagreement == (judgment.caller_relation != judgment.verdict)
 
 
 def test_no_budget_refuses_claim_write(service, http_intake):
@@ -305,6 +407,33 @@ def test_admission_with_missing_receipts_reports_unsupported(service, http_intak
     assert len(admitted_links) == 1
     assert admitted_links[0].support_receipt is None
 
+    # Legacy link without receipt produces no judgments on GET head and pinned revision
+    head_resp = service.client.get(
+        f"/v1/workspaces/{workspace_id}/intake/{RUN_ID}",
+        headers=_owner_headers(workspace_id),
+    )
+    assert head_resp.status_code == 200
+    head_view = IntakeRecordView.model_validate(head_resp.json())
+    assert len(head_view.evidence_links) == 1
+    assert head_view.support_judgments == ()
+
+    pinned_resp = service.client.get(
+        f"/v1/workspaces/{workspace_id}/intake/{RUN_ID}?revision=1",
+        headers=_owner_headers(workspace_id),
+    )
+    assert pinned_resp.status_code == 200
+    pinned_view = IntakeRecordView.model_validate(pinned_resp.json())
+    assert len(pinned_view.evidence_links) == 1
+    assert pinned_view.support_judgments == ()
+
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        direct_head = read_intake_view(cur, workspace_id, RUN_ID)
+        direct_pinned = read_intake_view(cur, workspace_id, f"{RUN_ID}@1")
+        assert len(direct_head.evidence_links) == 1
+        assert direct_head.support_judgments == ()
+        assert len(direct_pinned.evidence_links) == 1
+        assert direct_pinned.support_judgments == ()
+
 
 def test_forced_timeout_persists_timeout_receipt(service, http_intake):
     """Forced timeout persists timeout receipt with unknown usage (null tokens)."""
@@ -385,3 +514,76 @@ def test_receipt_binds_nonzero_artifact_byte_span(service, http_intake):
     assert link.support_receipt is not None
     assert link.support_receipt.source_span == SourceSpan(start=8, end=15)
     assert link.support_receipt.source_span.start > 0
+
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        view = read_intake_view(cur, workspace_id, RUN_ID)
+    assert len(view.support_judgments) == 1
+    judgment = view.support_judgments[0]
+    assert judgment.start_byte == 8
+    assert judgment.end_byte == 15
+    assert judgment.start_byte > 0
+
+
+def test_receiptless_legacy_link_yields_no_invented_judgments(service, http_intake):
+    """Receiptless legacy links yield no invented judgments while keeping evidence_links unchanged."""
+    workspace_id, mission_id = http_intake
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        seeded = revision_body(workspace_id, revision=0)
+        seeded["snapshot"]["state"] = "reasoning"
+        for artifact in seeded["snapshot"]["artifacts"]:
+            artifact["content_hash"] = hashlib.sha256(seeded["artifact_bytes"][artifact["id"]]).hexdigest()
+        seeded["supersessions"] = {}
+        seeded["snapshot"]["ontology"]["predicates"][0]["authority"].append("owner")
+        claim = seeded["snapshot"]["claims"][0]
+        span = claim["evidence"][0]
+        # Legacy link with no support_receipt
+        seeded["evidence_links"] = [
+            dict(claim_id=claim["id"], relation="supports", **span),
+        ]
+        seeded["binding"]["rule_bundle_hash"] = "1" * 64
+        seeded["binding"]["schema_hash"] = "2" * 64
+        seeded["binding"]["contract_hash"] = "3" * 64
+        seeded_snapshot = nsi.IntakeSnapshot.model_validate(seeded["snapshot"])
+        c_hash, s_hash = revision_hashes(seeded_snapshot, seeded["artifact_bytes"])
+        seeded["binding"]["claim_set_hash"] = c_hash
+        seeded["binding"]["source_hash"] = s_hash
+
+        locked = lock_revision(
+            cur, workspace_id=workspace_id, run_id=RUN_ID, expected_revision=-1,
+            mission_id=mission_id, operation_id=uuid4(),
+        )
+        append_revision(cur, locked, seeded, operation_id=uuid4())
+
+    stored_link = _stored_links(service, workspace_id, 0)[0]
+    assert stored_link.support_receipt is None
+
+    # GET head
+    head_resp = service.client.get(
+        f"/v1/workspaces/{workspace_id}/intake/{RUN_ID}",
+        headers=_owner_headers(workspace_id),
+    )
+    assert head_resp.status_code == 200
+    head_view = IntakeRecordView.model_validate(head_resp.json())
+    assert len(head_view.evidence_links) == 1
+    assert head_view.evidence_links[0].relation == "supports"
+    assert head_view.support_judgments == ()
+
+    # GET pinned revision
+    pinned_resp = service.client.get(
+        f"/v1/workspaces/{workspace_id}/intake/{RUN_ID}?revision=1",
+        headers=_owner_headers(workspace_id),
+    )
+    assert pinned_resp.status_code == 200
+    pinned_view = IntakeRecordView.model_validate(pinned_resp.json())
+    assert len(pinned_view.evidence_links) == 1
+    assert pinned_view.evidence_links[0].relation == "supports"
+    assert pinned_view.support_judgments == ()
+
+    # read_intake_view direct
+    with connection(service, workspace_id) as conn, conn.cursor() as cur:
+        direct_head = read_intake_view(cur, workspace_id, RUN_ID)
+        direct_pinned = read_intake_view(cur, workspace_id, f"{RUN_ID}@1")
+        assert len(direct_head.evidence_links) == 1
+        assert direct_head.support_judgments == ()
+        assert len(direct_pinned.evidence_links) == 1
+        assert direct_pinned.support_judgments == ()

@@ -30,7 +30,8 @@ from ..intake_support_judge import (
     judge_link,
 )
 from .api_models import (
-    IntakeAssessmentView, IntakeProvenance, IntakeRecordView, IntakeTrace, RegisterIntakeEvidenceResult,
+    IntakeAssessmentView, IntakeProvenance, IntakeRecordView, IntakeSupportJudgment, IntakeTrace,
+    RegisterIntakeEvidenceResult,
 )
 from .intake_decisions import (
     compute_settlement_assessment, execute_decision_operation, intake_actor, open_issues, settlement_records,
@@ -576,6 +577,27 @@ def read_intake_view(cur: Cursor, workspace_id: UUID, value: str) -> IntakeRecor
             claim_ids=tuple(dict.fromkeys(cid for r in link.requirements for cid in r.claim_ids)),
         ) for link in stored.body.history.criteria),
         assessments=assessments,
+        support_judgments=tuple(
+            IntakeSupportJudgment(
+                claim_id=link.claim_id,
+                artifact_id=link.artifact_id,
+                model_id=link.support_receipt.model_id,
+                start_byte=link.support_receipt.source_span.start,
+                end_byte=link.support_receipt.source_span.end,
+                caller_relation=link.relation,
+                verdict=link.support_receipt.verdict,
+                source_revision=link.support_receipt.source_revision,
+                model_version=link.support_receipt.model_version,
+                prompt_version=link.support_receipt.prompt_version,
+                rule_version=link.support_receipt.rule_version,
+                passage_sha256=link.support_receipt.passage_sha256,
+                claim_text_sha256=link.support_receipt.claim_text_sha256,
+                context_sha256=link.support_receipt.context_sha256,
+                disagreement=link.relation != link.support_receipt.verdict,
+            )
+            for link in stored.body.evidence_links
+            if link.support_receipt is not None
+        ),
         provenance=proof.model_copy(update={"revision": revision + 1}) if proof is not None
         else _revision_provenance(run_id, revision, stored.artifact_bytes),
     )
