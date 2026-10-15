@@ -403,6 +403,14 @@ def run_research_campaign(
         trial.campaign_id == campaign_id for trial in client.research(key).trials
     ):
         progress = recover_progress(client, store, key, resumed, definition, actor_id)
+        if progress.spent > search.budget:
+            raise RuntimeError(
+                f"campaign {campaign_id} restored cumulative cost {progress.spent} exceeds search budget {search.budget}"
+            )
+        if resume_campaign_id is not None and progress.pending is not None:
+            raise RuntimeError(
+                f"campaign {campaign_id} has unsettled trial {progress.pending.trial_id}"
+            )
         steps = progress.tree
         for result in progress.results:
             opened.add(result.step_id)

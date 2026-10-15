@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -606,6 +607,107 @@ def test_nonrunning_and_wrong_item_campaign_refuses(
             actor_id=fix.actor_id,
             resume_campaign_id=uuid4(),
         )
+
+
+def test_explicit_resume_with_unfinished_decision_refuses_unsettled(
+    campaign, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fix = campaign
+    definition = _make_definition_file(fix)
+    real_dispatch = research_campaign.dispatch_trial
+    calls: list[UUID] = []
+
+    def crash_second(*args, **kwargs):
+        calls.append(kwargs["trial_id"])
+        if len(calls) == 2:
+            raise Crash("crash after proposal before dispatch")
+        return real_dispatch(*args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(research_campaign, "dispatch_trial", crash_second)
+        with pytest.raises(Crash, match="crash after proposal before dispatch"):
+            _run(fix, definition)
+
+    before_campaign, before_trials, _ = _persisted(fix)
+    assert before_campaign.state == "running"
+    assert len(before_trials) == 2
+    # Second trial was proposed but not dispatched: no job
+    assert _job(fix, before_trials[1].trial_id) is None
+
+    # Explicit resume must refuse because trial 1 is unfinished/unsettled
+    dispatches: list[UUID] = []
+
+    def counted_dispatch(*args, **kwargs):
+        dispatches.append(kwargs["trial_id"])
+        return real_dispatch(*args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(research_campaign, "dispatch_trial", counted_dispatch)
+        with pytest.raises(RuntimeError, match="unsettled"):
+            run_research_campaign(
+                fix.client,
+                fix.store,
+                fix.key,
+                definition,
+                harness_dir=fix.harness_dir,
+                actor_id=fix.actor_id,
+                resume_campaign_id=before_campaign.campaign_id,
+            )
+        assert dispatches == []
+
+
+def test_explicit_resume_with_over_budget_restored_cost_refuses(
+    campaign, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fix = campaign
+    definition = _make_definition_file(fix, budget=3)
+
+    real_next_step = research_campaign.next_step
+    picks: list[int] = []
+
+    def interrupt_before_third_pick(*args, **kwargs):
+        picks.append(1)
+        if len(picks) == 3:
+            raise Crash()
+        return real_next_step(*args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(research_campaign, "next_step", interrupt_before_third_pick)
+        with pytest.raises(Crash):
+            _run(fix, definition)
+
+    before_campaign, before_trials, _ = _persisted(fix)
+    assert len(before_trials) == 2
+
+    dispatches: list[UUID] = []
+    real_dispatch = research_campaign.dispatch_trial
+
+    def counted_dispatch(*args, **kwargs):
+        dispatches.append(kwargs["trial_id"])
+        return real_dispatch(*args, **kwargs)
+
+    # Definition with budget=1 where 2 settled trials already spent 2.0
+    def_budget_1 = _make_definition_file(fix, budget=1)
+    real_prepare = research_campaign.prepare_campaign
+
+    def prepare_matching_spec(*args, **kwargs):
+        setup = real_prepare(*args, **kwargs)
+        return replace(setup, spec_sha256=before_campaign.spec_sha256)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(research_campaign, "dispatch_trial", counted_dispatch)
+        patch.setattr(research_campaign, "prepare_campaign", prepare_matching_spec)
+        with pytest.raises(RuntimeError, match="exceeds search budget"):
+            run_research_campaign(
+                fix.client,
+                fix.store,
+                fix.key,
+                def_budget_1,
+                harness_dir=fix.harness_dir,
+                actor_id=fix.actor_id,
+                resume_campaign_id=before_campaign.campaign_id,
+            )
+        assert dispatches == []
 
 
 def test_cli_resume_passes_valid_uuid(
