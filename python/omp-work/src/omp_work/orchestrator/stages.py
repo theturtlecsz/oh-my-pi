@@ -20,6 +20,7 @@ from omp_work.routing.policy import RoutingPolicy
 from omp_work.v1.models import CreateDecisionPayload, DecisionActionClass
 
 __all__ = [
+    "PRODUCT_ACCEPTANCE_RULE",
     "STAGE_ORDER",
     "UNRECORDED_KINDS",
     "ActionVerdict",
@@ -70,12 +71,16 @@ UNRECORDED_KINDS: frozenset[str] = frozenset({"frozen", "wait"})
 Outcome = Literal["none", "succeeded", "failed", "crashed", "waiting"]
 TerminalRequest = Literal["abandon", "cancel", "redefine"]
 Verdict = Literal["none", "pass", "fail"]
+ProductAcceptance = Literal["none", "pending", "pass", "fail"]
 
 _OUTCOMES = frozenset(get_args(Outcome))
 _TERMINAL_REQUESTS = frozenset(get_args(TerminalRequest))
 _VERDICTS = frozenset(get_args(Verdict))
+_PRODUCT_ACCEPTANCES = frozenset(get_args(ProductAcceptance))
 _DECISION_ACTION_CLASSES = frozenset(get_args(DecisionActionClass))
 
+PRODUCT_ACCEPTANCE_RULE = "d42-product-acceptance"
+_ACCEPTANCE_RULES = frozenset({PRODUCT_ACCEPTANCE_RULE})
 # Approval pauses record the action class and target digest; resume pauses do not.
 _APPROVAL_RULES = frozenset({"d35-tier3", "d41-merge-approval", "terminal-needs-basis"})
 _RESUME_RULES = frozenset(
@@ -91,10 +96,16 @@ _RESUME_RULES = frozenset(
 )
 _OPTIONS_APPROVAL = ("approve", "decline")
 _OPTIONS_RESUME = ("resume", "abandon")
+_OPTIONS_ACCEPTANCE = ("accept", "reject")
 
 # rule id -> (question, why it matters, risk of delay); {mission} is always
 # available and {commit}/{target} only for the merge rule.
 _RULE_TEXT: Mapping[str, tuple[str, str, str]] = {
+    PRODUCT_ACCEPTANCE_RULE: (
+        "Accept the delivered product for mission {mission}?",
+        "Technical delivery does not replace the owner's product acceptance.",
+        "The mission stays open until the delivered product is accepted.",
+    ),
     "release-qualification": (
         "This release has no recorded qualification pass. Resume mission {mission}?",
         "Unqualified code must not run the production orchestrator.",
@@ -183,6 +194,8 @@ class Facts:
     verdict: Verdict = "none"
     candidate_commit: str | None = None
     target_ref: str | None = None
+    requires_product_acceptance: bool = False
+    product_acceptance: ProductAcceptance = "none"
 
     def __post_init__(self) -> None:
         if self.stage not in _STAGE_SET:
@@ -191,6 +204,8 @@ class Facts:
             raise ValueError(f"unknown outcome: {self.outcome!r}")
         if self.verdict not in _VERDICTS:
             raise ValueError(f"unknown verdict: {self.verdict!r}")
+        if self.product_acceptance not in _PRODUCT_ACCEPTANCES:
+            raise ValueError(f"unknown product_acceptance: {self.product_acceptance!r}")
         if self.terminal_request is not None and self.terminal_request not in _TERMINAL_REQUESTS:
             raise ValueError(f"unknown terminal_request: {self.terminal_request!r}")
 
@@ -262,6 +277,15 @@ def decision_for(facts: Facts, rule_id: str) -> CreateDecisionPayload:
             "resume": "The mission continues from the paused stage.",
             "abandon": "The mission stays paused where it is.",
         }
+    elif rule_id in _ACCEPTANCE_RULES:
+        options = _OPTIONS_ACCEPTANCE
+        default = None
+        action_class = None
+        target_sha256 = None
+        risks = {
+            "accept": "The delivered product is accepted and the mission can complete.",
+            "reject": "The delivered product remains unaccepted and the mission stays open.",
+        }
     else:
         raise ValueError(f"unknown orchestrator rule id: {rule_id!r}")
 
@@ -269,6 +293,9 @@ def decision_for(facts: Facts, rule_id: str) -> CreateDecisionPayload:
         raise ValueError("d41-merge-approval requires candidate_commit and target_ref")
 
     question, why_it_matters, risk_of_delay = _RULE_TEXT[rule_id]
+    evidence_refs = (f"orch_step:{facts.mission_id}:{facts.step_index}",)
+    if rule_id in _ACCEPTANCE_RULES and facts.candidate_commit is not None:
+        evidence_refs += (f"delivery:{facts.candidate_commit}",)
     fields = {
         "mission": facts.mission_id,
         "commit": None if facts.candidate_commit is None else facts.candidate_commit[:12],
@@ -286,7 +313,7 @@ def decision_for(facts: Facts, rule_id: str) -> CreateDecisionPayload:
         default_if_any=default,
         action_class=action_class,
         target_sha256=target_sha256,
-        evidence_refs=(f"orch_step:{facts.mission_id}:{facts.step_index}",),
+        evidence_refs=evidence_refs,
         resume_state=facts.stage,
     )
 
@@ -400,6 +427,8 @@ def _succeeded(facts: Facts, bounds: Bounds) -> Step:
     if not facts.capacity_free:
         return _reschedule(facts)
     if facts.stage == "close":
+        if facts.requires_product_acceptance and facts.product_acceptance != "pass":
+            return _pause(facts, PRODUCT_ACCEPTANCE_RULE)
         return _step(facts, "end", "mission-complete", next_stage=None)
     return _step(facts, "advance", "stage-order", next_stage=_following(facts.stage))
 

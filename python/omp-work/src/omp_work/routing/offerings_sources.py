@@ -23,7 +23,7 @@ Two rules a reader must not lose:
 from __future__ import annotations
 
 import hashlib
-import subprocess
+import subprocess  # nosec B404 - one bounded non-interactive argv read, no shell
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone

@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import hashlib
+import inspect
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from omp_work.research import hypothesis
+from omp_work.research import hypothesis, mechanism_recipe
 from omp_work.v1 import canonical
+
+ADAPTIVE_RESTART = mechanism_recipe.ADAPTIVE_RESTART
+ROOT_FIRST = mechanism_recipe.ROOT_FIRST
+FAMILIES = mechanism_recipe.FAMILIES
+THRESHOLD_GRID = mechanism_recipe.THRESHOLD_GRID
+canonical_recipe = mechanism_recipe.canonical_recipe
 
 __all__ = [
     "MechanismDraft",
@@ -16,6 +24,7 @@ __all__ = [
     "explore",
     "failure_pattern",
     "generation_job",
+    "generation_population",
     "specify",
     "trace_digest",
     "trace_hypothesis",
@@ -175,9 +184,18 @@ def specify(draft: MechanismDraft) -> dict[str, Any]:
 
 
 def generation_job(spec: Mapping[str, Any], parameters: Mapping[str, Any]) -> str:
-    """Generate deterministic strategy source defining propose(steps, opened, *, seed=0, width=1)."""
-    threshold_val = float(parameters["min_metric"])
-    threshold_str = repr(threshold_val)
+    """Generate deterministic strategy source defining propose(steps, opened, *, seed=0, width=1).
+
+    ``parameters`` is validated as a recipe; a missing ``family`` means adaptive-restart.v1.
+    """
+    recipe = canonical_recipe(parameters)
+    threshold_str = repr(recipe["min_metric"])
+    if recipe["family"] == ROOT_FIRST:
+        return _root_first_source(threshold_str)
+    return _adaptive_restart_source(threshold_str)
+
+
+def _adaptive_restart_source(threshold_str: str) -> str:
     return f'''def propose(steps, opened, *, seed=0, width=1):
     threshold = {threshold_str}
     eligible_parents = []
@@ -221,3 +239,64 @@ def generation_job(spec: Mapping[str, Any], parameters: Mapping[str, Any]) -> st
 
     return None, seed
 '''
+
+
+def _root_first_source(threshold_str: str) -> str:
+    return f'''def propose(steps, opened, *, seed=0, width=1):
+    threshold = {threshold_str}
+    unopened_roots = sorted(sid for sid, node in steps.items() if node.get("parent_id") is None and sid not in opened)
+    if unopened_roots:
+        return unopened_roots[0], seed
+
+    def sort_key(sid):
+        metric = steps[sid].get("metric")
+        if metric is None:
+            return (1, 0.0, sid)
+        return (0, -float(metric), sid)
+
+    active_nodes = sorted(
+        (sid for sid in opened if steps[sid].get("infra_error") is None),
+        key=sort_key,
+    )
+    eligible = [
+        sid for sid in active_nodes
+        if steps[sid].get("metric") is not None and steps[sid]["metric"] >= threshold
+    ]
+    for parent_id in eligible[:width] + active_nodes:
+        children = sorted(c for c in (steps[parent_id].get("children") or ()) if c not in opened)
+        if children:
+            return children[0], seed
+
+    return None, seed
+'''
+
+
+_PRODUCTIONS = {
+    ADAPTIVE_RESTART: _adaptive_restart_source,
+    ROOT_FIRST: _root_first_source,
+}
+
+
+def generation_population(spec: Mapping[str, Any], family: str) -> list[dict[str, Any]]:
+    """Generate one executable policy per frozen threshold for one production rule."""
+    if family not in FAMILIES:
+        raise ValueError("unknown recipe family")
+    implementation = hashlib.sha256(
+        inspect.getsource(_PRODUCTIONS[family]).encode("utf-8")
+    ).hexdigest()
+    population: list[dict[str, Any]] = []
+    for threshold in THRESHOLD_GRID:
+        recipe = canonical_recipe({"family": family, "min_metric": threshold})
+        source = generation_job(spec, recipe)
+        population.append(
+            {
+                "family": family,
+                "recipe": recipe,
+                "recipe_sha256": canonical.sha256(recipe),
+                "spec_sha256": canonical.sha256(spec),
+                "source": source,
+                "source_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                "implementation_sha256": implementation,
+            }
+        )
+    return population
