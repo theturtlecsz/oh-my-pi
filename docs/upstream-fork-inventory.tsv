@@ -1118,6 +1118,7 @@ packages/coding-agent/test/launch/broker-client-own-shutdown.test.ts	fork-only	a
 packages/coding-agent/test/launch/broker-client-post-shutdown-close.test.ts	fork-only	added	d5bd76ed73fd	OMP-516-s01: test that post-shutdown ping connects to a new broker and a delayed close of the retired broker socket does not reject pending requests on newer sockets	retained
 packages/coding-agent/test/launch/broker-idle-shutdown.test.ts	shared	modified	fdc67e7e7b2c	OMP-246 CI: Hold startup presence until child admission, then prove live child retention and idle exit without authentication timing races	retained
 packages/coding-agent/test/legacy-pi-extension-cache.test.ts	shared	modified	c6f07ed496dd	OMP-401: repair legacy parse-cache migration test for the fork's schema 4	retained
+packages/coding-agent/test/lsp-format-options.test.ts	shared	modified	2129115fce91	LSP format-options tests use unique mkdtemp roots to avoid cross-user EACCES from shared fixed parents; assertions and cleanup unchanged.	retained
 packages/coding-agent/test/marketplace/project-scope.test.ts	shared	modified	aa6a69ca0922	session candidate: OMP-127	retained
 packages/coding-agent/test/mcp-http-transport.test.ts	shared	modified	0a3bd9d6f7f7	OMP-246 CI: Bound automatic SSE resumption with the existing external guard instead of an incidental startup deadline	retained
 packages/coding-agent/test/mcp-incremental-connect.test.ts	shared	modified	04d5543edc0e	ci: repair red main baseline (OMP-217)	retained
@@ -1155,6 +1156,7 @@ packages/coding-agent/test/session-manager/session-id.test.ts	shared	modified	e4
 packages/coding-agent/test/session-stop-continuation-recap.test.ts	shared	modified	74868752da3c	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
 packages/coding-agent/test/session/session-init-instruction-degradation.test.ts	fork-only	added	c887acacf1b3	OMP-248: Test that session_init persists non-empty instructionPrepDegradations and omits the key when empty	retained
 packages/coding-agent/test/session/session-loader-source-size.test.ts	shared	modified	8b31430889ac	This test's TempDir prefix starts with `@`, so the directory is under the system temp directory.	retained
+packages/coding-agent/test/settings-reload-cwd.test.ts	shared	modified	e361e93d4a73	Settings overlay and reload tests use unique mkdtemp roots to avoid cross-user EACCES from shared fixed parents; assertions, child setup, and cleanup unchanged.	retained
 packages/coding-agent/test/shell-snapshot.test.ts	shared	modified	d2b2be3d0aa4	OMP-488: remove omp-snap-* fixture directories under os.tmpdir() in afterEach	retained
 packages/coding-agent/test/silent-abort-print-mode.test.ts	shared	modified	8b59d6d7a8f4	OMP-246: Model required idle waiting without weakening aborted output assertions	retained
 packages/coding-agent/test/skill-descriptions.test.ts	shared	modified	7ea32eab3878	The TempDir prefix starts with `@` so the directory is under the system temp directory.	retained

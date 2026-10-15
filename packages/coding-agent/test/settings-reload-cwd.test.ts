@@ -145,7 +145,7 @@ describe("Settings.reloadForCwd", () => {
 	});
 
 	it("loads extra config overlays after project settings", async () => {
-		const testDir = path.join(os.tmpdir(), "test-config-overlay", Snowflake.next());
+		const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "test-config-overlay-"));
 		const projectDir = path.join(testDir, "project");
 		const overlayPath = path.join(testDir, "overlay.yml");
 		try {
@@ -170,10 +170,9 @@ describe("Settings.reloadForCwd", () => {
 	});
 
 	it("rejects a missing --config overlay instead of silently ignoring it", async () => {
-		const testDir = path.join(os.tmpdir(), "test-config-overlay-missing", Snowflake.next());
+		const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "test-config-overlay-missing-"));
 		try {
 			resetSettingsForTest();
-			fs.mkdirSync(testDir, { recursive: true });
 
 			const missingPath = path.join(testDir, "nope.yml");
 			await expect(Settings.init({ cwd: testDir, inMemory: true, configFiles: [missingPath] })).rejects.toThrow(
@@ -186,11 +185,10 @@ describe("Settings.reloadForCwd", () => {
 	});
 
 	it("rejects a malformed --config overlay", async () => {
-		const testDir = path.join(os.tmpdir(), "test-config-overlay-bad", Snowflake.next());
+		const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "test-config-overlay-bad-"));
 		const overlayPath = path.join(testDir, "bad.yml");
 		try {
 			resetSettingsForTest();
-			fs.mkdirSync(testDir, { recursive: true });
 			fs.writeFileSync(overlayPath, "compaction: [unclosed\n");
 
 			await expect(Settings.init({ cwd: testDir, inMemory: true, configFiles: [overlayPath] })).rejects.toThrow(
@@ -211,7 +209,7 @@ describe("Settings.reloadForCwd", () => {
 
 		beforeEach(() => {
 			resetSettingsForTest();
-			testDir = path.join(os.tmpdir(), "test-reload-cwd", Snowflake.next());
+			testDir = fs.mkdtempSync(path.join(os.tmpdir(), "test-reload-cwd-"));
 			agentDir = path.join(testDir, "agent");
 			startDir = path.join(testDir, "start");
 			scopedProject = path.join(testDir, "scoped");

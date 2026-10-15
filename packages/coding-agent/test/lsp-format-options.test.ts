@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { detectIndentFromContent, resolveFormatOptions } from "@oh-my-pi/pi-coding-agent/lsp/format-options";
-import { getProjectDir, removeWithRetries, Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
+import { getProjectDir, removeWithRetries, setProjectDir } from "@oh-my-pi/pi-utils";
 
 /**
  * Regression coverage for issue #2329 — the LSP format-on-write path used to
@@ -61,8 +61,7 @@ describe("resolveFormatOptions", () => {
 
 	beforeEach(async () => {
 		previousProjectDir = getProjectDir();
-		tempDir = path.join(os.tmpdir(), "pi-coding-agent-format-options", Snowflake.next());
-		await fs.mkdir(tempDir, { recursive: true });
+		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-coding-agent-format-options-"));
 		setProjectDir(tempDir);
 	});
 
