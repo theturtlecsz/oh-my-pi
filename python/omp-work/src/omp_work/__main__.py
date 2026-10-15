@@ -736,7 +736,7 @@ def main(argv: list[str] | None = None) -> int | None:
     offerings_commands = offerings.add_subparsers(
         dest="offerings_command",
         required=True,
-        metavar="{check}",
+        metavar="{check,install-timer}",
     )
     check = offerings_commands.add_parser(
         "check",
@@ -750,6 +750,15 @@ def main(argv: list[str] | None = None) -> int | None:
     check.add_argument("--record-dir", type=Path, metavar="DIR")
     check.add_argument("--omp", metavar="PATH")
     check.add_argument("--max-age-hours", type=float, default=36.0)
+
+    install_timer_parser = offerings_commands.add_parser(
+        "install-timer",
+        help="Install the daily offerings check as a systemd user timer",
+    )
+    install_timer_parser.add_argument("--sources", required=True, type=Path, metavar="FILE")
+    install_timer_parser.add_argument("--record-dir", type=Path, metavar="DIR")
+    install_timer_parser.add_argument("--omp", metavar="PATH")
+    install_timer_parser.add_argument("--systemd-dir", type=Path, metavar="DIR")
 
     args = parser.parse_args(argv)
     if args.command == "alarms":
@@ -765,6 +774,15 @@ def main(argv: list[str] | None = None) -> int | None:
     if args.command == "qualification":
         return _run_qualification_count()
     if args.command == "offerings":
+        if args.offerings_command == "install-timer":
+            from .operations.offerings_timer import install_timer
+
+            try:
+                install_timer(args.sources, args.record_dir, args.omp, args.systemd_dir)
+            except ValueError as error:
+                print(f"offerings install-timer: {error}", file=sys.stderr)
+                return 2
+            return 0
         return _run_offerings_check(args)
     if args.command == "stop":
         return _run_stop_command(args)

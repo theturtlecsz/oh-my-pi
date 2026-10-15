@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from omp_work.__main__ import main
 from omp_work.operations.offerings_timer import install_timer
 
 from test_offerings_evaluation_cli import (
@@ -107,3 +108,89 @@ def test_missing_sources_and_unfindable_omp_are_refused(tmp_path: Path, monkeypa
     stub = install_stub(monkeypatch, tmp_path, captures)
     _refused(tmp_path, tmp_path / "nope.json", stub, "sources")
     _refused(tmp_path, captures.sources, str(tmp_path / "no-such-omp"), "omp")
+
+
+@pytest.mark.parametrize("custom_records", [False, True])
+def test_cli_installs_units_and_prints_activation_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    custom_records: bool,
+):
+    captures = write_captures(tmp_path / "c", checked_at=now())
+    stub = install_stub(monkeypatch, tmp_path, captures)
+    units = tmp_path / "units"
+    args = [
+        "offerings", "install-timer", "--sources", str(captures.sources),
+        "--omp", stub, "--systemd-dir", str(units),
+    ]
+    records = tmp_path / "records"
+    if custom_records:
+        args.extend(["--record-dir", str(records)])
+
+    assert main(args) == 0
+
+    service = units / "omp-offerings-check.service"
+    assert service.is_file()
+    assert (units / "omp-offerings-check.timer").is_file()
+    if custom_records:
+        words = _decode(_exec_start(service))
+        assert words[words.index("--record-dir") + 1] == str(records)
+    output = capsys.readouterr()
+    assert output.err == ""
+    assert output.out.splitlines() == [
+        "systemctl --user daemon-reload",
+        "systemctl --user enable --now omp-offerings-check.timer",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("failure", "diagnostic"),
+    [("relative", "lanes.kimi.path"), ("missing", "sources"),
+     ("malformed", "not valid JSON"), ("omp", "omp")],
+)
+def test_cli_refuses_invalid_install_without_units_or_stdout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    failure: str, diagnostic: str,
+):
+    captures = write_captures(tmp_path / "c", checked_at=now())
+    stub = install_stub(monkeypatch, tmp_path, captures)
+    sources = captures.sources
+    if failure == "relative":
+        doc = json.loads(sources.read_text())
+        doc["lanes"]["kimi"]["path"] = "listing-kimi.json"
+        sources.write_text(json.dumps(doc))
+    elif failure == "missing":
+        sources = tmp_path / "missing.json"
+    elif failure == "malformed":
+        sources.write_text("{")
+    else:
+        stub = str(tmp_path / "no-such-omp")
+    units = tmp_path / "units"
+
+    assert main([
+        "offerings", "install-timer", "--sources", str(sources),
+        "--omp", stub, "--systemd-dir", str(units),
+    ]) == 2
+
+    assert not units.exists() or not list(units.iterdir())
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert output.err.startswith("offerings install-timer: ")
+    assert diagnostic in output.err
+
+
+@pytest.mark.parametrize(
+    ("args", "options"),
+    [(["offerings", "install-timer", "--help"],
+      ["--sources", "--record-dir", "--omp", "--systemd-dir"]),
+     (["offerings", "--help"], ["install-timer"])],
+)
+def test_cli_help_lists_timer_command_and_options(
+    args: list[str], options: list[str], capsys: pytest.CaptureFixture[str],
+):
+    with pytest.raises(SystemExit) as exc:
+        main(args)
+    assert exc.value.code == 0
+    output = capsys.readouterr()
+    assert output.err == ""
+    for option in options:
+        assert option in output.out
