@@ -19,7 +19,7 @@ from typing import Annotated
 
 from pydantic import AwareDatetime, Field, ValidationError, field_validator, model_validator
 
-from omp_work.research import mechanism
+from omp_work.research import mechanism, mechanism_recipe
 from omp_work.research.accounting import ResourceLimits
 from omp_work.standing_change import (
     ChangeAuthority, ChangeKind, StandingChangeRefused, authorize_standing_change,
@@ -116,19 +116,7 @@ class _R13Inputs(StrictModel):
 
     @model_validator(mode="after")
     def r13_recipe(self) -> _R13Inputs:
-        recipe = json.loads(self.recipe)
-        parameters = {key: value for key, value in recipe.items() if key not in _BOOKKEEPING}
-        if set(parameters) != {"min_metric"}:
-            raise ValueError("R13 recipe supports min_metric only")
-        metric = parameters["min_metric"]
-        if isinstance(metric, bool) or not isinstance(metric, (int, float)):
-            raise ValueError("min_metric must be a finite number")
-        try:
-            finite = math.isfinite(float(metric))
-        except OverflowError:
-            finite = False
-        if not finite:
-            raise ValueError("min_metric must be a finite number")
+        mechanism_recipe.canonical_recipe(json.loads(self.recipe))
         return self
 
     @property
@@ -137,10 +125,8 @@ class _R13Inputs(StrictModel):
 
     @property
     def equivalence_sha256(self) -> str:
-        # generation_job converts thresholds to float; identity must do the same.
-        metric = float(json.loads(self.recipe)["min_metric"])
         return canonical.sha256({
-            "recipe": {"min_metric": 0.0 if metric == 0 else metric},
+            "recipe": mechanism_recipe.canonical_recipe(json.loads(self.recipe)),
             "spec": _semantic(self.spec),
         })
 
@@ -244,6 +230,7 @@ class RecursionState(StrictModel):
     proposal_history: tuple[RecursiveProposal, ...] = ()
     usage: tuple[RecursiveUsage, ...] = ()
     terminal_reason: _Nonempty | None = None
+    confirmation_history: bytes = b"{}"
 
     @model_validator(mode="after")
     def history_bindings(self) -> RecursionState:
@@ -251,6 +238,9 @@ class RecursionState(StrictModel):
             if self.proposal_history or self.usage:
                 raise ValueError("proposal/usage references unknown study")
             return self
+        from omp_work.research.recursive_confirmation import validate_history
+
+        validate_history(self)
         for index, study in enumerate(self.studies):
             reason = _tree_reason(self.studies[:index], study, self.grant)
             if reason:
@@ -604,17 +594,13 @@ def admit_proposal(
     action: ActionRequest | None = None,
     repositories: Mapping[str, RepositoryRecord] | Sequence[RepositoryRecord] | None = None,
     now: datetime | None = None,
+    confirmation: object = None,
 ) -> RecursionState:
-    """Admit one R13 proposal or terminate with a reason, retaining all prior history.
+    """Admit a distinct recipe under live authority and cumulative resource gates.
 
-    Shares the live authority/window gate with study admission; the proposal's
-    study must already be admitted and in window. Equivalence is
-    content-canonical and independent of labels and IDs, so a renamed duplicate
-    of any prior proposal — including completed or refused history —
-    terminates; a distinct finite min_metric remains eligible under the other
-    gates. Admission derives only the deterministic mechanism generation job:
-    no synthesis, execution, activation, or fallback runs here, and no child is
-    generated.
+    Family changes require fresh native confirmation of the frozen population.
+    Legacy scalar changes remain eligible without confirmation. Neither path
+    activates a policy or generates a child; equivalence ignores display names.
     """
     if state.terminal_reason is not None:
         return state
@@ -639,6 +625,12 @@ def admit_proposal(
         mechanism.generation_job(_semantic(proposal.spec), _semantic(proposal.recipe))
     except (ValueError, TypeError, KeyError, OverflowError):
         return _refuse(state, "invalid_admission")
+    from omp_work.research import recursive_confirmation
+
+    if recursive_confirmation.structural_change(state, proposal):
+        state, reason = recursive_confirmation.confirm(state, proposal, confirmation, now)
+        if reason:
+            return _refuse(state, reason)
     try:
         return RecursionState.model_validate({
             **state.model_dump(), "proposal_history": (*state.proposal_history, proposal),
@@ -751,4 +743,5 @@ def record_usage(
         proposal_history=state.proposal_history,
         usage=new_usage,
         terminal_reason=terminal_reason,
+        confirmation_history=state.confirmation_history,
     )

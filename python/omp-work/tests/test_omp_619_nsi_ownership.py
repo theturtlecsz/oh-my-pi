@@ -185,7 +185,8 @@ def test_pending_dispositions_preserve_runtime_admission_gates() -> None:
     assert PROOF in text
 
     inventory = INVENTORY.read_text()
-    assert DISPOSITION in inventory
+    _, marker = _read_record()
+    assert marker in inventory
     assert PROOF in inventory
     assert "have no qualified runtime proof recorded" in inventory
     assert "have no qualified owner or proof recorded" not in inventory

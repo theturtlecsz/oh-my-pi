@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import hashlib
 import importlib.util
 import json
 from pathlib import Path
 import re
 import statistics
+import subprocess
 import sys
 
 
 BASELINE = 3.0
+TIMESTAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 
 
 def integer(value: object) -> bool:
@@ -36,6 +39,101 @@ def cap_proof(starts: list[dict]) -> dict:
             proof.update(proven=True, kind="providers",
                          value={name: limits["max_parallel"] for name, limits in providers.items()})
     return proof
+
+
+def content_sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def git_bytes(flood_dir: Path, *args: str) -> bytes | None:
+    try:
+        completed = subprocess.run(["git", "-C", str(flood_dir), *args], capture_output=True, check=False)
+    except OSError:
+        return None
+    if completed.returncode != 0:
+        return None
+    return completed.stdout
+
+
+def added_region_lines(before: bytes, after: bytes) -> list[str]:
+    """Non-blank lines the activating flood commit added to flood.py. That is the OMP-584 change."""
+    old = before.decode("utf-8", "surrogateescape").splitlines()
+    new = after.decode("utf-8", "surrogateescape").splitlines()
+    added = []
+    for tag, _i1, _i2, j1, j2 in difflib.SequenceMatcher(a=old, b=new).get_opcodes():
+        if tag in ("insert", "replace"):
+            added.extend(new[j1:j2])
+    return [line for line in added if line.strip()]
+
+
+def region_remains(source: bytes, lines: list[str]) -> bool:
+    if not lines:
+        return False
+    pending = 0
+    for line in source.decode("utf-8", "surrogateescape").splitlines():
+        if line == lines[pending]:
+            pending += 1
+            if pending == len(lines):
+                return True
+    return False
+
+
+def accepted_code_hashes(flood_dir: Path, rollout: dict) -> set[str]:
+    """Whole-file hashes whose flood.py still contains the activating commit's OMP-584 lines.
+
+    rollout.flood_sha256 is one file. Later commits change other lines and keep the region.
+    external_commit is that flood commit; each start's code_sha256 is looked up in flood.git.
+    """
+    accepted = {rollout["flood_sha256"]}
+    commit = rollout.get("external_commit")
+    if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-fA-F]{7,40}", commit):
+        return accepted
+    activated = git_bytes(flood_dir, "show", f"{commit}:flood.py")
+    parent = git_bytes(flood_dir, "show", f"{commit}^:flood.py")
+    if activated is None or parent is None or content_sha256(activated) != rollout["flood_sha256"]:
+        return accepted
+    region = added_region_lines(parent, activated)
+    if not region:
+        return accepted
+    listing = git_bytes(flood_dir, "rev-list", "--all", "--", "flood.py")
+    blobs: dict[str, bytes] = {}
+    if listing is not None:
+        for rev in listing.decode().split():
+            if not re.fullmatch(r"[0-9a-fA-F]{7,40}", rev):
+                continue
+            blob = git_bytes(flood_dir, "show", f"{rev}:flood.py")
+            if blob is not None:
+                blobs.setdefault(content_sha256(blob), blob)
+    disk = flood_dir / "flood.py"
+    if disk.is_file():
+        data = disk.read_bytes()
+        blobs.setdefault(content_sha256(data), data)
+    for digest, blob in blobs.items():
+        if region_remains(blob, region):
+            accepted.add(digest)
+    return accepted
+
+
+def matching_plan_start(history: list, success: dict) -> dict:
+    """Plan-start for a PASS review. A re-run keeps the last start of that attempt before the review."""
+    def matches(event: dict) -> bool:
+        return (event.get("phase") == "plan-start" and "attempt" in event
+                and success.get("attempt") is not None and event["attempt"] == success["attempt"])
+
+    anywhere = [event for event in history if matches(event)]
+    if len(anywhere) == 1:
+        return anywhere[0]
+    review_at = success.get("at")
+    if len(anywhere) > 1 and isinstance(review_at, str) and TIMESTAMP.fullmatch(review_at):
+        review_index = next(i for i in range(len(history) - 1, -1, -1) if history[i] is success)
+        before = [
+            event for i, event in enumerate(history)
+            if i < review_index and matches(event)
+            and isinstance(event.get("at"), str) and TIMESTAMP.fullmatch(event["at"]) and event["at"] < review_at
+        ]
+        if before:
+            return before[-1]
+    raise ValueError("ambiguous successful plan-review: requires exactly one plan-start attempt")
 
 
 def validate_matched_start(event: dict) -> None:
@@ -107,12 +205,14 @@ def report(flood_dir: Path, rollout_path: Path) -> tuple[dict, int]:
         errors.append(f"flood import: {exc}")
         flood = None
 
+    accepted = accepted_code_hashes(flood_dir, rollout) if valid_rollout else set()
+
     def included(event: dict) -> bool:
         if not isinstance(event.get("at"), str) or not isinstance(event.get("code_sha256"), str):
             raise ValueError("malformed start: requires string at and code_sha256")
-        if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", event["at"]):
+        if not TIMESTAMP.fullmatch(event["at"]):
             return False
-        return event["at"] > rollout["activated_at"] and event["code_sha256"] == rollout["flood_sha256"]
+        return event["at"] > rollout["activated_at"] and event["code_sha256"] in accepted
 
     has_malformed_start = False
     cap_events = []
@@ -157,11 +257,7 @@ def report(flood_dir: Path, rollout_path: Path) -> tuple[dict, int]:
                 verdict = success.get("verdict")
                 if not isinstance(verdict, str) or verdict.upper() != "PASS":
                     raise ValueError("missing successful final plan-review")
-                matching = [e for e in plan_starts if "attempt" in e and success.get("attempt") is not None
-                            and e["attempt"] == success["attempt"]]
-                if len(matching) != 1:
-                    raise ValueError("ambiguous successful plan-review: requires exactly one plan-start attempt")
-                start = matching[0]
+                start = matching_plan_start(history, success)
                 if not isinstance(start.get("at"), str) or not re.fullmatch(
                     r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", start["at"]
                 ) or not isinstance(start.get("code_sha256"), str):

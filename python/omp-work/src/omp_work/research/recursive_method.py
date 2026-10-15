@@ -1,7 +1,7 @@
 """Bounded R13 recipe execution and a controller-owned PolicyFn adapter.
 
 method_sha256 pins this method implementation; lower_researcher_sha256
-pins the existing deterministic mechanism module. The sealed study recipe
+pins the deterministic mechanism and recipe modules. The sealed study recipe
 binds the parameters independently of both implementation identities. Source uses a raw byte
 hash, while artifact_sha256 uses the existing package_candidate manifest.
 Only development evidence enters generation. Receipt verification, admission,
@@ -12,14 +12,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from time import perf_counter
 
-from omp_work.research import mechanism, recursive, strategy_protocol
+from omp_work.research import mechanism, mechanism_recipe, recursive, strategy_execution, strategy_protocol
 from omp_work.research.accounting import ResourceAccounting
 from omp_work.research.harness_release import package_candidate
 from omp_work.research.receipt import (
@@ -32,6 +35,18 @@ from omp_work.v1 import canonical
 
 
 SOURCE_PATH = "research/strategies/recursive.py"
+_EXECUTION_CANCEL: ContextVar[threading.Event | None] = ContextVar("recursive_cancel", default=None)
+
+
+@contextmanager
+def cancellation_scope(cancel: threading.Event | None):
+    """Propagate controller cancellation through composed transfer execution."""
+    token = _EXECUTION_CANCEL.set(cancel)
+    try:
+        yield
+    finally:
+        _EXECUTION_CANCEL.reset(token)
+
 
 
 def method_sha256() -> str:
@@ -41,7 +56,9 @@ def method_sha256() -> str:
 
 def lower_researcher_sha256() -> str:
     """Identity of the deterministic generator implementation, not its output."""
-    return hashlib.sha256(Path(mechanism.__file__).read_bytes()).hexdigest()
+    return hashlib.sha256(
+        Path(mechanism.__file__).read_bytes() + Path(mechanism_recipe.__file__).read_bytes()
+    ).hexdigest()
 
 
 def _now() -> datetime:
@@ -66,6 +83,7 @@ class MethodContext:
     request_id: str
     job_id: str | None = None
     now: Callable[[], datetime] = _now
+    cancel: threading.Event | None = None
 
 
 @dataclass(frozen=True)
@@ -92,6 +110,9 @@ class _Execution:
 
     def gate(self) -> str | None:
         ctx = self.context
+        cancel = ctx.cancel or _EXECUTION_CANCEL.get()
+        if cancel is not None and cancel.is_set():
+            return "canceled"
         now = ctx.now()
         reason = self.state.terminal_reason or recursive._admission_gate(
             self.state, ctx.grant, ctx.policy, ctx.authority, ctx.action, ctx.repositories, now,
@@ -227,12 +248,21 @@ def run_method(
     )
 
 
+def _history_extends(newer: bytes, older: bytes) -> bool:
+    current = json.loads(newer)
+    return all(
+        value in current.get(key, [])
+        for key, values in json.loads(older).items() for value in values
+    )
+
+
 def _extends(newer: recursive.RecursionState, older: recursive.RecursionState) -> bool:
     return (
         newer.grant == older.grant
         and newer.studies[:len(older.studies)] == older.studies
         and newer.proposal_history[:len(older.proposal_history)] == older.proposal_history
         and newer.usage[:len(older.usage)] == older.usage
+        and _history_extends(newer.confirmation_history, older.confirmation_history)
         and (older.terminal_reason is None or newer.terminal_reason == older.terminal_reason)
     )
 
@@ -324,14 +354,27 @@ class GeneratedPolicy:
                     "parent_id": node.get("parent_id"), "children": node.get("children"),
                     "metric": metric, "infra_error": None,
                 }
-            proposal = strategy_protocol.run_candidate(
-                source, visible, opened_copy, seed=seed, width=width,
-                allowed_actions=("open",), resource_caps={},
-            )
-            if proposal["status"] != "ok":
-                raise ValueError(proposal.get("reason") or ",".join(proposal["reasons"]))
-            pick = proposal["proposal"]["step_id"]
-            new_seed = proposal["seed"]
+            recipe = mechanism_recipe.canonical_recipe(json.loads(result.recipe_bytes))
+            if recipe["family"] != mechanism_recipe.ADAPTIVE_RESTART:
+                outcome = strategy_execution.execute_strategy(
+                    source.encode("utf-8"), visible, opened_copy, seed=seed, width=width,
+                    allowed_actions=("open",), resource_caps={},
+                    timeout=min(self._protocol.timeout_seconds, execution.study.limits.max_wall_clock_seconds),
+                    cancel=execution.context.cancel or _EXECUTION_CANCEL.get(),
+                )
+                if outcome.failure or outcome.selection is None:
+                    raise ValueError(outcome.failure or "invalid_selection")
+                pick = outcome.selection["step_id"]
+                new_seed = outcome.seed
+            else:
+                proposal = strategy_protocol.run_candidate(
+                    source, visible, opened_copy, seed=seed, width=width,
+                    allowed_actions=("open",), resource_caps={},
+                )
+                if proposal["status"] != "ok":
+                    raise ValueError(proposal.get("reason") or ",".join(proposal["reasons"]))
+                pick = proposal["proposal"]["step_id"]
+                new_seed = proposal["seed"]
             if pick in opened_copy:
                 raise ValueError("already_open")
         except Exception as error:

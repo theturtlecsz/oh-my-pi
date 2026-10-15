@@ -32,6 +32,6 @@ qualification, runtime admission, native acceptance or an activation claim.
   shared bounded-model-job substrate) have no qualified runtime proof recorded in
   this repository, so no E1–E4 runtime admission can be evidenced from this tree.
 
-NSI-DISPOSITION: NSI-4=pending NSI-5=pending
+NSI-DISPOSITION: NSI-4=owner:OMP-634 NSI-5=owner:OMP-634
 
 Naming an owner or recording a deferral is not qualified runtime proof and does not admit E2 or E3.

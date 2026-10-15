@@ -5,30 +5,30 @@ Chris chooses; both stay pending. This record is prepared, not an owner decision
 Source: [full programme audit](../report/omp-full-programme-audit-2026-09-18.md),
 rows NSI4 and NSI5. Their full contracts and exit evidence remain required.
 
-NSI-DISPOSITION: NSI-4=pending NSI-5=pending
+NSI-DISPOSITION: NSI-4=owner:OMP-634 NSI-5=owner:OMP-634
 
 ```json
 {
-  "phase": "prepared",
+  "phase": "recorded",
   "NSI-4": {
     "row": "NSI4",
     "title": "Gap-directed questioning and owner decision loop",
-    "status": "pending",
-    "owner": null,
+    "status": "owner",
+    "owner": "OMP-634",
     "deferral": null,
-    "date": null,
-    "wording": null,
-    "evidence": null
+    "date": "2026-10-15",
+    "wording": "OMP-634 owns gap-directed questioning (NSI-4) and readiness withholding and receipts (NSI-5): it tests whether intake asks the owner about missing requirements and withholds ready-for-ratification until they are answered, and it carries the fixes.",
+    "evidence": "NSI-6 shadow (docs/nsi6/shadow.json, report_sha256 2ec897320afb) showed 0 gap questions on missing-requirement cases and 13/19 false-ready in both routes."
   },
   "NSI-5": {
     "row": "NSI5",
     "title": "Acceptance compilation, semantic ratification and readiness receipts",
-    "status": "pending",
-    "owner": null,
+    "status": "owner",
+    "owner": "OMP-634",
     "deferral": null,
-    "date": null,
-    "wording": null,
-    "evidence": null
+    "date": "2026-10-15",
+    "wording": "OMP-634 owns gap-directed questioning (NSI-4) and readiness withholding and receipts (NSI-5): it tests whether intake asks the owner about missing requirements and withholds ready-for-ratification until they are answered, and it carries the fixes.",
+    "evidence": "NSI-6 shadow (docs/nsi6/shadow.json, report_sha256 2ec897320afb) showed 0 gap questions on missing-requirement cases and 13/19 false-ready in both routes."
   }
 }
 ```

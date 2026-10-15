@@ -1046,3 +1046,15 @@ credential-free task. Proposed handoff: this lane changes only
 row, proving real JobWorker renewal through the existing settled-response gate.
 Production renewal, cancellation, proxy, sandbox and pre-item helpers remain
 unchanged. Starting revision: `94b5d4d76d`. Active-lane acknowledgment is not claimed.
+
+## OMP-595-s07-s06 renewal authority handoff
+
+OMP-595-s07-s06 handoff for orch-worker-20261011 (ledger OMP-595 r2)
+
+External coordination unavailable: this isolated task has no external credentials.
+Proposed handoff: this task extends only
+`python/omp-work/tests/test_orchestrator_renewed_model_authority.py`, consuming
+`renewed_world` without changing pre-item tests/helpers or production sources.
+Coverage adds live pre-DELETE refusal after renewal and post-settlement stale
+acceptance checks, with exact measured accounting. Reserve fixture/worker/proxy
+production changes for their owners. No external message was sent.

@@ -39,10 +39,12 @@ from omp_work.operations.config import OperationsConfig
 from omp_work.operations.database import _jobs_migration_state, check_migrations
 from omp_work.orchestrator import intake_binding, intake_gate, qualification, verify_main
 from omp_work.orchestrator.stages import (
+    PRODUCT_ACCEPTANCE_RULE,
     STAGE_ORDER,
     UNRECORDED_KINDS,
     ActionVerdict,
     Facts,
+    ProductAcceptance,
     Step,
     bounds_for,
     decide,
@@ -192,12 +194,14 @@ class MissionRequest:
     test_command: tuple[str, ...] = ()
     worker_argv: tuple[str, ...] = ()
     controls: dict[str, Any] = field(default_factory=dict)
+    requires_product_acceptance: bool = False
 
     def document(self) -> dict[str, Any]:
         body = {
             "mission_id": str(self.mission_id),
             "project_id": str(self.project_id),
             "unattended": self.unattended,
+            "requires_product_acceptance": self.requires_product_acceptance,
             "intake": self.intake.model_dump(mode="json"),
             "scope": self.scope.model_dump(mode="json"),
             "instruction": self.instruction.model_dump(mode="json"),
@@ -380,6 +384,7 @@ def load_request(path: Path) -> MissionRequest:
         mission_id=UUID(str(data["mission_id"])),
         project_id=UUID(str(data["project_id"])),
         unattended=bool(data.get("unattended", False)),
+        requires_product_acceptance=bool(data.get("requires_product_acceptance", False)),
         intake=BoundedIntakeDraft.model_validate(data["intake"]),
         scope=MissionIntakeScope.model_validate(data["scope"]),
         instruction=OwnerInstruction.model_validate(data["instruction"]),
@@ -1459,7 +1464,7 @@ class OrchestratorHandler:
             action = _terminal_action(self, terminal)
         candidate = _nested(produced.data, "candidate_commit") or _prior_field(steps, "candidate_commit")
         target = _nested(produced.data, "target_ref") or self._request.get("target_ref") or None
-        return Facts(
+        facts = Facts(
             mission_id=str(self.mission_id),
             project_id=self.project_id,
             step_index=step_index,
@@ -1467,6 +1472,7 @@ class OrchestratorHandler:
             mission_status=str(mission.get("status") or "draft"),
             outcome=produced.outcome if produced.outcome in {"none", "succeeded", "failed", "crashed", "waiting"} else "failed",
             qualified=qualified,
+            requires_product_acceptance=bool(self._request.get("requires_product_acceptance", False)),
             attempts=_count(steps, "retry", stage),
             repair_rounds=_count(steps, "repair", None),
             stop_engaged=self._stopped(),
@@ -1481,6 +1487,15 @@ class OrchestratorHandler:
             candidate_commit=None if candidate is None else str(candidate),
             target_ref=None if not target else str(target),
         )
+        if stage == "close":
+            decision_id = decision_for(facts, PRODUCT_ACCEPTANCE_RULE).decision_id
+            record = self.find_decision(str(decision_id))
+            if record is not None:
+                acceptance: ProductAcceptance = "pending"
+                if record.get("status") == "answered":
+                    acceptance = "pass" if record.get("answer") == "accept" else "fail"
+                facts = replace(facts, product_acceptance=acceptance)
+        return facts
 
     def _bounds(self, stage: str):
         if self._request is None:
@@ -1576,6 +1591,11 @@ class OrchestratorHandler:
             None,
         )
         rule_id = None if pause is None else str(pause.get("rule_id"))
+        if rule_id == PRODUCT_ACCEPTANCE_RULE:
+            if answer == "accept":
+                self._set_status("running", "decision", decision_id=decision_id)
+                self._set_status("completed", "decision", decision_id=decision_id)
+            return
         if rule_id == "d23-owner-confirm":
             # The answer is the intake decision's: confirm/edited_draft approve the
             # mission and re-run the confirm stage, which then advances to plan; a

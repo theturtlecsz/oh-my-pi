@@ -11,26 +11,32 @@ import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 import psycopg
 import pytest
+from omp_work import model_proxy
 from omp_work.jobs import worker as jobs_worker
 from omp_work.jobs.budget import item_budget, root_work_id
+from omp_work.jobs.cancel import cancel_job
 from omp_work.jobs.worker import JobWorker
 from omp_work.model_proxy import ProxyConfig, create_app
-from omp_work.orchestrator import worker_sandbox
+from omp_work.model_proxy_budget import ModelProxyBudget
+from omp_work.orchestrator import model_proxy_client, worker_sandbox
 from omp_work.orchestrator import service as orchestrator
 from omp_work.orchestrator.service import OrchestratorHandler, submit
 from omp_work.v1.canonical import sha256
+from omp_work.v1.models import CommandEnvelope, OperationState
 from omp_work.v1.server import create_app as work_app
+from omp_work.v1.store import PostgresWorkStore
 from orchestrator_e2e_support import open_e2e_world, open_worker, tick_until
 from psycopg.rows import dict_row
 from test_item_budget_alerts import _seed_budget
@@ -977,3 +983,311 @@ def test_renewed_model_authority(renewed_world: RenewedWorld, record_property: A
     assert snapshot() == before
     assert len(state.grants) == 1
     assert len(state.revocations) == 1
+
+
+# OMP-595 r2 handoff scope for orch-worker-20261011: consume renewed_world;
+# add refusal/acceptance evidence only. No production or pre-item helper edits.
+_MODEL_PATH = "/models/gemini-3.8-flash-high:streamGenerateContent?alt=sse"
+
+
+def _authority_revision(record_property: Any) -> None:
+    revision = subprocess.run(
+        ["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+    ).stdout.strip()
+    record_property("tested_git_revision", revision)
+    print(f"renewed refusal/acceptance OMP-595 r2 tested_git_revision={revision}")
+
+
+def _ledger_snapshot(state: RenewedWorld) -> tuple[Any, ...]:
+    return (len(state.calls), state.usage_events(), state.spend_records(), state.receipts())
+
+
+def _assert_measured_calls(state: RenewedWorld, count: int) -> None:
+    """Every consumed 200 has exactly one measured receipt, usage and spend row."""
+    receipts = state.receipts()
+    usage = [r for r in state.usage_events() if r["role_derived"] == "model_call"]
+    spend = state.spend_records()
+    assert len(state.calls) == len(receipts) == len(usage) == len(spend) == count
+    for receipt in receipts:
+        fingerprint = receipt["result"]["fingerprint"]
+        assert Decimal(fingerprint["task_ceiling_usd"]) == _EXPECTED_TASK_USD
+        assert fingerprint["worker_id"] == state.gate.worker_id
+        assert fingerprint["fence"] == state.gate.fence
+        assert fingerprint["prepared"]["max_input_tokens"] == _EXPECTED_PREPARED_INPUT
+        assert fingerprint["prepared"]["max_output_tokens"] == _EXPECTED_PREPARED_OUTPUT
+        settlement = receipt["result"]["settlement"]
+        assert settlement["measurement"] == "measured"
+        assert [settlement[k] for k in ("input_tokens", "output_tokens", "cache_tokens")] == [10, 5, 0]
+        assert Decimal(str(settlement["actual_usd"])) == _INDEPENDENT_PER_CALL_USD
+        identity = receipt["operation_id"].removeprefix("model_call:receipt:")
+        event, = [r for r in usage if r["request_id"] == f"model_call:request:{identity}"]
+        record, = [r for r in spend if str(r["record_id"]) == str(UUID(bytes=bytes.fromhex(identity[:32])))]
+        assert event["measurement"] == "measured"
+        assert [event[k] for k in ("input_tokens", "output_tokens", "cache_tokens")] == [10, 5, 0]
+        assert Decimal(str(event["price_usd"])) == Decimal(str(record["amount_usd"])) == _INDEPENDENT_PER_CALL_USD
+    assert sum((Decimal(str(r["amount_usd"])) for r in spend), Decimal()) == count * _INDEPENDENT_PER_CALL_USD
+
+
+def _refused_probe(state: RenewedWorld, detail: str) -> None:
+    grant, = state.grants
+    token = json.loads(grant.response_body)["model_token"]
+    before = _ledger_snapshot(state)
+    with httpx.Client(base_url=state.proxy_url, timeout=5, trust_env=False) as client:
+        response = client.post(
+            _MODEL_PATH,
+            headers={"x-goog-api-key": token},
+            json={"contents": [{"parts": [{"text": "probe authority"}]}]},
+        )
+    assert response.status_code == 403, response.text
+    assert response.json() == {"detail": detail}
+    assert _ledger_snapshot(state) == before
+
+
+@contextmanager
+def _before_revoke(state: RenewedWorld, monkeypatch: Any):
+    """Bound DELETE independently of renewal/cancellation so live tokens can be probed."""
+    entered, release = threading.Event(), threading.Event()
+    real_revoke = model_proxy_client.revoke_task
+
+    def revoke(*args: Any, **kwargs: Any) -> Any:
+        entered.set()
+        assert release.wait(_GATE_TIMEOUT_S), "test did not release DELETE"
+        return real_revoke(*args, **kwargs)
+
+    monkeypatch.setattr(model_proxy_client, "revoke_task", revoke)
+
+    def drive() -> None:
+        for _ in range(60):
+            state.worker.tick()
+            if entered.is_set():
+                return
+        raise AssertionError("worker never reached model grant revocation")
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(drive)
+        try:
+            yield entered
+        finally:
+            state.gate.stop.set()
+            state.provider_release.set()
+            release.set()
+            future.result(timeout=_GATE_TIMEOUT_S)
+    assert not state.proxy.errors
+
+
+def _stop_authority(state: RenewedWorld, stopped: bool) -> None:
+    receipt, result = PostgresWorkStore(state.service.config).execute(
+        CommandEnvelope.model_validate({
+            "api_version": "work.omp.dev/v1",
+            "workspace_id": str(state.world.workspace_id),
+            "operation_id": str(uuid4()), "request_id": str(uuid4()),
+            "correlation_id": str(uuid4()),
+            "command": {"type": "engage_stop" if stopped else "release_stop",
+                        "payload": {"reason": "renewed authority regression"}},
+        }),
+        actor_id=OWNER, actor_kind="owner",
+        required_scope="work.stop" if stopped else "work.approve",
+    )
+    assert receipt.state == OperationState.APPLIED
+    assert result["stopped"] is stopped
+
+
+def _lose_authority(state: RenewedWorld, change: str) -> None:
+    if change == "cancel":
+        result = cancel_job(
+            state.worker.store, operation_id=str(uuid4()),
+            workspace_id=state.world.workspace_id, actor_id=OWNER,
+            job_id=state.gate.job_id, reason="renewed model authority loss",
+        )
+        assert result["status"] == "applied"
+        row = state.job_row()
+        assert row["status"] == "cancelled" and row["fence"] > state.gate.fence
+    elif change == "fence":
+        # Model a committed reassignment without refreshing the original grant.
+        with psycopg.connect(**state.gate.db_kwargs) as conn:
+            conn.execute(
+                "UPDATE omp_jobs.jobs SET fence=fence+1, worker_id=%s WHERE workspace_id=%s AND job_id=%s",
+                ("replacement-worker", state.world.workspace_id, state.gate.job_id),
+            )
+        row = state.job_row()
+        assert row["worker_id"] == "replacement-worker" and row["fence"] > state.gate.fence
+    else:
+        assert change == "stop"
+        _stop_authority(state, True)
+
+
+def _competing_usage(state: RenewedWorld, dimension: str, *, clear: bool = False) -> None:
+    """Seed/remove other charged usage, never change published or granted ceilings."""
+    with psycopg.connect(**state.gate.db_kwargs) as conn:
+        if clear:
+            conn.execute(
+                "DELETE FROM omp_jobs.usage_events WHERE workspace_id=%s AND role_derived='authority_test_competitor'",
+                (state.world.workspace_id,),
+            )
+        else:
+            # Copy a valid persisted event under a distinct identity. No provider
+            # receipt/spend is invented: measured calls remain independently checked.
+            conn.execute(
+                """INSERT INTO omp_jobs.usage_events
+                SELECT (jsonb_populate_record(NULL::omp_jobs.usage_events,
+                    to_jsonb(u) || jsonb_build_object(
+                        'usage_id', %s::text, 'request_id', %s::text,
+                        'step_index', step_index+1000,
+                        'role_derived', 'authority_test_competitor',
+                        'input_tokens', %s::bigint, 'output_tokens', 0,
+                        'cache_tokens', 0, 'tokens', %s::bigint,
+                        'price_usd', %s::numeric))).*
+                FROM omp_jobs.usage_events u
+                WHERE workspace_id=%s AND job_id_derived=%s
+                ORDER BY recorded_at LIMIT 1""",
+                (sha256({"competitor": dimension}), str(uuid4()),
+                 _EXPECTED_ITEM_TOKENS if dimension == "tokens" else 0,
+                 _EXPECTED_ITEM_TOKENS if dimension == "tokens" else 0,
+                 _EXPECTED_TASK_USD if dimension == "usd" else Decimal(),
+                 state.world.workspace_id, state.gate.job_id),
+            )
+
+
+def _expire_proxy_clock(state: RenewedWorld, monkeypatch: Any) -> None:
+    # Cross unchanged hard grant deadline without moving worker/renewal clocks
+    # or refreshing any authority. Only proxy's clock is controlled by this seam.
+    expires = datetime.fromisoformat(json.loads(state.grants[0].request_body)["expires_at"])
+
+    class ExpiredClock(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> datetime:
+            return (expires + timedelta(seconds=1)).astimezone(tz)
+
+    monkeypatch.setattr(model_proxy, "datetime", ExpiredClock)
+
+
+@pytest.mark.parametrize("loss", ["cancel", "fence", "stop", "usd", "tokens", "deadline"])
+def test_renewed_live_token_refuses_before_delete(
+    renewed_world: RenewedWorld, monkeypatch: Any, record_property: Any, loss: str,
+) -> None:
+    """Renewal cannot revive authority; refusal sticks after stop/budget recovery."""
+    _authority_revision(record_property)
+    state = renewed_world
+    ready, release = threading.Event(), threading.Event()
+    real_wait = state.gate.wait_for_renewal_past_expiry
+
+    async def hold_renewed_response() -> None:
+        await real_wait()
+        ready.set()
+        deadline = time.monotonic() + _GATE_TIMEOUT_S
+        while not release.is_set():
+            assert time.monotonic() < deadline, "renewal response gate timed out"
+            await asyncio.sleep(0.01)
+
+    monkeypatch.setattr(state.gate, "wait_for_renewal_past_expiry", hold_renewed_response)
+    with _before_revoke(state, monkeypatch) as deleting:
+        try:
+            assert ready.wait(_GATE_TIMEOUT_S)
+            assert state.gate.lock_free and state.gate.renewed_expiry > state.gate.original_expiry
+            if loss in {"usd", "tokens"}:
+                _competing_usage(state, loss)
+                detail = "item_budget_exceeded"
+            elif loss == "deadline":
+                _expire_proxy_clock(state, monkeypatch)
+                detail = "grant_refused"
+            else:
+                _lose_authority(state, loss)
+                detail = "agent_stop_engaged" if loss == "stop" else "job_fence_stale"
+            assert not state.revocations
+            _assert_measured_calls(state, 1)
+            _refused_probe(state, detail)
+            if loss == "stop":
+                row = state.job_row()
+                assert row["worker_id"] == state.gate.worker_id
+                assert row["fence"] == state.gate.fence
+                _stop_authority(state, False)
+            elif loss in {"usd", "tokens"}:
+                _competing_usage(state, loss, clear=True)
+            _refused_probe(state, "grant_refused")
+            before = _ledger_snapshot(state)
+        finally:
+            release.set()
+        assert deleting.wait(_GATE_TIMEOUT_S)
+        assert not state.revocations
+        _refused_probe(state, "grant_refused")
+        assert _ledger_snapshot(state) == before
+    _refused_probe(state, "grant_refused")
+    assert _ledger_snapshot(state) == before
+    assert len(state.grants) == len(state.revocations) == 1
+    assert Decimal(json.loads(state.revocations[0].response_body)["spent_usd"]) == _PER_CALL_USD
+    _assert_measured_calls(state, 1)
+
+
+@pytest.mark.parametrize("loss", ["cancel", "fence", "deadline"])
+def test_renewed_consumed_success_withheld_after_authority_loss(
+    renewed_world: RenewedWorld, monkeypatch: Any, record_property: Any, loss: str,
+) -> None:
+    """Successful measured output cannot pass acceptance after committed authority loss."""
+    _authority_revision(record_property)
+    state = renewed_world
+    settled, accept = threading.Event(), threading.Event()
+    real_call = ModelProxyBudget.call
+    real_wait = state.gate.wait_for_renewal_past_expiry
+    real_mark = state.gate.mark_call1_committed
+
+    def mark_once() -> None:
+        if state.gate.hold_started_at is None:
+            real_mark()
+
+    async def already_renewed() -> None:
+        assert settled.is_set()
+
+    def settled_call(self: ModelProxyBudget, *args: Any, **kwargs: Any) -> Any:
+        # REAL call exits its transaction before this barrier. Cancellation
+        # commits on another connection; never wait for it under FOR UPDATE.
+        if loss == "deadline":
+            upstream_call = args[-1]
+            real_invoke = upstream_call.invoke
+
+            def consumed_past_expiry(prepared: Any) -> Any:
+                result = real_invoke(prepared)
+                # Successful provider bytes/known usage have been consumed,
+                # but REAL budget.call has not settled or returned yet.
+                _expire_proxy_clock(state, monkeypatch)
+                return result
+
+            monkeypatch.setattr(upstream_call, "invoke", consumed_past_expiry)
+        receipt = real_call(self, *args, **kwargs)
+        mark_once()
+        asyncio.run(real_wait())
+        settled.set()
+        assert accept.wait(_GATE_TIMEOUT_S), "acceptance barrier timed out"
+        return receipt
+
+    monkeypatch.setattr(ModelProxyBudget, "call", settled_call)
+    monkeypatch.setattr(state.gate, "mark_call1_committed", mark_once)
+    monkeypatch.setattr(state.gate, "wait_for_renewal_past_expiry", already_renewed)
+    with _before_revoke(state, monkeypatch) as deleting:
+        try:
+            assert settled.wait(_GATE_TIMEOUT_S)
+            assert state.gate.lock_free
+            _assert_measured_calls(state, 1)
+            if loss != "deadline":
+                # Bounded, joined update executes only after successful provider
+                # response and settlement, when admission's row locks are gone.
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    executor.submit(_lose_authority, state, loss).result(timeout=5)
+            before = _ledger_snapshot(state)
+        finally:
+            accept.set()
+        assert deleting.wait(_GATE_TIMEOUT_S)
+        request, = state.worker_requests
+        assert request.status == 403
+        assert b"functionCall" not in request.response_body
+        assert not state.gate.feature_path.exists()
+        assert not state.revocations
+        _refused_probe(state, "grant_refused")
+        assert _ledger_snapshot(state) == before
+    assert _ledger_snapshot(state) == before
+    _refused_probe(state, "grant_refused")
+    _assert_measured_calls(state, 1)
+    assert len(state.grants) == len(state.revocations) == 1
+    assert Decimal(json.loads(state.revocations[0].response_body)["spent_usd"]) == _PER_CALL_USD
+    handler = OrchestratorHandler(state.world.config)
+    handler.mission_id = state.world.mission_id
+    assert not any(s.get("stage") == "implement" and s.get("outcome") == "succeeded" for s in handler.steps())

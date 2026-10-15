@@ -18,7 +18,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isInstallable, readAssetSource, readMirrorFile } from "./catalog";
+import { ECC_ROOT, isInstallable, loadManifest, readAssetSource, readMirrorFile } from "./catalog";
 import { sha256Hex } from "./hash";
 import { lockAssetsById, lockFromPlan, readLock, writeLock } from "./lock";
 import { loadOverlay } from "./overlay";
@@ -125,6 +125,15 @@ async function readIfExists(filePath: string): Promise<string | null> {
 	}
 }
 
+async function readBytesIfExists(filePath: string): Promise<Uint8Array | null> {
+	try {
+		return await Bun.file(filePath).bytes();
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+		throw err;
+	}
+}
+
 /**
  * Verify a completed plan's files against the destination filesystem without
  * writing, returning the conflicts (existing files that are not owned).
@@ -170,11 +179,83 @@ async function writeFileAtomic(destination: string, bytes: Uint8Array): Promise<
 	await fs.rename(temp, destination);
 }
 
+/**
+ * Remove directories left empty by deleted files, deepest first. Walks upward
+ * from each directory but never removes the project root or `.omp` itself.
+ */
+async function pruneEmptyDirectories(options: AdapterOptions, directories: Iterable<string>): Promise<void> {
+	const omp = path.resolve(options.projectRoot, ".omp");
+	const prunable = (p: string): boolean => {
+		const rel = path.relative(options.projectRoot, p);
+		return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel) && p !== omp;
+	};
+	for (const dir of [...directories].sort((a, b) => b.split(path.sep).length - a.split(path.sep).length)) {
+		let current = path.resolve(dir);
+		while (prunable(current)) {
+			try {
+				await fs.rmdir(current);
+			} catch (err) {
+				const code = (err as NodeJS.ErrnoException).code;
+				if (code === "ENOTEMPTY" || code === "EEXIST" || code === "ENOENT") break;
+				throw err;
+			}
+			current = path.dirname(current);
+		}
+	}
+}
+
+/**
+ * Delete files of retired assets (lock assets whose id left the manifest) that
+ * are not part of the new plan, but only when the on-disk bytes still match the
+ * old lock. Modified or already-missing files are kept and reported as skipped.
+ */
+async function removeRetiredFiles(
+	options: AdapterOptions,
+	manifest: Manifest,
+	existing: AdaptedLock,
+	plan: InstallPlan,
+): Promise<{ removed: string[]; skipped: string[] }> {
+	const declared = new Set(manifest.assets.map(asset => asset.id));
+	const retired = existing.assets.filter(asset => !declared.has(asset.id));
+	const protectedPaths = new Set(plan.files.map(file => file.path));
+	for (const asset of existing.assets) {
+		if (declared.has(asset.id)) for (const file of asset.files) protectedPaths.add(file.path);
+	}
+	const removed: string[] = [];
+	const skipped: string[] = [];
+	const directories = new Set<string>();
+	for (const asset of retired) {
+		for (const file of asset.files) {
+			if (protectedPaths.has(file.path)) continue;
+			const destination = path.join(options.projectRoot, file.path);
+			const onDisk = await readBytesIfExists(destination);
+			if (onDisk === null || sha256Hex(onDisk) !== file.sha256) {
+				skipped.push(file.path);
+				continue;
+			}
+			await fs.rm(destination);
+			removed.push(file.path);
+			directories.add(path.dirname(destination));
+		}
+	}
+	await pruneEmptyDirectories(options, directories);
+	return { removed, skipped };
+}
+
 /** Install the plan, refusing on any unowned destination. */
-export async function install(
+export function install(
 	options: AdapterOptions,
 	manifest: Manifest,
 	assets: ManifestAsset[],
+): Promise<InstallResult> {
+	return applyPlan(options, manifest, assets, false);
+}
+
+async function applyPlan(
+	options: AdapterOptions,
+	manifest: Manifest,
+	assets: ManifestAsset[],
+	retire: boolean,
 ): Promise<InstallResult> {
 	const lockPath = installLockPath(options);
 	const existing = await readLock(lockPath);
@@ -210,6 +291,16 @@ export async function install(
 	// Selection controls writes, not removal: retain omitted assets and files
 	// with their last installed hashes until explicit remove releases ownership.
 	const assetsById = existing ? lockAssetsById(existing) : new Map<string, LockAsset>();
+	let removed: string[] = [];
+	if (retire && existing) {
+		// Retired assets left the manifest: release their ownership and delete
+		// the files that are still pristine.
+		const retired = await removeRetiredFiles(options, manifest, existing, plan);
+		removed = retired.removed;
+		skipped.push(...retired.skipped);
+		const declared = new Set(manifest.assets.map(asset => asset.id));
+		for (const id of [...assetsById.keys()]) if (!declared.has(id)) assetsById.delete(id);
+	}
 	for (const asset of next.assets) {
 		const filesByPath = new Map(assetsById.get(asset.id)?.files.map(file => [file.path, file]));
 		for (const file of asset.files) filesByPath.set(file.path, file);
@@ -218,16 +309,17 @@ export async function install(
 	next.assets = [...assetsById.values()];
 	await writeLock(lockPath, next);
 	return {
-		status: written.length === 0 ? "unchanged" : existing ? "updated" : "installed",
+		status: written.length === 0 && removed.length === 0 ? "unchanged" : existing ? "updated" : "installed",
 		written,
-		removed: [],
+		removed,
 		skipped,
 		conflicts: [],
 	};
 }
 
 /**
- * Update an existing installation. Delegates to {@link install}; the explicit
+ * Update an existing installation like {@link install}, and also retire lock
+ * assets that left the manifest. The explicit
  * entry point exists so callers must intend an update, and so a missing lock is
  * reported rather than silently treated as a fresh install.
  */
@@ -238,7 +330,7 @@ export async function update(
 ): Promise<InstallResult> {
 	const lock = await readLock(installLockPath(options));
 	if (!lock) throw new InstallError("no adapted.lock.json to update; run install first");
-	return install(options, manifest, assets);
+	return applyPlan(options, manifest, assets, true);
 }
 
 /** Remove every file recorded in the lock, then prune directories it emptied. */
@@ -247,18 +339,47 @@ export async function remove(options: AdapterOptions): Promise<InstallResult> {
 	const lock = await readLock(lockPath);
 	if (!lock) return { status: "removed", written: [], removed: [], skipped: [], conflicts: [] };
 
+	let manifest: Manifest;
+	try {
+		manifest = await loadManifest(options.eccRoot);
+	} catch {
+		manifest = await loadManifest(ECC_ROOT);
+	}
+	const declared = new Set(manifest.assets.map(asset => asset.id));
+
+	// Active assets refuse remove if any owned file was modified locally.
+	// Check non-retired assets before making any filesystem modifications.
+	for (const asset of lock.assets) {
+		if (!declared.has(asset.id)) continue;
+		for (const file of asset.files) {
+			const destination = path.join(options.projectRoot, file.path);
+			const onDisk = await readBytesIfExists(destination);
+			if (onDisk !== null && sha256Hex(onDisk) !== file.sha256) {
+				throw new InstallError(`refusing to remove modified file '${file.path}'`);
+			}
+		}
+	}
+
 	const removed: string[] = [];
 	const skipped: string[] = [];
 	const directories = new Set<string>();
+	const seen = new Set<string>();
 	for (const asset of lock.assets) {
+		const isRetired = !declared.has(asset.id);
 		for (const file of asset.files) {
+			if (seen.has(file.path)) continue;
+			seen.add(file.path);
 			const destination = path.join(options.projectRoot, file.path);
-			const existing = await readIfExists(destination);
-			if (existing === null) {
+			const onDisk = await readBytesIfExists(destination);
+			if (onDisk === null) {
 				skipped.push(file.path);
 				continue;
 			}
-			if (sha256Hex(existing) !== file.sha256) {
+			if (sha256Hex(onDisk) !== file.sha256) {
+				if (isRetired) {
+					skipped.push(file.path);
+					continue;
+				}
 				throw new InstallError(`refusing to remove modified file '${file.path}'`);
 			}
 			await fs.rm(destination);
@@ -268,20 +389,6 @@ export async function remove(options: AdapterOptions): Promise<InstallResult> {
 	}
 	await fs.rm(lockPath, { force: true });
 	directories.add(path.dirname(lockPath));
-	// Prune only directories this install created and that are now empty,
-	// deepest first; never remove the project root or `.omp` itself.
-	const inRoot = (p: string): boolean => {
-		const rel = path.relative(options.projectRoot, p);
-		return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
-	};
-	for (const dir of [...directories].sort((a, b) => b.length - a.length)) {
-		let current = dir;
-		while (inRoot(current)) {
-			const entries = await fs.readdir(current).catch(() => ["x"]);
-			if (entries.length > 0) break;
-			await fs.rmdir(current).catch(() => undefined);
-			current = path.dirname(current);
-		}
-	}
+	await pruneEmptyDirectories(options, directories);
 	return { status: "removed", written: [], removed, skipped, conflicts: [] };
 }
