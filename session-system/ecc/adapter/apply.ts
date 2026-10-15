@@ -175,17 +175,21 @@ async function writeFileAtomic(destination: string, bytes: Uint8Array): Promise<
  * from each directory but never removes the project root or `.omp` itself.
  */
 async function pruneEmptyDirectories(options: AdapterOptions, directories: Iterable<string>): Promise<void> {
-	const omp = path.join(options.projectRoot, ".omp");
+	const omp = path.resolve(options.projectRoot, ".omp");
 	const prunable = (p: string): boolean => {
 		const rel = path.relative(options.projectRoot, p);
 		return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel) && p !== omp;
 	};
-	for (const dir of [...directories].sort((a, b) => b.length - a.length)) {
-		let current = dir;
+	for (const dir of [...directories].sort((a, b) => b.split(path.sep).length - a.split(path.sep).length)) {
+		let current = path.resolve(dir);
 		while (prunable(current)) {
-			const entries = await fs.readdir(current).catch(() => ["x"]);
-			if (entries.length > 0) break;
-			await fs.rmdir(current).catch(() => undefined);
+			try {
+				await fs.rmdir(current);
+			} catch (err) {
+				const code = (err as NodeJS.ErrnoException).code;
+				if (code === "ENOTEMPTY" || code === "EEXIST" || code === "ENOENT") break;
+				throw err;
+			}
 			current = path.dirname(current);
 		}
 	}
@@ -215,7 +219,10 @@ async function removeRetiredFiles(
 		for (const file of asset.files) {
 			if (protectedPaths.has(file.path)) continue;
 			const destination = path.join(options.projectRoot, file.path);
-			const onDisk = await readIfExists(destination);
+			const onDisk = await Bun.file(destination).bytes().catch((err: NodeJS.ErrnoException) => {
+				if (err.code === "ENOENT") return null;
+				throw err;
+			});
 			if (onDisk === null || sha256Hex(onDisk) !== file.sha256) {
 				skipped.push(file.path);
 				continue;
