@@ -21,7 +21,7 @@ from omp_work.jobs.campaign_definition import load_definition, search_steps
 from omp_work.jobs.research_trial import trial_job_id
 from omp_work.research.campaign_comparison import SEEDS, compute_student_t
 from omp_work.research.search import next_step
-from omp_work.research.zlib_source_task import create_seed_task
+from omp_work.research.zlib_source_task import build_corpus, create_seed_task
 from test_research_campaign_cli_http import _serve_app
 from test_research_campaign_runner import campaign  # noqa: F401
 
@@ -179,7 +179,7 @@ def test_real_source_comparison_cli(
                 "receipts": receipts, "selection_replay_seconds": replay_seconds,
                 "selection_model_cost_usd": 0, "helper_model_cost_usd": 0,
                 "model_calls": model_calls,
-                "cost_basis": "Measured compute jobs: zero model-call resources, empty settlement usage, and no workspace usage events; deterministic policy replay. No model evaluator or helper.",
+                "cost_basis": "USD zero derived from observed zero model-call resources, empty settlement usage, and no workspace usage events; deterministic local policy and evaluator. Not a separately metered monetary ledger charge.",
             }
         assert row["difference"] == row["greedy"]["best_metric"] - row["fixed"]["best_metric"]
     with campaign.store.transaction(campaign.workspace_id, campaign.actor_id) as cur:
@@ -200,6 +200,18 @@ def test_real_source_comparison_cli(
         "selection_sensitivity": sensitivity,
         "scope": "Five seeds on one production-source compression task: local decision only, not programme qualification.",
         "adaptive_default": "off; greedy requires explicit search.policy",
-        "cost_units": "Trial cost is unit compute reservation, not dollars; selection replay seconds exclude CLI/DB overhead. Model costs are recorded USD charges.",
+        "cost_units": "Trial cost is unit compute reservation, not dollars; selection replay seconds exclude CLI/DB overhead. Model USD costs are derived zeros from observed absence of model calls/usage, not separately metered ledger charges.",
     }
     output.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
+
+
+def test_committed_comparison_corpus_matches_checkout() -> None:
+    """Committed evidence must describe this checkout, including after a rebase."""
+    root = Path(__file__).resolve().parents[3]
+    report = json.loads((root / "docs/reports/omp-605-adaptive-vs-fixed.json").read_text())
+    for seed in SEEDS:
+        _, hashes, tree_hash = build_corpus(root, seed)
+        assert report["corpus_hashes"][str(seed)] == hashes, (
+            "Production corpus changed; regenerate committed comparison evidence."
+        )
+        assert report["corpus_tree"][str(seed)] == tree_hash

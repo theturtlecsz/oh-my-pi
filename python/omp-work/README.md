@@ -43,4 +43,4 @@ uv run --project python/omp-work omp-work research run --key <KEY> --definition 
   uv run --project python/omp-work python -m omp_work research compare --key <KEY> --repo-root <checkout> --output <report.json> --client-config <client.json>
   ```
 
-  Comparison accepts the same DB flags, reports corpus hashes, actual decisions/trials/costs, paired effect and 95% Student-t interval, and labels intervals containing zero as a null result. A valid comparison completes the study regardless of outcome. See [host comparison evidence](../../docs/reports/omp-605-adaptive-vs-fixed.md), including measured selection/helper-model costs and local-decision limits.
+  Comparison accepts the same DB flags, reports corpus hashes, actual decisions/trials/costs, paired effect and 95% Student-t interval, and labels intervals containing zero as a null result. A valid comparison completes the study regardless of outcome. See [host comparison evidence](../../docs/reports/omp-605-adaptive-vs-fixed.md), including selection/helper-model costs derived from observed usage and local-decision limits.
