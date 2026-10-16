@@ -6,6 +6,7 @@ Judges see ``judge_input`` only; gold, rationale and near-miss tags stay behind
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections import Counter
@@ -15,13 +16,18 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 
 from omp_work.frozen_corpus import FrozenCorpus, freeze, verify
-from omp_work.v1.canonical import validate_execution_path
+from omp_work.intake_support_rules import Approval, Rules, rule_block
+from omp_work.v1.canonical import canonical_json, validate_execution_path
 from omp_work.v1.models import StrictModel
 
 Gold = Literal["supports", "contradicts", "neither"]
 NearMiss = Literal["topic_wrong_claim", "negation", "scope_mismatch", "quote_out_of_context"]
 V2NearMiss = Literal[NearMiss, "adjacent_inference"]
 Split = Literal["train", "heldout"]
+
+ROOT = Path(__file__).resolve().parents[4]
+RULE_DOC = ROOT / "docs/intake-support-v2-labelling-rule.md"
+APPROVAL = ROOT / "evals/intake_support/v2/rule-approval.json"
 
 PAIRS_FILE = "pairs.json"
 RULES_FILE = "rules.json"
@@ -154,12 +160,29 @@ def _validated_v2(pairs: list[V2Pair], rules: dict) -> list[Pair]:
     return list(pairs)
 
 
-def load_pairs(directory: str | Path, manifest: str | Path, version: int = 1) -> list[Pair]:
-    """Verify the seal, then return the validated pairs; raise ValueError on drift or malformed data."""
-    root = Path(directory)
-    files_for(version)
-    verify(root, manifest)
-    rules = json.loads((root / RULES_FILE).read_bytes())
+def _bound_rules(rules: dict, rule_doc: str | Path, approval: str | Path, *, sealing: bool) -> dict:
+    """Match the approved policy and exact byte bindings before any corpus writes."""
+    document_bytes = Path(rule_doc).read_bytes()
+    policy = rule_block(rule_doc)
+    Rules.model_validate(policy)
+    approval_bytes = Path(approval).read_bytes()
+    record = Approval.model_validate_json(approval_bytes)
+    bindings = {
+        "rule_sha256": hashlib.sha256(document_bytes).hexdigest(),
+        "approval_sha256": hashlib.sha256(approval_bytes).hexdigest(),
+    }
+    if record.rule_sha256 != bindings["rule_sha256"]:
+        raise ValueError("approval rule_sha256 must hash the exact document bytes")
+    unbound = {key: None if key in bindings else value for key, value in rules.items()}
+    if canonical_json(unbound) != canonical_json(policy):
+        raise ValueError("rules must match the exact approved policy")
+    for key, digest in bindings.items():
+        if rules[key] != digest and not (sealing and rules[key] is None):
+            raise ValueError(f"{key} binding drift")
+    return {**rules, **bindings}
+
+
+def _load_validated(root: Path, rules: dict, version: int) -> list[Pair]:
     document = json.loads((root / PAIRS_FILE).read_bytes())
     if type(document.get("version")) is not int or document.get("version") != version:
         raise ValueError("document version must match requested corpus version")
@@ -168,8 +191,38 @@ def load_pairs(directory: str | Path, manifest: str | Path, version: int = 1) ->
     return _validated_v2([V2Pair.model_validate(row) for row in document["pairs"]], rules)
 
 
-def seal(directory: str | Path, origin_commit: str, manifest: str | Path) -> FrozenCorpus:
-    return freeze(directory, FILES, origin_commit, manifest)
+def load_pairs(
+    directory: str | Path, manifest: str | Path, version: int = 1, *,
+    rule_doc: str | Path = RULE_DOC, approval: str | Path = APPROVAL,
+) -> list[Pair]:
+    """Verify the seal, policy and bindings, then return validated pairs."""
+    root = Path(directory)
+    files = files_for(version)
+    sealed = verify(root, manifest)
+    rules = json.loads((root / RULES_FILE).read_bytes())
+    pairs = _load_validated(root, rules, version)
+    if version == 2:
+        if sorted((file.id, file.path) for file in sealed.files) != sorted(files):
+            raise ValueError("manifest file ids must match requested corpus version")
+        _bound_rules(rules, rule_doc, approval, sealing=False)
+    return pairs
+
+
+def seal(
+    directory: str | Path, origin_commit: str, manifest: str | Path, version: int = 1, *,
+    rule_doc: str | Path = RULE_DOC, approval: str | Path = APPROVAL,
+) -> FrozenCorpus:
+    """Bind valid v2 inputs to their approved policy; preserve raw v1 freezing."""
+    files = files_for(version)
+    if version == 2:
+        root = Path(directory)
+        rules_path = root / RULES_FILE
+        rules = json.loads(rules_path.read_bytes())
+        _load_validated(root, rules, version)
+        bound = _bound_rules(rules, rule_doc, approval, sealing=True)
+        if bound != rules:
+            rules_path.write_text(canonical_json(bound))
+    return freeze(directory, files, origin_commit, manifest)
 
 
 def judge_input(pair: Pair) -> dict[str, str]:

@@ -23,7 +23,7 @@ from uuid import UUID, uuid4
 import httpx
 import psycopg
 import pytest
-from omp_work import model_proxy
+from omp_work import egress_sandbox, model_proxy
 from omp_work.jobs import worker as jobs_worker
 from omp_work.jobs.budget import item_budget, root_work_id
 from omp_work.jobs.cancel import cancel_job
@@ -1291,3 +1291,247 @@ def test_renewed_consumed_success_withheld_after_authority_loss(
     handler = OrchestratorHandler(state.world.config)
     handler.mission_id = state.world.mission_id
     assert not any(s.get("stage") == "implement" and s.get("outcome") == "succeeded" for s in handler.steps())
+
+
+# OMP-595-s07-s07: lifecycle evidence consumes the existing renewed_world fixture.
+# Hard deadline and termination bounds are declared before launching any child.
+_EXIT_HARD_SECONDS = 8
+_EXIT_TERMINATION_SECONDS = 8
+
+
+@pytest.fixture
+def exit_world(request: Any, monkeypatch: Any):
+    """Configure provider behavior before consuming the unchanged real-world fixture."""
+    mode = request.param
+    real_upstream = upstream
+
+    @contextmanager
+    def exit_upstream(_forbidden: bool):
+        with real_upstream(
+            status_code=503 if mode == "provider_refusal" else 200,
+            block_all=mode in {"stop", "timeout"},
+        ) as handles:
+            transport, calls, entered, release = handles
+            real_post = transport.post
+
+            def post(*args: Any, **kwargs: Any) -> Any:
+                response = real_post(*args, **kwargs)
+                if mode == "forbidden_tool":
+                    # Keep real provider usage, but return an undeclared tool.
+                    response = replace(response, body=response.body.replace(b'"write"', b'"bash"'))
+                return response
+
+            monkeypatch.setattr(transport, "post", post)
+            yield transport, calls, entered, release
+
+    monkeypatch.setitem(globals(), "upstream", exit_upstream)
+    if mode == "timeout":
+        real_submit = submit
+
+        def short_request(config: Any, mission: Any) -> Any:
+            return real_submit(config, replace(
+                mission, controls={**mission.controls, "wall_clock_seconds": _EXIT_HARD_SECONDS},
+            ))
+
+        monkeypatch.setitem(globals(), "submit", short_request)
+    state = request.getfixturevalue("renewed_world")
+
+    # Lifecycle cases hold at the provider itself, not the renewal-only response
+    # gate. Ordinary exits should also finish without waiting an obsolete lease.
+    response_held = threading.Event()
+
+    async def no_response_hold() -> None:
+        if mode == "fence":
+            # Reassignment needs the job row. Hold already-settled output,
+            # outside admission locks, while the native child awaits HTTP.
+            response_held.set()
+            until = time.monotonic() + _GATE_TIMEOUT_S
+            while not state.provider_release.is_set():
+                assert time.monotonic() < until, "settled response gate timed out"
+                await asyncio.sleep(0.01)
+
+    monkeypatch.setattr(state.gate, "wait_for_renewal_past_expiry", no_response_hold)
+    # A 503 has no measured receipt; mark_call1_committed is renewal-test-only.
+    monkeypatch.setattr(state.gate, "mark_call1_committed", lambda: None)
+    return state, response_held
+
+
+def _implement_outcomes(state: RenewedWorld) -> list[dict[str, Any]]:
+    handler = OrchestratorHandler(state.world.config)
+    handler.mission_id = state.world.mission_id
+    return [s for s in handler.steps() if s.get("stage") == "implement" and s.get("kind") == "outcome"]
+
+
+def _session_children(pid: int) -> set[int]:
+    """Read only this launch's descendants while they are alive in /proc."""
+    children: set[int] = set()
+    pending = [pid]
+    while pending:
+        parent = pending.pop()
+        try:
+            found = {int(p) for p in Path(f"/proc/{parent}/task/{parent}/children").read_text().split()}
+        except FileNotFoundError:
+            continue
+        pending.extend(found - children)
+        children.update(found)
+    return children
+
+
+@pytest.mark.parametrize(
+    "exit_world", ["success", "provider_refusal", "forbidden_tool", "stop", "fence", "timeout"],
+    indirect=True,
+)
+def test_model_token_revoked_on_real_worker_exit(
+    exit_world: tuple[RenewedWorld, threading.Event], request: Any, monkeypatch: Any, record_property: Any,
+) -> None:
+    """Every acquired token is deleted once after physical exit, without losing charges."""
+    _authority_revision(record_property)
+    state, response_held = exit_world
+    mode = request.node.callspec.params["exit_world"]
+    held = mode in {"stop", "fence", "timeout"}
+    deleting = threading.Event()
+    launches: list[tuple[Any, float, Path, Any]] = []
+    children: set[int] = set()
+    real_wait = egress_sandbox._wait_sandboxed
+    real_revoke = model_proxy_client.revoke_task
+    renewal_threads: list[threading.Thread] = []
+    revoke_observation: dict[str, Any] = {}
+
+    def wait(proc: Any, timeout: Any, cancel: Any) -> Any:
+        if threading.current_thread() is state.gate.ticker:
+            launches.append((proc, time.monotonic(), Path(state.gate.launch_env["OMP_WORKER_MANIFEST"]), cancel))
+            renewal_threads.extend(t for t in threading.enumerate() if "_renew_loop" in t.name)
+        return real_wait(proc, timeout, cancel)
+
+    def revoke(*args: Any, **kwargs: Any) -> Any:
+        proc, _, manifest, cancel = launches[0]
+        assert proc.poll() is not None, "DELETE must follow physical worker exit"
+        assert not manifest.exists()
+        revoke_observation.update(at=datetime.now(UTC), row=state.job_row(), cancelled=cancel.is_set())
+        result = real_revoke(*args, **kwargs)
+        deleting.set()
+        return result
+
+    real_app = state.proxy.app
+
+    async def release_during_delete(scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] == "http" and scope["method"] == "DELETE":
+            # Real DELETE has arrived after physical exit. Let its grant lock
+            # wait for the consumed provider response and measured settlement.
+            assert launches[0][0].poll() is not None
+            state.provider_release.set()
+        await real_app(scope, receive, send)
+
+    monkeypatch.setattr(state.proxy, "app", release_during_delete)
+    monkeypatch.setattr(egress_sandbox, "_wait_sandboxed", wait)
+    monkeypatch.setattr(model_proxy_client, "revoke_task", revoke)
+
+    def first_attempt() -> None:
+        # Stop after the first implement tick, before retry dispatch can acquire
+        # another grant. A cancelled/frozen attempt writes no outcome at all.
+        for _ in range(60):
+            state.worker.tick()
+            if state.grants:
+                return
+        raise AssertionError("implement never acquired model token")
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(first_attempt)
+        try:
+            with state.provider_entered:
+                assert state.provider_entered.wait_for(lambda: bool(state.calls), timeout=_GATE_TIMEOUT_S)
+            if mode == "fence":
+                assert response_held.wait(_GATE_TIMEOUT_S)
+            assert len(launches) == 1
+            proc, started, manifest, cancel = launches[0]
+            children.update(_session_children(proc.pid))
+            if held:
+                assert children, "compiled jail worker must actually be running"
+                assert proc.poll() is None and not cancel.is_set()
+                row = state.job_row()
+                assert row["status"] == "admitted"
+                assert row["worker_id"] == state.gate.worker_id and row["fence"] == state.gate.fence
+                assert row["lease_expires_at"] > datetime.now(UTC)
+                if mode == "fence":
+                    _assert_measured_calls(state, 1)
+                else:
+                    assert not state.receipts(), "provider must still be in flight"
+                if mode == "timeout":
+                    deadline = datetime.fromisoformat(state.manifests[0]["task_deadline"])
+                    # No obsolete expiry or startup failure can satisfy this test.
+                    assert state.calls[0][4] < datetime.now(UTC) < deadline
+                    assert deadline < state.gate.original_expiry
+                    payload = json.loads(state.grants[0].request_body)
+                    assert datetime.fromisoformat(payload["expires_at"]) == deadline
+                else:
+                    cancelled_at = time.monotonic()
+                    _lose_authority(state, mode)
+            assert deleting.wait(_GATE_TIMEOUT_S), "native exit did not reach DELETE"
+            future.result(timeout=_GATE_TIMEOUT_S)
+        finally:
+            state.provider_release.set()
+            state.gate.stop.set()
+            future.result(timeout=_GATE_TIMEOUT_S)
+
+    assert not state.proxy.errors
+    assert len(launches) == len(state.grants) == len(state.revocations) == 1
+    grant, = state.grants
+    revoke_http, = state.revocations
+    assert grant.status == revoke_http.status == 200
+    assert revoke_http.path == f"/tasks/{json.loads(grant.response_body)['id']}"
+    assert not manifest.exists() and proc.poll() is not None
+    assert state.gate.ticker is not None and not state.gate.ticker.is_alive()
+    assert not any(Path(f"/proc/{pid}").exists() for pid in children)
+
+    # JobWorker joins its renewal thread; fixture serving/upstream contexts
+    # separately join provider/server threads when their servers close.
+    assert renewal_threads
+    for thread in renewal_threads:
+        thread.join(_EXIT_TERMINATION_SECONDS)
+        assert not thread.is_alive(), f"attempt leaked thread {thread.name}"
+
+    outcomes = _implement_outcomes(state)
+    if mode in {"stop", "fence"}:
+        assert revoke_observation["cancelled"]
+        assert time.monotonic() - cancelled_at < _EXIT_TERMINATION_SECONDS
+        assert outcomes == [], "cancelled/frozen implement wrote stale outcome"
+        assert not state.gate.feature_path.exists()
+        if mode == "stop":
+            row = state.job_row()
+            assert row["worker_id"] == state.gate.worker_id and row["fence"] == state.gate.fence
+            assert state.worker.frozen_requested.is_set()
+    else:
+        outcome, = outcomes
+        if mode == "success":
+            assert outcome["outcome"] == "succeeded" and outcome["data"]["exit_code"] == 0
+            assert state.gate.feature_path.read_text() == CONTENT
+        else:
+            assert outcome["outcome"] == "crashed"
+            assert not state.gate.feature_path.exists()
+            if mode == "timeout":
+                assert outcome["data"]["code"] == "lease_dead"
+                assert outcome["data"]["exit_code"] is None
+                assert revoke_observation["at"] >= deadline
+                assert revoke_observation["at"] < deadline + timedelta(seconds=_EXIT_TERMINATION_SECONDS)
+                assert not revoke_observation["cancelled"]
+                assert revoke_observation["row"]["lease_expires_at"] > revoke_observation["at"]
+            else:
+                assert outcome["data"]["exit_code"] != 0
+
+    consumed = 0 if mode == "provider_refusal" else 2 if mode == "success" else 1
+    if consumed:
+        _assert_measured_calls(state, consumed)
+    else:
+        # Provider refused without usage: preserve the existing conservative
+        # reservation charge, rather than inventing a measured zero-cost call.
+        assert len(state.calls) == 1
+        receipt, = state.receipts()
+        event, = state.usage_events()
+        spend, = state.spend_records()
+        assert receipt["result"]["settlement"]["measurement"] == event["measurement"] == "estimated"
+        assert Decimal(str(receipt["result"]["settlement"]["actual_usd"])) == _EXPECTED_PREPARED_USD
+        assert Decimal(str(event["price_usd"])) == Decimal(str(spend["amount_usd"])) == _EXPECTED_PREPARED_USD
+    expected_spent = consumed * _INDEPENDENT_PER_CALL_USD if consumed else _EXPECTED_PREPARED_USD
+    assert Decimal(json.loads(revoke_http.response_body)["spent_usd"]) == expected_spent
+    _refused_probe(state, "grant_refused")
+    assert len(state.grants) == len(state.revocations) == 1

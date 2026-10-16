@@ -1058,3 +1058,19 @@ Proposed handoff: this task extends only
 Coverage adds live pre-DELETE refusal after renewal and post-settlement stale
 acceptance checks, with exact measured accounting. Reserve fixture/worker/proxy
 production changes for their owners. No external message was sent.
+
+## OMP-595-s07-s07 exit lifecycle handoff
+
+External coordination with orch-worker-20261011 unavailable in this isolated,
+credential-free lane. Proposed handoff (OMP-595 r2): append lifecycle tests only
+in `python/omp-work/tests/test_orchestrator_renewed_model_authority.py`, consuming
+`renewed_world` unchanged. Cover real grant/DELETE on success, provider refusal,
+forbidden tool, native stop/fence cancellation and in-flight hard timeout.
+Production and pre-item helpers remain owned by their existing lanes. No external
+message or acknowledgment is claimed.
+
+Validation blocker: protected `packages/coding-agent/test/orchestrator-renewed-authority.test.ts`
+fails before worker startup on this host: `mount --bind /usr <private-root>/usr`
+returns EINVAL under its user/mount namespace (17 failures, zero provider requests).
+`LIBMOUNT_FORCE_MOUNT2=always` also fails. Host configuration and protected tests
+were left unchanged; installed-host namespace qualification belongs to operator.

@@ -364,6 +364,12 @@ def hold_bindings(cur: Cursor, *, workspace_id: UUID, mission_id: UUID, code: st
         (code, workspace_id, mission_id),
     )
 
+    cur.execute(
+        "UPDATE omp_work.mission_launch_bindings SET state='held', hold_code=%s "
+        "WHERE workspace_id=%s AND mission_id=%s AND state='bound'",
+        (code, workspace_id, mission_id),
+    )
+
 
 @dataclass(frozen=True)
 class IntakeRevisionView:

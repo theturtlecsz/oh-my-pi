@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "assetId": "ecc-wp3-typescript-testing",
+  "upstreamPath": "rules/typescript/testing.md",
+  "upstreamSha256": "92e3d02b4fff30899bc1a2af043d74941adbf3b2c0e972d2fcd2c68c9c2ea70b",
+  "adaptedSha256": "004de5063c151d72c8a702b5a284bc463e985bf5df8d113963f541d73079e6a3",
+  "edits": [
+    {
+      "reason": "Adapt TypeScript testing guidance to native rulebook use, retaining Playwright without compulsory gates and referencing common testing while removing e2e-runner.",
+      "find": [
+        "---",
+        "paths:",
+        "  - \"**/*.ts\"",
+        "  - \"**/*.tsx\"",
+        "  - \"**/*.js\"",
+        "  - \"**/*.jsx\"",
+        "---",
+        "# TypeScript/JavaScript Testing",
+        "",
+        "> This file extends [common/testing.md](../common/testing.md) with TypeScript/JavaScript specific content.",
+        "",
+        "## E2E Testing",
+        "",
+        "Use **Playwright** as the E2E testing framework for critical user flows.",
+        "",
+        "## Agent Support",
+        "",
+        "- **e2e-runner** - Playwright E2E testing specialist",
+        ""
+      ],
+      "replace": [
+        "---",
+        "paths:",
+        "  - \"**/*.ts\"",
+        "  - \"**/*.tsx\"",
+        "  - \"**/*.js\"",
+        "  - \"**/*.jsx\"",
+        "---",
+        "# TypeScript/JavaScript Testing",
+        "",
+        "> This file extends [common/testing.md](../common/testing.md) with TypeScript/JavaScript specific content.",
+        "",
+        "## E2E Testing",
+        "",
+        "Use **Playwright** as the E2E testing framework for critical user flows when relevant to the changed behavior and configured in the project. Task scope and existing project runners select checks; this guidance adds no compulsory E2E run, coverage threshold, or reviewer.",
+        "",
+        "## Testing Guidance",
+        "",
+        "Refer to included `rule://ecc-wp3-common-testing` for shared test structure, AAA pattern, test isolation, mock verification, and troubleshooting test failures. An independent audit is explicitly optional and never compulsory. Existing project runners select checks; commands, if included, are task-scoped project-guidance examples (OMP TS uses `bun check` for typechecking). No coverage, reviewer, approval, commit, push, or hook mandate.",
+        ""
+      ]
+    }
+  ]
+}
