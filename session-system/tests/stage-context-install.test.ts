@@ -6,6 +6,8 @@ import * as path from "node:path";
 import type { CloseAttempt, EvidenceReceipt, WorkflowView } from "@oh-my-pi/pi-work-client";
 import { defaultRun, stageContextLines } from "../extensions/workflow/stage-context";
 
+const SPAWN_TIMEOUT_MS = 10_000;
+
 const repoRoot = path.resolve(import.meta.dir, "..", "..");
 const installSh = path.join(import.meta.dir, "..", "install.sh");
 const venvDir = path.join(repoRoot, "python", "omp-knowledge", ".venv");
@@ -116,6 +118,8 @@ describe("fresh install stage context", () => {
 			const env = launchEnv(home, stateDir);
 
 			const installed = Bun.spawnSync(["bash", installSh], {
+				timeout: SPAWN_TIMEOUT_MS,
+				killSignal: "SIGKILL",
 				env,
 				stdout: "pipe",
 				stderr: "pipe",

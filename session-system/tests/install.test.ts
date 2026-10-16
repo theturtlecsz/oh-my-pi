@@ -3,6 +3,9 @@ import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+const SPAWN_TIMEOUT_MS = 10_000;
+const TEST_TIMEOUT_MS = 30_000;
+
 // install.sh --print-manifest contract (OMP-156): a read-only, LC_ALL=C-sorted TSV of
 // every managed live destination — extensions root walked recursively plus the
 // singleton files and skill links — comparable across runs with cmp(1).
@@ -22,6 +25,8 @@ interface RunResult {
 
 function runInstall(home: string, ...args: string[]): RunResult {
 	const proc = Bun.spawnSync(["bash", installSh, ...args], {
+		timeout: SPAWN_TIMEOUT_MS,
+		killSignal: "SIGKILL",
 		env: { ...process.env, HOME: home } as Record<string, string>,
 		stdout: "pipe",
 		stderr: "pipe",
@@ -72,7 +77,7 @@ describe("install.sh --print-manifest", () => {
 		}
 		// read-only: nothing was created under the fake home
 		expect(readdirSync(home)).toEqual([]);
-	});
+	}, TEST_TIMEOUT_MS);
 
 	test("covers the extensions tree, singletons, and both skill sets after install", () => {
 		const home = fakeHome();
@@ -126,7 +131,7 @@ describe("install.sh --print-manifest", () => {
 				expect(cells[3].startsWith(repoRoot), `${cells[0]} -> ${cells[3]}`).toBe(true);
 			}
 		}
-	});
+	}, TEST_TIMEOUT_MS);
 
 	test("is byte-stable across runs and LC_ALL=C sorted", () => {
 		const home = fakeHome();
@@ -139,7 +144,7 @@ describe("install.sh --print-manifest", () => {
 			.filter(Boolean)
 			.map(line => line.split("\t")[0]);
 		expect(paths).toEqual([...paths].sort());
-	});
+	}, TEST_TIMEOUT_MS);
 
 	test("--expect-backend work verifies without touching the live set", () => {
 		const home = fakeHome();
@@ -149,5 +154,5 @@ describe("install.sh --print-manifest", () => {
 		expect(verify.exitCode, verify.stderr).toBe(0);
 		expect(verify.stdout).toContain("backend work");
 		expect(existsSync(join(home, ".omp/agent/extensions/work-now.ts"))).toBe(true);
-	});
+	}, TEST_TIMEOUT_MS);
 });

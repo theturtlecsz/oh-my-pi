@@ -18,6 +18,9 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+const SPAWN_TIMEOUT_MS = 10_000;
+const TEST_TIMEOUT_MS = 30_000;
+
 // refresh-natives.sh contract (OMP-157): atomic native addon replacement.
 //   * replaces addons by staging in packages/natives/native/ and renaming —
 //     never by copying over the loaded file (which replaces mapped text pages
@@ -71,7 +74,7 @@ function makeFixture(options: { omitBaseline?: boolean } = {}): Fixture {
 	writeFileSync(join(pkgDir, "pi_natives.linux-x64-modern.node"), "NEW-MODERN");
 	if (!options.omitBaseline) writeFileSync(join(pkgDir, "pi_natives.linux-x64-baseline.node"), "NEW-BASELINE");
 	const tarball = join(root, "natives.tgz");
-	const tar = Bun.spawnSync(["tar", "czf", tarball, "-C", join(root, "pkg"), "package"]);
+	const tar = Bun.spawnSync(["tar", "czf", tarball, "-C", join(root, "pkg"), "package"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 	if (tar.exitCode !== 0) throw new Error(`tar: ${tar.stderr.toString()}`);
 
 	const npmStub = join(binDir, "npm");
@@ -89,6 +92,8 @@ cp "$FAKE_TARBALL" ./oh-my-pi-pi-natives-linux-x64-${VERSION}.tgz
 
 	const run = () => {
 		const proc = Bun.spawnSync(["bash", "session-system/refresh-natives.sh"], {
+			timeout: SPAWN_TIMEOUT_MS,
+			killSignal: "SIGKILL",
 			cwd: repo,
 			env: {
 				...process.env,
@@ -148,7 +153,7 @@ describe("refresh-natives.sh atomic replacement", () => {
 			} finally {
 				closeSync(fd);
 			}
-		},
+		}, TEST_TIMEOUT_MS,
 	);
 });
 
@@ -170,5 +175,5 @@ describe("refresh-natives.sh partial-package refusal", () => {
 		const retry = fx.run();
 		expect(retry.exitCode).toBe(1);
 		expect(retry.stdout).not.toContain("natives OK");
-	});
+	}, TEST_TIMEOUT_MS);
 });

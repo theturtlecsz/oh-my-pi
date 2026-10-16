@@ -1,4 +1,4 @@
-"""Label-blind intake support judge (OMP-604-s04).
+"""Label-blind intake support judge (OMP-604-s04, OMP-631-s05).
 
 Serves amended OMP-604 criterion 4 (a verdict is a receipt bound to the claim
 text, source span, source hash, model id and version, prompt version and rule
@@ -6,11 +6,17 @@ version) and criterion 5 (measured token counts, or unknown with null counts,
 never zero standing in for unknown). The caller relation is not an argument
 and is not sent to the model.
 
-The committed prompt is ``prompts/intake_support_judge.md`` with placeholders
-``{{claim}}``, ``{{passage}}`` and ``{{context}}`` only. ``tuning-pin.json``
-records the sealed corpus tree, the manifest digest, and the prompt bytes.
+Versioned prompts live in ``prompts/intake_support_judge.md`` (v1) and
+``prompts/intake_support_judge_v2.md`` (v2) with placeholders ``{{claim}}``,
+``{{passage}}`` and ``{{context}}`` only. ``tuning-pin.json`` records the sealed
+corpus tree, the manifest digest, and the prompt bytes. In ordinary mode,
 ``judge_link`` checks that pin, via ``frozen_corpus.verify``, before it calls
-the model.
+the model. In v2 candidate mode for training, the frozen corpus seal and prompt
+hash are verified without requiring a finalized tuning pin.
+
+In v2, supports verdicts require an exact verbatim non-empty supporting span
+from the passage; missing or non-verbatim spans become neither. Other valid
+verdicts (including timeouts) work without a span; malformed replies refuse.
 
 Receipt bindings, all recomputed from the call:
 
@@ -19,7 +25,7 @@ Receipt bindings, all recomputed from the call:
 - ``source_revision``: UTF-8 hash of ``context`` (the source hash)
 - ``model_version``: the ``model_id`` used for the call
 - ``prompt_version`` and ``prompt_sha256``: SHA-256 of the prompt file bytes
-- ``rule_version``: SHA-256 of the sealed ``rules.json``
+- ``rule_version``: SHA-256 of the sealed versioned ``rules.json``
 
 No production path installs a judge hook. Tests opt in with ``use_judge_hook``.
 """
@@ -38,6 +44,7 @@ from pathlib import Path
 
 import httpx
 
+from omp_work import intake_support_corpus as corpus
 from omp_work.frozen_corpus import FrozenCorpus, verify
 from omp_work.intake_support import Measurement, SourceSpan, SupportReceipt, Verdict
 from omp_work.v1.canonical import text_sha256
@@ -106,21 +113,50 @@ def use_judge_hook(hook: JudgeHook) -> Iterator[JudgeHook]:
         _installed_hook = prior
 
 
-def prompt_path() -> Path:
-    return Path(__file__).resolve().parent / "prompts" / "intake_support_judge.md"
+def prompt_path(version: int = 1) -> Path:
+    suffix = f"_v{version}" if version > 1 else ""
+    return Path(__file__).resolve().parent / "prompts" / f"intake_support_judge{suffix}.md"
 
 
-def corpus_dir() -> Path:
+def corpus_dir(version: int = 1) -> Path:
     root = _repo_root()
-    return root / "evals" / "intake_support" / "v1"
+    return root / "evals" / "intake_support" / f"v{version}"
 
 
-def prompt_bytes() -> bytes:
-    return prompt_path().read_bytes()
+def prompt_bytes(version: int = 1) -> bytes:
+    return _resolve_prompt_path(version).read_bytes()
 
 
-def prompt_sha256() -> str:
-    return hashlib.sha256(prompt_bytes()).hexdigest()
+def prompt_sha256(version: int = 1) -> str:
+    return hashlib.sha256(_resolve_prompt_bytes(version)).hexdigest()
+
+
+def _resolve_prompt_path(version: int = 1) -> Path:
+    try:
+        return prompt_path(version)
+    except TypeError:
+        return prompt_path()
+
+
+def _resolve_prompt_bytes(version: int = 1) -> bytes:
+    try:
+        return prompt_bytes(version)
+    except TypeError:
+        return prompt_bytes()
+
+
+def _resolve_prompt_sha256(version: int = 1) -> str:
+    try:
+        return prompt_sha256(version)
+    except TypeError:
+        return prompt_sha256()
+
+
+def _get_corpus_dir(version: int = 1) -> Path:
+    try:
+        return corpus_dir(version)
+    except TypeError:
+        return corpus_dir()
 
 
 def judge_link(
@@ -132,6 +168,8 @@ def judge_link(
     remaining_usd: Decimal | int | float,
     complete: Complete,
     settle: Settle,
+    version: int = 1,
+    candidate: bool = False,
 ) -> SupportReceipt:
     """Judge one claim against one passage and return a bound receipt.
 
@@ -142,15 +180,15 @@ def judge_link(
     is parsed, including when the reply is unparsable.
     """
     _refuse_unless_admitted(model_id, remaining_usd)
-    sealed, prompt_hash = _sealed_pin()
-    rendered = _render(claim_text, passage, context)
+    sealed, prompt_hash = _sealed_pin(version=version, candidate=candidate)
+    rendered = _render(claim_text, passage, context, version=version)
     try:
         completion = complete(rendered, model_id)
     except httpx.TimeoutException:
         completion = Completion('{"verdict": "timeout"}', None, None)
     usage_id = settle(completion)
     measurement, input_tokens, output_tokens = _measurement(completion)
-    verdict = _parse_verdict(completion.text)
+    verdict = _parse_verdict(completion.text, passage=passage, version=version)
     return _receipt(
         verdict=verdict,
         claim_text=claim_text,
@@ -163,6 +201,7 @@ def judge_link(
         usage_id=usage_id,
         sealed=sealed,
         prompt_hash=prompt_hash,
+        version=version,
     )
 
 
@@ -172,13 +211,15 @@ def echo_receipt(
     passage: str,
     context: str,
     caller_relation: str,
+    version: int = 1,
+    candidate: bool = False,
 ) -> SupportReceipt:
     """Receipt whose verdict copies the caller relation. Usage stays unknown.
 
     Does not admit, call a model, or record usage. ``model_id`` is
     ``echo-caller-label``.
     """
-    sealed, prompt_hash = _sealed_pin()
+    sealed, prompt_hash = _sealed_pin(version=version, candidate=candidate)
     return _receipt(
         verdict=caller_relation,
         claim_text=claim_text,
@@ -191,6 +232,7 @@ def echo_receipt(
         usage_id=None,
         sealed=sealed,
         prompt_hash=prompt_hash,
+        version=version,
     )
 
 
@@ -245,18 +287,32 @@ def _repo_root() -> Path:
     raise IntakeJudgeRefusal(PIN_MISMATCH)
 
 
-def _sealed_pin() -> tuple[FrozenCorpus, str]:
+def _sealed_pin(version: int = 1, candidate: bool = False) -> tuple[FrozenCorpus, str]:
     """Verify the corpus seal and require the tuning pin to match it."""
-    base = corpus_dir()
+    if candidate and version != 2:
+        raise IntakeJudgeRefusal(PIN_MISMATCH)
+    base = _get_corpus_dir(version)
     try:
         sealed = verify(base / "inputs", base / "manifest.json")
+    except (ValueError, OSError) as exc:
+        raise IntakeJudgeRefusal(PIN_MISMATCH) from exc
+    try:
+        expected_files = sorted(corpus.files_for(version))
     except ValueError as exc:
         raise IntakeJudgeRefusal(PIN_MISMATCH) from exc
+    actual_files = sorted((f.id, f.path) for f in sealed.files)
+    if actual_files != expected_files:
+        raise IntakeJudgeRefusal(PIN_MISMATCH)
+    try:
+        prompt_hash = _resolve_prompt_sha256(version)
+    except (OSError, ValueError) as exc:
+        raise IntakeJudgeRefusal(PIN_MISMATCH) from exc
+    if candidate:
+        return sealed, prompt_hash
     try:
         pin = json.loads((base / "tuning-pin.json").read_bytes())
     except (OSError, json.JSONDecodeError) as exc:
         raise IntakeJudgeRefusal(PIN_MISMATCH) from exc
-    prompt_hash = prompt_sha256()
     expected = {
         "tree_sha256": sealed.tree_sha256,
         "manifest_sha256": sealed.manifest_sha256,
@@ -267,14 +323,18 @@ def _sealed_pin() -> tuple[FrozenCorpus, str]:
     return sealed, prompt_hash
 
 
-def _rule_version(sealed: FrozenCorpus) -> str:
+def _rule_version(sealed: FrozenCorpus, version: int = 1) -> str:
+    target_id = f"intake-support-rules-v{version}"
+    for item in sealed.files:
+        if item.path == _RULES_PATH and item.id == target_id:
+            return item.sha256
     for item in sealed.files:
         if item.path == _RULES_PATH:
             return item.sha256
     raise IntakeJudgeRefusal(PIN_MISMATCH)
 
 
-def _render(claim_text: str, passage: str, context: str) -> str:
+def _render(claim_text: str, passage: str, context: str, version: int = 1) -> str:
     values = {"claim": claim_text, "passage": passage, "context": context}
     seen: set[str] = set()
 
@@ -283,13 +343,14 @@ def _render(claim_text: str, passage: str, context: str) -> str:
         seen.add(key)
         return values[key]
 
-    rendered = _PLACEHOLDER.sub(sub, prompt_bytes().decode("utf-8"))
+    template = _resolve_prompt_bytes(version).decode("utf-8")
+    rendered = _PLACEHOLDER.sub(sub, template)
     if seen != set(values):
         raise IntakeJudgeRefusal(PIN_MISMATCH)
     return rendered
 
 
-def _parse_verdict(text: str) -> Verdict:
+def _parse_verdict(text: str, passage: str = "", version: int = 1) -> Verdict:
     body = text.strip()
     fenced = _FENCE.match(body)
     if fenced:
@@ -298,14 +359,31 @@ def _parse_verdict(text: str) -> Verdict:
         value = json.loads(body)
     except json.JSONDecodeError as exc:
         raise IntakeJudgeRefusal(JUDGE_UNPARSABLE) from exc
-    if (
-        not isinstance(value, dict)
-        or set(value) != {"verdict"}
-        or not isinstance(value["verdict"], str)
-        or value["verdict"] not in _VERDICTS
-    ):
+    if not isinstance(value, dict) or not isinstance(value.get("verdict"), str):
         raise IntakeJudgeRefusal(JUDGE_UNPARSABLE)
-    return value["verdict"]  # type: ignore[return-value]
+    verdict = value["verdict"]
+    if verdict not in _VERDICTS:
+        raise IntakeJudgeRefusal(JUDGE_UNPARSABLE)
+
+    if version == 1:
+        if set(value) != {"verdict"}:
+            raise IntakeJudgeRefusal(JUDGE_UNPARSABLE)
+        return verdict  # type: ignore[return-value]
+
+    if version == 2:
+        if set(value) - {"verdict", "supporting_span"}:
+            raise IntakeJudgeRefusal(JUDGE_UNPARSABLE)
+        if verdict == "supports":
+            span = value.get("supporting_span")
+            if not isinstance(span, str) or not span or span not in passage:
+                return "neither"
+            return "supports"
+        span = value.get("supporting_span")
+        if span is not None and not isinstance(span, str):
+            raise IntakeJudgeRefusal(JUDGE_UNPARSABLE)
+        return verdict  # type: ignore[return-value]
+
+    raise IntakeJudgeRefusal(JUDGE_UNPARSABLE)
 
 
 def _measurement(
@@ -345,6 +423,7 @@ def _receipt(
     usage_id: str | None,
     sealed: FrozenCorpus,
     prompt_hash: str,
+    version: int = 1,
 ) -> SupportReceipt:
     return SupportReceipt(
         verdict=verdict,  # type: ignore[arg-type]
@@ -352,7 +431,7 @@ def _receipt(
         source_revision=text_sha256(context),
         model_version=model_id,
         prompt_version=prompt_hash,
-        rule_version=_rule_version(sealed),
+        rule_version=_rule_version(sealed, version=version),
         passage_sha256=text_sha256(passage),
         claim_text_sha256=text_sha256(claim_text),
         context_sha256=text_sha256(context),

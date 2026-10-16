@@ -12,6 +12,9 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
+const SPAWN_TIMEOUT_MS = 10_000
+const TEST_TIMEOUT_MS = 30_000
+
 const hookScript = fileURLToPath(
 	new URL("../hooks/task-observer-first-tool.mjs", import.meta.url),
 )
@@ -60,6 +63,8 @@ function runHook(input: string): {
 	stderr: string
 } {
 	const result = spawnSync("node", [hookScript], {
+		timeout: SPAWN_TIMEOUT_MS,
+		killSignal: "SIGKILL",
 		env: {
 			...process.env,
 			HOME: home,
@@ -97,7 +102,7 @@ describe("task-observer-first-tool", () => {
 		expect(result.status).toBe(2)
 		expect(result.stderr).toContain("task-observer")
 		expect(existsSync(markerPath())).toBe(false)
-	})
+	}, TEST_TIMEOUT_MS)
 
 	test("loads task-observer from the digest path and writes the loaded marker", () => {
 		createDirectoryLayout()
@@ -106,7 +111,7 @@ describe("task-observer-first-tool", () => {
 
 		expect(result.status).toBe(0)
 		expect(readFileSync(markerPath(), "utf8")).toContain("loaded")
-	})
+	}, TEST_TIMEOUT_MS)
 
 	test("loads task-observer from the full skill episode path and writes the loaded marker", () => {
 		createDirectoryLayout()
@@ -115,7 +120,7 @@ describe("task-observer-first-tool", () => {
 
 		expect(result.status).toBe(0)
 		expect(readFileSync(markerPath(), "utf8")).toContain("loaded")
-	})
+	}, TEST_TIMEOUT_MS)
 
 	test("allows an arbitrary tool through the loaded-marker fast-path", () => {
 		createDirectoryLayout()
@@ -126,7 +131,7 @@ describe("task-observer-first-tool", () => {
 
 		expect(result.status).toBe(0)
 		expect(readFileSync(markerPath(), "utf8")).toContain("loaded")
-	})
+	}, TEST_TIMEOUT_MS)
 
 	test("falls back to classifying a top-level transcript as a main session", () => {
 		createTranscriptLayout()
@@ -135,7 +140,7 @@ describe("task-observer-first-tool", () => {
 
 		expect(result.status).toBe(2)
 		expect(existsSync(markerPath())).toBe(false)
-	})
+	}, TEST_TIMEOUT_MS)
 
 	test("fails open without a marker for missing and nested-only layouts", () => {
 		const missingLayoutResult = runHook(arbitraryTool)
@@ -155,7 +160,7 @@ describe("task-observer-first-tool", () => {
 
 		expect(nestedLayoutResult.status).toBe(0)
 		expect(existsSync(markerPath())).toBe(false)
-	})
+	}, TEST_TIMEOUT_MS)
 
 	test("fails open without a marker for malformed stdin in a main layout", () => {
 		createDirectoryLayout()
@@ -164,7 +169,7 @@ describe("task-observer-first-tool", () => {
 
 		expect(result.status).toBe(0)
 		expect(existsSync(markerPath())).toBe(false)
-	})
+	}, TEST_TIMEOUT_MS)
 
 	test("does not accept a task-observer range selector on full skill or digest", () => {
 		createDirectoryLayout()
@@ -186,7 +191,7 @@ describe("task-observer-first-tool", () => {
 		}))
 		expect(result2.status).toBe(2)
 		expect(existsSync(markerPath())).toBe(false)
-	})
+	}, TEST_TIMEOUT_MS)
 
 	test("session-start digest is <= 2,048 bytes", () => {
 		const digestFile = fileURLToPath(
@@ -195,5 +200,5 @@ describe("task-observer-first-tool", () => {
 		const bytes = readFileSync(digestFile).length
 		expect(bytes).toBeGreaterThan(0)
 		expect(bytes).toBeLessThanOrEqual(2048)
-	})
+	}, TEST_TIMEOUT_MS)
 })

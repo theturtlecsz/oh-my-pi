@@ -91,6 +91,7 @@
 
 ### Fixed
 
+- Integrated durable-lease test proves a lost response replays one work/job identity, a renewed run continues past its initial lease while the hard task deadline still bounds it, a lost lease stops the process within a predeclared bound and refuses the stale result, and a frozen stop holds ownership until one release resumes it ([#595](https://github.com/can1357/oh-my-pi/issues/595)).
 - The provenance fixture composes the OMP-584 patches onto the installed `planner-independence.md` form ([#629](https://github.com/can1357/oh-my-pi/issues/629)).
 - OMP-584 activation now waits two flood poll intervals (10 seconds when configuration is absent or invalid) for reload proof unless an explicit timeout is set ([#627](https://github.com/can1357/oh-my-pi/issues/627)).
 - Intake changes hold mission execution: editing an intake revision pauses every later stage and grants no execution until a PASS exists for the current revision, then the mission rebinds to the new revision and receipt, and an authorized terminal abandon still ends a held mission ([#603](https://github.com/can1357/oh-my-pi/issues/603)).

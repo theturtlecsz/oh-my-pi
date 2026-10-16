@@ -9,8 +9,9 @@ import importlib.util
 import json
 from pathlib import Path
 import re
+import shutil
 import statistics
-import subprocess
+import subprocess  # nosec B404 - fixed git argv, no shell
 import sys
 
 
@@ -46,8 +47,12 @@ def content_sha256(data: bytes) -> str:
 
 
 def git_bytes(flood_dir: Path, *args: str) -> bytes | None:
+    git = shutil.which("git")
+    if git is None:
+        return None
     try:
-        completed = subprocess.run(["git", "-C", str(flood_dir), *args], capture_output=True, check=False)
+        completed = subprocess.run(  # nosec B603 - absolute git path, argv list, no shell
+            [git, "-C", str(flood_dir), *args], capture_output=True, check=False)
     except OSError:
         return None
     if completed.returncode != 0:

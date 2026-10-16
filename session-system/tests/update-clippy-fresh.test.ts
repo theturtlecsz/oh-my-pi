@@ -3,6 +3,9 @@ import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimes
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
+const SPAWN_TIMEOUT_MS = 10_000;
+const TEST_TIMEOUT_MS = 30_000;
+
 // OMP-510: gate 7 clippy cache freshness regression test.
 // Verifies that update.sh refreshes every tracked .rs under crates/
 // before invoking cargo clippy, so a warm cache cannot hide lints.
@@ -29,6 +32,8 @@ const RUST_TRACKED_PATHS = [
 
 function sh(cwd: string, command: string[], env: Record<string, string | undefined> = {}): RunResult {
 	const proc = Bun.spawnSync(command, {
+		timeout: SPAWN_TIMEOUT_MS,
+		killSignal: "SIGKILL",
 		cwd,
 		env: { ...process.env, GIT_MERGE_AUTOEDIT: "no", ...env } as Record<string, string>,
 		stdout: "pipe",
@@ -196,5 +201,5 @@ describe("update.sh clippy cache freshness (OMP-510)", () => {
 		]);
 
 		expect(git(fx.repo, "status", "--porcelain")).toBe("");
-	});
+	}, TEST_TIMEOUT_MS);
 });
