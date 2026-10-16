@@ -19,6 +19,8 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { type CandidatePathBasis, candidateSha256 } from "@oh-my-pi/pi-work-client";
 import { candidateDrift, cleanupExecutionWorkspace, dirtyPaths, ensureExecutionWorkspace, ensureUpToDateWithDefault, findSecrets, freezeCandidateCommit, type GhPrRunner, forcePushCandidate, parentCommit, parsePorcelain, pushCandidate, rangeDiffSha256, resolveDefaultBranch, runOxcCheck, sealedSnapshotCandidate, validateExecutionPaths, verifyMergeConfirmation } from "../extensions/workflow/git";
 
+const SPAWN_TIMEOUT_MS = 10_000;
+
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ss-commit-step-"));
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
 
@@ -31,15 +33,15 @@ const makeRepo = (branch = "main"): string => {
 		["config", "user.email", "test@example.com"],
 		["config", "user.name", "Test"],
 	])
-		Bun.spawnSync(["git", ...args], { cwd: repo });
+		Bun.spawnSync(["git", ...args], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: repo });
 	fs.writeFileSync(path.join(repo, "seed.txt"), "seed\n");
-	Bun.spawnSync(["git", "add", "--", "seed.txt"], { cwd: repo });
-	Bun.spawnSync(["git", "commit", "-q", "-m", "seed"], { cwd: repo });
+	Bun.spawnSync(["git", "add", "--", "seed.txt"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: repo });
+	Bun.spawnSync(["git", "commit", "-q", "-m", "seed"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: repo });
 	return repo;
 };
 
 const git = (repo: string, ...args: string[]): string =>
-	Bun.spawnSync(["git", ...args], { cwd: repo }).stdout.toString().trim();
+	Bun.spawnSync(["git", ...args], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: repo }).stdout.toString().trim();
 
 interface FakeUi {
 	confirm(title: string, body: string): Promise<boolean>;
@@ -92,7 +94,7 @@ describe("candidate freeze and push", () => {
 		git(repo, "commit", "-m", "next");
 		const second = git(repo, "rev-parse", "HEAD");
 		expect(parentCommit(repo, second)).toBe(first);
-	});
+	}, 20_000);
 
 	test("findSecrets ignores its own short fixtures but catches credential-length added values", () => {
 		expect(findSecrets("+const pattern = /lin_api_[A-Za-z0-9]/;")).toEqual([]);
@@ -117,7 +119,7 @@ describe("candidate freeze and push", () => {
 		expect(ui.confirms[0].title).toContain("pre-session");
 		expect(ui.confirms[0].body).toContain("owner.txt");
 		expect(ui.confirms[1].body).toContain("left alone: 1 pre-session file(s)");
-	});
+	}, 20_000);
 
 	test("inherited files freeze into the candidate on explicit owner yes (OMP-57 cross-session close)", async () => {
 		const repo = makeRepo();
@@ -132,7 +134,7 @@ describe("candidate freeze and push", () => {
 		expect(git(repo, "show", "--name-only", "--format=", "HEAD").split("\n").sort()).toEqual(["also-earlier.txt", "built-earlier.txt"]);
 		expect(git(repo, "status", "--porcelain")).toBe("");
 		expect(ui.confirms[0].title).toContain("2 pre-session file(s)");
-	});
+	}, 20_000);
 
 	test("packages/ paths stay out when the owner declines the lane group; lookalike prefixes commit (OMP-38 re-probe)", async () => {
 		const repo = makeRepo();
@@ -150,7 +152,7 @@ describe("candidate freeze and push", () => {
 		expect(git(repo, "status", "--porcelain")).toBe("?? packages/");
 		expect(ui.confirms[0].title).toContain("packages/");
 		expect(ui.confirms[1].body).toContain("left alone: 1 file(s) under packages/");
-	});
+	}, 20_000);
 
 	test("packages/ paths freeze on explicit owner yes (plan-scope lane work, OMP-57)", async () => {
 		const repo = makeRepo();
@@ -163,13 +165,13 @@ describe("candidate freeze and push", () => {
 
 		expect(frozenPaths(frozen)?.sort()).toEqual(["packages/sub/lib.ts", "session.txt"]);
 		expect(git(repo, "status", "--porcelain")).toBe("");
-	});
+	}, 20_000);
 
 	test("candidate freeze adopts current HEAD when inherited dirt is declined", async () => {
 		const repo = makeRepo();
 		fs.writeFileSync(path.join(repo, "session.txt"), "committed work\n");
-		Bun.spawnSync(["git", "add", "--", "session.txt"], { cwd: repo });
-		Bun.spawnSync(["git", "commit", "-q", "-m", "work"], { cwd: repo });
+		Bun.spawnSync(["git", "add", "--", "session.txt"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: repo });
+		Bun.spawnSync(["git", "commit", "-q", "-m", "work"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: repo });
 		const head = git(repo, "rev-parse", "HEAD");
 		fs.writeFileSync(path.join(repo, "owner.txt"), "owner setting\n");
 		const ui = makeUi(title => !title.includes("pre-session"));
@@ -182,7 +184,7 @@ describe("candidate freeze and push", () => {
 		expect(git(repo, "status", "--porcelain")).toBe("?? owner.txt");
 		expect(ui.confirms[1].title).toContain("Use current HEAD");
 		expect(ui.confirms[1].body).toContain("NOT be part of the candidate");
-	});
+	}, 20_000);
 
 	test("secret in staged diff aborts freeze and restores the tree", async () => {
 		const repo = makeRepo();
@@ -194,19 +196,19 @@ describe("candidate freeze and push", () => {
 		expect(git(repo, "rev-list", "--count", "HEAD")).toBe("1"); // seed only
 		expect(git(repo, "diff", "--cached", "--name-only")).toBe(""); // nothing left staged
 		expect(ui.notices.some(n => n.startsWith("error: freeze refused — possible secret") && n.includes("linear-key"))).toBe(true);
-	});
+	}, 20_000);
 
 	test("pre-staged index entries refuse the freeze (no unconfirmed bytes in the candidate)", async () => {
 		const repo = makeRepo();
 		fs.writeFileSync(path.join(repo, "sneaky.txt"), "already staged\n");
-		Bun.spawnSync(["git", "add", "--", "sneaky.txt"], { cwd: repo });
+		Bun.spawnSync(["git", "add", "--", "sneaky.txt"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: repo });
 		fs.writeFileSync(path.join(repo, "session.txt"), "session work\n");
 		const ui = makeUi(true);
 		const frozen = await freezeCandidateCommit(ui, repo, "HOME-1", "candidate-1");
 		expect("refused" in frozen && frozen.refused).toBe("failed");
 		expect(git(repo, "rev-list", "--count", "HEAD")).toBe("1");
 		expect(ui.notices.some(n => n.includes("already has staged entries"))).toBe(true);
-	});
+	}, 20_000);
 
 	test("glob characters in a filename stage that file only (literal pathspecs)", async () => {
 		const repo = makeRepo();
@@ -217,7 +219,7 @@ describe("candidate freeze and push", () => {
 		const frozen = await freezeCandidateCommit(ui, repo, "HOME-1", "candidate-1", preExisting);
 		expect(frozenPaths(frozen)).toEqual(["a*.txt"]);
 		expect(git(repo, "status", "--porcelain")).toBe("?? ab.txt");
-	});
+	}, 20_000);
 
 	test("unreadable working tree refuses the freeze instead of adopting HEAD (fail closed)", async () => {
 		const repo = makeRepo();
@@ -227,7 +229,7 @@ describe("candidate freeze and push", () => {
 		expect("refused" in frozen && frozen.refused).toBe("failed");
 		expect(ui.confirms).toEqual([]); // never reached an adoption or freeze prompt
 		expect(ui.notices.some(n => n.includes("could not enumerate the working tree"))).toBe(true);
-	});
+	}, 20_000);
 
 	test("hook-injected paths roll the marker commit back; retry can never bind them (Sol review)", async () => {
 		const repo = makeRepo();
@@ -252,7 +254,7 @@ describe("candidate freeze and push", () => {
 		expect("refused" in second && second.refused).toBe("failed");
 		expect(git(repo, "rev-list", "--count", "HEAD")).toBe("1");
 		expect(git(repo, "log", "--all", "--name-only", "--format=")).not.toContain("injected.txt");
-	});
+	}, 20_000);
 
 	test("hook mutating an approved file's content after the scan rolls the commit back (tree OID binding)", async () => {
 		const repo = makeRepo();
@@ -271,7 +273,7 @@ describe("candidate freeze and push", () => {
 		expect(ui.notices.some(n => n.includes("differs from the scanned tree"))).toBe(true);
 		expect(git(repo, "rev-list", "--count", "HEAD")).toBe("1"); // poisoned marker removed
 		expect(git(repo, "log", "--all", "-p", "--format=")).not.toContain(linear);
-	});
+	}, 20_000);
 
 	test("oversized files in an opt-in group are flagged loudly in the confirm body", async () => {
 		const repo = makeRepo();
@@ -287,7 +289,7 @@ describe("candidate freeze and push", () => {
 		expect(ui.confirms[0].body).toContain("stray.dump (60 MB)");
 		expect(frozenPaths(frozen)).toEqual(["session.txt"]);
 		expect(git(repo, "show", "--name-only", "--format=", "HEAD")).toBe("session.txt");
-	});
+	}, 20_000);
 
 	test("owner decline leaves repo untouched and returns a typed, notified refusal", async () => {
 		const repo = makeRepo();
@@ -298,7 +300,7 @@ describe("candidate freeze and push", () => {
 		expect(git(repo, "rev-list", "--count", "HEAD")).toBe("1");
 		expect(git(repo, "diff", "--cached", "--name-only")).toBe("");
 		expect(ui.notices.some(n => n.startsWith("warning: freeze declined"))).toBe(true);
-	});
+	}, 20_000);
 
 	test("legacy manual merge-tip adoption without sealed snapshot paths refuses", async () => {
 		const repo = makeRepo();
@@ -314,7 +316,7 @@ describe("candidate freeze and push", () => {
 		if ("refused" in frozen) {
 			expect(frozen.reason).toContain("candidate path set must not be empty");
 		}
-	});
+	}, 20_000);
 
 	test("manual merge-tip adoption with approved snapshot binds merge commit and sealed paths", async () => {
 		const repo = makeRepo();
@@ -338,7 +340,7 @@ describe("candidate freeze and push", () => {
 		expect(ui.confirms[0].body).toContain("feature.txt");
 		expect(ui.notices.some(n => n.includes("using approved snapshot"))).toBe(true);
 		expect(git(repo, "rev-parse", "HEAD")).toBe(mergeCommit);
-	});
+	}, 20_000);
 
 	test("manual merge-tip adoption preserves approved commit when HEAD later advances (later-HEAD independence)", async () => {
 		const repo = makeRepo();
@@ -366,14 +368,14 @@ describe("candidate freeze and push", () => {
 		expect(frozen.paths).toEqual(["feature.txt"]);
 		expect(frozen.candidateSha256).toBe(candidateSha256(mergeCommit, ["feature.txt"], "sealed-snapshot"));
 		expect(git(repo, "rev-parse", "HEAD")).toBe(laterHead);
-	});
+	}, 20_000);
 
 	test("sealedSnapshotCandidate refuses missing tree paths (fail closed)", () => {
 		const repo = makeRepo();
 		const head = git(repo, "rev-parse", "HEAD");
 		expect(() => sealedSnapshotCandidate(repo, head, ["nonexistent.txt"])).toThrow("missing sealed path(s): nonexistent.txt");
 		expect(() => sealedSnapshotCandidate(repo, head, [])).toThrow("candidate path set must not be empty");
-	});
+	}, 20_000);
 	test("sealedSnapshotCandidate validates against approved tree even when current checkout differs structurally at sealed path", () => {
 		const repo = makeRepo();
 		fs.mkdirSync(path.join(repo, "sub"), { recursive: true });
@@ -394,12 +396,12 @@ describe("candidate freeze and push", () => {
 		expect(candidate.commitSha).toBe(approvedSha);
 		expect(candidate.paths).toEqual(["sub/target.txt"]);
 		expect(candidate.candidateSha256).toBe(candidateSha256(approvedSha, ["sub/target.txt"], "sealed-snapshot"));
-	});
+	}, 20_000);
 
 	test("pushCandidate pushes the exact frozen commit and repeated checks stay idempotent", () => {
 		const repo = makeRepo();
 		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
-		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		git(repo, "remote", "add", "origin", remote);
 		const branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD");
 		const frozen = git(repo, "rev-parse", "HEAD");
@@ -414,12 +416,12 @@ describe("candidate freeze and push", () => {
 		const second = pushCandidate(repo, frozen);
 		expect(second.status).not.toBe("not_pushed");
 		expect(second.remoteCommit).toBe(frozen);
-	});
+	}, 20_000);
 
 	test("pushCandidate proves containment when a newer same-branch tip contains the frozen commit — no push runs", () => {
 		const repo = makeRepo();
 		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
-		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		git(repo, "remote", "add", "origin", remote);
 		const branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD");
 		const frozen = git(repo, "rev-parse", "HEAD");
@@ -438,12 +440,12 @@ describe("candidate freeze and push", () => {
 		expect(outcome.detail).toContain("merge-base --is-ancestor exit 0");
 		// The branch was never touched — no backward push, tip byte-identical.
 		expect(git(remote, "rev-parse", `refs/heads/${branch}`)).toBe(before);
-	});
+	}, 20_000);
 
 	test("pushCandidate fails closed on a diverged remote, naming both commits, remote untouched", () => {
 		const repo = makeRepo();
 		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
-		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		git(repo, "remote", "add", "origin", remote);
 		const branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD");
 		const frozen = git(repo, "rev-parse", "HEAD");
@@ -467,19 +469,19 @@ describe("candidate freeze and push", () => {
 		expect(outcome.detail).toContain(frozen);
 		expect(outcome.detail).toContain("does not contain it");
 		expect(git(remote, "rev-parse", `refs/heads/${branch}`)).toBe(unrelated);
-	});
+	}, 20_000);
 
 	test("pushCandidate reports not_pushed when no remote", () => {
 		const repo = makeRepo();
 		const head = git(repo, "rev-parse", "HEAD");
 		const outcome = pushCandidate(repo, head);
 		expect(outcome.status).toBe("not_pushed");
-	});
+	}, 20_000);
 
 	test("pushCandidate pushes to explicit targetRemoteRef when provided (OMP-212)", () => {
 		const repo = makeRepo();
 		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
-		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		git(repo, "remote", "add", "origin", remote);
 		const frozen = git(repo, "rev-parse", "HEAD");
 		const targetRef = "refs/heads/execution/omp-212";
@@ -491,12 +493,12 @@ describe("candidate freeze and push", () => {
 			remoteCommit: frozen,
 		});
 		expect(git(remote, "rev-parse", targetRef)).toBe(frozen);
-	});
+	}, 20_000);
 
 	test("pushCandidate preserves expectedBaseline as priorTip when pushing to new targetRemoteRef (OMP-212)", () => {
 		const repo = makeRepo();
 		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
-		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		git(repo, "remote", "add", "origin", remote);
 		const baseline = git(repo, "rev-parse", "HEAD");
 		fs.writeFileSync(path.join(repo, "cand.txt"), "cand\n");
@@ -513,12 +515,12 @@ describe("candidate freeze and push", () => {
 			priorTip: baseline,
 		});
 		expect(git(remote, "rev-parse", targetRef)).toBe(candidate);
-	});
+	}, 20_000);
 
 	test("pushCandidate proves containment on explicit targetRemoteRef when newer tip contains commit (OMP-212)", () => {
 		const repo = makeRepo();
 		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
-		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		git(repo, "remote", "add", "origin", remote);
 		const frozen = git(repo, "rev-parse", "HEAD");
 		const targetRef = "refs/heads/execution/omp-212";
@@ -536,12 +538,12 @@ describe("candidate freeze and push", () => {
 			remoteCommit: later,
 		});
 		expect(outcome.detail).toContain(`containment: ${later} contains ${frozen}`);
-	});
+	}, 20_000);
 
 	test("forcePushCandidate overwrites a stale sibling lane tip with the lease bound to it (OMP-245)", () => {
 		const repo = makeRepo();
 		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
-		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		git(repo, "remote", "add", "origin", remote);
 		const laneRef = "refs/heads/execution/omp-245";
 		const baseline = git(repo, "rev-parse", "HEAD");
@@ -557,19 +559,19 @@ describe("candidate freeze and push", () => {
 		git(repo, "add", "--", "fresh.txt");
 		git(repo, "commit", "-q", "-m", "fresh candidate");
 		const fresh = git(repo, "rev-parse", "HEAD");
-		expect(Bun.spawnSync(["git", "merge-base", "--is-ancestor", staleTip, fresh], { cwd: repo }).exitCode).not.toBe(0);
+		expect(Bun.spawnSync(["git", "merge-base", "--is-ancestor", staleTip, fresh], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: repo }).exitCode).not.toBe(0);
 
 		const outcome = forcePushCandidate(repo, fresh, laneRef, staleTip);
 
 		expect(outcome).toMatchObject({ status: "pushed", remoteRef: laneRef, remoteCommit: fresh, priorTip: staleTip });
 		expect(outcome.detail).toContain(`forced over stale lane tip ${staleTip}`);
 		expect(git(remote, "rev-parse", laneRef)).toBe(fresh);
-	});
+	}, 20_000);
 
 	test("forcePushCandidate refuses when the lane tip moved after observation — remote untouched (OMP-245)", () => {
 		const repo = makeRepo();
 		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
-		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		git(repo, "remote", "add", "origin", remote);
 		const laneRef = "refs/heads/execution/omp-245";
 		const observedTip = git(repo, "rev-parse", "HEAD");
@@ -591,12 +593,12 @@ describe("candidate freeze and push", () => {
 
 		expect(outcome.status).toBe("not_pushed");
 		expect(git(remote, "rev-parse", laneRef)).toBe(movedTip);
-	});
+	}, 20_000);
 
 	test("forcePushCandidate refuses non-execution refs and malformed expected tips (OMP-245)", () => {
 		const repo = makeRepo();
 		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
-		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		git(repo, "remote", "add", "origin", remote);
 		const head = git(repo, "rev-parse", "HEAD");
 
@@ -616,9 +618,9 @@ describe("candidate freeze and push", () => {
 		expect(longTip.detail).not.toContain("expected lane tip must be a full commit SHA");
 		expect(longTip.detail).toContain(`force-with-lease push over ${sha256Tip} failed`);
 
-		expect(Bun.spawnSync(["git", "rev-parse", "--verify", "--quiet", "refs/heads/main"], { cwd: remote }).exitCode).not.toBe(0);
-		expect(Bun.spawnSync(["git", "rev-parse", "--verify", "--quiet", "refs/heads/execution/omp-245"], { cwd: remote }).exitCode).not.toBe(0);
-	});
+		expect(Bun.spawnSync(["git", "rev-parse", "--verify", "--quiet", "refs/heads/main"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: remote }).exitCode).not.toBe(0);
+		expect(Bun.spawnSync(["git", "rev-parse", "--verify", "--quiet", "refs/heads/execution/omp-245"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: remote }).exitCode).not.toBe(0);
+	}, 20_000);
 });
 
 describe("managed execution worktrees (OMP-213)", () => {
@@ -652,7 +654,7 @@ describe("managed execution worktrees (OMP-213)", () => {
 		expect(cleanCleanup.cleaned).toBe(true);
 		expect(fs.existsSync(first.path)).toBe(false);
 		expect(fs.readFileSync(path.join(repo, "owner-only.txt"), "utf8")).toBe("owner dirt\n");
-	});
+	}, 20_000);
 
 	test("same work key never reuses a terminal grant workspace", async () => {
 		const repo = makeRepo();
@@ -678,7 +680,7 @@ describe("managed execution worktrees (OMP-213)", () => {
 		expect(second.branch).not.toBe(first.branch);
 		await cleanupExecutionWorkspace(first);
 		await cleanupExecutionWorkspace(second);
-	});
+	}, 20_000);
 });
 
 describe("execution freeze (OMP-188)", () => {
@@ -700,7 +702,7 @@ describe("execution freeze (OMP-188)", () => {
 		expect("refused" in outcome && outcome.refused).toBe("failed");
 		expect("refused" in outcome ? outcome.reason : "").toContain("empty sealed path set cannot bind already-delivered candidate");
 		expect(git(repo, "rev-parse", "HEAD")).toBe(head);
-	});
+	}, 20_000);
 
 	test("refuses when sealed paths are empty and working tree is dirty (names unsealed path)", async () => {
 		const repo = makeRepo();
@@ -715,7 +717,7 @@ describe("execution freeze (OMP-188)", () => {
 		expect("refused" in outcome && outcome.refused).toBe("failed");
 		expect("refused" in outcome ? outcome.reason : "").toContain("unsealed modified paths (dirty.txt)");
 		expect(git(repo, "rev-parse", "HEAD")).toBe(head);
-	});
+	}, 20_000);
 
 	test("binds baseline HEAD when sealed paths carry no changes and HEAD equals the grant baseline", async () => {
 		const repo = makeRepo();
@@ -732,7 +734,7 @@ describe("execution freeze (OMP-188)", () => {
 		expect(outcome.candidateSha256).toBe(candidateSha256(head, ["seed.txt"], "sealed-snapshot"));
 		expect(git(repo, "rev-parse", "HEAD")).toBe(head); // no new commit
 		expect(ui.notices.some(n => n.includes("binding grant baseline HEAD"))).toBe(true);
-	});
+	}, 20_000);
 
 	test("refuses clean sealed paths without a verified grant baseline (fail closed)", async () => {
 		const repo = makeRepo();
@@ -744,14 +746,14 @@ describe("execution freeze (OMP-188)", () => {
 		expect("refused" in outcome && outcome.refused).toBe("failed");
 		expect("refused" in outcome ? outcome.reason : "").toContain("has no verified grant baseline");
 		expect(git(repo, "rev-parse", "HEAD")).toBe(head); // repo untouched
-	});
+	}, 20_000);
 
 	test("refuses a clean HEAD that moved off the grant baseline (foreign commit never adopted)", async () => {
 		const repo = makeRepo();
 		const baseline = git(repo, "rev-parse", "HEAD");
 		fs.writeFileSync(path.join(repo, "foreign.txt"), "unrelated post-grant work\n");
-		Bun.spawnSync(["git", "add", "--", "foreign.txt"], { cwd: repo });
-		Bun.spawnSync(["git", "commit", "-q", "-m", "foreign clean commit"], { cwd: repo });
+		Bun.spawnSync(["git", "add", "--", "foreign.txt"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: repo });
+		Bun.spawnSync(["git", "commit", "-q", "-m", "foreign clean commit"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: repo });
 		const movedHead = git(repo, "rev-parse", "HEAD");
 		expect(movedHead).not.toBe(baseline);
 		const outcome = await freezeCandidateCommit(makeUi(true), repo, "OMP-1", "cand-1", [], {
@@ -762,20 +764,20 @@ describe("execution freeze (OMP-188)", () => {
 		expect("refused" in outcome && outcome.refused).toBe("failed");
 		expect("refused" in outcome ? outcome.reason : "").toContain("differs from grant baseline");
 		expect(git(repo, "rev-parse", "HEAD")).toBe(movedHead); // repo untouched
-	});
+	}, 20_000);
 
 	test("refuses failed when the repo has no HEAD commit", async () => {
 		const repo = path.join(tempRoot, `repo-${repoSeq++}`);
 		fs.mkdirSync(repo, { recursive: true });
 		for (const args of [["init", "-q"], ["config", "user.email", "t@example.com"], ["config", "user.name", "T"]])
-			Bun.spawnSync(["git", ...args], { cwd: repo });
+			Bun.spawnSync(["git", ...args], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: repo });
 		const outcome = await freezeCandidateCommit(makeUi(true), repo, "OMP-1", "cand-1", [], {
 			mode: "execution",
 			sealedPaths: ["seed.txt"],
 		});
 		expect("refused" in outcome && outcome.refused).toBe("failed");
 		expect("refused" in outcome ? outcome.reason : "").toContain("no HEAD commit");
-	});
+	}, 20_000);
 
 	test("dirty sealed path still freezes a fresh marker candidate commit", async () => {
 		const repo = makeRepo();
@@ -789,7 +791,7 @@ describe("execution freeze (OMP-188)", () => {
 		expect(outcome.commitSha).not.toBe(baseline);
 		expect(outcome.paths).toEqual(["feat.ts"]);
 		expect(git(repo, "log", "-1", "--format=%s")).toBe("session candidate: OMP-1");
-	});
+	}, 20_000);
 
 	test("re-freeze on the marker HEAD returns the same commit (idempotent)", async () => {
 		const repo = makeRepo();
@@ -806,14 +808,14 @@ describe("execution freeze (OMP-188)", () => {
 		if ("refused" in second) throw new Error(`re-freeze refused: ${second.reason}`);
 		expect(second.commitSha).toBe(first.commitSha);
 		expect(second.candidateSha256).toBe(first.candidateSha256);
-	});
+	}, 20_000);
 
 	// OMP-218: a candidate that cannot pass required CI lint must never freeze.
 	test("execution freeze refuses when biome check fails on sealed paths", async () => {
 		const repo = makeRepo();
 		fs.writeFileSync(path.join(repo, "biome.json"), "{}\n");
-		Bun.spawnSync(["git", "add", "--", "biome.json"], { cwd: repo });
-		Bun.spawnSync(["git", "commit", "-q", "-m", "biome config"], { cwd: repo });
+		Bun.spawnSync(["git", "add", "--", "biome.json"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: repo });
+		Bun.spawnSync(["git", "commit", "-q", "-m", "biome config"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: repo });
 		fs.writeFileSync(path.join(repo, "feat.ts"), "export const feat = true;\n");
 		const calls: string[][] = [];
 		const outcome = await freezeCandidateCommit(makeUi(true), repo, "OMP-1", "cand-1", [], {
@@ -829,13 +831,13 @@ describe("execution freeze (OMP-188)", () => {
 		expect("refused" in outcome ? outcome.reason : "").toContain("biome check failed on sealed paths");
 		expect("refused" in outcome ? outcome.reason : "").toContain("format error: feat.ts");
 		expect(git(repo, "log", "-1", "--format=%s")).toBe("biome config"); // no candidate commit
-	});
+	}, 20_000);
 
 	test("execution freeze proceeds when biome check passes", async () => {
 		const repo = makeRepo();
 		fs.writeFileSync(path.join(repo, "biome.json"), "{}\n");
-		Bun.spawnSync(["git", "add", "--", "biome.json"], { cwd: repo });
-		Bun.spawnSync(["git", "commit", "-q", "-m", "biome config"], { cwd: repo });
+		Bun.spawnSync(["git", "add", "--", "biome.json"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: repo });
+		Bun.spawnSync(["git", "commit", "-q", "-m", "biome config"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: repo });
 		fs.writeFileSync(path.join(repo, "feat.ts"), "export const feat = true;\n");
 		const outcome = await freezeCandidateCommit(makeUi(true), repo, "OMP-1", "cand-1", [], {
 			mode: "execution",
@@ -845,7 +847,7 @@ describe("execution freeze (OMP-188)", () => {
 		if ("refused" in outcome) throw new Error(`expected freeze, got refusal: ${outcome.reason}`);
 		expect(outcome.paths).toEqual(["feat.ts"]);
 		expect(git(repo, "log", "-1", "--format=%s")).toBe("session candidate: OMP-1");
-	});
+	}, 20_000);
 
 	test("lint gate is skipped when the repo has no biome config", async () => {
 		const repo = makeRepo();
@@ -861,13 +863,13 @@ describe("execution freeze (OMP-188)", () => {
 		});
 		if ("refused" in outcome) throw new Error(`expected freeze, got refusal: ${outcome.reason}`);
 		expect(called).toBe(false);
-	});
+	}, 20_000);
 
 	test("an oxlint config gates the freeze with its runner when there is no biome config", async () => {
 		const repo = makeRepo();
 		fs.writeFileSync(path.join(repo, ".oxlintrc.json"), "{}\n");
-		Bun.spawnSync(["git", "add", "--", ".oxlintrc.json"], { cwd: repo });
-		Bun.spawnSync(["git", "commit", "-q", "-m", "oxlint config"], { cwd: repo });
+		Bun.spawnSync(["git", "add", "--", ".oxlintrc.json"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: repo });
+		Bun.spawnSync(["git", "commit", "-q", "-m", "oxlint config"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: repo });
 		fs.writeFileSync(path.join(repo, "feat.ts"), "export const feat = true;\n");
 		const outcome = await freezeCandidateCommit(makeUi(true), repo, "OMP-1", "cand-1", [], {
 			mode: "execution",
@@ -876,7 +878,7 @@ describe("execution freeze (OMP-188)", () => {
 		});
 		expect("refused" in outcome ? outcome.reason : "").toContain("oxlint/oxfmt check failed on sealed paths");
 		expect(git(repo, "log", "-1", "--format=%s")).toBe("oxlint config"); // no candidate commit
-	});
+	}, 20_000);
 
 	test("default oxc runner passes on a known-clean repo file", () => {
 		// Real oxlint/oxfmt invocation — catches flag/command construction errors
@@ -884,7 +886,7 @@ describe("execution freeze (OMP-188)", () => {
 		const repoRoot = path.resolve(import.meta.dir, "..", "..");
 		const res = runOxcCheck(repoRoot, ["scripts/release.ts"]);
 		expect(res.ok, res.output).toBe(true);
-	});
+	}, 20_000);
 });
 
 describe("rangeDiffSha256", () => {
@@ -900,12 +902,12 @@ describe("rangeDiffSha256", () => {
 		const repo = makeRepo();
 		const start = git(repo, "rev-parse", "HEAD");
 		fs.writeFileSync(path.join(repo, "blob.bin"), Buffer.from([0x00, 0x01, 0xff, 0x00, 0x42, 0x00]));
-		Bun.spawnSync(["git", "add", "--", "blob.bin"], { cwd: repo });
-		Bun.spawnSync(["git", "commit", "-q", "-m", "binary blob"], { cwd: repo });
+		Bun.spawnSync(["git", "add", "--", "blob.bin"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: repo });
+		Bun.spawnSync(["git", "commit", "-q", "-m", "binary blob"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: repo });
 		const final = git(repo, "rev-parse", "HEAD");
 
 		const digest = (...flags: string[]): string => {
-			const p = Bun.spawnSync(["git", "-C", repo, "diff", ...flags, `${start}..${final}`, "--"]);
+			const p = Bun.spawnSync(["git", "-C", repo, "diff", ...flags, `${start}..${final}`, "--"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 			expect(p.exitCode).toBe(0);
 			return new Bun.CryptoHasher("sha256").update(p.stdout).digest("hex");
 		};
@@ -933,6 +935,8 @@ describe("rangeDiffSha256", () => {
 			if (!got) process.exit(2);
 			process.stdout.write(got);`;
 		const child = Bun.spawnSync([process.execPath, "-e", script], {
+			timeout: SPAWN_TIMEOUT_MS,
+			killSignal: "SIGKILL",
 			env: { ...process.env, PATH: `${shimDir}:${process.env.PATH}` },
 		});
 		expect(child.exitCode).toBe(0);
@@ -952,7 +956,7 @@ describe("rangeDiffSha256", () => {
 		const args = diffCalls[0]!;
 		expect(args[0]).toBe("-C");
 		expect(args.slice(2)).toEqual(["diff", "--binary", "--full-index", `${start}..${final}`, "--"]);
-	});
+	}, 20_000);
 });
 
 describe("candidateDrift", () => {
@@ -961,49 +965,49 @@ describe("candidateDrift", () => {
 		const head = git(repo, "rev-parse", "HEAD");
 		const result = candidateDrift(repo, head);
 		expect(result).toEqual({ shape: "unchanged", head });
-	});
+	}, 20_000);
 
 	test("detects descendant fixes on top", () => {
 		const repo = makeRepo();
 		const candidate = git(repo, "rev-parse", "HEAD");
 		fs.writeFileSync(path.join(repo, "fix.txt"), "fix\n");
-		Bun.spawnSync(["git", "add", "--", "fix.txt"], { cwd: repo });
-		Bun.spawnSync(["git", "commit", "-q", "-m", "fix"], { cwd: repo });
+		Bun.spawnSync(["git", "add", "--", "fix.txt"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: repo });
+		Bun.spawnSync(["git", "commit", "-q", "-m", "fix"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: repo });
 		const head = git(repo, "rev-parse", "HEAD");
 		expect(head).not.toBe(candidate);
 		const result = candidateDrift(repo, candidate);
 		expect(result).toEqual({ shape: "fixes-on-top", head });
-	});
+	}, 20_000);
 
 	test("detects orphan/divergent history whose repository still contains the candidate object", () => {
 		const repo = makeRepo();
 		const candidate = git(repo, "rev-parse", "HEAD");
-		Bun.spawnSync(["git", "checkout", "-q", "--orphan", "other-branch"], { cwd: repo });
-		Bun.spawnSync(["git", "rm", "-rf", "-q", "."], { cwd: repo });
+		Bun.spawnSync(["git", "checkout", "-q", "--orphan", "other-branch"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: repo });
+		Bun.spawnSync(["git", "rm", "-rf", "-q", "."], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: repo });
 		fs.writeFileSync(path.join(repo, "other.txt"), "other\n");
-		Bun.spawnSync(["git", "add", "--", "other.txt"], { cwd: repo });
-		Bun.spawnSync(["git", "commit", "-q", "-m", "other root"], { cwd: repo });
+		Bun.spawnSync(["git", "add", "--", "other.txt"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: repo });
+		Bun.spawnSync(["git", "commit", "-q", "-m", "other root"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: repo });
 		const head = git(repo, "rev-parse", "HEAD");
 		expect(head).not.toBe(candidate);
 		// Candidate object still exists in repo
-		expect(Bun.spawnSync(["git", "cat-file", "-e", candidate], { cwd: repo }).exitCode).toBe(0);
+		expect(Bun.spawnSync(["git", "cat-file", "-e", candidate], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: repo }).exitCode).toBe(0);
 		const result = candidateDrift(repo, candidate);
 		expect(result).toEqual({ shape: "unrelated", head });
-	});
+	}, 20_000);
 
 	test("handles unreadable / non-repository path", () => {
 		const nonRepo = path.join(tempRoot, "not-a-repo");
 		fs.mkdirSync(nonRepo, { recursive: true });
 		const result = candidateDrift(nonRepo, "0123456789abcdef0123456789abcdef01234567");
 		expect(result).toEqual({ shape: "unrelated", head: null });
-	});
+	}, 20_000);
 
 	test("handles null or undefined candidate commit", () => {
 		const repo = makeRepo();
 		const head = git(repo, "rev-parse", "HEAD");
 		expect(candidateDrift(repo, null)).toEqual({ shape: "unrelated", head });
 		expect(candidateDrift(repo, undefined)).toEqual({ shape: "unrelated", head });
-	});
+	}, 20_000);
 });
 
 describe("merge confirmation gating (OMP-212)", () => {
@@ -1029,7 +1033,7 @@ describe("merge confirmation gating (OMP-212)", () => {
 		const outcome = verifyMergeConfirmation(repo, head, "refs/heads/main", "refs/heads/main", mockGhPassing(head));
 		expect(outcome.confirmed).toBe(false);
 		expect(outcome.detail).toContain("direct push to protected default branch is disabled");
-	});
+	}, 20_000);
 
 	test("refuses completion when gh PR query fails (missing or non-zero exit)", () => {
 		const repo = makeRepo();
@@ -1038,7 +1042,7 @@ describe("merge confirmation gating (OMP-212)", () => {
 		const outcome = verifyMergeConfirmation(repo, head, "refs/heads/execution/omp-212", "refs/heads/main", failingGh);
 		expect(outcome.confirmed).toBe(false);
 		expect(outcome.detail).toContain("PR query failed");
-	});
+	}, 20_000);
 
 	test("refuses completion when PR base branch does not match default branch", () => {
 		const repo = makeRepo();
@@ -1057,7 +1061,7 @@ describe("merge confirmation gating (OMP-212)", () => {
 		const outcome = verifyMergeConfirmation(repo, head, "refs/heads/execution/omp-212", "refs/heads/main", wrongBaseGh);
 		expect(outcome.confirmed).toBe(false);
 		expect(outcome.detail).toContain("expected main");
-	});
+	}, 20_000);
 
 	test("refuses completion when PR base branch is absent", () => {
 		const repo = makeRepo();
@@ -1076,7 +1080,7 @@ describe("merge confirmation gating (OMP-212)", () => {
 		const outcome = verifyMergeConfirmation(repo, head, "refs/heads/execution/omp-212", "refs/heads/main", absentBaseGh);
 		expect(outcome.confirmed).toBe(false);
 		expect(outcome.detail).toContain("PR base branch is absent");
-	});
+	}, 20_000);
 
 	test("refuses completion when PR head branch is absent", () => {
 		const repo = makeRepo();
@@ -1095,7 +1099,7 @@ describe("merge confirmation gating (OMP-212)", () => {
 		const outcome = verifyMergeConfirmation(repo, head, "refs/heads/execution/omp-212", "refs/heads/main", absentHeadGh);
 		expect(outcome.confirmed).toBe(false);
 		expect(outcome.detail).toContain("PR head branch is absent");
-	});
+	}, 20_000);
 
 	test("refuses completion when PR head branch does not match candidate branch", () => {
 		const repo = makeRepo();
@@ -1115,7 +1119,7 @@ describe("merge confirmation gating (OMP-212)", () => {
 		const outcome = verifyMergeConfirmation(repo, head, "refs/heads/execution/omp-212", "refs/heads/main", wrongHeadGh);
 		expect(outcome.confirmed).toBe(false);
 		expect(outcome.detail).toContain("PR head branch is other-feature, expected execution/omp-212");
-	});
+	}, 20_000);
 
 	test("resolveDefaultBranch detects master vs main from remote or local", () => {
 		const repoMain = makeRepo("main");
@@ -1125,13 +1129,13 @@ describe("merge confirmation gating (OMP-212)", () => {
 		expect(resolveDefaultBranch(repoMaster)).toBe("refs/heads/master");
 
 		const remoteMaster = path.join(tempRoot, `remote-master-${repoSeq}.git`);
-		Bun.spawnSync(["git", "init", "--bare", "--initial-branch=master", "-q", remoteMaster]);
+		Bun.spawnSync(["git", "init", "--bare", "--initial-branch=master", "-q", remoteMaster], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		const repoRemote = makeRepo("temp");
 		git(repoRemote, "remote", "add", "origin", remoteMaster);
 		git(repoRemote, "push", "-q", "origin", "HEAD:refs/heads/master");
 		git(repoRemote, "fetch", "-q", "origin");
 		expect(resolveDefaultBranch(repoRemote)).toBe("refs/heads/master");
-	});
+	}, 20_000);
 	test("refuses completion when PR state is OPEN or not MERGED", () => {
 		const repo = makeRepo();
 		const head = git(repo, "rev-parse", "HEAD");
@@ -1151,7 +1155,7 @@ describe("merge confirmation gating (OMP-212)", () => {
 		const outcome = verifyMergeConfirmation(repo, head, "refs/heads/execution/omp-212", "refs/heads/main", openPrGh);
 		expect(outcome.confirmed).toBe(false);
 		expect(outcome.detail).toContain("expected MERGED");
-	});
+	}, 20_000);
 
 	test("refuses completion when PR has no required status checks recorded", () => {
 		const repo = makeRepo();
@@ -1172,7 +1176,7 @@ describe("merge confirmation gating (OMP-212)", () => {
 		const outcome = verifyMergeConfirmation(repo, head, "refs/heads/execution/omp-212", "refs/heads/main", noChecksGh);
 		expect(outcome.confirmed).toBe(false);
 		expect(outcome.detail).toContain("no required status checks");
-	});
+	}, 20_000);
 
 	test("refuses completion when optional check passes but required check fails/pending/cancelled/timed_out/skipped/null", () => {
 		const repo = makeRepo();
@@ -1195,12 +1199,12 @@ describe("merge confirmation gating (OMP-212)", () => {
 		const outcome = verifyMergeConfirmation(repo, head, "refs/heads/execution/omp-212", "refs/heads/main", failedCheckGh);
 		expect(outcome.confirmed).toBe(false);
 		expect(outcome.detail).toContain('required check "lint-required" is not passing');
-	});
+	}, 20_000);
 
 	test("refuses completion when candidate is pushed to execution branch but not merged into origin/main", () => {
 		const repo = makeRepo();
 		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
-		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		git(repo, "remote", "add", "origin", remote);
 		git(repo, "push", "-q", "origin", "HEAD:refs/heads/main");
 
@@ -1215,12 +1219,12 @@ describe("merge confirmation gating (OMP-212)", () => {
 		const outcome = verifyMergeConfirmation(repo, candidateSha, "refs/heads/execution/omp-212", "refs/heads/main", mockGhPassing(candidateSha));
 		expect(outcome.confirmed).toBe(false);
 		expect(outcome.detail).toContain(`candidate commit ${candidateSha} is not contained in origin/main`);
-	});
+	}, 20_000);
 
 	test("confirms completion when PR is merged with required checks and origin/main contains candidate commit", () => {
 		const repo = makeRepo();
 		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
-		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		git(repo, "remote", "add", "origin", remote);
 
 		// Create candidate commit
@@ -1241,11 +1245,11 @@ describe("merge confirmation gating (OMP-212)", () => {
 		const outcome = verifyMergeConfirmation(repo, candidateSha, "refs/heads/execution/omp-212", "refs/heads/main", mockGhPassing(candidateSha));
 		expect(outcome.confirmed).toBe(true);
 		expect(outcome.detail).toContain(`PR merged with 1 required check(s) passing and origin/main contains candidate ${candidateSha}`);
-	});
+	}, 20_000);
 	test("confirms completion when PR is merged to master and origin/master contains candidate commit", () => {
 		const repo = makeRepo("master");
 		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
-		Bun.spawnSync(["git", "init", "--bare", "--initial-branch=master", "-q", remote]);
+		Bun.spawnSync(["git", "init", "--bare", "--initial-branch=master", "-q", remote], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		git(repo, "remote", "add", "origin", remote);
 
 		// Create candidate commit
@@ -1280,12 +1284,12 @@ describe("merge confirmation gating (OMP-212)", () => {
 		const outcome = verifyMergeConfirmation(repo, candidateSha, "refs/heads/execution/omp-212", "refs/heads/master", mockGhMaster);
 		expect(outcome.confirmed).toBe(true);
 		expect(outcome.detail).toContain(`PR merged with 1 required check(s) passing and origin/master contains candidate ${candidateSha}`);
-	});
+	}, 20_000);
 
 	test("updates stale local tracking ref during fetch and confirms ancestry when remote advances", () => {
 		const repo = makeRepo("main");
 		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
-		Bun.spawnSync(["git", "init", "--bare", "--initial-branch=main", "-q", remote]);
+		Bun.spawnSync(["git", "init", "--bare", "--initial-branch=main", "-q", remote], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		git(repo, "remote", "add", "origin", remote);
 		git(repo, "push", "-q", "origin", "HEAD:refs/heads/main");
 		git(repo, "fetch", "-q", "origin");
@@ -1313,7 +1317,7 @@ describe("merge confirmation gating (OMP-212)", () => {
 		const outcome = verifyMergeConfirmation(repo, candidateSha, "refs/heads/execution/omp-212", "refs/heads/main", mockGhPassing(candidateSha));
 		expect(outcome.confirmed).toBe(true);
 		expect(git(repo, "rev-parse", "origin/main")).toBe(candidateSha);
-	});
+	}, 20_000);
 
 	test("refuses completion when origin fetch fails", () => {
 		const repo = makeRepo();
@@ -1322,13 +1326,13 @@ describe("merge confirmation gating (OMP-212)", () => {
 		const outcome = verifyMergeConfirmation(repo, head, "refs/heads/execution/omp-212", "refs/heads/main", mockGhPassing(head));
 		expect(outcome.confirmed).toBe(false);
 		expect(outcome.detail).toContain("fetch refs/heads/main failed");
-	});
+	}, 20_000);
 
 	// OMP-220: ancestry alone is not enough — the PR head must BE the audited candidate.
 	test("refuses a PR head that is a descendant of the audited candidate (unaudited post-PASS content)", () => {
 		const repo = makeRepo();
 		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
-		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		git(repo, "remote", "add", "origin", remote);
 		fs.writeFileSync(path.join(repo, "feat.txt"), "feat\n");
 		git(repo, "add", "--", "feat.txt");
@@ -1345,7 +1349,7 @@ describe("merge confirmation gating (OMP-212)", () => {
 		expect(outcome.confirmed).toBe(false);
 		expect(outcome.detail).toContain("is not the audited candidate");
 		expect(outcome.detail).toContain("re-freeze");
-	});
+	}, 20_000);
 
 	test("directs a conflicted open delivery PR to a fresh freeze instead of a hand sync merge", () => {
 		const repo = makeRepo();
@@ -1368,13 +1372,13 @@ describe("merge confirmation gating (OMP-212)", () => {
 		expect(outcome.confirmed).toBe(false);
 		expect(outcome.detail).toContain("merge-conflicted");
 		expect(outcome.detail).toContain("re-freeze from the updated main tip");
-	});
+	}, 20_000);
 
 	// OMP-247: already-delivered candidate into origin default branch
 	test("already-delivered candidate with ancestry and identical tree succeeds without invoking GhPrRunner", () => {
 		const repo = makeRepo();
 		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
-		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		git(repo, "remote", "add", "origin", remote);
 		fs.writeFileSync(path.join(repo, "feat.txt"), "feat\n");
 		git(repo, "add", "--", "feat.txt");
@@ -1391,12 +1395,12 @@ describe("merge confirmation gating (OMP-212)", () => {
 		expect(outcome.detail).toContain("already delivered into origin/main");
 		expect(outcome.detail).toContain("merge-base --is-ancestor");
 		expect(outcome.detail).toContain("rev-parse ^{tree}");
-	});
+	}, 20_000);
 
 	test("ancestor with different tip tree falls through to PR check and refuses on stale head OID", () => {
 		const repo = makeRepo();
 		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
-		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		git(repo, "remote", "add", "origin", remote);
 		fs.writeFileSync(path.join(repo, "feat.txt"), "feat\n");
 		git(repo, "add", "--", "feat.txt");
@@ -1416,12 +1420,12 @@ describe("merge confirmation gating (OMP-212)", () => {
 		const outcome = verifyMergeConfirmation(repo, candidateSha, "refs/heads/execution/omp-212", "refs/heads/main", stalePrGh);
 		expect(outcome.confirmed).toBe(false);
 		expect(outcome.detail).toContain("is not the audited candidate");
-	});
+	}, 20_000);
 
 	test("identical tree without ancestry does not bypass PR check", () => {
 		const repo = makeRepo();
 		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
-		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		git(repo, "remote", "add", "origin", remote);
 
 		// Create a root commit on origin/main
@@ -1443,7 +1447,7 @@ describe("merge confirmation gating (OMP-212)", () => {
 		const outcome = verifyMergeConfirmation(repo, orphanSha, "refs/heads/execution/omp-247", "refs/heads/main", spyGh);
 		expect(ghCalled).toBe(true);
 		expect(outcome.confirmed).toBe(false);
-	});
+	}, 20_000);
 });
 
 describe("admission rebase-check (OMP-220)", () => {
@@ -1464,7 +1468,7 @@ describe("admission rebase-check (OMP-220)", () => {
 		expect(git(repo, "rev-parse", "HEAD")).toBe(head);
 		git(repo, "push", "origin", `${foreign}:refs/heads/main`);
 		expect(ensureUpToDateWithDefault(repo, "refs/heads/main", "OMP-233").ok).toBe(true);
-	});
+	}, 20_000);
 
 	test("admission distinguishes its own candidate and ordinary prose from foreign candidate markers", () => {
 		const repo = makeRepo();
@@ -1478,12 +1482,12 @@ describe("admission rebase-check (OMP-220)", () => {
 		expect(ensureUpToDateWithDefault(repo, "refs/heads/main", "OMP-233").ok).toBe(true);
 		git(repo, "commit", "--allow-empty", "-m", "session candidate: OMP-239\n\nWork-Candidate: actual-id");
 		expect(ensureUpToDateWithDefault(repo, "refs/heads/main", "OMP-233").ok).toBe(false);
-	});
+	}, 20_000);
 
 	test("passes when HEAD contains the origin default tip and refuses when behind", () => {
 		const repo = makeRepo("main");
 		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
-		Bun.spawnSync(["git", "init", "--bare", "--initial-branch=main", "-q", remote]);
+		Bun.spawnSync(["git", "init", "--bare", "--initial-branch=main", "-q", remote], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		git(repo, "remote", "add", "origin", remote);
 		git(repo, "push", "-q", "origin", "HEAD:refs/heads/main");
 
@@ -1494,14 +1498,14 @@ describe("admission rebase-check (OMP-220)", () => {
 		// Independent seed commits only match when their timestamps match.
 		// Clone the shared history instead of relying on same-second commits.
 		const pusher = path.join(tempRoot, `pusher-${repoSeq++}`);
-		const clone = Bun.spawnSync(["git", "clone", "-q", remote, pusher]);
+		const clone = Bun.spawnSync(["git", "clone", "-q", remote, pusher], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		expect(clone.exitCode, clone.stderr.toString()).toBe(0);
 		git(pusher, "config", "user.email", "test@example.com");
 		git(pusher, "config", "user.name", "Test");
 		fs.writeFileSync(path.join(pusher, "advanced.txt"), "advanced\n");
 		git(pusher, "add", "--", "advanced.txt");
 		git(pusher, "commit", "-q", "-m", "advanced");
-		const push = Bun.spawnSync(["git", "push", "-q", "origin", "HEAD:refs/heads/main"], { cwd: pusher });
+		const push = Bun.spawnSync(["git", "push", "-q", "origin", "HEAD:refs/heads/main"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: pusher });
 		expect(push.exitCode, push.stderr.toString()).toBe(0);
 		expect(git(pusher, "rev-parse", "HEAD")).not.toBe(git(repo, "rev-parse", "HEAD"));
 
@@ -1514,12 +1518,12 @@ describe("admission rebase-check (OMP-220)", () => {
 		git(repo, "merge", "-q", "refs/remotes/origin/main");
 		const caughtUp = ensureUpToDateWithDefault(repo, "refs/heads/main");
 		expect(caughtUp.ok).toBe(true);
-	});
+	}, 20_000);
 
 	test("fails closed when the repo has no origin remote", () => {
 		const repo = makeRepo("main");
 		const res = ensureUpToDateWithDefault(repo, "refs/heads/main");
 		expect(res.ok).toBe(false);
 		expect(res.detail).toContain("fetch origin main failed");
-	});
+	}, 20_000);
 });
