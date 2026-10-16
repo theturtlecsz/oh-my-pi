@@ -40,6 +40,7 @@ from omp_work.orchestrator import (
     candidate_git,
     intake_binding,
     intake_gate,
+    launch_binding,
     lesson_context,
     merge_gate,
     model_proxy_client,
@@ -449,7 +450,15 @@ def _approach_lines(
 
 
 def _admitted_approach(ctx: StageContext) -> list[str] | intake_gate.Refusal | None:
-    """Approach from the revision stored on the admitted binding.
+    """Approach from the revision stored on the admitted binding."""
+    admitted = _admitted_intake(ctx)
+    return admitted[0] if isinstance(admitted, tuple) else admitted
+
+
+def _admitted_intake(
+    ctx: StageContext,
+) -> tuple[list[str], intake_binding.Binding] | intake_gate.Refusal | None:
+    """Approach and the admitted binding it was read from.
 
     The intake head is not read, so a newer head cannot replace the revision
     the mission was admitted on. ``None`` means that binding is absent. The
@@ -479,11 +488,12 @@ def _admitted_approach(ctx: StageContext) -> list[str] | intake_gate.Refusal | N
         item.statement
         for item in sorted(projected.constraints, key=lambda item: item.id)
     ]
-    return _approach_lines(
+    approach = _approach_lines(
         projected.goal.statement,
         typed,
         _request_constraint_statements(_request_mapping(ctx.request)),
     )
+    return approach, binding
 
 
 def run_grant(ctx: StageContext) -> Outcome:
@@ -617,6 +627,36 @@ def run_grant(ctx: StageContext) -> Outcome:
     return _attach_pin(_grant_phase(ctx, gid))
 
 
+def _plan_inputs(
+    ctx: StageContext, phase: str
+) -> tuple[list[str], list[str], list[str], str, str, intake_binding.Binding] | Outcome:
+    """Approach, verification, paths, plan body and sha, plus the admitted binding read."""
+    rq = _request_mapping(ctx.request)
+    verification = [str(x) for x in rq.get("test_command") or ()]
+    if not verification:
+        return Outcome(
+            outcome="failed",
+            data={"stage": "grant", "code": "test_command_missing", "phase": phase},
+        )
+    admitted = _admitted_intake(ctx)
+    if isinstance(admitted, intake_gate.Refusal):
+        return Outcome(
+            outcome="failed",
+            data={"stage": "grant", "code": admitted.code, "phase": phase},
+        )
+    if admitted is None:
+        return Outcome(
+            outcome="failed",
+            data={"stage": "grant", "code": intake_gate.TYPED_INTAKE_MISSING, "phase": phase},
+        )
+    approach, binding = admitted
+    paths = [str(x) for x in rq.get("allowed_paths") or ()]
+    plan_body = canonical_json(
+        {"approach": approach, "verification": verification, "paths": paths}
+    )
+    return approach, verification, paths, plan_body, text_sha256(plan_body), binding
+
+
 def _grant_phase(ctx: StageContext, gid: UUID) -> Outcome:
     """Drive the owned grant's active item through at most three re-read passes.
 
@@ -650,6 +690,35 @@ def _grant_phase(ctx: StageContext, gid: UUID) -> Outcome:
                 data={"stage": "grant", "code": f"grant_phase_{phase}", "phase": phase},
             )
         if phase == "executing":
+            inputs = _plan_inputs(ctx, phase)
+            if isinstance(inputs, Outcome):
+                return inputs
+            stamp = item.get("plan_stamp")
+            if not isinstance(stamp, Mapping) or stamp.get("plan_sha256") != inputs[4]:
+                return Outcome(
+                    outcome="failed",
+                    data={"stage": "grant", "code": "plan_obsolete", "phase": phase},
+                )
+            binding = inputs[5]
+            with intake_gate.cursor(
+                ctx._handler.store,
+                workspace_id=UUID(str(ctx.workspace_id)),
+                actor_id=UUID(str(ctx.principal.actor_id)),
+            ) as cur:
+                launch_binding.record(
+                    cur,
+                    workspace_id=UUID(str(ctx.workspace_id)),
+                    mission_id=UUID(str(ctx.mission_id)),
+                    intake_binding_id=binding.binding_id,
+                    run_id=binding.run_id,
+                    revision=binding.revision,
+                    assessment_id=str(binding.assessment_id),
+                    plan_receipt_id=str(stamp["plan_receipt_id"]),
+                    plan_sha256=inputs[4],
+                    item_id=str(item["item_id"]),
+                    work_id=UUID(str(ctx.work_id)),
+                    candidate_id=str(stamp["candidate_id"]),
+                )
             return Outcome(
                 outcome="succeeded",
                 data={
@@ -702,50 +771,17 @@ def _grant_phase(ctx: StageContext, gid: UUID) -> Outcome:
             continue
         if phase == "planning":
             rq = _request_mapping(ctx.request)
-            raw_test_cmd = rq.get("test_command") or ()
-            test_command = [str(x) for x in raw_test_cmd]
-            if not test_command:
-                return Outcome(
-                    outcome="failed",
-                    data={
-                        "stage": "grant",
-                        "code": "test_command_missing",
-                        "phase": phase,
-                    },
-                )
+            inputs = _plan_inputs(ctx, phase)
+            if isinstance(inputs, Outcome):
+                return inputs
+            approach, verification, paths, plan_body, plan_sha, _binding = inputs
             pid = service._ids(ctx.mission_id, "plan-candidate")
-            approach = _admitted_approach(ctx)
-            if isinstance(approach, intake_gate.Refusal):
-                return Outcome(
-                    outcome="failed",
-                    data={"stage": "grant", "code": approach.code, "phase": phase},
-                )
-            if approach is None:
-                return Outcome(
-                    outcome="failed",
-                    data={
-                        "stage": "grant",
-                        "code": intake_gate.TYPED_INTAKE_MISSING,
-                        "phase": phase,
-                    },
-                )
-            verification = test_command
-            raw_paths = rq.get("allowed_paths") or ()
-            paths = [str(x) for x in raw_paths]
             candidate_sha = sha256(
                 {
                     "base_commit": rq["base_commit"],
                     "allowed_paths": rq["allowed_paths"],
                 }
             )
-            plan_body = canonical_json(
-                {
-                    "approach": approach,
-                    "verification": verification,
-                    "paths": paths,
-                }
-            )
-            plan_sha = text_sha256(plan_body)
             ctx.command(
                 "stamp_execution_plan",
                 {
@@ -1054,6 +1090,25 @@ def run_implement(ctx: StageContext) -> Outcome:
             outcome="crashed",
             data={"stage": "implement", "code": "worker_argv_missing"},
         )
+    with intake_gate.cursor(
+        ctx._handler.store,
+        workspace_id=UUID(str(ctx.workspace_id)),
+        actor_id=UUID(str(ctx.principal.actor_id)),
+    ) as cur:
+        launch = launch_binding.verify(
+            cur,
+            workspace_id=UUID(str(ctx.workspace_id)),
+            mission_id=UUID(str(ctx.mission_id)),
+            grant_id=service._ids(ctx.mission_id, "grant"),
+            work_id=UUID(str(ctx.work_id)),
+        )
+    if isinstance(launch, launch_binding.Refusal):
+        refused: dict[str, Any] = {"stage": "implement", "code": launch.code}
+        if launch.hold_code is not None:
+            refused["hold_code"] = launch.hold_code
+        if launch.field is not None:
+            refused["field"] = launch.field
+        return Outcome(outcome="failed", data=refused)
     worktree = candidate_git.reset_worktree(
         ctx.config.control_repo,
         ctx.config.worktrees_dir,
@@ -1065,6 +1120,12 @@ def run_implement(ctx: StageContext) -> Outcome:
         "worktree": str(worktree),
         "identity": "worker",
         "repair_round": ctx.repair_round,
+        "launch_binding_id": str(launch.launch_binding_id),
+        "intake_revision": launch.revision,
+        "assessment_id": launch.assessment_id,
+        "plan_receipt_id": launch.plan_receipt_id,
+        "item_id": launch.item_id,
+        "candidate_id": launch.candidate_id,
     }
     model_worker = (
         Path(argv[0]).name == "orchestrator-worker"
