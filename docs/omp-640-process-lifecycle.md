@@ -1,161 +1,172 @@
-# OMP-640 — process lifecycle around `killed N dangling process`
+# OMP-640 process lifecycle evidence
 
-Owner: OMP-640-s01. Scope: the `session-system/tests` run under the gate
-(`bun test session-system/tests --parallel=1 --timeout=30000`, empty `HOME`, no
-`uv`). This document records the observed mechanism, the actual child process
-behind the diagnostic, and why the two named tests were the first to emit it.
+Scope: OMP-640-s01 supplies explicit child/pipe ownership and regression proof.
+Existing tests, production code and preload remain unchanged. Applying the
+fixture to existing test files and five full gate runs belong to other tasks.
 
-## Environment
+## Environment and commands
 
-- Bun `1.4.2` (`bun --version` → `1.4.2`; banner `bun test v1.4.2 (744846f84)`).
-- Linux, `bunfig.toml` `[test] preload = ["./scripts/session-system-test-preload.ts"]`
-  gives each run a private `mkdtemp` `TMPDIR` (`/tmp/omp-session-test-*`), removed
-  on `process.on("exit")` and `afterAll`.
-- Gate command from the archived failure:
-  `bun test session-system/tests --parallel=1 --timeout=30000`.
+Observed 2026-10-16, Linux, Bun `1.4.2 (744846f84)` in worktree
+`/home/ompbot/flood-repos/oh-my-pi-wt/OMP-640-s01`.
+Root `bunfig.toml` loads `scripts/session-system-test-preload.ts`, allocating a
+private `TMPDIR`; individual tests also remove their own fixture directories.
 
-Commands used to reproduce the diagnostic in isolation:
-
-- `bun test --timeout 1 session-system/tests/omp-262-plan-identity.test.ts`
-  — the exact archived signature (dangling line + `ENOENT` on `plan.md`).
-- `bun test session-system/tests/update.test.ts` — the mapper fence path
-  (passes; the mapper is reaped by its own `finally` on the non-deadline path).
-
-## The two causal paths and their actual children
-
-The diagnostic is not tied to a test *name*; it is tied to a child that is still
-live at the moment Bun enforces a test's deadline. Two session-system paths
-reach a long-lived child:
-
-1. **`omp-262-plan-identity.test.ts` → `stamp payload parity`.**
-   `runExecution` calls `createWorkflowHost(...)` (`host.ts`), and
-   `createWorkflowHost` runs a **synchronous** git probe at `host.ts:740`:
-
-   ```ts
-   const gitRooted = spawnSync("git", ["-C", process.cwd(), "rev-parse", "--show-toplevel"], { encoding: "utf8" }).status === 0;
-   ```
-
-   This is the only child the path spawns. Instrumenting `Bun.spawnSync`
-   (a wrapper around the real call, logging `pid`/`status`/`signalCode`/`argv`)
-   while running this file shows three such calls, each returning **killed by
-   the deadline** rather than a status:
-
-   ```
-   +1111ms Bun.spawnSync pid=1649104 status=null signal="SIGTERM" argv=["git","-C","/home/ompbot/flood-repos/oh-my-pi-wt/OMP-640-s01","rev-parse","--show-toplevel"]
-   +1118ms Bun.spawnSync pid=1649108 status=null signal="SIGTERM" argv=[...]
-   +1120ms Bun.spawnSync pid=1649109 status=null signal="SIGTERM" argv=[...]
-   ```
-
-   Owned PID/argv: the child PID is the `git` process; argv is
-   `git -C <repo-root> rev-parse --show-toplevel`; cwd is `process.cwd()`;
-   exit is `status=null`, `signalCode="SIGTERM"`.
-
-2. **`update.test.ts` → `live-mapping fence (OMP-157)`.**
-   The fence spawns a python mapper that `mmap`s a fixture file and then
-   `time.sleep(600)`:
-
-   ```ts
-   const mapper = Bun.spawn(["python3", mapperPy, mappedReal], { stdout: "pipe", stderr: "ignore" });
-   ```
-
-   Owned PID/argv: `python3 <tmp>/mapper.py <realpath-of-mapped-file>`
-   (plus `shield` in the second case). On the normal path the test already does
-   `finally { mapper.kill(); await mapper.exited; }`.
-
-The archived cascade's first dangling line lands here
-(`/home/ompbot/flood/flood-logs/OMP-612-s04.test.1.log:1066`), immediately after
-`stamp payload parity` case 3 and immediately before an unhandled
-`could not read plan file /tmp/omp-262-exec-00y9KW/plan.md: ENOENT`.
-
-## Chronology: spawn, deadline, exit, hooks
-
-For one test that overruns its `--timeout`:
-
-1. The test body spawns a child (`git` via `spawnSync`, or `python3` mapper) and
-   keeps it live.
-2. The test body blocks/awaits past the deadline (in the archived run, the
-   synchronous git probe stalls; in isolation, an artificial `sleep` past a
-   short `--timeout` produces the identical line).
-3. Bun's deadline enforcement fires on a separate thread: it **kills the live
-   child** and prints `killed N dangling process` **at that instant**.
-4. The test body then **resumes**; its `await`/blocking call returns with the
-   child already dead. For `spawnSync`, the return is `status=null`,
-   `signalCode="SIGTERM"` (step 1 log above).
-5. Only **after** the body settles does the awaited `afterEach` run — the
-   fixture dirs (`mkdtemp` under the private `TMPDIR`) are removed there.
-
-Two facts distinguish "first stall" from "later kills":
-
-- The **first** dangling line is the *stall itself*: a test exceeded its
-  deadline while holding a live child, so Bun killed it.
-- **Later** dangling lines are other, independent tests reaching their own
-  deadline under the same condition. They are not caused by the earlier kill.
-
-## Why later spawns fail (evidenced)
-
-Later spawns do **not** fail because the runner was poisoned by the earlier
-dangling kill. Controlled reproductions:
-
-- Same file, next test after a dangling kill: `Bun.spawnSync(["git","--version"])`
-  and `Bun.spawnSync(["git","init","-q"])` both **exit 0** (see
-  `session-system/tests/process-lifecycle.test.ts`, case 4).
-- Cross file (`/tmp` probe): file A stalls past a 300 ms deadline and is
-  dangling-killed; file B then runs `git --version` and `git init` — both exit
-  **0**, under both the default runner and `--parallel=1`.
-- `node:child_process.spawnSync` after a dangling kill also exits 0.
-
-What actually produces the observed later failures is the **body resuming after
-the deadline into a fixture the hook already deleted**:
-
-- `host.ts` then does `readFileSync(planPath)` and gets
-  `ENOENT: .../omp-262-exec-*/plan.md`, which the test surfaces as
-  `stamp_execution_plan failed: could not read plan file ...`.
-- Equivalently, a `spawnSync` whose `cwd` has been removed **throws**
-  `ENOENT: no such file or directory, posix_spawn 'git'` (reproduced directly),
-  and a later `git config` in a removed dir exits non-zero with **empty stderr**.
-
-So the correct statement of the cascade is: *a test that overruns its deadline
-leaves a live child; Bun kills that child and prints the diagnostic, then the
-test body resumes against state its `afterEach` already tore down, so it fails
-with `ENOENT`/failed assertions. It does not poison the runner — every later
-`git`/`spawnSync` still starts.*
-
-## Why `try/finally` is insufficient, and why `afterEach` is the fix
-
-Instrumentation with `spawnSync`/`Bun.spawn` wrappers and a probe test that
-registers a live child, then overruns its deadline:
-
-- With cleanup only in the test body's `try/finally`, a **`finally` never runs**
-  on the deadline path: the probe's `events` array stays empty while Bun prints
-  `killed 1 dangling process`. Bun's deadline kill happens before any pending
-  `finally`, so a `finally`-based `kill()`/`await exited` cannot fire.
-  (This is why the mapper's `finally { mapper.kill(); await mapper.exited; }` in
-  `update.test.ts` is insufficient once the test reaches its deadline.)
-- With cleanup in an awaited `afterEach`, the hook **does run** and reaps the
-  child (`afterEach: pid=... alive=true` → `exited code=...`).
-- A test that **returns normally** (no deadline) whose `afterEach` reaps the
-  child prints **no** dangling line at all — Bun's dangling check for the
-  normal path happens after `afterEach`.
-
-Conclusion: register every child at spawn and reap it in an awaited
-`afterEach` (`fixtures/owned-children.ts`). That is the only hook that runs on
-both the normal-return and the deadline paths, so no test ever ends with a live
-child and no deadline overrun is needed to clean up. `session-system/tests/process-lifecycle.test.ts`
-exercises the normal path (child reaped, next `git init`/`git config` exits 0),
-a deliberate assertion failure with a live child (reaped; file finishes
-cleanly), and a child-live test driven past a short deadline (diagnostic prints,
-the next `git` spawn still exits 0) — proving a deliberately left child does
-not make the next test's git spawn fail.
-
-## Reproduction / verification
+Passing focused commands:
 
 ```sh
-# exact archived signature (dangling line + ENOENT on plan.md)
-bun test --timeout 1 session-system/tests/omp-262-plan-identity.test.ts
-
-# healthy baseline: 8 pass
-bun test session-system/tests/omp-262-plan-identity.test.ts
-
-# the proof suite: 4 pass, no "killed N dangling process"
 bun test session-system/tests/process-lifecycle.test.ts
+bun test session-system/tests/omp-262-plan-identity.test.ts session-system/tests/update.test.ts
+bun scripts/upstream-inventory.ts
 ```
+
+The lifecycle file passes eight cases with no dangling-process diagnostic.
+The two existing files pass 29 cases. These are focused runs, not evidence that
+the entire session suite passes repeatedly under the gate's empty HOME/no uv.
+
+## Actual children on both paths
+
+### Identity: synchronous git, not a forgotten asynchronous mapper
+
+`omp-262-plan-identity.test.ts` `stamp payload parity` calls `runExecution`,
+then `createWorkflowHost`. `session-system/extensions/workflow/host.ts:740`
+uses `node:child_process.spawnSync`:
+
+```ts
+spawnSync("git", ["-C", process.cwd(), "rev-parse", "--show-toplevel"], { encoding: "utf8" })
+```
+
+A disposable preload wrapped the real `Bun.spawnSync` (used by Bun's Node
+compatibility implementation), recording only argv, PID, exit and signal.
+It also traced the existing `fs.promises.rm` calls, reinstalling that trace
+after the test's `vi.restoreAllMocks()`. It changed neither command nor return
+value. The preload was deleted after this experiment. Command:
+
+```sh
+bun test --preload ./session-system/tests/fixtures/omp-640-probe.ts --timeout 1 session-system/tests/omp-262-plan-identity.test.ts
+```
+
+This deliberately failing diagnostic run produced this chronology, milliseconds
+since preload initialization (imports account for most elapsed time):
+
+```text
++689 spawn ["git","-C","<worktree>","rev-parse","--show-toplevel"]
+     killed 1 dangling process
++689 remove /tmp/omp-session-test-arersc/omp-262-exec-csvVeQ
++689 exit pid=2388336 exitCode=null signalCode=SIGTERM
+     stamp_execution_plan failed: could not read plan file
+     /tmp/omp-session-test-arersc/omp-262-exec-csvVeQ/plan.md: ENOENT
++699 removed /tmp/omp-session-test-arersc/omp-262-exec-csvVeQ
++699 outer afterEach hook
++701 next git spawn; killed 1 dangling process
++701 exit pid=2388337 exitCode=null signalCode=SIGTERM
++702 next git spawn; killed 1 dangling process
++703 exit pid=2388338 exitCode=null signalCode=SIGTERM
+```
+
+Thus the diagnostic can identify a *synchronous* child whose caller has not
+returned. Later calls really create new git PIDs and return a signal instead
+of status 0. This is not evidence of a failed `posix_spawn` syscall. Fixture
+removal starts **before** the synchronous call returns; the still-running
+body then reads the very directory being removed. The exact removed path and
+failed read match here, rather than an equivalent removed-cwd example.
+
+### Update fence: mapped Python child, already reaped on normal completion
+
+`update.test.ts` starts `python3 <fixture>/bin/mapper.py
+<fixture>/repo/mapped.bin` (second case adds `shield`). The Python script
+opens and mmaps the file, prints `ready <procfs-pid>`, then sleeps 600 seconds.
+Both cases already have `finally { mapper.kill(); await mapper.exited; }`.
+
+The same disposable preload wrapped real `Bun.spawn` to record the returned
+PID and immediately read **that PID's** `/proc/<pid>/cmdline`; it observed
+`proc.exited` without changing child behavior. Focused command:
+
+```sh
+bun test --preload ./session-system/tests/fixtures/omp-640-probe.ts --test-name-pattern 'live-mapping fence' session-system/tests/update.test.ts
+```
+
+Observed first child PID `2389151`, cmdline `python3
+/tmp/omp-session-test-sxwp3O/omp-update-test-34XqxV/bin/mapper.py
+/tmp/omp-session-test-sxwp3O/omp-update-test-34XqxV/repo/mapped.bin`.
+It exited `143/SIGTERM` at +138ms, before the second update command and
++207ms hook. Second child PID `2389360`, same argv shape plus `shield`, exited
+`143/SIGTERM` at +381ms, before +383ms hook. Both cases passed.
+These are observed child handles and procfs identities, not attribution from
+the preceding test name. During the synchronous update command the mapper
+is intentionally alive; a test deadline there can require emergency cleanup
+before JavaScript reaches its existing `finally`.
+
+## Runtime source and hook ordering
+
+Pinned source for the installed revision
+[`744846f844374847c902b5e7fd59b4342a51ef99`](https://github.com/oven-sh/bun/commit/744846f844374847c902b5e7fd59b4342a51ef99):
+
+- [`Execution.rs:300–334`](https://github.com/oven-sh/bun/blob/744846f844374847c902b5e7fd59b4342a51ef99/src/runtime/test_runner/Execution.rs#L300):
+  `handle_timeout` invokes `kill_dangling_processes_on_timeout`; an expired
+  serial entry calls the VM auto-killer and prints the dangling count.
+- [`js_bun_spawn_bindings.rs:1937–1969`](https://github.com/oven-sh/bun/blob/744846f844374847c902b5e7fd59b4342a51ef99/src/runtime/api/bun/js_bun_spawn_bindings.rs#L1937):
+  the synchronous wait honors the active test deadline, kills pending children
+  and closes readable pipes. This can happen inside a synchronous API call;
+  it does not require a separate watchdog thread executing JavaScript.
+- [`spawn_sync:277–308`](https://github.com/oven-sh/bun/blob/744846f844374847c902b5e7fd59b4342a51ef99/src/runtime/api/bun/js_bun_spawn_bindings.rs#L277):
+  after the isolated loop is torn down and child reaped, the timeout callback
+  runs **before** the synchronous result returns to JavaScript. This explains
+  teardown starting before the identity body resumes.
+
+The committed nested `test-deadline` scenario experimentally establishes the
+asynchronous ordering too: child alive → 100ms test timeout/emergency kill →
+awaited `afterEach` reaps child and finishes readers → next test starts and
+observes exit → suspended body's `finally` eventually runs → git case passes.
+The next case deliberately waits long enough to observe that continuation.
+The separate `sync-deadline` scenario holds a registered asynchronous child
+while a bounded synchronous Bun child sleeps past the same 100ms deadline.
+Bun reports two killed children; the next synchronous git init/config still
+exits 0. Thus both asynchronous and synchronous deadline paths are exercised.
+A body `finally` is therefore **late**, not guaranteed never to run. An awaited
+hook does not retroactively suppress an already printed timeout diagnostic.
+
+Normal return, assertion failure and a 30ms **operation** deadline follow a
+different ordering: body settles → awaited hook reaps child → next case
+observes exit and unlocked pipes → git init/config/readback exit 0. No dangling
+diagnostic. Keeping the operation deadline below Bun's test timeout makes
+cleanup possible before Bun's emergency action.
+
+## First stall versus later failures: evidence limits
+
+The archived first identity timeout was followed by fixture `ENOENT`s and
+later 30-second git-related timeouts. The controlled identity run above proves
+why timed-out sync probes return failure: Bun kills their actual git PIDs at
+the active deadline; it also proves the resulting fixture teardown race.
+The later failures reproduced here are **new probes reaching their own
+expired deadlines**, not missing executables or proven deleted git cwd. Git's
+`-C` target in this path remains the worktree, not the removed plan fixture.
+
+An independent next case still runs git successfully after an emergency kill
+in the committed regression. That disproves deterministic runner poisoning
+in this reproduction; it does **not** rule out an intermittent runtime issue
+in the archived cascade. Neither the first archived 30-second stall nor a
+causal link from its kill to later independent stalls has been reproduced.
+There is no evidence here to claim a Bun defect, deleted later git cwd, or a
+complete explanation of that intermittent stall cascade. The evidenced root
+cause addressed by this fixture is teardown racing unfinished work: cleanup
+must own child exit and pipe completion, rather than rely on eventual body
+`finally` execution. Archived logs alone cannot establish more.
+
+## Ownership and bounded cleanup proof
+
+`fixtures/owned-children.ts` registers each handle at spawn and immediately
+owns its stdout/stderr readers. `output()` uses those readers. `reap()` sends
+SIGTERM only to registered live handles, escalates individually after a bounded
+grace, awaits exit, then awaits reader cancellation and read-loop settlement.
+Read/cancellation failures surface; handles stay registered until cleanup
+succeeds. Only after awaited cleanup do tests remove fixture directories.
+The tree-killing process utility is unsuitable because this task explicitly
+excludes descendant/group sweeps; ordinary stream helpers do not expose the
+reader and cancellation completion needed for this ownership boundary.
+
+All nested runners use the same registry and an independent spawn timeout
+(4s), below enclosing test timeout (10s); child fixtures have their own 1.5s
+safety timeout. A stalled runner with no grandchildren is deliberately killed
+and awaited by its parent. Another case starts a SIGTERM-resistant child,
+verifies SIGKILL escalation, settled output and released reader locks before
+fixture removal. No process-name or descendant signaling is used.

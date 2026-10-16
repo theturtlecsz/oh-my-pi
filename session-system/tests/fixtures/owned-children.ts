@@ -1,70 +1,102 @@
-import type { Subprocess } from "bun";
+import type { SpawnOptions, Subprocess } from "bun";
 
-/**
- * Registry of child processes a test file explicitly owns.
- *
- * Bun reaps any child still live when a test ends and prints
- * `killed N dangling process`; a test-body `finally` never runs when Bun
- * enforces the test deadline, so cleanup must live in an awaited `afterEach`.
- * Register every spawned child here at spawn time, then reap in `afterEach`.
- */
+interface OwnedPipe {
+	finished: boolean;
+	reader: ReadableStreamDefaultReader<Uint8Array>;
+	text: Promise<string>;
+}
+
+interface OwnedChild {
+	proc: Subprocess;
+	stdout?: OwnedPipe;
+	stderr?: OwnedPipe;
+}
+
+/** Explicit child ownership. Await reap() in afterEach before removing fixtures. */
 export class OwnedChildren {
-	readonly #live = new Map<number, Subprocess>();
+	readonly #children = new Map<number, OwnedChild>();
 
-	/** Track an already-spawned child. Returns it unchanged. */
+	/** Register immediately at spawn; this registry also owns all pipe readers. */
 	register<T extends Subprocess>(proc: T): T {
-		this.#live.set(proc.pid, proc);
+		if (this.#children.has(proc.pid)) throw new Error(`Child ${proc.pid} already registered`);
+		const child: OwnedChild = { proc };
+		this.#children.set(proc.pid, child);
+		child.stdout = ownPipe(proc.stdout);
+		child.stderr = ownPipe(proc.stderr);
 		return proc;
 	}
 
-	/** Spawn and register in one step, so no window exists where it is untracked. */
-	spawn(...args: Parameters<typeof Bun.spawn>): Subprocess {
-		return this.register(Bun.spawn(...args));
+	spawn<
+		const In extends SpawnOptions.Writable = "ignore",
+		const Out extends SpawnOptions.Readable = "pipe",
+		const Err extends SpawnOptions.Readable = "inherit",
+	>(cmd: string[], options?: SpawnOptions.SpawnOptions<In, Out, Err>): Subprocess<In, Out, Err> {
+		return this.register(Bun.spawn(cmd, options));
 	}
 
-	/** PIDs still tracked (exited handles are removed by reap). */
 	pids(): number[] {
-		return [...this.#live.keys()];
+		return [...this.#children.keys()];
 	}
 
-	/**
-	 * Terminate every tracked child and wait for it to exit.
-	 *
-	 * SIGTERM first; after `gracefulMs`, SIGKILL. Only individually owned PIDs
-	 * are signalled — no process-group or name-based sweep. Pipe streams are
-	 * drained/cancelled so file descriptors are released before a caller
-	 * removes the fixture directory.
-	 */
-	async reap(gracefulMs = 1_000): Promise<void> {
-		const procs = [...this.#live.values()];
-		this.#live.clear();
-		for (const proc of procs) {
-			if (proc.exitCode === null) {
-				try {
-					proc.kill("SIGTERM");
-				} catch {
-					// already gone
-				}
-			}
-		}
-		await Promise.all(
-			procs.map(async proc => {
-				if (await exitedWithin(proc, gracefulMs)) return;
-				if (proc.exitCode === null) {
-					try {
-						proc.kill("SIGKILL");
-					} catch {
-						// already gone
-					}
+	/** Read through the registered readers, never lock proc.stdout/stderr again. */
+	async output(proc: Subprocess): Promise<{ stdout: string; stderr: string }> {
+		const child = this.#children.get(proc.pid);
+		if (!child) throw new Error(`Child ${proc.pid} is not registered`);
+		const [stdout, stderr] = await Promise.all([child.stdout?.text ?? "", child.stderr?.text ?? ""]);
+		return { stdout, stderr };
+	}
+
+	/** Signal only owned handles, escalate after grace, then finish every read. */
+	async reap(gracefulMs = 200): Promise<void> {
+		const results = await Promise.allSettled(
+			[...this.#children.values()].map(async child => {
+				const { proc } = child;
+				if (proc.exitCode === null) proc.kill("SIGTERM");
+				if (!(await exitedWithin(proc, gracefulMs))) {
+					if (proc.exitCode === null) proc.kill("SIGKILL");
+					if (!(await exitedWithin(proc, 1_000))) throw new Error(`Child ${proc.pid} did not exit after SIGKILL`);
 				}
 				await proc.exited;
+				// Exit does not imply pipe EOF (another writer could hold the fd).
+				// Cancel via our readers and await both cancellation and read loops.
+				await Promise.all([finishPipe(child.stdout), finishPipe(child.stderr)]);
+				this.#children.delete(proc.pid);
 			}),
 		);
-		for (const proc of procs) {
-			cancelPipe(proc.stdout);
-			cancelPipe(proc.stderr);
-		}
+		const errors = results.filter(result => result.status === "rejected").map(result => result.reason);
+		if (errors.length) throw new AggregateError(errors, "Owned-child cleanup failed");
 	}
+}
+
+function ownPipe(stream: ReadableStream<Uint8Array> | number | undefined): OwnedPipe | undefined {
+	if (stream === undefined || typeof stream === "number") return undefined;
+	const reader = stream.getReader();
+	const pipe: OwnedPipe = { reader, finished: false, text: Promise.resolve("") };
+	pipe.text = (async () => {
+		const decoder = new TextDecoder();
+		let text = "";
+		try {
+			while (true) {
+				const { value, done } = await reader.read();
+				if (done) return text + decoder.decode();
+				text += decoder.decode(value, { stream: true });
+			}
+		} finally {
+			pipe.finished = true;
+			reader.releaseLock();
+		}
+	})();
+	// A read can fail before the test awaits output/reap. Retain the rejection
+	// for those consumers without reporting an unrelated unhandled rejection.
+	void pipe.text.catch(() => {});
+	return pipe;
+}
+
+async function finishPipe(pipe: OwnedPipe | undefined): Promise<void> {
+	if (!pipe) return;
+	const results = await Promise.allSettled([pipe.finished ? undefined : pipe.reader.cancel(), pipe.text]);
+	const errors = results.filter(result => result.status === "rejected").map(result => result.reason);
+	if (errors.length) throw new AggregateError(errors, "Owned pipe cleanup failed");
 }
 
 function exitedWithin(proc: Subprocess, ms: number): Promise<boolean> {
@@ -76,13 +108,4 @@ function exitedWithin(proc: Subprocess, ms: number): Promise<boolean> {
 		resolve(true);
 	});
 	return promise;
-}
-
-function cancelPipe(stream: ReadableStream<Uint8Array> | undefined): void {
-	if (!stream) return;
-	try {
-		void stream.cancel().catch(() => undefined);
-	} catch {
-		// stream already closed
-	}
 }
