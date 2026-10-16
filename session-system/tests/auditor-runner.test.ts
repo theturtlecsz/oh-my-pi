@@ -41,6 +41,10 @@ import {
 
 // Host tests provide installed-agent discovery and isolated caches explicitly so
 // they do not depend on an existing OMP installation in the developer home.
+// Bound every git fixture spawn; SIGKILL cannot be ignored. Tests that spawn carry a >=20s budget.
+const SPAWN_TIMEOUT_MS = 10_000;
+const SPAWN_BOUND = { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" } as const;
+
 const fixtureCaches: string[] = [];
 function temporaryCacheFile(): string {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-auditor-cache-"));
@@ -872,12 +876,12 @@ describe("native auditor runner (OMP-168)", () => {
 		} as unknown as ExtensionAPI;
 
 		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pause-notice-repo-"));
-		spawnSync("git", ["init", "-b", "main"], { cwd });
-		spawnSync("git", ["config", "user.name", "Test"], { cwd });
-		spawnSync("git", ["config", "user.email", "test@example.com"], { cwd });
+		spawnSync("git", ["init", "-b", "main"], { cwd, ...SPAWN_BOUND });
+		spawnSync("git", ["config", "user.name", "Test"], { cwd, ...SPAWN_BOUND });
+		spawnSync("git", ["config", "user.email", "test@example.com"], { cwd, ...SPAWN_BOUND });
 		fs.writeFileSync(path.join(cwd, "foreign.txt"), "tracked foreign source\n");
-		spawnSync("git", ["add", "."], { cwd });
-		spawnSync("git", ["commit", "-m", "seed foreign source"], { cwd });
+		spawnSync("git", ["add", "."], { cwd, ...SPAWN_BOUND });
+		spawnSync("git", ["commit", "-m", "seed foreign source"], { cwd, ...SPAWN_BOUND });
 		const head = headCommit(cwd) ?? "0".repeat(40);
 		const workId = "c7a904ca-c979-4cc9-aa87-6063da842aec";
 		const revisionId = "f7eed1b9-7f74-4998-85d6-2bce9862067c";
@@ -1129,7 +1133,7 @@ describe("native auditor runner (OMP-168)", () => {
 			fs.rmSync(cacheDir, { recursive: true, force: true });
 			fs.rmSync(cwd, { recursive: true, force: true });
 		}
-	});
+	}, 20_000);
 
 });
 
@@ -1650,7 +1654,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 			acceptEntry: () => true,
 		})(fakePi);
 		const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "stamp-test-"));
-		spawnSync("git", ["init"], { cwd: testDir });
+		spawnSync("git", ["init"], { cwd: testDir, ...SPAWN_BOUND });
 		fs.mkdirSync(path.join(testDir, "src"), { recursive: true });
 		const planPath = path.join(os.tmpdir(), `stamp-plan-${crypto.randomUUID()}.md`);
 		fs.writeFileSync(planPath, "## Approach\n1. Step\n\n## Verification\n1. Check\n");
@@ -1763,7 +1767,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 			fs.rmSync(planPath, { force: true });
 			fs.rmSync(testDir, { recursive: true, force: true });
 		}
-	});
+	}, 20_000);
 
 	test("expandExecutionPlanClosure automatically includes approval, schema, and client dependencies for contract paths", () => {
 		const cwd = path.resolve(import.meta.dir, "../..");
@@ -1982,12 +1986,12 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "recovery-owner-"));
 		const recoveredCwd = fs.mkdtempSync(path.join(os.tmpdir(), "recovery-worktree-"));
 		const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "recovery-cache-"));
-		spawnSync("git", ["init", "-b", "main"], { cwd });
-		spawnSync("git", ["config", "user.name", "Test"], { cwd });
-		spawnSync("git", ["config", "user.email", "test@example.com"], { cwd });
+		spawnSync("git", ["init", "-b", "main"], { cwd, ...SPAWN_BOUND });
+		spawnSync("git", ["config", "user.name", "Test"], { cwd, ...SPAWN_BOUND });
+		spawnSync("git", ["config", "user.email", "test@example.com"], { cwd, ...SPAWN_BOUND });
 		fs.writeFileSync(path.join(cwd, "seed.txt"), "seed\n");
-		spawnSync("git", ["add", "."], { cwd });
-		spawnSync("git", ["commit", "-m", "seed"], { cwd });
+		spawnSync("git", ["add", "."], { cwd, ...SPAWN_BOUND });
+		spawnSync("git", ["commit", "-m", "seed"], { cwd, ...SPAWN_BOUND });
 		const head = headCommit(cwd) ?? "0".repeat(40);
 		const exec = makeSnapshot("active", "single", [{ position: 0, work_id: "OMP-213", phase: "executing" }]);
 		exec.grant.repository = cwd;
@@ -2122,7 +2126,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 			fs.rmSync(recoveredCwd, { recursive: true, force: true });
 			fs.rmSync(cwd, { recursive: true, force: true });
 		}
-	});
+	}, 20_000);
 
 	test("/execute resume transitioning to stopped emits full notice and status message", async () => {
 		const commands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
@@ -2223,7 +2227,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		} finally {
 			dirtySpy.mockRestore();
 		}
-	});
+	}, 20_000);
 
 	test("session_start recovery transitioning to stopped emits full notice and updates status", async () => {
 		const handlers = new Map<string, Array<(event: unknown, ctx: ExtensionContext) => Promise<void>>>();
@@ -2330,23 +2334,23 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		} finally {
 			dirtySpy.mockRestore();
 		}
-	});
+	}, 20_000);
 });
 
 	function makeTempRepo(): { dir: string; cacheFile: string; headSha: string; cleanup: () => void } {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "service-refresh-test-"));
 		const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "service-refresh-cache-"));
-		spawnSync("git", ["init", "-b", "main"], { cwd: dir });
-		spawnSync("git", ["config", "user.name", "Test"], { cwd: dir });
-		spawnSync("git", ["config", "user.email", "test@example.com"], { cwd: dir });
+		spawnSync("git", ["init", "-b", "main"], { cwd: dir, ...SPAWN_BOUND });
+		spawnSync("git", ["config", "user.name", "Test"], { cwd: dir, ...SPAWN_BOUND });
+		spawnSync("git", ["config", "user.email", "test@example.com"], { cwd: dir, ...SPAWN_BOUND });
 		fs.writeFileSync(path.join(dir, ".work-project"), "The Bookends\n");
 		fs.mkdirSync(path.join(dir, "python/omp-work/src/omp_work/v1"), { recursive: true });
 		fs.writeFileSync(path.join(dir, "python/omp-work/src/omp_work/v1/store.py"), "# initial\n");
 		const contractDir = path.join(dir, "python/omp-work/src/omp_work/contracts/v1");
 		const realContractDir = path.resolve(import.meta.dir, "../../python/omp-work/src/omp_work/contracts/v1");
 		fs.cpSync(realContractDir, contractDir, { recursive: true });
-		spawnSync("git", ["add", "."], { cwd: dir });
-		spawnSync("git", ["commit", "-m", "initial commit"], { cwd: dir });
+		spawnSync("git", ["add", "."], { cwd: dir, ...SPAWN_BOUND });
+		spawnSync("git", ["commit", "-m", "initial commit"], { cwd: dir, ...SPAWN_BOUND });
 		const head = headCommit(dir) ?? "0".repeat(40);
 		const cacheFile = path.relative(path.join(os.homedir(), ".omp", "agent"), path.join(cacheDir, "work-cache.json"));
 		return {
@@ -2643,7 +2647,7 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 		} finally {
 			repo.cleanup();
 		}
-	});
+	}, 20_000);
 
 	test("autonomous review cancels the reserved launch instead of settling when the auditor never starts (OMP-251)", async () => {
 		const repo = makeTempRepo();
@@ -2848,7 +2852,7 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 		} finally {
 			repo.cleanup();
 		}
-	});
+	}, 20_000);
 
 	test("service refresh refusal cases perform zero freeze, push, or audit calls", async () => {
 		const repo = makeTempRepo();
@@ -3024,7 +3028,7 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 
 			// 2. Refusal: migration dirt in real repo (only migration file dirty)
 			fs.rmSync(path.join(repo.dir, "unsealed.txt"), { force: true });
-			spawnSync("git", ["checkout", "--", "python/omp-work/src/omp_work/v1/store.py"], { cwd: repo.dir });
+			spawnSync("git", ["checkout", "--", "python/omp-work/src/omp_work/v1/store.py"], { cwd: repo.dir, ...SPAWN_BOUND });
 			fs.mkdirSync(path.join(repo.dir, "python/omp-work/src/omp_work/operations/migrations"), { recursive: true });
 			fs.writeFileSync(path.join(repo.dir, "python/omp-work/src/omp_work/operations/migrations/0024_test.sql"), "-- mig\n");
 			callLog.length = 0;
@@ -3038,7 +3042,7 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 
 			// 3. Refusal: non-service TCB drift (clean repo, mismatched judge)
 			fs.rmSync(path.join(repo.dir, "python/omp-work/src/omp_work/operations/migrations/0024_test.sql"), { force: true });
-			spawnSync("git", ["checkout", "."], { cwd: repo.dir });
+			spawnSync("git", ["checkout", "."], { cwd: repo.dir, ...SPAWN_BOUND });
 			callLog.length = 0;
 			freezeSpy.mockClear();
 			pushSpy.mockClear();
@@ -3110,7 +3114,7 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 		} finally {
 			repo.cleanup();
 		}
-	});
+	}, 20_000);
 
 	test("execution delivery checkpoint race and crash-retry use one guarded continuation", async () => {
 		const repo = makeTempRepo();
@@ -3393,7 +3397,7 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 		} finally {
 			repo.cleanup();
 		}
-	});
+	}, 20_000);
 });
 
 describe("execution grant admission branch selection (OMP-212)", () => {
@@ -3442,7 +3446,7 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 			expect(await vcs.requireGit(repo.dir).headSha()).toBe(originalHead);
 			expect(gitModule.dirtyPaths(repo.dir)).toEqual([]);
 		} finally { repo.cleanup(); }
-	});
+	}, 20_000);
 
 	test("binds dedicated execution branch ref when starting on default branch main", async () => {
 		const registeredCommands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
@@ -3837,7 +3841,7 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 			runSubprocessSpy.mockRestore();
 			discoverSpy.mockRestore();
 		}
-	});
+	}, 20_000);
 
 	test("echoed grant_id differs -> setExecutionState targetState: 'stopped', reason starts execution_workspace_provision_failed:, ensure not called", async () => {
 		const registeredCommands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
@@ -4195,10 +4199,10 @@ describe("dead execution context and terminal work suppression (OMP-247)", () =>
 		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "dead-grant-repo-"));
 		const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "dead-grant-cache-"));
 		fixtureCaches.push(cwd, cacheDir);
-		spawnSync("git", ["init", "-b", "main"], { cwd });
+		spawnSync("git", ["init", "-b", "main"], { cwd, ...SPAWN_BOUND });
 		fs.writeFileSync(path.join(cwd, "seed.txt"), "seed\n");
-		spawnSync("git", ["add", "."], { cwd });
-		spawnSync("git", ["commit", "-m", "seed"], { cwd });
+		spawnSync("git", ["add", "."], { cwd, ...SPAWN_BOUND });
+		spawnSync("git", ["commit", "-m", "seed"], { cwd, ...SPAWN_BOUND });
 
 		const cacheRelPath = path.relative(path.join(os.homedir(), ".omp", "agent"), path.join(cacheDir, "cache.json"));
 		const cacheFullPath = path.join(os.homedir(), ".omp", "agent", cacheRelPath);
@@ -4253,7 +4257,7 @@ describe("dead execution context and terminal work suppression (OMP-247)", () =>
 		expect(savedCache.executingIssue).toBeUndefined();
 		expect(savedCache.executionWorkspace).toBeUndefined();
 		expect(savedCache.obligationHandoff).toBeUndefined();
-	});
+	}, 20_000);
 
 	test("session_stop with dead execution grant or terminal work emits no continuation", async () => {
 		const handlers = new Map<string, Array<(event: unknown, ctx: ExtensionContext) => Promise<unknown>>>();
@@ -4280,10 +4284,10 @@ describe("dead execution context and terminal work suppression (OMP-247)", () =>
 		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "dead-stop-repo-"));
 		const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "dead-stop-cache-"));
 		fixtureCaches.push(cwd, cacheDir);
-		spawnSync("git", ["init", "-b", "main"], { cwd });
+		spawnSync("git", ["init", "-b", "main"], { cwd, ...SPAWN_BOUND });
 		fs.writeFileSync(path.join(cwd, "seed.txt"), "seed\n");
-		spawnSync("git", ["add", "."], { cwd });
-		spawnSync("git", ["commit", "-m", "seed"], { cwd });
+		spawnSync("git", ["add", "."], { cwd, ...SPAWN_BOUND });
+		spawnSync("git", ["commit", "-m", "seed"], { cwd, ...SPAWN_BOUND });
 
 		const cacheRelPath = path.relative(path.join(os.homedir(), ".omp", "agent"), path.join(cacheDir, "cache.json"));
 		const cacheFullPath = path.join(os.homedir(), ".omp", "agent", cacheRelPath);
@@ -4357,7 +4361,7 @@ describe("dead execution context and terminal work suppression (OMP-247)", () =>
 		expect(savedCache.executingIssue).toBeUndefined();
 		expect(savedCache.executionWorkspace).toBeUndefined();
 		expect(savedCache.obligationHandoff).toBeUndefined();
-	});
+	}, 20_000);
 });
 
 describe("native audit launch attribution parent-session entry (OMP-275 / M2-A)", () => {
@@ -4644,7 +4648,7 @@ describe("native audit launch attribution parent-session entry (OMP-275 / M2-A)"
 			await f.sessionManager.close();
 			f.repo.cleanup();
 		}
-	});
+	}, 20_000);
 
 	test("unknown fields remain absent on reload when runner omits model attribution", async () => {
 		const f = await setupM2Fixture();
@@ -4683,7 +4687,7 @@ describe("native audit launch attribution parent-session entry (OMP-275 / M2-A)"
 			await f.sessionManager.close();
 			f.repo.cleanup();
 		}
-	});
+	}, 20_000);
 
 	test("multiple launches under same attempt record distinct reloaded entries keyed by launch_id", async () => {
 		let launchCounter = 0;
@@ -4735,7 +4739,7 @@ describe("native audit launch attribution parent-session entry (OMP-275 / M2-A)"
 			await f.sessionManager.close();
 			f.repo.cleanup();
 		}
-	});
+	}, 20_000);
 
 	test("before-start cancellation appends nothing and releases reservation without journal record", async () => {
 		const f = await setupM2Fixture();
@@ -4769,7 +4773,7 @@ describe("native audit launch attribution parent-session entry (OMP-275 / M2-A)"
 			await f.sessionManager.close();
 			f.repo.cleanup();
 		}
-	});
+	}, 20_000);
 
 	test("real async session drift leaves zero entries in either session file", async () => {
 		const f = await setupM2Fixture();
@@ -4821,7 +4825,7 @@ describe("native audit launch attribution parent-session entry (OMP-275 / M2-A)"
 			await f.sessionManager.close();
 			f.repo.cleanup();
 		}
-	});
+	}, 20_000);
 
 	test("manual run_audit refuses without owner /summary input and writes zero launch entries", async () => {
 		const f = await setupM2Fixture();
@@ -4837,7 +4841,7 @@ describe("native audit launch attribution parent-session entry (OMP-275 / M2-A)"
 			await f.sessionManager.close();
 			f.repo.cleanup();
 		}
-	});
+	}, 20_000);
 
 	test("independent Pi session drift leaves zero audit-launch entries after reload", async () => {
 		const f = await setupM2Fixture();
@@ -4880,5 +4884,5 @@ describe("native audit launch attribution parent-session entry (OMP-275 / M2-A)"
 			await f.sessionManager.close();
 			f.repo.cleanup();
 		}
-	});
+	}, 20_000);
 });
