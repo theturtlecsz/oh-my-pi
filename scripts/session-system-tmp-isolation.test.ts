@@ -29,23 +29,36 @@
  * interleave with the reporter's and even truncate header lines; the JUnit file
  * is the only interleaving-proof record of which tests ran and how they ended.
  *
- * The parent is removed in `finally` on every outcome, after permissions are
- * restored so a mode-000 directory cannot block the recursive delete.
+ * Fixture teardown must survive *every* outcome, including a bun-level per-test
+ * timeout: on timeout bun abandons the test body, so its `finally` never runs
+ * (verified against Bun 1.4.2 — it does still run `afterAll`). A leftover
+ * mode-000 `parent` then poisons this process's own preload teardown, which
+ * recursively deletes the private root containing it and hits EACCES. So the
+ * module tracks the active fixture and restores mode 0700 and removes it both
+ * in the test's `finally` and from that `afterAll`, and the outer deadline
+ * leaves the bounded child room to be killed and cleaned up first.
  */
 
-import { describe, expect, it } from "bun:test";
+import { afterAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { ptree } from "@oh-my-pi/pi-utils";
 
 const repoRoot = path.join(import.meta.dir, "..");
-// The whole session-system suite ran in ~110s on a quiet runner; leave headroom
-// for a loaded CI lane.
-const CHILD_TIMEOUT_MS = 240_000;
+// The session-system suite ran in ~130s on a quiet runner and ~127s pinned to
+// four cores; flood shares this box with other lanes, so a loaded run is far
+// slower. ~3.2x the quiet time still finishes a loaded lane, while a truly
+// wedged suite is killed and reported instead of hanging the chunk.
+const CHILD_TIMEOUT_MS = 420_000;
 // scripts/session-system-test-preload.ts allocates its per-process root with
 // this prefix under the inherited temp dir.
 const PRELOAD_ROOT_PREFIX = "omp-session-test-";
+// Outer deadline for the whole test. Strictly exceeds CHILD_TIMEOUT_MS so the
+// bounded child is always killed and ptree.exec throws before bun abandons the
+// test; the ~2 minutes left over then cover group termination and the fixture
+// teardown below.
+const TEST_TIMEOUT_MS = 540_000;
 
 // The AgentSession prompt suites the isolation fix protects, with the number of
 // tests each must still execute. Floors, not equalities: a file that ran fewer
@@ -66,6 +79,27 @@ interface SuiteResult {
 	failures: number;
 	skipped: number;
 }
+
+// The fixture the running test owns. Kept at module scope so the `afterAll`
+// below can still tear it down after a bun-level timeout abandons the body.
+let activeParent: { parent: string; ompLocal: string } | null = null;
+
+/**
+ * Restore `omp-local` to a traversable mode and delete the whole fixture. Safe
+ * to call twice (finally, then afterAll): each step tolerates an already-removed
+ * path. Never throws, so a cleanup failure cannot mask the test's own verdict —
+ * a leftover is reported by the next run's assertions instead.
+ */
+async function removeFixture(fixture: { parent: string; ompLocal: string } | null): Promise<void> {
+	if (!fixture) return;
+	await fs.chmod(fixture.ompLocal, 0o700).catch(() => {});
+	await fs.rm(fixture.parent, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }).catch(() => {});
+}
+
+afterAll(async () => {
+	await removeFixture(activeParent);
+	if (activeParent) activeParent = null;
+});
 
 /**
  * Run the acceptance command from the repo root, letting bun discover the root
@@ -117,78 +151,82 @@ function suiteFor(junit: string, file: string): SuiteResult | null {
 describe.skipIf(process.platform === "win32")(
 	"session-system tests run on a private temp root under a hostile TMPDIR",
 	() => {
-		it("passes the full session-system suite with a mode-000 parent/omp-local, leaving it untouched and the parent clean", async () => {
-			const parent = await fs.mkdtemp(path.join(os.tmpdir(), "ss-tmp-isolation-"));
-			const home = path.join(parent, "home");
-			const ompLocal = path.join(parent, "omp-local");
-			const junitPath = path.join(parent, "junit.xml");
-			try {
-				await fs.mkdir(home);
-				await fs.mkdir(ompLocal);
-				await fs.chmod(ompLocal, 0o000);
-
-				// Prerequisite, not a defect path: prove the hostile root is really
-				// unwritable. A root user would make every assertion below vacuous, so
-				// fail loudly instead of running the child against a writable root.
-				let writable = false;
+		it(
+			"passes the full session-system suite with a mode-000 parent/omp-local, leaving it untouched and the parent clean",
+			async () => {
+				const parent = await fs.mkdtemp(path.join(os.tmpdir(), "ss-tmp-isolation-"));
+				const home = path.join(parent, "home");
+				const ompLocal = path.join(parent, "omp-local");
+				const junitPath = path.join(parent, "junit.xml");
+				activeParent = { parent, ompLocal };
 				try {
-					await fs.mkdir(path.join(ompLocal, "probe"));
-					writable = true;
-				} catch (err) {
-					if ((err as NodeJS.ErrnoException).code !== "EACCES") throw err;
-				}
-				if (writable) {
-					throw new Error(
-						`Prerequisite failed: mode-000 ${ompLocal} is writable (running as root?). Run as non-root.`,
-					);
-				}
+					await fs.mkdir(home);
+					await fs.mkdir(ompLocal);
+					await fs.chmod(ompLocal, 0o000);
 
-				const env: Record<string, string | undefined> = {
-					...Bun.env,
-					TMPDIR: parent,
-					TMP: parent,
-					TEMP: parent,
-					HOME: home,
-				};
-				const result = await runSessionSystemTests(env, junitPath);
-				if (result.exitCode !== 0) {
-					throw new Error(`session-system suite failed (exit ${result.exitCode}):\n${result.output}`);
-				}
-
-				let junit: string;
-				try {
-					junit = await fs.readFile(junitPath, "utf8");
-				} catch (err) {
-					throw new Error(`No JUnit report at ${junitPath} (exit ${result.exitCode}):\n${result.output}`, {
-						cause: err,
-					});
-				}
-
-				const totals = /<testsuites\b[^>]*>/.exec(junit)?.[0];
-				expect(totals && Number(attribute(totals, "failures"))).toBe(0);
-
-				for (const { file, minTests } of TARGET_FILES) {
-					const suite = suiteFor(junit, file);
-					if (suite === null) {
-						throw new Error(`${file} did not run:\n${result.output}`);
+					// Prerequisite, not a defect path: prove the hostile root is really
+					// unwritable. A root user would make every assertion below vacuous, so
+					// fail loudly instead of running the child against a writable root.
+					let writable = false;
+					try {
+						await fs.mkdir(path.join(ompLocal, "probe"));
+						writable = true;
+					} catch (err) {
+						if ((err as NodeJS.ErrnoException).code !== "EACCES") throw err;
 					}
-					expect({ file, failures: suite.failures }).toEqual({ file, failures: 0 });
-					expect({ file, skipped: suite.skipped }).toEqual({ file, skipped: 0 });
-					expect(suite.tests).toBeGreaterThanOrEqual(minTests);
+					if (writable) {
+						throw new Error(
+							`Prerequisite failed: mode-000 ${ompLocal} is writable (running as root?). Run as non-root.`,
+						);
+					}
+
+					const env: Record<string, string | undefined> = {
+						...Bun.env,
+						TMPDIR: parent,
+						TMP: parent,
+						TEMP: parent,
+						HOME: home,
+					};
+					const result = await runSessionSystemTests(env, junitPath);
+					if (result.exitCode !== 0) {
+						throw new Error(`session-system suite failed (exit ${result.exitCode}):\n${result.output}`);
+					}
+
+					let junit: string;
+					try {
+						junit = await fs.readFile(junitPath, "utf8");
+					} catch (err) {
+						throw new Error(`No JUnit report at ${junitPath} (exit ${result.exitCode}):\n${result.output}`, {
+							cause: err,
+						});
+					}
+
+					const totals = /<testsuites\b[^>]*>/.exec(junit)?.[0];
+					expect(totals && Number(attribute(totals, "failures"))).toBe(0);
+
+					for (const { file, minTests } of TARGET_FILES) {
+						const suite = suiteFor(junit, file);
+						if (suite === null) {
+							throw new Error(`${file} did not run:\n${result.output}`);
+						}
+						expect({ file, failures: suite.failures }).toEqual({ file, failures: 0 });
+						expect({ file, skipped: suite.skipped }).toEqual({ file, skipped: 0 });
+						expect(suite.tests).toBeGreaterThanOrEqual(minTests);
+					}
+
+					// The child never reached the hostile root: it is still mode 000 and
+					// therefore had nothing written into it.
+					expect((await fs.stat(ompLocal)).mode & 0o777).toBe(0);
+
+					await fs.chmod(ompLocal, 0o700);
+					expect(await fs.readdir(ompLocal)).toEqual([]);
+					const leftoverRoots = (await fs.readdir(parent)).filter(name => name.startsWith(PRELOAD_ROOT_PREFIX));
+					expect(leftoverRoots).toEqual([]);
+				} finally {
+					await removeFixture(activeParent);
 				}
-
-				// The child never reached the hostile root: it is still mode 000 and
-				// therefore had nothing written into it.
-				expect((await fs.stat(ompLocal)).mode & 0o777).toBe(0);
-
-				await fs.chmod(ompLocal, 0o700);
-				expect(await fs.readdir(ompLocal)).toEqual([]);
-				const leftoverRoots = (await fs.readdir(parent)).filter(name => name.startsWith(PRELOAD_ROOT_PREFIX));
-				expect(leftoverRoots).toEqual([]);
-			} finally {
-				await fs.chmod(ompLocal, 0o700).catch(() => {});
-				await fs.rm(parent, { recursive: true, force: true });
-			}
-		}, 300_000);
+			},
+			TEST_TIMEOUT_MS,
+		);
 	},
 );

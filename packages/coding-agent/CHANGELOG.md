@@ -65,11 +65,11 @@
 - Video frame files and browser-recording frames are created in the system temp directory.
 - A security scan pinned to one OAuth account no longer lets background skill compression disable that account. If that account's login is rejected, the scan fails instead of continuing with a different account ([#628](https://github.com/can1357/oh-my-pi/issues/628)).
 - Documented the orchestrator control plane's atomic submission, dynamic fenced authority versus the hard task deadline, and lost lease versus frozen stop/release ([#595](https://github.com/can1357/oh-my-pi/issues/595)).
+- Session-system tests no longer share the fixed `<os.tmpdir()>/omp-local` root, so a hostile or leftover mode-000 root can no longer fail them: a root `bun test` preload gives each run its own private temp root, and CI reproduces the unwritable-root case for the session-system suite (OMP-637).
 
 ### Removed
 
 - ECC database advisor is no longer installed; retirement preserves project customizations (OMP-612).
-- Session-system tests no longer share the fixed `<os.tmpdir()>/omp-local` root, so a hostile or leftover mode-000 root can no longer fail them: a root `bun test` preload gives each run its own private temp root, and CI reproduces the unwritable-root case for the session-system suite.
 
 ## [18.4.6] - 2026-10-01
 
