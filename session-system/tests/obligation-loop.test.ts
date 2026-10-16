@@ -8,6 +8,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, expect, test } from "bun:test";
 
+const SPAWN_TIMEOUT_MS = 10_000;
+
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ss-obligation-"));
 afterAll(() => {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -26,7 +28,7 @@ fs.writeFileSync(
 		owner_id: "00000000-0000-7000-8000-000000000002",
 	}),
 );
-Bun.spawnSync(["git", "init", "-q"], { cwd: probe });
+Bun.spawnSync(["git", "init", "-q"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 
 test("only approval arms execution and only typed handoff settles it", () => {
 	const child = Bun.spawnSync([process.execPath, harness, probe], {
@@ -34,6 +36,8 @@ test("only approval arms execution and only typed handoff settles it", () => {
 		// Pin XDG_CONFIG_HOME to the temp HOME: hosted CI images export it globally,
 		// and ompWorkConfigDir() prefers it over $HOME/.config (OMP-254).
 		env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), OMP_WORK_BEARER: "test-token", PI_CODING_AGENT_DIR: path.join(home, ".omp", "agent") },
+		timeout: SPAWN_TIMEOUT_MS,
+		killSignal: "SIGKILL",
 	});
 	expect(child.exitCode, child.stderr.toString()).toBe(0);
 	const out = JSON.parse(child.stdout.toString()) as Record<string, string | number>;
@@ -43,4 +47,4 @@ test("only approval arms execution and only typed handoff settles it", () => {
 	expect(out.settled).toBe("none");
 	expect(out.rewrittenFile, "file watchers must not resurrect settled workflow debt").toBe("none");
 	expect(out.planComments).toBe(1);
-});
+}, 20_000);

@@ -607,6 +607,8 @@ describe("secret obfuscation (shared redactor)", () => {
 
 // ---- installed-shape smoke (real work-now extension, subprocess) -------------
 
+const SPAWN_TIMEOUT_MS = 10_000;
+
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ss-ledger-"));
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
 
@@ -626,13 +628,15 @@ describe("installed shape (work-now.ts through the workflow harness)", () => {
 				owner_id: "00000000-0000-7000-8000-000000000002",
 			}),
 		);
-		Bun.spawnSync(["git", "init", "-q", "-b", "main"], { cwd: probe });
+		Bun.spawnSync(["git", "init", "-q", "-b", "main"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		const harness = path.join(import.meta.dir, "fixtures/workflow-sequence-harness.ts");
 		const child = Bun.spawnSync([process.execPath, harness, probe, "ledger"], {
 			cwd: probe,
 			// Pin XDG_CONFIG_HOME to the temp HOME: hosted CI images export it globally,
 			// and ompWorkConfigDir() prefers it over $HOME/.config (OMP-254).
 			env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), OMP_WORK_BEARER: "test-token", PI_CODING_AGENT_DIR: path.join(home, ".omp", "agent") },
+			timeout: SPAWN_TIMEOUT_MS,
+			killSignal: "SIGKILL",
 		});
 		expect(child.exitCode, child.stderr.toString()).toBe(0);
 		const out = JSON.parse(child.stdout.toString()) as {
@@ -646,5 +650,5 @@ describe("installed shape (work-now.ts through the workflow harness)", () => {
 		expect(only.message.content).toBe(formatLedgerModelContent(SESSION_LEDGER_UNAVAILABLE));
 		expect(only.options).toEqual({ deliverAs: "nextTurn", triggerTurn: false });
 		expect(out.writes).toMatchObject({ created: 0, addNow: 0, removeNow: 0, closed: 0 });
-	});
+	}, 20_000);
 });

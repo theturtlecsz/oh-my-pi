@@ -9,6 +9,9 @@ import { confirmRoundTrip } from "./two-phase";
 import { currentTranscriptRef } from "../../extensions/workflow/transcript";
 import { buildPlanPacket, createWorkBackend } from "../../extensions/workflow/work";
 import { riderBatchPath } from "../../extensions/workflow/rider-batch";
+
+const SPAWN_TIMEOUT_MS = 10_000;
+
 const probe = process.argv[2];
 const mode = process.argv[3];
 const MODES = ["intake", "plan", "plan-now-change", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "summary-stale-final", "summary-final-reuse", "summary-sealed-snapshot", "summary-begin-refused", "summary-refusal-durable", "summary-rider-refusal-durable", "stop-continuation-states", "atomic-child", "done", "done-cancel", "done-cancel-decline", "footer", "audit", "restore", "now-canceled", "center", "center-scoped", "center-stale", "triage-questions", "ledger-reads", "ledger-reads-subagent", "closeout-pending-recovery", "ledger", "descriptions", "omp140-audit-states", "omp140-restart-flow", "omp140-failed-checkpoint", "omp140-terminal-guidance"];
@@ -1617,7 +1620,7 @@ if (mode === "intake") {
 	await setNow();
 	attempts.length = 0;
 	closeEvents.length = 0;
-	const headCommit = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
+	const headCommit = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" }).stdout.toString().trim();
 	const remediationAttempt: MockAttempt = {
 		attempt_id: "att-remediation",
 		work_id: "id-1",
@@ -1660,8 +1663,8 @@ if (mode === "intake") {
 
 	// Create descendant remediation commit
 	fs.writeFileSync(path.join(probe, "remediation.txt"), "remediation\n");
-	Bun.spawnSync(["git", "add", "remediation.txt"], { cwd: probe });
-	Bun.spawnSync(["git", "commit", "-q", "-m", "remediation fix"], { cwd: probe });
+	Bun.spawnSync(["git", "add", "remediation.txt"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "commit", "-q", "-m", "remediation fix"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 
 	out.descendantExtras = await testBackend.digestExtras(probe);
 
@@ -1901,8 +1904,8 @@ if (mode === "intake") {
 	await setNow();
 	await approve(planA);
 	fs.writeFileSync(path.join(probe, "work.txt"), "candidate work\n");
-	const origin = Bun.spawnSync(["git", "remote", "get-url", "origin"], { cwd: probe }).stdout.toString().trim();
-	Bun.spawnSync(["git", "remote", "remove", "origin"], { cwd: probe });
+	const origin = Bun.spawnSync(["git", "remote", "get-url", "origin"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" }).stdout.toString().trim();
+	Bun.spawnSync(["git", "remote", "remove", "origin"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 	await enterSummary();
 	const frozen = (items.get("HOME-1") ?? initialItem).candidate;
 	out.beginAfterPushFailure = beginCalls.length;
@@ -1910,11 +1913,11 @@ if (mode === "intake") {
 	out.pushReceiptsAfterFailure = receipts.filter(receipt => receipt.kind === "push").length;
 	out.failureNotice = uiCalls.at(-1) ?? null;
 
-	Bun.spawnSync(["git", "remote", "add", "origin", origin], { cwd: probe });
+	Bun.spawnSync(["git", "remote", "add", "origin", origin], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 	await enterSummary();
 	const recovered = (items.get("HOME-1") ?? initialItem).candidate;
-	const branch = Bun.spawnSync(["git", "rev-parse", "--abbrev-ref", "HEAD"], { cwd: probe }).stdout.toString().trim();
-	const remoteCommit = Bun.spawnSync(["git", "ls-remote", "origin", `refs/heads/${branch}`], { cwd: probe }).stdout.toString().trim().split(/\s+/)[0];
+	const branch = Bun.spawnSync(["git", "rev-parse", "--abbrev-ref", "HEAD"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" }).stdout.toString().trim();
+	const remoteCommit = Bun.spawnSync(["git", "ls-remote", "origin", `refs/heads/${branch}`], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" }).stdout.toString().trim().split(/\s+/)[0];
 	out.beginAfterPushRetry = beginCalls.length;
 	out.pushReceiptsAfterRetry = receipts.filter(receipt => receipt.kind === "push").length;
 	out.candidateCommit = recovered?.commit_sha ?? null;
@@ -1925,12 +1928,12 @@ if (mode === "intake") {
 	// A staged index entry makes the candidate freeze REFUSE before any
 	// attempt begins — the state that used to deadlock every later /summary.
 	fs.writeFileSync(path.join(probe, "work.txt"), "candidate work\n");
-	Bun.spawnSync(["git", "add", "work.txt"], { cwd: probe });
+	Bun.spawnSync(["git", "add", "work.txt"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 	await enterSummary();
 	out.beginAfterRefused = beginCalls.length;
 	// Owner remediates; another literal /skill:summary must recover without a
 	// session restart.
-	Bun.spawnSync(["git", "reset", "-q"], { cwd: probe });
+	Bun.spawnSync(["git", "reset", "-q"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 	await enterSummary();
 	out.beginAfterSkillRetry = beginCalls.length;
 	// Unrelated owner messages never authorize anything.
@@ -1955,9 +1958,9 @@ if (mode === "intake") {
 
 	// Simulate descendant commit B (fixes on top of commit A)
 	fs.writeFileSync(path.join(probe, "extra.txt"), "drifted commit\n");
-	Bun.spawnSync(["git", "add", "extra.txt"], { cwd: probe });
-	Bun.spawnSync(["git", "commit", "-q", "-m", "drifted commit B"], { cwd: probe });
-	const commitB = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
+	Bun.spawnSync(["git", "add", "extra.txt"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "commit", "-q", "-m", "drifted commit B"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	const commitB = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" }).stdout.toString().trim();
 
 	// Invoke summary again (descendant drift)
 	await enterSummary();
@@ -1969,16 +1972,16 @@ if (mode === "intake") {
 	out.pushReceiptsBeforeDrift = pushReceiptsBeforeDrift;
 	out.pushReceiptsAfterDescendant = receipts.filter(receipt => receipt.kind === "push").length;
 	out.descendantDriftNotice = uiCalls.at(-1) ?? null;
-	out.headAfterDescendant = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
-	out.dirtyAfterDescendant = Bun.spawnSync(["git", "status", "--porcelain"], { cwd: probe }).stdout.toString().trim();
+	out.headAfterDescendant = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" }).stdout.toString().trim();
+	out.dirtyAfterDescendant = Bun.spawnSync(["git", "status", "--porcelain"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" }).stdout.toString().trim();
 
 	// Move fixture to an orphan commit (unrelated history)
-	Bun.spawnSync(["git", "checkout", "-q", "--orphan", "unrelated-branch"], { cwd: probe });
-	Bun.spawnSync(["git", "rm", "-rf", "-q", "."], { cwd: probe });
+	Bun.spawnSync(["git", "checkout", "-q", "--orphan", "unrelated-branch"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "rm", "-rf", "-q", "."], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 	fs.writeFileSync(path.join(probe, "orphan.txt"), "orphan work\n");
-	Bun.spawnSync(["git", "add", "orphan.txt"], { cwd: probe });
-	Bun.spawnSync(["git", "commit", "-q", "-m", "orphan root"], { cwd: probe });
-	const commitOrphan = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
+	Bun.spawnSync(["git", "add", "orphan.txt"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "commit", "-q", "-m", "orphan root"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	const commitOrphan = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" }).stdout.toString().trim();
 
 	// Invoke summary again (unrelated drift)
 	await enterSummary();
@@ -1987,8 +1990,8 @@ if (mode === "intake") {
 	out.beginCallsAfterUnrelated = beginCalls.length;
 	out.pushReceiptsAfterUnrelated = receipts.filter(receipt => receipt.kind === "push").length;
 	out.unrelatedDriftNotice = uiCalls.at(-1) ?? null;
-	out.headAfterUnrelated = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
-	out.dirtyAfterUnrelated = Bun.spawnSync(["git", "status", "--porcelain"], { cwd: probe }).stdout.toString().trim();
+	out.headAfterUnrelated = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" }).stdout.toString().trim();
+	out.dirtyAfterUnrelated = Bun.spawnSync(["git", "status", "--porcelain"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" }).stdout.toString().trim();
 } else if (mode === "summary-final-reuse") {
 	await setNow();
 	await approve(planA);
@@ -2002,13 +2005,13 @@ if (mode === "intake") {
 } else if (mode === "summary-sealed-snapshot") {
 	await setNow();
 	// Create feature branch with feature.txt, merge into main with --no-ff
-	Bun.spawnSync(["git", "checkout", "-q", "-b", "feature"], { cwd: probe });
+	Bun.spawnSync(["git", "checkout", "-q", "-b", "feature"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 	fs.writeFileSync(path.join(probe, "feature.txt"), "feature content\n");
-	Bun.spawnSync(["git", "add", "feature.txt"], { cwd: probe });
-	Bun.spawnSync(["git", "commit", "-q", "-m", "feature commit"], { cwd: probe });
-	Bun.spawnSync(["git", "checkout", "-q", "main"], { cwd: probe });
-	Bun.spawnSync(["git", "merge", "-q", "--no-ff", "feature", "-m", "merge feature"], { cwd: probe });
-	const approvedMerge = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
+	Bun.spawnSync(["git", "add", "feature.txt"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "commit", "-q", "-m", "feature commit"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "checkout", "-q", "main"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "merge", "-q", "--no-ff", "feature", "-m", "merge feature"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	const approvedMerge = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" }).stdout.toString().trim();
 
 	// Approve plan with ## Paths\n- feature.txt
 	const planMerge =
@@ -2017,11 +2020,11 @@ if (mode === "intake") {
 
 	// Advance and push HEAD with a descendant commit unrelated to this work
 	fs.writeFileSync(path.join(probe, "unrelated.txt"), "unrelated work\n");
-	Bun.spawnSync(["git", "add", "unrelated.txt"], { cwd: probe });
-	Bun.spawnSync(["git", "commit", "-q", "-m", "unrelated descendant"], { cwd: probe });
-	Bun.spawnSync(["git", "push", "-q", "origin", "main"], { cwd: probe });
-	const laterHead = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
-	const remoteTipBefore = Bun.spawnSync(["git", "ls-remote", "origin", "refs/heads/main"], { cwd: probe }).stdout.toString().trim().split(/\s+/)[0];
+	Bun.spawnSync(["git", "add", "unrelated.txt"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "commit", "-q", "-m", "unrelated descendant"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "push", "-q", "origin", "main"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	const laterHead = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" }).stdout.toString().trim();
+	const remoteTipBefore = Bun.spawnSync(["git", "ls-remote", "origin", "refs/heads/main"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" }).stdout.toString().trim().split(/\s+/)[0];
 
 	// Run /summary
 	await enterSummary();
@@ -2029,7 +2032,7 @@ if (mode === "intake") {
 	const finalItem = items.get("HOME-1") ?? initialItem;
 	const finalCandidate = finalItem.candidate;
 	const confirms = uiCalls.filter(c => c.startsWith("confirm:"));
-	const remoteTipAfter = Bun.spawnSync(["git", "ls-remote", "origin", "refs/heads/main"], { cwd: probe }).stdout.toString().trim().split(/\s+/)[0];
+	const remoteTipAfter = Bun.spawnSync(["git", "ls-remote", "origin", "refs/heads/main"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" }).stdout.toString().trim().split(/\s+/)[0];
 
 	out.approvedMerge = approvedMerge;
 	out.laterHead = laterHead;
@@ -2037,7 +2040,7 @@ if (mode === "intake") {
 	out.remoteTipAfter = remoteTipAfter;
 	out.finalCandidateCommit = finalCandidate?.commit_sha ?? null;
 	out.finalCandidateSha256 = finalCandidate?.candidate_sha256 ?? null;
-	out.headAfterSummary = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
+	out.headAfterSummary = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" }).stdout.toString().trim();
 	out.confirms = confirms;
 } else if (mode === "done-cancel" || mode === "done-cancel-decline") {
 	await setNow();
