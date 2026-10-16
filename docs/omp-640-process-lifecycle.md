@@ -170,3 +170,39 @@ safety timeout. A stalled runner with no grandchildren is deliberately killed
 and awaited by its parent. Another case starts a SIGTERM-resistant child,
 verifies SIGKILL escalation, settled output and released reader locks before
 fixture removal. No process-name or descendant signaling is used.
+
+## OMP-640-s02: applying the boundary to the two leaking files
+
+Before (observed in s01 above): `stamp payload parity` let teardown delete
+`plan.md` while the timed-out `runExecution` continuation still read it
+(ENOENT), and `live-mapping fence` held a mapper whose kill/`exited` lived in
+a body `finally`. That `finally` is late, not absent: the mapper stays alive
+through blocking `Bun.spawnSync` update runs, so a test deadline reaches Bun's
+emergency kill ("killed N dangling process") before JavaScript resumes. The
+`finally` also never released the readiness reader, and ran in addition to,
+not instead of, any hook.
+
+After:
+
+- `omp-262-plan-identity.test.ts`: the git child is spawned inside
+  `createWorkflowHost` (called code), so no handle exists to register and none
+  is invented. Every `runExecution` continuation is tracked; `afterEach`
+  awaits them (bounded at 2s, failing loudly) before `vi.restoreAllMocks()`
+  and fixture removal.
+- `update.test.ts`: mappers (shielded and unshielded, E0551 carve-out
+  assertions unchanged) are spawned through `OwnedChildren` at spawn time.
+  Readiness is an async-polled file (8s bound), not a stdout line, so the
+  registry owns the only stdout reader. The per-case `finally` blocks are
+  gone; one awaited `afterEach` reaps before directories are removed. The
+  refusal case reaps mid-test only because the second run needs the mapping
+  gone. Case timeouts (60s) now exceed the sum of blocking commands plus the
+  readiness bound, so a hang is cleaned up by the hook before Bun's kill.
+- `process-lifecycle.test.ts` `continuation-deadline`: a registered child is
+  left alive, a synchronous probe is interrupted by the 100ms deadline, and the
+  continuation reads its fixture afterward. Output shows `plan:read` before
+  `hook:reaped` (no ENOENT), then the next case's git init/config exits 0.
+
+Causal reduction: each leaking case now ends with its owned children exited
+and readers settled before fixture deletion on success, assertion failure and
+operation deadline; the only remaining "killed N" output is for deliberate
+test-deadline scenarios inside the nested lifecycle runner.

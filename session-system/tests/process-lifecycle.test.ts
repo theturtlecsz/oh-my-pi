@@ -12,10 +12,13 @@ const owned = new OwnedChildren();
 const tempDirs: string[] = [];
 let previousChild: Subprocess<"ignore", "pipe", "pipe"> | undefined;
 let bodyFinally = false;
+// Timed-out bodies whose continuations still use fixtures (see the identity test).
+const pendingRuns: Promise<unknown>[] = [];
 
 // Hooks run even after assertion/deadline failures. Always finish process and
 // pipe cleanup before deleting paths that unfinished work might still use.
 afterEach(async () => {
+	await Promise.allSettled(pendingRuns.splice(0));
 	await owned.reap();
 	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
 	if (SCENARIO) console.log("hook:reaped");
@@ -83,7 +86,13 @@ if (SCENARIO === undefined) {
 
 		test("next case initializes and configures git after child and pipe cleanup", gitAfterExit, 5_000);
 
-		for (const scenario of ["assertion-failure", "operation-deadline", "test-deadline", "sync-deadline"]) {
+		for (const scenario of [
+			"assertion-failure",
+			"operation-deadline",
+			"test-deadline",
+			"sync-deadline",
+			"continuation-deadline",
+		]) {
 			test(`awaited hook reaps child after ${scenario} before next git`, async () => {
 				const result = await runNestedScenario(scenario);
 				expect(result.exit).not.toBe(0);
@@ -93,11 +102,17 @@ if (SCENARIO === undefined) {
 				expect(result.output).toContain("hook:reaped");
 				expect(result.output).toContain("next:git:0");
 				expect(result.output.indexOf("hook:reaped")).toBeLessThan(result.output.indexOf("next:git:0"));
-				if (scenario === "test-deadline" || scenario === "sync-deadline") {
+				if (scenario === "test-deadline" || scenario === "sync-deadline" || scenario === "continuation-deadline") {
 					expect(result.output).toContain("timed out after 100ms");
 					expect(result.output).toContain(
-						scenario === "sync-deadline" ? "killed 2 dangling processes" : "killed 1 dangling process",
+						scenario === "test-deadline" ? "killed 1 dangling process" : "killed 2 dangling processes",
 					);
+					if (scenario === "continuation-deadline") {
+						// The continuation read its fixture; teardown waited for it.
+						expect(result.output).toContain("plan:read:plan body");
+						expect(result.output).not.toContain("ENOENT");
+						expect(result.output.indexOf("plan:read")).toBeLessThan(result.output.indexOf("hook:reaped"));
+					}
 					if (scenario === "test-deadline")
 						expect(result.output.indexOf("hook:reaped")).toBeLessThan(result.output.indexOf("body:finally"));
 				} else {
@@ -166,6 +181,21 @@ if (SCENARIO === undefined) {
 		"leaves a registered child through a failing path",
 		async () => {
 			previousChild = spawnChild();
+			if (SCENARIO === "continuation-deadline") {
+				const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-640-plan-"));
+				tempDirs.push(dir);
+				const plan = path.join(dir, "plan.md");
+				await Bun.write(plan, "plan body");
+				const run = (async () => {
+					// Like createWorkflowHost's git probe: the deadline interrupts this
+					// synchronous call and teardown starts before the body resumes.
+					Bun.spawnSync([process.execPath, "-e", "Bun.sleepSync(500)"], { timeout: 1_500 });
+					console.log(`plan:read:${await Bun.file(plan).text()}`);
+				})();
+				pendingRuns.push(run);
+				await run;
+				return;
+			}
 			if (SCENARIO === "sync-deadline") {
 				// The test deadline interrupts this synchronous wait, as in the
 				// identity path. Its bounded child is reaped by spawnSync itself.
@@ -190,7 +220,9 @@ if (SCENARIO === undefined) {
 				console.log("body:finally");
 			}
 		},
-		SCENARIO === "test-deadline" || SCENARIO === "sync-deadline" ? 100 : 2_000,
+		SCENARIO === "test-deadline" || SCENARIO === "sync-deadline" || SCENARIO === "continuation-deadline"
+			? 100
+			: 2_000,
 	);
 
 	test("next case observes exit before git init/config", gitAfterExit, 2_000);
