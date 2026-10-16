@@ -298,9 +298,11 @@ def test_stdout_log_is_partial_safe_end_to_end(tmp_path: Path) -> None:
         deadline = time.monotonic() + 30
         seen: list[dict[str, object]] = []
         while time.monotonic() < deadline:
-            seen = _parsed(rpc.stdout_log)
+            # The child may not have created the log yet on a loaded host.
+            seen = _parsed(rpc.stdout_log) if rpc.stdout_log.exists() else []
             if len(seen) == 2:
                 break
+            time.sleep(0.05)
         assert [event["type"] for event in seen] == ["one", "two"]
         assert seen[1]["n"] == 2
     finally:
