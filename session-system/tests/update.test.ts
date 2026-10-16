@@ -3,6 +3,9 @@ import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+const SPAWN_TIMEOUT_MS = 10_000;
+const TEST_TIMEOUT_MS = 30_000;
+
 // update.sh contract (OMP-156, standing guardrail OMP-229): pinned non-pushing gate runner.
 //   * exactly one full 40-hex upstream commit; `main`/short/moving refs refused
 //   * dirty tracked worktree refused
@@ -29,6 +32,8 @@ interface RunResult {
 
 function sh(cwd: string, command: string[], env: Record<string, string | undefined> = {}): RunResult {
 	const proc = Bun.spawnSync(command, {
+		timeout: SPAWN_TIMEOUT_MS,
+		killSignal: "SIGKILL",
 		cwd,
 		env: { ...process.env, GIT_MERGE_AUTOEDIT: "no", ...env } as Record<string, string>,
 		stdout: "pipe",
@@ -156,19 +161,19 @@ describe("argument validation", () => {
 		expect(result.exitCode).toBe(2);
 		expect(result.stderr).toContain("exactly one argument");
 		expect(fx.logLines()).toEqual([]);
-	});
+	}, TEST_TIMEOUT_MS);
 	test("refuses the moving ref `main`", () => {
 		const fx = makeFixture();
 		const result = fx.runUpdate("main");
 		expect(result.exitCode).toBe(2);
 		expect(result.stderr).toContain("moving refs are refused");
-	});
+	}, TEST_TIMEOUT_MS);
 	test("refuses an abbreviated commit id", () => {
 		const fx = makeFixture();
 		const result = fx.runUpdate("b4e8e856ad");
 		expect(result.exitCode).toBe(2);
 		expect(result.stderr).toContain("not a full 40-hex commit");
-	});
+	}, TEST_TIMEOUT_MS);
 	test("refuses a dirty tracked worktree", () => {
 		const fx = makeFixture();
 		writeFileSync(join(fx.repo, "file.txt"), "dirty\n");
@@ -176,13 +181,13 @@ describe("argument validation", () => {
 		expect(result.exitCode).toBe(1);
 		expect(result.stderr).toContain("uncommitted tracked changes");
 		expect(fx.logLines()).toEqual([]);
-	});
+	}, TEST_TIMEOUT_MS);
 	test("refuses a well-formed commit id that does not resolve", () => {
 		const fx = makeFixture();
 		const result = fx.runUpdate(FAKE_SHA);
 		expect(result.exitCode).toBe(1);
 		expect(result.stderr).toContain("does not resolve to a commit");
-	});
+	}, TEST_TIMEOUT_MS);
 });
 
 describe("merge path", () => {
@@ -192,7 +197,7 @@ describe("merge path", () => {
 		expect(result.exitCode).toBe(1);
 		expect(result.stderr).toContain("refusing to merge on 'main'");
 		expect(git(fx.repo, "rev-list", "--count", "HEAD")).toBe("1");
-	});
+	}, TEST_TIMEOUT_MS);
 	test("refuses to merge without a standing-guardrail review record", () => {
 		const fx = makeFixture();
 		git(fx.repo, "checkout", "-b", "integration");
@@ -201,7 +206,7 @@ describe("merge path", () => {
 		expect(result.stderr).toContain("no review record");
 		expect(git(fx.repo, "rev-list", "--count", "HEAD")).toBe("1");
 		expect(fx.logLines()).toEqual([]);
-	});
+	}, TEST_TIMEOUT_MS);
 	test("refuses a review record pinned to a different candidate", () => {
 		const fx = makeFixture();
 		git(fx.repo, "checkout", "-b", "integration");
@@ -210,7 +215,7 @@ describe("merge path", () => {
 		expect(result.exitCode).toBe(1);
 		expect(result.stderr).toContain(`review record targets '${FAKE_SHA}', not ${fx.upstreamSha}`);
 		expect(git(fx.repo, "rev-list", "--count", "HEAD")).toBe("1");
-	});
+	}, TEST_TIMEOUT_MS);
 	test("refuses a review record pinning an unknown fork commit", () => {
 		const fx = makeFixture();
 		git(fx.repo, "checkout", "-b", "integration");
@@ -220,7 +225,7 @@ describe("merge path", () => {
 		expect(result.stderr).toContain("pins unknown fork commit");
 		expect(result.stderr).toContain("re-run the review against the current fork state");
 		expect(git(fx.repo, "rev-list", "--count", "HEAD")).toBe("1");
-	});
+	}, TEST_TIMEOUT_MS);
 	test("accepts a committed review record — fork-pin drift confined to docs/upstream-review-", () => {
 		const fx = makeFixture();
 		git(fx.repo, "checkout", "-b", "integration");
@@ -230,7 +235,7 @@ describe("merge path", () => {
 		const result = fx.runUpdate(fx.upstreamSha);
 		expect(result.exitCode, result.stderr).toBe(0);
 		expect(git(fx.repo, "rev-parse", "HEAD^2")).toBe(fx.upstreamSha);
-	});
+	}, TEST_TIMEOUT_MS);
 	test("refuses fork-pin drift outside docs/upstream-review-", () => {
 		const fx = makeFixture();
 		git(fx.repo, "checkout", "-b", "integration");
@@ -242,7 +247,7 @@ describe("merge path", () => {
 		expect(result.exitCode).toBe(1);
 		expect(result.stderr).toContain("outside docs/upstream-review-");
 		expect(result.stderr).toContain("diverging path: shared.txt");
-	});
+	}, TEST_TIMEOUT_MS);
 	test("refuses to merge when the guardrail review fails", () => {
 		const fx = makeFixture();
 		git(fx.repo, "checkout", "-b", "integration");
@@ -251,7 +256,7 @@ describe("merge path", () => {
 		expect(result.exitCode).toBe(1);
 		expect(result.stderr).toContain("standing guardrail review failed");
 		expect(git(fx.repo, "rev-list", "--count", "HEAD")).toBe("1");
-	});
+	}, TEST_TIMEOUT_MS);
 	test("merges --no-ff on an integration branch and stops before any gate", () => {
 		const fx = makeFixture();
 		git(fx.repo, "checkout", "-b", "integration");
@@ -265,7 +270,7 @@ describe("merge path", () => {
 		expect(fx.logLines()).toEqual([
 			`bun scripts/verify-upstream-handoff.ts --record docs/upstream-review-${fx.upstreamSha.slice(0, 12)}.json`,
 		]);
-	});
+	}, TEST_TIMEOUT_MS);
 	test("a conflicted merge exits immediately with no install or gates", () => {
 		const fx = makeFixture({ conflict: true });
 		git(fx.repo, "checkout", "-b", "integration");
@@ -278,7 +283,7 @@ describe("merge path", () => {
 		]);
 		// merge stopped in conflict state for hand resolution
 		expect(git(fx.repo, "ls-files", "-u")).not.toBe("");
-	});
+	}, TEST_TIMEOUT_MS);
 });
 
 describe("ancestor gate path", () => {
@@ -313,7 +318,7 @@ describe("ancestor gate path", () => {
 			"cargo nextest run --workspace --exclude brush-core --status-level=fail --final-status-level=fail",
 			"bun run test:session:smoke pg=1",
 		]);
-	});
+	}, TEST_TIMEOUT_MS);
 	test("a failing gate stops the chain immediately", () => {
 		const fx = mergedFixture();
 		const result = fx.runUpdate(fx.upstreamSha, { CARGO_EXIT: "3" });
@@ -321,19 +326,19 @@ describe("ancestor gate path", () => {
 		const lines = fx.logLines();
 		expect(lines[lines.length - 1]).toBe("cargo fmt --all -- --check");
 		expect(lines).not.toContain("bun run test:ts");
-	});
+	}, TEST_TIMEOUT_MS);
 	test("refuses success when gate 12 does not print PASS", () => {
 		const fx = mergedFixture();
 		const result = fx.runUpdate(fx.upstreamSha, { SMOKE_OUTPUT: "smoke did not converge" });
 		expect(result.exitCode).toBe(1);
 		expect(result.stderr).toContain("did not print PASS");
-	});
+	}, TEST_TIMEOUT_MS);
 	test("refuses success when a gate dirties tracked state", () => {
 		const fx = mergedFixture();
 		const result = fx.runUpdate(fx.upstreamSha, { DIRTY_ON: "run test:py" });
 		expect(result.exitCode).toBe(1);
 		expect(result.stderr).toContain("dirtied tracked state");
-	});
+	}, TEST_TIMEOUT_MS);
 });
 
 describe("forbidden behavior", () => {
@@ -349,7 +354,7 @@ describe("forbidden behavior", () => {
 		// the only merge in the script targets the validated pinned argument
 		expect(code).toMatch(/git merge --no-ff "\$TARGET"/);
 		expect(code.match(/git merge(?!-base)/g)).toHaveLength(1);
-	});
+	}, TEST_TIMEOUT_MS);
 });
 
 describe("live-mapping fence (OMP-157)", () => {

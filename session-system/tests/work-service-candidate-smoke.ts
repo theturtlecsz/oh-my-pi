@@ -13,6 +13,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { WORK_CONTRACT_SHA256 } from "@oh-my-pi/pi-work-client";
 
+const SPAWN_TIMEOUT_MS = 10_000;
+
 if (process.env.OMP_WORK_POSTGRES_INTEGRATION !== "1") {
 	console.log("work-service-candidate-smoke: skipped (set OMP_WORK_POSTGRES_INTEGRATION=1; needs docker)");
 	process.exit(0);
@@ -67,7 +69,7 @@ const cleanup = () => {
 		return;
 	}
 	service?.kill();
-	Bun.spawnSync(["pg_ctl", "-D", pgData, "-m", "immediate", "stop"], { stdout: "ignore", stderr: "ignore" });
+	Bun.spawnSync(["pg_ctl", "-D", pgData, "-m", "immediate", "stop"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", stdout: "ignore", stderr: "ignore" });
 	fs.rmSync(root, { recursive: true, force: true });
 };
 
@@ -84,6 +86,8 @@ try {
 	}
 	const py = (args: string[]) => {
 		const run = Bun.spawnSync(["uv", "run", "python", "-m", "omp_work", ...args], {
+			timeout: SPAWN_TIMEOUT_MS,
+			killSignal: "SIGKILL",
 			cwd: pythonDir,
 			env: { ...process.env, XDG_CONFIG_HOME: xdg, XDG_STATE_HOME: xdg, XDG_DATA_HOME: xdg, OMP_WORK_POSTGRES_PORT: String(pgPort) },
 		});
@@ -98,18 +102,20 @@ try {
 		fs.writeFileSync(pwfile, `${pgSecret}\n`, { mode: 0o600 });
 		const initdb = (() => {
 			try {
-				return Bun.spawnSync(["initdb", "-D", pgData, "-U", "postgres", "--pwfile", pwfile, "--auth-host=scram-sha-256", "--auth-local=trust"], { stderr: "pipe" });
+				return Bun.spawnSync(["initdb", "-D", pgData, "-U", "postgres", "--pwfile", pwfile, "--auth-host=scram-sha-256", "--auth-local=trust"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", stderr: "pipe" });
 			} finally {
 				// initdb is the only consumer; the superuser password must not linger in the smoke tree.
 				fs.rmSync(pwfile, { force: true });
 			}
 		})();
 		if (initdb.exitCode !== 0) throw new Error(`initdb failed: ${initdb.stderr.toString()}`);
-		const run = Bun.spawnSync(["pg_ctl", "-D", pgData, "-w", "-l", path.join(root, "pg.log"), "-o", `-p ${pgPort} -k ${root} -c listen_addresses=127.0.0.1`, "start"], { stderr: "pipe" });
+		const run = Bun.spawnSync(["pg_ctl", "-D", pgData, "-w", "-l", path.join(root, "pg.log"), "-o", `-p ${pgPort} -k ${root} -c listen_addresses=127.0.0.1`, "start"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", stderr: "pipe" });
 		if (run.exitCode !== 0) throw new Error(`pg_ctl start failed: ${run.stderr.toString()}`);
 	}
 	const psql = (sql: string) => {
 		const res = Bun.spawnSync(["psql", "-h", "127.0.0.1", "-p", String(pgPort), "-U", "postgres", "-d", "omp_work", "-v", "ON_ERROR_STOP=1", "-c", sql], {
+			timeout: SPAWN_TIMEOUT_MS,
+			killSignal: "SIGKILL",
 			env: { ...process.env, PGPASSWORD: pgSecret },
 		});
 		if (res.exitCode !== 0) throw new Error(`psql failed: ${res.stderr.toString()}`);
@@ -117,12 +123,14 @@ try {
 	if (!REUSE) {
 		for (let attempt = 0; attempt < 30; attempt++) {
 			// Integration exception: awaits a real postgres condition (pg_isready exit code); the sleep is only the poll interval.
-			if (Bun.spawnSync(["pg_isready", "-h", "127.0.0.1", "-p", String(pgPort)]).exitCode === 0) break;
+			if (Bun.spawnSync(["pg_isready", "-h", "127.0.0.1", "-p", String(pgPort)], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" }).exitCode === 0) break;
 			if (attempt === 29) throw new Error("postgres never became ready");
 			await Bun.sleep(500);
 		}
 		const psqlAdmin = (sql: string, db = "postgres") => {
 			const res = Bun.spawnSync(["psql", "-h", "127.0.0.1", "-p", String(pgPort), "-U", "postgres", "-d", db, "-v", "ON_ERROR_STOP=1", "-c", sql], {
+				timeout: SPAWN_TIMEOUT_MS,
+				killSignal: "SIGKILL",
 				env: { ...process.env, PGPASSWORD: pgSecret },
 			});
 			if (res.exitCode !== 0) throw new Error(`psql admin failed: ${res.stderr.toString()}`);
@@ -142,6 +150,8 @@ try {
 			const ordinal = parseInt(f.split("_")[0], 10);
 			const sha = new Bun.CryptoHasher("sha256").update(sqlContent).digest("hex");
 			const res = Bun.spawnSync(["psql", "-h", "127.0.0.1", "-p", String(pgPort), "-U", "omp_work_migrator", "-d", "omp_work", "-v", "ON_ERROR_STOP=1"], {
+				timeout: SPAWN_TIMEOUT_MS,
+				killSignal: "SIGKILL",
 				env: { ...process.env, PGPASSWORD: migratorSecret },
 				stdin: Buffer.from(sqlContent),
 			});
@@ -157,6 +167,8 @@ try {
 			const ordinal = parseInt(f.split("_")[0], 10);
 			const sha = new Bun.CryptoHasher("sha256").update(sqlContent).digest("hex");
 			const res = Bun.spawnSync(["psql", "-h", "127.0.0.1", "-p", String(pgPort), "-U", "omp_work_migrator", "-d", "omp_work", "-v", "ON_ERROR_STOP=1"], {
+				timeout: SPAWN_TIMEOUT_MS,
+				killSignal: "SIGKILL",
 				env: { ...process.env, PGPASSWORD: migratorSecret },
 				stdin: Buffer.from(sqlContent),
 			});
@@ -167,7 +179,7 @@ try {
 		// Readiness compares this row against the computed migration-set digest
 		// (collect_health `compatible`); a placeholder value keeps the service
 		// permanently not-ready.
-		const shaRun = Bun.spawnSync(["uv", "run", "python", "-c", "from omp_work.operations.database import migration_set_sha256; print(migration_set_sha256(), end='')"], { cwd: pythonDir });
+		const shaRun = Bun.spawnSync(["uv", "run", "python", "-c", "from omp_work.operations.database import migration_set_sha256; print(migration_set_sha256(), end='')"], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd: pythonDir });
 		if (shaRun.exitCode !== 0) throw new Error(`migration_set_sha256 failed: ${shaRun.stderr.toString()}`);
 		const migrationSetSha = shaRun.stdout.toString().trim();
 		psqlAdmin(`INSERT INTO omp_control.runtime_compatibility (contract_version, contract_sha256, migration_set_sha256, postgres_major) VALUES ('work.omp.dev/v1', '${WORK_CONTRACT_SHA256}', '${migrationSetSha}', 18) ON CONFLICT (singleton) DO UPDATE SET contract_version=EXCLUDED.contract_version, contract_sha256=EXCLUDED.contract_sha256, migration_set_sha256=EXCLUDED.migration_set_sha256, postgres_major=EXCLUDED.postgres_major;`, "omp_work");
@@ -185,7 +197,7 @@ try {
 	const probe = path.join(root, "repo");
 	fs.mkdirSync(probe, { recursive: true });
 	const git = (cwd: string, args: string[]) => {
-		const run = Bun.spawnSync(["git", ...args], { cwd });
+		const run = Bun.spawnSync(["git", ...args], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL", cwd });
 		if (run.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${run.stderr.toString()}`);
 		return run.stdout.toString().trim();
 	};
@@ -225,6 +237,8 @@ try {
 		const args = [path.join(import.meta.dir, "fixtures/work-service-smoke-harness.ts"), probe, phase];
 		if (phaseKey) args.push(phaseKey);
 		const child = Bun.spawnSync([process.execPath, ...args], {
+			timeout: SPAWN_TIMEOUT_MS,
+			killSignal: "SIGKILL",
 			cwd: probe,
 			env: { ...process.env, HOME: home, XDG_CONFIG_HOME: xdg, PI_CODING_AGENT_DIR: path.join(home, ".omp", "agent") },
 		});

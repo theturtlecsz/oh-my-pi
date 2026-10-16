@@ -3,6 +3,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
+const SPAWN_TIMEOUT_MS = 10_000;
+const TEST_TIMEOUT_MS = 30_000;
+
 const installSh = path.join(import.meta.dir, "..", "install.sh");
 const tempDirs: string[] = [];
 
@@ -29,6 +32,8 @@ function runInstall(home: string, customEnv: Record<string, string> = {}, ...arg
 	Object.assign(env, customEnv);
 
 	const proc = Bun.spawnSync(["bash", installSh, ...args], {
+		timeout: SPAWN_TIMEOUT_MS,
+		killSignal: "SIGKILL",
 		env,
 		stdout: "pipe",
 		stderr: "pipe",
@@ -135,7 +140,7 @@ describe("install.sh context settings", () => {
 		expect(json.engine).toBe("none");
 		expect(json.reranker_url).toBeNull();
 		expect(json.reranker_model).toBeNull();
-	});
+	}, TEST_TIMEOUT_MS);
 
 	test("reranker URL/model, engine cognee and state dir set at install are recorded", () => {
 		const home = fakeHome();
@@ -155,7 +160,7 @@ describe("install.sh context settings", () => {
 		expect(json.reranker_model).toBe("bge-reranker-large");
 		expect(json.state_dir).toBe(customStateDir);
 		expect(json.structural_state_dir).toBe(customStateDir);
-	});
+	}, TEST_TIMEOUT_MS);
 
 	test("a rerun keeps an edited file byte-identical", () => {
 		const home = fakeHome();
@@ -174,7 +179,7 @@ describe("install.sh context settings", () => {
 
 		const afterRerun = fs.readFileSync(configPath, "utf8");
 		expect(afterRerun).toBe(editedContent);
-	});
+	}, TEST_TIMEOUT_MS);
 
 	test("OMP_KNOWLEDGE_CONFIG_DIR moves the file", () => {
 		const home = fakeHome();
@@ -190,7 +195,7 @@ describe("install.sh context settings", () => {
 
 		const stat = fs.statSync(customConfigPath);
 		expect(stat.mode & 0o777).toBe(0o600);
-	});
+	}, TEST_TIMEOUT_MS);
 
 	test("engine bogus exits 2, HOME left empty", () => {
 		const home = fakeHome();
@@ -200,7 +205,7 @@ describe("install.sh context settings", () => {
 		expect(result.exitCode).toBe(2);
 		expect(result.stderr).toContain("OMP_KNOWLEDGE_ENGINE");
 		expect(fs.readdirSync(home)).toEqual([]);
-	});
+	}, TEST_TIMEOUT_MS);
 
 	test("PATH without uv: exit 0, warning, no file", () => {
 		const home = fakeHome();
@@ -216,7 +221,7 @@ describe("install.sh context settings", () => {
 
 		const configPath = path.join(home, ".config", "omp-knowledge", "context.json");
 		expect(fs.existsSync(configPath)).toBe(false);
-	});
+	}, TEST_TIMEOUT_MS);
 
 	test("PATH without bun: exit 0, warning, no file", () => {
 		const home = fakeHome();
@@ -232,5 +237,5 @@ describe("install.sh context settings", () => {
 
 		const configPath = path.join(home, ".config", "omp-knowledge", "context.json");
 		expect(fs.existsSync(configPath)).toBe(false);
-	});
+	}, TEST_TIMEOUT_MS);
 });

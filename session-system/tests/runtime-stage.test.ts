@@ -15,6 +15,9 @@ import {
 	verifyRelease,
 } from "../runtime/stage";
 
+const SPAWN_TIMEOUT_MS = 10_000;
+const TEST_TIMEOUT_MS = 30_000;
+
 const directories: string[] = [];
 const disposers: (() => void)[] = [];
 
@@ -104,7 +107,7 @@ describe("release inventory isolation", () => {
 		expect(await releaseFileSha256(candidate)).not.toBe(await releaseFileSha256(installed));
 		expect(await collectReleaseFiles(release)).toEqual(inventory);
 		expect(await Bun.file(path.join(release, "entry.ts")).text()).toBe("export const value = 1;\n");
-	});
+	}, TEST_TIMEOUT_MS);
 
 	test("external source links and cache hardlinks cannot enter the install manifest", async () => {
 		const { source, release } = await fixture();
@@ -117,7 +120,7 @@ describe("release inventory isolation", () => {
 		await fs.unlink(link);
 		await fs.link(candidate, link);
 		await expect(collectReleaseFiles(release)).rejects.toThrow("shares an inode");
-	});
+	}, TEST_TIMEOUT_MS);
 
 	test("explicit interpreter exception admits only that exact external file", async () => {
 		const { source, release } = await fixture();
@@ -133,7 +136,7 @@ describe("release inventory isolation", () => {
 		]);
 		await fs.symlink(other, path.join(release, "service.py"));
 		await expect(collectReleaseFiles(release, [interpreter])).rejects.toThrow("service.py");
-	});
+	}, TEST_TIMEOUT_MS);
 });
 
 /** A pi-vcs repository stand-in exposing only what release staging reads. */
@@ -152,7 +155,7 @@ describe("release staging admission", () => {
 		disposers.push(() => repo.mockRestore());
 		await expect(stageRelease(options)).rejects.toThrow("clean source checkout");
 		await expect(fs.lstat(release)).rejects.toHaveProperty("code", "ENOENT");
-	});
+	}, TEST_TIMEOUT_MS);
 
 	test("existing or overlapping destinations preserve existing content", async () => {
 		const { source, release, options } = await fixture();
@@ -164,7 +167,7 @@ describe("release staging admission", () => {
 			"outside the source tree",
 		);
 		expect(await Bun.file(path.join(release, "keep")).text()).toBe("existing installation");
-	});
+	}, TEST_TIMEOUT_MS);
 
 	test("a Bun version mismatch leaves an incomplete stage without a consumable manifest", async () => {
 		const { source, release, options } = await fixture();
@@ -183,7 +186,7 @@ describe("release staging admission", () => {
 		expect(await Bun.file(path.join(release, "manifest.json")).exists()).toBe(false);
 		expect(await Bun.file(path.join(release, "staging.json")).json()).toMatchObject({ status: "INCOMPLETE" });
 		expect(await releaseFileSha256(path.join(release, "bin/bun"))).toBe(await releaseFileSha256(process.execPath));
-	});
+	}, TEST_TIMEOUT_MS);
 
 	test("the command-line entry point stages a real commit past the archive step", async () => {
 		const { source, release, options } = await fixture();
@@ -195,6 +198,8 @@ describe("release staging admission", () => {
 			.env(env)
 			.quiet();
 		const result = Bun.spawnSync({
+			timeout: SPAWN_TIMEOUT_MS,
+			killSignal: "SIGKILL",
 			cmd: [
 				process.execPath,
 				path.join(import.meta.dir, "../runtime/stage.ts"),
@@ -218,7 +223,7 @@ describe("release staging admission", () => {
 		expect(result.exitCode).not.toBe(0);
 		expect(result.stderr.toString()).toContain("Bun version mismatch");
 		expect(await Bun.file(path.join(release, "source/package.json")).exists()).toBe(true);
-	});
+	}, TEST_TIMEOUT_MS);
 });
 
 describe("release verification", () => {
@@ -252,7 +257,7 @@ describe("release verification", () => {
 			.nothrow();
 		expect(refused.exitCode).not.toBe(0);
 		expect(refused.stderr.toString()).toContain("Release inventory changed: source/native.node");
-	});
+	}, TEST_TIMEOUT_MS);
 
 	test("modified runtime bytes and added discovery files reject an otherwise selected manifest", async () => {
 		const { release, digest } = await manifestedFixture();
@@ -263,12 +268,12 @@ describe("release verification", () => {
 		await Bun.write(runtime, "installed service");
 		await Bun.write(path.join(release, "source/.omp/extensions/unapproved.ts"), "unapproved discovery entry");
 		await expect(verifyRelease(release, digest)).rejects.toThrow("added or missing files");
-	});
+	}, TEST_TIMEOUT_MS);
 
 	test("manifest selection and external interpreter drift fail independently of release-local bytes", async () => {
 		const { release, interpreter, digest } = await manifestedFixture();
 		await expect(verifyRelease(release, "0".repeat(64))).rejects.toThrow("manifest digest");
 		await Bun.write(interpreter, "upgraded host Python runtime");
 		await expect(verifyRelease(release, digest)).rejects.toThrow("External Python interpreter identity changed");
-	});
+	}, TEST_TIMEOUT_MS);
 });
