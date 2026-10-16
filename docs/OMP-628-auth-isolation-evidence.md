@@ -808,3 +808,151 @@ Current verdict (verbatim):
 
 Disposition: deferred, unresolved by this change. Explicit thinking-off forwarding is unrelated; no worker/RPC default change.
 
+## s02 pinned-rejection control
+
+Sections above this heading are retained history. Executed 2026-10-15 on branch `OMP-628-s01-s02`, worktree base `50385312ca`, Bun `1.4.2 (744846f84)`. This revision consumes the existing SDK fix (`SkillDescriptionCatalog` omits `compress` when `options.getApiKey` is supplied) and does not edit source, runners, contracts, skips, retries, or timeouts. It extends `packages/coding-agent/test/security/coordinator-auth-isolation.test.ts` with one control on the same default-session path as the publication regression.
+
+The chunk failures come from one shared SQLite `AuthStorage` pool. Background skill compression can soft-disable the pinned row after session disposal, so a later case cannot select it. The selector's sibling fallback and the auth-retry `lastChance` step would hide that by minting another account in the same pool. The new control keeps both rows in one private store. The pinned grant is expired, so the default session's exact resolver refreshes it; the refresh hook throws `OAuth refresh failed: 400 invalid_grant: refresh token revoked`. The sibling grant is fresh and its refresh would mint `sibling-minted-token`. The foreground model would publish a canonical finding if it received either bearer.
+
+Before the pinned refresh is released, preflight has already pinned `workspace-fixture`, refresh has been called once for that credential id only, both accounts are still selectable, and the disabled list is empty. After release the scan terminal phase is `failed`, `findingCount` is 0, and both the operation and the stored bundle carry `The pinned security OAuth credential could not be resolved`. The bundle plan account is still the pinned identity. `oauth.accessById` is called only with the pinned id. Registry `getApiKey`, `getApiKeyForProvider`, `getApiKeyAndHeaders`, `getApiKeyWithCredentialForProvider`, `keys.get`, and `oauth.access` are not called. The compressor factory is not called. Foreground and smol mock calls are 0. The persisted session has no entries. After reload, pinned selection throws `not available`, the sibling account is unchanged and still selectable, the only active row is the sibling, and the disabled tombstone is the pinned id with `invalid_grant`.
+
+The publication regression in the same file still completes and its post-disposal preflight keeps the same pinned credential. `test/security/coordinator.test.ts` is unchanged.
+
+### Focused results
+
+Each command ran alone from `packages/coding-agent` after the final test text:
+
+| Command | Exit | Pass / fail | Assertions | Reported time |
+| --- | --- | --- | --- | --- |
+| `bun test test/security/coordinator-auth-isolation.test.ts` | 0 | 6 / 0 | 86 | 1017.00ms |
+| `bun test test/security/coordinator.test.ts` | 0 | 7 / 0 | 28 | 1217.00ms |
+
+### Twenty consecutive chunk invocations
+
+From the repository root, one ephemeral Bun process imports `buildChildEnv` and `withTempAgentDir` from `scripts/ci-test-ts.ts`. Each iteration calls `withTempAgentDir` with `buildChildEnv()` as its base environment, so the child receives a gate-scrubbed env and a private agent dir. The child is a fresh awaited `bun` process with cwd `packages/coding-agent` and an explicit ten-file argv. There is no retry. A non-zero exit, an unparsed footer, a non-zero fail count, or a file count other than 10 stops the loop and prints that child's stdout and stderr. An earlier 20-iteration sequence also exited 0 on every iteration; its footer parser read stdout while Bun writes the summary on stderr, so those iterations are not in the table. The sequence below is the parsed run. No failed run was discarded.
+
+```sh
+bun /tmp/omp-628-s01-s02-chunk.ts
+```
+
+```ts
+import { spawn } from "node:child_process";
+import { buildChildEnv, withTempAgentDir } from "/home/ompbot/flood-repos/oh-my-pi-wt/OMP-628-s01-s02/scripts/ci-test-ts.ts";
+
+const root = "/home/ompbot/flood-repos/oh-my-pi-wt/OMP-628-s01-s02";
+const files = [
+	"test/security/contracts.test.ts",
+	"test/security/coordinator.test.ts",
+	"test/security/gate.test.ts",
+	"test/security/history.test.ts",
+	"test/security/importers-store.test.ts",
+	"test/security/preflight.test.ts",
+	"test/security/publication.test.ts",
+	"test/security/remediation.test.ts",
+	"test/security/seeded-fixture.test.ts",
+	"test/security/slash-command.test.ts",
+];
+
+for (let run = 1; run <= 20; run++) {
+	const label = String(run).padStart(2, "0");
+	const outcome = await withTempAgentDir(async (_agentDir, env) => {
+		const childEnv: Record<string, string> = {};
+		for (const [key, value] of Object.entries(env)) {
+			if (value !== undefined) childEnv[key] = value;
+		}
+		const child = spawn("bun", ["test", ...files, "--parallel=1", "--timeout=30000"], {
+			cwd: `${root}/packages/coding-agent`,
+			env: childEnv,
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		const stdoutChunks: Buffer[] = [];
+		const stderrChunks: Buffer[] = [];
+		child.stdout.on("data", chunk => stdoutChunks.push(Buffer.from(chunk)));
+		child.stderr.on("data", chunk => stderrChunks.push(Buffer.from(chunk)));
+		const exitCode = await new Promise<number>((resolve, reject) => {
+			child.once("error", reject);
+			child.once("close", code => resolve(code ?? 1));
+		});
+		return {
+			exitCode,
+			stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+			stderr: Buffer.concat(stderrChunks).toString("utf8"),
+		};
+	}, buildChildEnv());
+	const plain = outcome.stderr.replace(/\x1b\[[0-9;]*m/g, "");
+	const footer = plain.match(
+		/(\d+) pass\s+(\d+) fail\s+(\d+) expect\(\) calls\s+Ran (\d+) tests across (\d+) files\. \[([^\]]+)\]/,
+	);
+	const summary = footer
+		? `${footer[1]} pass / ${footer[2]} fail / ${footer[3]} expect / ${footer[4]} tests / ${footer[5]} files / ${footer[6]}`
+		: "unparsed";
+	console.log(`${label} exit=${outcome.exitCode} ${summary}`);
+	if (outcome.exitCode !== 0 || !footer || footer[2] !== "0" || footer[5] !== "10") {
+		console.log("--- failure stdout ---");
+		console.log(outcome.stdout);
+		console.log("--- failure stderr ---");
+		console.log(outcome.stderr);
+		process.exit(1);
+	}
+}
+console.log("20/20 exit=0");
+```
+
+Loop exited 0. Every invocation reported 56 pass, 0 fail, 176 assertions, 56 tests across 10 files.
+
+| Run | Exit | Pass / fail | Assertions | Files | Reported time |
+| --- | --- | --- | --- | --- | --- |
+| 01 | 0 | 56 / 0 | 176 | 10 | 3.41s |
+| 02 | 0 | 56 / 0 | 176 | 10 | 3.48s |
+| 03 | 0 | 56 / 0 | 176 | 10 | 3.26s |
+| 04 | 0 | 56 / 0 | 176 | 10 | 4.29s |
+| 05 | 0 | 56 / 0 | 176 | 10 | 5.25s |
+| 06 | 0 | 56 / 0 | 176 | 10 | 5.40s |
+| 07 | 0 | 56 / 0 | 176 | 10 | 5.43s |
+| 08 | 0 | 56 / 0 | 176 | 10 | 5.56s |
+| 09 | 0 | 56 / 0 | 176 | 10 | 5.06s |
+| 10 | 0 | 56 / 0 | 176 | 10 | 5.09s |
+| 11 | 0 | 56 / 0 | 176 | 10 | 6.07s |
+| 12 | 0 | 56 / 0 | 176 | 10 | 5.57s |
+| 13 | 0 | 56 / 0 | 176 | 10 | 5.24s |
+| 14 | 0 | 56 / 0 | 176 | 10 | 5.09s |
+| 15 | 0 | 56 / 0 | 176 | 10 | 5.12s |
+| 16 | 0 | 56 / 0 | 176 | 10 | 5.23s |
+| 17 | 0 | 56 / 0 | 176 | 10 | 5.17s |
+| 18 | 0 | 56 / 0 | 176 | 10 | 4.82s |
+| 19 | 0 | 56 / 0 | 176 | 10 | 4.80s |
+| 20 | 0 | 56 / 0 | 176 | 10 | 4.76s |
+
+### Static check
+
+From the repository root, `bun run ci:check:full` exited 0. It ran `check:ts`: oxlint (65 warnings, 0 errors in existing files), oxfmt check, sequential workspace package type checks, and the session-system runtime type check. No formatting failures. This is the requested static check, not the full test suite or gate script.
+
+`bun scripts/upstream-inventory.ts --write` refreshed the fingerprints for this evidence document, the isolation test, and `packages/coding-agent/CHANGELOG.md`. Their behavior descriptions name this control. `bun scripts/upstream-inventory.ts` then exited 0 with 6402 diverging paths. One row per path.
+
+### Edited-path master-report selection
+
+Read-only input: `/home/ompbot/master-report/master.json`, SHA-256 `0b524573ee206be4d49faad0272ed6769395561c3687d161264deafedc14dad6`. No report records were modified. Selection is evidence containing `"/src/" + path` for the paths this revision edits:
+
+- `packages/coding-agent/test/security/coordinator-auth-isolation.test.ts`
+- `docs/OMP-628-auth-isolation-evidence.md`
+- `packages/coding-agent/CHANGELOG.md`
+- `docs/upstream-fork-inventory.tsv`
+
+14 of 1151 records matched. None cite the regression test or this evidence document. Inventory citations are E0059, E0060, E0069, E0076, E0081, E0152, E0203, E0251, E0477, E0489, E0562. Changelog citations are E0093, E0682, E0703. Verdicts already recorded above stay deferred. E0093 and E0703 are additional changelog citations:
+
+### E0093
+
+Current verdict (verbatim):
+
+> Mechanism: A sound replay/qualification harness was added without a committed evidence corpus or a job that runs it on recorded transcripts, and the default was switched on the strength of synthetic tests. Consequence: The claim that the structured supervisor is qualified against historical advisor behaviour is not supported by evidence in the pins; regressions on real transcripts would not be caught. Limit: The harness includes negative controls that detect a dropped class and canary rollback (supervision-qualification.test.ts), and legacy rollback is one setting away (supervision-retirement.test.ts:380-407).
+
+Disposition: deferred, unresolved by this change. Advisor replay qualification is unrelated; the changelog entry does not add a corpus or job.
+
+### E0703
+
+Current verdict (verbatim):
+
+> Mechanism: Top-level no-data guard counts only active accounts and reports, excluding already-fetched actionable disabled credential summaries. Consequence: When final credential becomes disabled, normal omp usage returns no-credentials message before formatUsageBreakdown can show why login failed; helper test promising tombstone-only section does not exercise entrypoint. JSON does retain summaries. Limit: Renderer itself handles tombstone-only provider correctly and JSON includes disabledCredentials. Loss is specific to human CLI early-return boundary.
+
+Disposition: deferred, unresolved by this change. The human `omp` usage early-return is separate from pinned security-scan rejection; no CLI guard change.
+

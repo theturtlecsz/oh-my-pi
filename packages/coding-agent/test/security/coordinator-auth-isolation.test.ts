@@ -25,13 +25,27 @@ const sourceId = "coordinator-auth-isolation";
 
 // Each private root owns agent-dir caches and SQLite rows. No case inherits
 // another case's disabled credential or the host's compression cache.
-async function authFixture(expires = Date.now() + 60 * 60_000) {
+// `sibling` adds a second fresh account in the same pool. Its refresh would
+// mint a distinct token; the pinned row still rejects with invalid_grant.
+async function authFixture(expires = Date.now() + 60 * 60_000, options?: { sibling?: boolean }) {
 	const root = await fs.mkdtemp(path.join(import.meta.dir, ".auth-isolation-"));
 	const host = isolateHost({ home: root });
 	const store = await SqliteAuthCredentialStore.open(path.join(host.agentDir, "agent.db"));
 	const entered = Promise.withResolvers<void>();
 	const release = Promise.withResolvers<void>();
-	const refresh = vi.fn(async () => {
+	const refresh = vi.fn(async (...args: unknown[]) => {
+		const credential = args[2] as { accountId?: string } | undefined;
+		if (credential?.accountId === "workspace-sibling") {
+			return {
+				access: "sibling-minted-token",
+				refresh: "sibling-refresh-token",
+				expires: Date.now() + 60 * 60_000,
+				accountId: "workspace-sibling",
+				email: "sibling@example.invalid",
+				orgId: "workspace-sibling",
+				orgName: "team",
+			};
+		}
 		entered.resolve();
 		await release.promise;
 		throw new Error("OAuth refresh failed: 400 invalid_grant: refresh token revoked");
@@ -41,8 +55,8 @@ async function authFixture(expires = Date.now() + 60 * 60_000) {
 		{ preconnect: () => undefined },
 	);
 	const storage = new AuthStorage(store, { refreshOAuthCredential: refresh, usageFetch });
-	await storage.credentials.set(provider, {
-		type: "oauth",
+	const pinnedCredential = {
+		type: "oauth" as const,
 		access: "fixture-access-token",
 		refresh: "fixture-refresh-token",
 		expires,
@@ -50,8 +64,35 @@ async function authFixture(expires = Date.now() + 60 * 60_000) {
 		email: "security@example.invalid",
 		orgId: "workspace-fixture",
 		orgName: "pro",
-	});
-	const account = selectSecurityOAuthAccount(storage, provider);
+	};
+	await storage.credentials.set(
+		provider,
+		options?.sibling
+			? [
+					pinnedCredential,
+					{
+						type: "oauth" as const,
+						access: "sibling-access-token",
+						refresh: "sibling-refresh-token",
+						expires: Date.now() + 60 * 60_000,
+						accountId: "workspace-sibling",
+						email: "sibling@example.invalid",
+						orgId: "workspace-sibling",
+						orgName: "team",
+					},
+				]
+			: pinnedCredential,
+	);
+	const pinnedId = options?.sibling
+		? storage.oauth.accounts(provider).find(row => row.accountId === "workspace-fixture")?.credentialId
+		: undefined;
+	if (options?.sibling && pinnedId === undefined) throw new Error("pinned fixture account missing");
+	const account = selectSecurityOAuthAccount(storage, provider, pinnedId);
+	const siblingId = options?.sibling
+		? storage.oauth.accounts(provider).find(row => row.accountId === "workspace-sibling")?.credentialId
+		: undefined;
+	if (options?.sibling && siblingId === undefined) throw new Error("sibling fixture account missing");
+	const sibling = siblingId === undefined ? undefined : selectSecurityOAuthAccount(storage, provider, siblingId);
 	const registry = new ModelRegistry(storage, path.join(host.agentDir, "models.yml"));
 	const settings = Settings.isolated({
 		"security.enabled": true,
@@ -66,6 +107,7 @@ async function authFixture(expires = Date.now() + 60 * 60_000) {
 		registry,
 		settings,
 		account,
+		sibling,
 		entered,
 		release,
 		refresh,
@@ -462,6 +504,201 @@ describe("coordinator shared-auth isolation controls", () => {
 			await Promise.allSettled(pending);
 			await drain?.catch(() => undefined);
 			await capturedSession?.dispose();
+			for (const ref of AgentRegistry.global().list()) {
+				if (!ref.id.startsWith("Security-")) continue;
+				await ref.session?.dispose();
+				AgentRegistry.global().unregister(ref.id);
+			}
+			vi.restoreAllMocks();
+			await f.close();
+		}
+	});
+
+	test("definitive rejection of the pinned account fails the scan and does not use a sibling", async () => {
+		// The chunk fails when one shared SQLite auth pool is soft-disabled after
+		// disposal. A repair must not paper over that by rotating to another row:
+		// the selector's sibling fallback and the auth-retry lastChance step would
+		// otherwise mint the sibling. This scan uses the same default session as
+		// the publication regression, with the pinned grant actually dead.
+		const f = await authFixture(Date.now() - 1000, { sibling: true });
+		const sibling = f.sibling;
+		if (!sibling) throw new Error("sibling fixture account missing");
+		const repoRoot = path.join(f.root, "repo");
+		const stateRoot = path.join(f.root, "state");
+		await fs.mkdir(path.join(repoRoot, "src"), { recursive: true });
+		await $`git init --initial-branch=main`.cwd(repoRoot).quiet();
+		await $`git config user.name Fixture`.cwd(repoRoot).quiet();
+		await $`git config user.email fixture@example.invalid`.cwd(repoRoot).quiet();
+		await Bun.write(path.join(repoRoot, "src", "app.ts"), "export const app = true;\n");
+		await $`git add src/app.ts`.cwd(repoRoot).quiet();
+		await $`git commit -m base`.cwd(repoRoot).quiet();
+		const skillDir = path.join(f.host.agentDir, "skills", "auth-isolation-regression");
+		await fs.mkdir(skillDir, { recursive: true });
+		await Bun.write(
+			path.join(skillDir, "SKILL.md"),
+			[
+				"---",
+				"name: auth-isolation-regression",
+				"description: Use when verifying that a rejected security account is not replaced by a sibling.",
+				"---",
+				"",
+				"Body.",
+				"",
+			].join("\n"),
+		);
+		const storeFactory = (): Promise<SecurityStore> => SecurityStore.open(repoRoot, { stateRoot });
+		const gitAdapter: SecurityGitAdapter = {
+			root: async () => repoRoot,
+			headSha: async () => "a".repeat(40),
+			resolveRef: async (_cwd, refName) => (refName === "base" ? "b".repeat(40) : "c".repeat(40)),
+			diffTree: async () => "fixture-diff",
+			status: async () => "",
+			files: async () => ["src/app.ts"],
+			untracked: async () => [],
+		};
+		const pending: Promise<void>[] = [];
+		let compressorInvocations = 0;
+		const createCompressor = skillDescriptions.createSkillDescriptionCompressor;
+		const compressorFactory = vi
+			.spyOn(skillDescriptions, "createSkillDescriptionCompressor")
+			.mockImplementation((...args) => {
+				const compress = createCompressor(...args);
+				return (...input) => {
+					compressorInvocations++;
+					const work = compress(...input);
+					pending.push(
+						work.then(
+							() => undefined,
+							() => undefined,
+						),
+					);
+					return work;
+				};
+			});
+		const smol = createMockModel({
+			provider,
+			id: "auth-isolation-smol",
+			baseUrl: "https://chatgpt.com/backend-api/codex",
+			handler: () => ({ content: ["sibling compression must not run"] }),
+		});
+		const foreground = createMockModel({
+			provider,
+			id: "security-mock",
+			responses: [
+				{
+					content: [
+						{
+							type: "toolCall",
+							name: "security_publish",
+							arguments: {
+								findings: [
+									{
+										rule_id: "fixture.command-injection",
+										title: "Untrusted command reaches a shell",
+										summary: "A fixture value is interpolated into a shell command.",
+										severity: "high",
+										confidence: "high",
+										category: "command-injection",
+										locations: [{ path: "src/app.ts", start_line: 1, role: "sink" }],
+										evidence: [{ label: "shell sink", explanation: "Fixture evidence" }],
+										remediation: "Use an argument-vector API.",
+										validation: "validated",
+									},
+								],
+								coverage: { completeness: "complete" },
+								report: "# Fixture security report\n\nOne validated finding.\n",
+							},
+						},
+					],
+				},
+				{ content: ["Security publication completed."] },
+			],
+		});
+		const coordinator = new SecurityCoordinator(
+			{
+				cwd: repoRoot,
+				settings: f.settings,
+				authStorage: f.storage,
+				modelRegistry: f.registry,
+				activeModel: foreground,
+				sessionId: "parent-session",
+				agentId: "Main",
+			},
+			{ openStore: storeFactory, gitAdapter },
+		);
+		let drain: Promise<unknown> | undefined;
+		try {
+			registerMockApi(sourceId);
+			vi.spyOn(f.registry, "getAvailable").mockReturnValue([smol]);
+			const unpinned = [
+				vi.spyOn(f.registry, "getApiKey"),
+				vi.spyOn(f.registry, "getApiKeyForProvider"),
+				vi.spyOn(f.registry, "getApiKeyAndHeaders"),
+				vi.spyOn(f.registry, "getApiKeyWithCredentialForProvider"),
+				vi.spyOn(f.storage.keys, "get"),
+				vi.spyOn(f.storage.oauth, "access"),
+			];
+			const pinnedAccess = vi.spyOn(f.storage.oauth, "accessById");
+			const plan = await coordinator.preflight({ credentialId: f.account.credentialId, model: foreground });
+			expect(plan.account).toEqual({
+				provider,
+				credentialId: f.account.credentialId,
+				accountId: "workspace-fixture",
+				email: "security@example.invalid",
+				organizationId: "workspace-fixture",
+				organizationName: "pro",
+			});
+			expect(f.refresh).not.toHaveBeenCalled();
+			const started = await coordinator.start({ planId: plan.id });
+			const waitPromise = coordinator.wait(started.operationId);
+			drain = waitPromise;
+			await Promise.race([
+				f.entered.promise,
+				waitPromise.then(() => {
+					throw new Error("Pinned scan settled before the definitive refresh");
+				}),
+			]);
+			expect(f.refresh.mock.calls.map(call => call[1])).toEqual([f.account.credentialId]);
+			expect(selectSecurityOAuthAccount(f.storage, provider, f.account.credentialId)).toEqual(f.account);
+			expect(selectSecurityOAuthAccount(f.storage, provider, sibling.credentialId)).toEqual(sibling);
+			expect(await f.store.listDisabledCredentials(provider)).toEqual([]);
+			f.release.resolve();
+			const terminal = await waitPromise;
+			expect(terminal.phase).toBe("failed");
+			expect(terminal.findingCount).toBe(0);
+			expect(terminal.error).toBe("The pinned security OAuth credential could not be resolved");
+			const bundle = await (await storeFactory()).getBundle(terminal.scanId);
+			expect(bundle?.scan.status).toBe("failed");
+			expect(bundle?.scan.error).toBe("The pinned security OAuth credential could not be resolved");
+			expect(bundle?.findings).toEqual([]);
+			if (!bundle?.scan.plan) throw new Error("expected the failed scan to keep its pinned plan");
+			expect(bundle.scan.plan.account).toEqual(plan.account);
+			expect(f.refresh.mock.calls.map(call => call[1])).toEqual([f.account.credentialId]);
+			expect(pinnedAccess).toHaveBeenCalled();
+			for (const call of pinnedAccess.mock.calls) expect(call[1]).toBe(f.account.credentialId);
+			for (const spy of unpinned) expect(spy).not.toHaveBeenCalled();
+			expect(compressorFactory).not.toHaveBeenCalled();
+			expect(compressorInvocations).toBe(0);
+			expect(foreground.calls).toHaveLength(0);
+			expect(smol.calls).toHaveLength(0);
+			if (!terminal.sessionFile) throw new Error("expected persisted security session");
+			const reopened = await SessionManager.open(terminal.sessionFile, undefined, undefined, {
+				initialCwd: repoRoot,
+			});
+			// The resolver throws before a turn is persisted, so the session cannot
+			// contain a sibling bearer or a published finding.
+			expect(reopened.getEntries()).toEqual([]);
+			await f.storage.credentials.reload();
+			expect(() => selectSecurityOAuthAccount(f.storage, provider, f.account.credentialId)).toThrow("not available");
+			expect(selectSecurityOAuthAccount(f.storage, provider, sibling.credentialId)).toEqual(sibling);
+			expect(f.store.listAuthCredentials(provider).map(row => row.id)).toEqual([sibling.credentialId]);
+			expect(await f.store.listDisabledCredentials(provider)).toMatchObject([
+				{ id: f.account.credentialId, cause: expect.stringContaining("invalid_grant") },
+			]);
+		} finally {
+			f.release.resolve();
+			await Promise.allSettled(pending);
+			await drain?.catch(() => undefined);
 			for (const ref of AgentRegistry.global().list()) {
 				if (!ref.id.startsWith("Security-")) continue;
 				await ref.session?.dispose();
