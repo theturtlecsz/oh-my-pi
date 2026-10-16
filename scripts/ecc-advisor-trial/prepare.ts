@@ -3,8 +3,6 @@ import * as path from "node:path";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { isEnoent, prompt } from "@oh-my-pi/pi-utils";
 import { loadWatchdogConfigFile, saveWatchdogConfigFile } from "../../packages/coding-agent/src/advisor/config";
-import { ECC_ROOT } from "../../session-system/ecc/adapter/catalog";
-import { runEccCli } from "../../session-system/ecc/adapter/cli";
 import primaryPromptTemplate from "./primary-prompt.md" with { type: "text" };
 
 export const ADVISOR_NAME = "ECC Database Reviewer";
@@ -77,13 +75,11 @@ export interface PrepareCaseOptions {
 	outDir: string;
 	casesPath?: string;
 	repoDir?: string;
-	eccRoot?: string;
 }
 
 /**
- * Prepare a detached worktree at <work>/tree for a trial case, install ECC assets,
- * and write <out>/prompt.md. The ECC database advisor asset is retired, so no
- * roster entry is enabled here.
+ * Prepare a detached worktree at <work>/tree for a historical trial case
+ * and write <out>/prompt.md. Preparation installs no ECC assets or advisors.
  */
 export async function prepareCase(options: PrepareCaseOptions): Promise<{ promptPath: string; treeDir: string }> {
 	const repoDir = options.repoDir ?? process.cwd();
@@ -127,9 +123,6 @@ export async function prepareCase(options: PrepareCaseOptions): Promise<{ prompt
 	}
 
 	await gitRepo.worktreeAdd(treeDir, caseItem.commit, { detach: true, clone: false });
-
-	const eccRoot = options.eccRoot ? path.resolve(options.eccRoot) : ECC_ROOT;
-	await runEccCli({ command: "install", project: treeDir, eccRoot });
 
 	const diff = await gitRepo.diffText({
 		base: `${caseItem.commit}^`,

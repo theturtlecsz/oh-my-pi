@@ -4,6 +4,7 @@
 
 ### Added
 
+- Orchestrator worker renders manifest compiled context into its system prompt and reports compiled-context and prompt SHA-256 hashes on delivery (OMP-607).
 - Documented orchestrator worker launch contract with exact argv `["/opt/omp/bin/omp", "orchestrator-worker"]`, single-task token and manifest injection, lease expiry and sticky refusal semantics, scoped `read`/`write` tools, sandbox evaluate test stage, and loopback model proxy configuration.
 - Added opt-in stage context for native auditor workers. Set `OMP_STAGE_CONTEXT_PUSH=1` to deliver the current Work Ledger digest and stage inputs at launch.
 - `before_agent_start` handlers can return `block`/`reason` to refuse a prompt before any provider call.
@@ -62,6 +63,10 @@
 - Fixed computer screenshots, session-less vibe worker artifacts, and worker stderr captures piling up in the system temp directory; each is now removed when its run or worker lifetime ends, including after a hard kill.
 - Video frame files and browser-recording frames are created in the system temp directory.
 - A security scan pinned to one OAuth account no longer lets background skill compression disable that account. If that account's login is rejected, the scan fails instead of continuing with a different account ([#628](https://github.com/can1357/oh-my-pi/issues/628)).
+
+### Removed
+
+- ECC database advisor is no longer installed; retirement preserves project customizations (OMP-612).
 
 ## [18.4.6] - 2026-10-01
 

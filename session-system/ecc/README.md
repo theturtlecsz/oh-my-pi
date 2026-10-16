@@ -1,8 +1,8 @@
 # ECC packs: pinned mirror and OMP adapter
 
 This directory holds a pinned mirror of upstream [ECC](https://github.com/affaan-m/ECC.git)
-and the deterministic adapter that turns a small selected subset of it into two
-installable packs for this repository. Nothing here fetches the network or needs
+and the deterministic adapter that turns a small subset of it into installable
+packs for this repository. Nothing here fetches the network or needs
 a git submodule: the pinned upstream bytes are vendored under `mirror/`, so every
 invariant below is verifiable offline with `bun test`.
 
@@ -11,7 +11,7 @@ invariant below is verifiable offline with `bun test`.
 | Path                       | Purpose                                                                                                                                  |
 | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `mirror/`                  | The full upstream tree at the pinned revision (3716 files), inert: never installed or activated by mirroring. Its git tree id equals `upstream.tree`; the upstream sha256 pins read from here. |
-| `manifest.json`            | Upstream pin, the two packs, every asset record (target, adaptation kind, disposition, dependencies), reserved native command names, and disposition rules. |
+| `manifest.json`            | Upstream pin, declared packs, every asset record (target, adaptation kind, disposition, dependencies), reserved native command names, and disposition rules. |
 | `catalog.json`             | Every mirrored file, sorted by path, with sha256, classification, reason, and asset owner (or null). Rebuilt by `adapter/emit-catalog.ts`; `--check` names stale or unclassified files. |
 | `adapter/`                 | The deterministic transform, overlay engine, install plan, and install/update/remove lifecycle.                                          |
 | `adapter/emit-lock.ts`     | Build step: rebuilds `adapted.lock.json` from the mirror.                                                                                |
@@ -22,7 +22,6 @@ invariant below is verifiable offline with `bun test`.
 | `reviews/`                 | Accepted reviews as `<candidate commit>.json`, written by `repin.ts` and pinned by the lock `review` field. Absent until the first re-pin. |
 | `adapted.lock.json`        | Committed record of each asset's upstream sha256, adapted sha256, and owned files.                                                       |
 | `overlays/`                | Reviewed `find`/`replace` edits applied after the metadata transform, pinned to both the upstream and adapted sha256.                    |
-| `advisor/`                 | The static read-only policy prepended to the database advisor's instructions.                                                            |
 
 Upstream pin: repository `https://github.com/affaan-m/ECC.git`, commit
 `8321021c54d670126ce3b2969d5deb880b4b0c2a`, tree
@@ -32,7 +31,7 @@ Upstream pin: repository `https://github.com/affaan-m/ECC.git`, commit
 ## Packs
 
 - **`ecc-engineering`** — the two coding-style rules, the search-first and
-  verification-loop skills, and the database-reviewer advisor adaptation.
+  verification-loop skills.
 - **`ecc-research`** — the two coding-style rules plus the research, deep-research,
   MLE, benchmark-optimization, agent-self-evaluation, eval-harness, and
   scholar-evaluation skills.
@@ -42,8 +41,7 @@ Upstream pin: repository `https://github.com/affaan-m/ECC.git`, commit
 - **`ecc-domain-typescript`** — TypeScript rules plus coding-standards,
   hexagonal-architecture, architecture-decision-records, and api-design skills.
 - **`ecc-domain-python`** — Python rules, patterns/testing skills, and reviewer.
-- **`ecc-domain-postgresql`** — postgres-patterns and database-migrations skills
-  plus the existing database-reviewer advisor.
+- **`ecc-domain-postgresql`** — postgres-patterns and database-migrations skills.
 - **`ecc-domain-security`** — common, Rust, TypeScript, and Python security rules,
   security reviewer, and security-scan skill.
 - **`ecc-maintenance`** — benchmark-optimization-loop plus the agent-architecture-audit,
@@ -52,14 +50,37 @@ Upstream pin: repository `https://github.com/affaan-m/ECC.git`, commit
 New domain members are inactive and deferred pending WP3 adaptation. The
 maintenance members are inactive and deferred pending WP3 adaptation of their
 helper paths and result locations. Domain packs reuse existing adapted assets:
-Rust installs both coding-style rules, PostgreSQL installs the disabled database
-advisor, and the other domain packs install no content until their deferred
-members are adapted. The maintenance pack installs only the already-adapted
-benchmark-optimization-loop skill: its other five members are deferred and
+Rust installs both coding-style rules; the other domain packs install no content
+until their deferred members are adapted. The maintenance pack installs only
+the already-adapted benchmark-optimization-loop skill: its other five members are deferred and
 install nothing.
 
 Assets are only ever installed through a declared pack; arbitrary subsets are not
 part of the contract.
+
+## Database advisor retirement
+
+The current ECC database advisor is retired by the owner's 2026-10-13
+[decision](../../docs/report/ecc-database-advisor-trial/DECISION.md).
+The [OMP-525 trial evidence](../../docs/report/ecc-database-advisor-trial/README.md)
+is retained unchanged: 2 useful findings, 23 false alarms, 0 known defects caught.
+Preview, install, and update omit the retired advisor; historical trial
+preparation only creates a worktree and prompt, without installing ECC or
+enabling an advisor.
+
+On update or remove, legacy ECC-owned files whose bytes match the project lock
+are deleted. Modified legacy files, including an enabled or customized
+`.omp/WATCHDOG.yml`, are kept byte-for-byte; unowned WATCHDOG files are also kept.
+Update releases retired ownership; remove deletes the project lock. Active
+assets still refuse to overwrite or remove modified owned files.
+
+Programme obligation O4 and ECC WP6 remain open. Any replacement requires a new
+Work Ledger proposal and its own evaluation plan; this retirement builds none.
+Installer entry and ownership work remain with OMP-611. For OMP-611-s02/s06,
+remaining install assets come from the manifest packs, mirror, and overlays,
+with hashes and owned paths in `adapted.lock.json`. There is no ECC-WATCHDOG or
+advisor policy bundling; the upstream database reviewer remains inert mirror
+content, outside the install set.
 
 ## Adaptation kinds
 
@@ -68,7 +89,6 @@ part of the contract.
 | `rule-metadata`             | Emits OMP frontmatter (`description`, `globs`) and rewrites relative links to the installed targets; body is preserved verbatim.  |
 | `skill-namespaced`          | Renames the skill to `ecc-<upstream name>` so it can never claim a bare native name; helper files install verbatim.               |
 | `agent-metadata`            | Emits a read-only OMP task agent (`ecc-` prefix, read/grep/glob only, disabled).                                                  |
-| `database-advisor-profile`  | Emits a project `.omp/WATCHDOG.yml` roster entry: read-only tools, `enabled: false`, static policy prepended.                     |
 
 Every installable asset's mirror bytes must hash to its manifest pin, and the
 transform must reproduce the adapted sha256 recorded in `adapted.lock.json`.
@@ -274,7 +294,8 @@ the complete file set before writing anything.
   project lock has the restored `upstream.commit`.
 - **remove** — deletes only lock-owned files whose bytes still match the recorded
   sha256, prunes directories it emptied, and deletes the lock. A modified owned
-  file is refused.
+  file is refused, except retired files with local changes, which are kept as
+  described above.
 
 Ownership is recorded per project in `<projectRoot>/.omp/ecc/adapted.lock.json`,
 so two projects never share an ownership record. Every step is idempotent:
@@ -291,7 +312,7 @@ bun test session-system/tests/ecc-adaptation.test.ts session-system/tests/ecc-in
 The adaptation test verifies source and transformed hashes, manifest and
 disposition invariants, reference closure (including a failure on a missing
 reference), overlay drift refusal, the preserved candidate-execution refusal, and
-that an adapted rule, skill, and advisor are discovered natively. The install
+that adapted rules and skills are discovered natively. The install
 test verifies deterministic install/update/remove, unowned-overwrite refusal,
 per-project ownership, and that nothing activates accidentally. The upstream-check
 test verifies an identical copy, a changed primary file, a missing helper, an
