@@ -86,6 +86,8 @@ def git_bytes(flood_dir: Path, *args: str) -> bytes | None:
     if git is None:
         return None
     try:
+        # Internal callers supply fixed commands and hex-validated revisions; flood_dir is one -C operand.
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
         completed = subprocess.run(  # nosec B603 - absolute git path, argv list, no shell
             [git, "-C", str(flood_dir), *args], capture_output=True, check=False)
     except OSError:
