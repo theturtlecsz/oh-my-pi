@@ -63,6 +63,7 @@
 - Fixed computer screenshots, session-less vibe worker artifacts, and worker stderr captures piling up in the system temp directory; each is now removed when its run or worker lifetime ends, including after a hard kill.
 - Video frame files and browser-recording frames are created in the system temp directory.
 - A security scan pinned to one OAuth account no longer lets background skill compression disable that account. If that account's login is rejected, the scan fails instead of continuing with a different account ([#628](https://github.com/can1357/oh-my-pi/issues/628)).
+- Documented the orchestrator control plane's atomic submission, dynamic fenced authority versus the hard task deadline, and lost lease versus frozen stop/release ([#595](https://github.com/can1357/oh-my-pi/issues/595)).
 
 ### Removed
 

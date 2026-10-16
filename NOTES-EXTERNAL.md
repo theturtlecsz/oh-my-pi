@@ -1074,3 +1074,20 @@ fails before worker startup on this host: `mount --bind /usr <private-root>/usr`
 returns EINVAL under its user/mount namespace (17 failures, zero provider requests).
 `LIBMOUNT_FORCE_MOUNT2=always` also fails. Host configuration and protected tests
 were left unchanged; installed-host namespace qualification belongs to operator.
+
+## OMP-595-s08 durable lease handoff
+
+External coordination with orch-worker-20261011 unavailable in this isolated,
+credential-free lane, so this record stands in for the message. Proposed handoff
+(ledger OMP-595 r2): this lane adds only
+`python/omp-work/tests/test_orchestrator_durable_lease_e2e.py` plus documentation
+(`docs/OMP-595-handoff.md`, additive sections in `docs/orchestrator-control-plane.md`,
+both changelogs, inventory rows). It consumes the disposable DB/world/build
+utilities, `JobWorker`, `OrchestratorHandler`, `run_implement`, `worker_sandbox`,
+and `model_proxy` with a fake provider, and reuses prior new tests read-only.
+Coverage composes lost-response replay, past-initial-lease renewal, bounded kill
+with stale-refusal, frozen hold/release, and hard-deadline model authority.
+Production code, existing tests/helpers, contract schemas, and qualification
+approvals are unchanged. Tested revision `60fd67bfde1272938018b6c2a78501c4c1dadebc`;
+7 passed, 0 failed, 0 skipped. No external message or acknowledgment is claimed,
+and the installation hold (OMP-424/519) is unchanged.
