@@ -361,6 +361,7 @@ def _replay_archived_inputs(report_path):
             candidate_tar=_bytes(custody, receipt.candidate_digest), candidate_digest=receipt.candidate_digest,
             evaluator_script=_bytes(custody, receipt.evaluator_artifact_sha256),
             confirmation=_bytes(custody, receipt.confirmation_sha256),
+            cancel=None,
         )
         assert result.verdict == "qualified", result.failure_reason
         assert result.metrics == receipt.metrics
