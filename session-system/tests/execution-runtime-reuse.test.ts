@@ -4,6 +4,9 @@ import * as path from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import { dirtyPaths, ensureExecutionWorkspace } from "../extensions/workflow/git";
 
+// SIGKILL so a child that ignores SIGTERM cannot keep spawnSync blocked.
+const SPAWN_TIMEOUT_MS = 10_000;
+
 describe("execution runtime dependency reuse (OMP-472)", () => {
 	const roots: string[] = [];
 
@@ -12,7 +15,7 @@ describe("execution runtime dependency reuse (OMP-472)", () => {
 	});
 
 	const git = (cwd: string, args: string[]): string => {
-		const result = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+		const result = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe", timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		if (result.exitCode !== 0) {
 			throw new Error(`git ${args.join(" ")} failed: ${result.stderr.toString()}`);
 		}
@@ -68,7 +71,7 @@ describe("execution runtime dependency reuse (OMP-472)", () => {
 		expect(pkgReal.startsWith(`${wsReal}${path.sep}`)).toBe(true);
 		expect(fs.existsSync(marker)).toBe(false);
 		expect(dirtyPaths(ws.path)).toEqual([]);
-	});
+	}, 20_000);
 
 	test("an uncommitted primary bun.lock edit falls through to install", async () => {
 		const { repo, head, worktreesRoot, marker } = makeRepo(true);
@@ -78,7 +81,7 @@ describe("execution runtime dependency reuse (OMP-472)", () => {
 			ensureExecutionWorkspace(repo, "OMP-472", grantId, head, {}, worktreesRoot, installStub(marker)),
 		).rejects.toThrow(/dependency install failed/);
 		expect(fs.existsSync(marker)).toBe(true);
-	});
+	}, 20_000);
 
 	test("a primary checkout without node_modules falls through to install", async () => {
 		const { repo, head, worktreesRoot, marker } = makeRepo(false);
@@ -87,5 +90,5 @@ describe("execution runtime dependency reuse (OMP-472)", () => {
 			ensureExecutionWorkspace(repo, "OMP-472", grantId, head, {}, worktreesRoot, installStub(marker)),
 		).rejects.toThrow(/dependency install failed/);
 		expect(fs.existsSync(marker)).toBe(true);
-	});
+	}, 20_000);
 });

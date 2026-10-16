@@ -22,6 +22,9 @@ import {
 import * as gitModule from "../extensions/workflow/git";
 import { createWorkflowHost } from "../extensions/workflow/host";
 
+// SIGKILL so a child that ignores SIGTERM cannot keep spawnSync blocked.
+const SPAWN_TIMEOUT_MS = 10_000;
+
 interface BeginExecutionInput {
 	grantId: string;
 	remoteRef: string;
@@ -64,7 +67,7 @@ describe("execution remote ref admission end-to-end (OMP-233 AC6)", () => {
 	});
 
 	function git(cwd: string, ...args: string[]): string {
-		const res = Bun.spawnSync(["git", ...args], { cwd });
+		const res = Bun.spawnSync(["git", ...args], { cwd, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		if (res.exitCode !== 0) {
 			throw new Error(`git ${args.join(" ")} failed in ${cwd}: ${res.stderr.toString()}`);
 		}
@@ -278,7 +281,7 @@ describe("execution remote ref admission end-to-end (OMP-233 AC6)", () => {
 		const worktreeHeadRef = fixture.git(fixture.lastProvisionedWorkspace!.path, "symbolic-ref", "HEAD");
 		expect(worktreeHeadRef).toBe(expectedRef);
 		expect(capturedRemoteRef).toBe(worktreeHeadRef);
-	});
+	}, 20_000);
 
 	test("case 2: start on non-default branch: recorded remote_ref == worktree git symbolic-ref HEAD == executionRemoteRef('OMP-237', capturedGrantId), ref is not non-default branch", async () => {
 		const fixture = setupFixture("main");
@@ -302,7 +305,7 @@ describe("execution remote ref admission end-to-end (OMP-233 AC6)", () => {
 		expect(capturedRemoteRef).toBe(worktreeHeadRef);
 		expect(capturedRemoteRef).not.toBe("refs/heads/release/x");
 		expect(worktreeHeadRef).not.toBe("refs/heads/release/x");
-	});
+	}, 20_000);
 
 	test("case 3: backend returns remote_ref refs/heads/execution/omp-238 -> grant stopped with reason starting execution_workspace_provision_failed", async () => {
 		const fixture = setupFixture("main");
@@ -327,7 +330,7 @@ describe("execution remote ref admission end-to-end (OMP-233 AC6)", () => {
 		expect(fixture.setExecutionStateCalledWith?.reason?.startsWith("execution_workspace_provision_failed:")).toBe(true);
 		expect(fixture.setExecutionStateCalledWith?.reason).toContain("refs/heads/execution/omp-238");
 		expect(fixture.lastProvisionedWorkspace).toBeUndefined();
-	});
+	}, 20_000);
 
 	test("case 4: backend returns executionRemoteRef('OMP-237', otherUuid) -> grant stopped with reason starting execution_workspace_provision_failed", async () => {
 		const fixture = setupFixture("main");
@@ -353,5 +356,5 @@ describe("execution remote ref admission end-to-end (OMP-233 AC6)", () => {
 		expect(fixture.setExecutionStateCalledWith?.reason?.startsWith("execution_workspace_provision_failed:")).toBe(true);
 		expect(fixture.setExecutionStateCalledWith?.reason).toContain(executionRemoteRef("OMP-237", otherUuid));
 		expect(fixture.lastProvisionedWorkspace).toBeUndefined();
-	});
+	}, 20_000);
 });

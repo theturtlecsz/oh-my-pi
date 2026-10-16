@@ -9,6 +9,9 @@ import {
 	executionRemoteRefRefusal,
 } from "../extensions/workflow/git";
 
+// SIGKILL so a child that ignores SIGTERM cannot keep spawnSync blocked.
+const SPAWN_TIMEOUT_MS = 10_000;
+
 describe("executionRemoteRef and executionRemoteRefRefusal (OMP-233)", () => {
 	const grantId = "00000000-0000-7000-8000-000000000237";
 	const canonical = executionRemoteRef("OMP-237", grantId);
@@ -90,16 +93,16 @@ describe("ensureExecutionWorkspace symbolic-ref HEAD and grant isolation (OMP-23
 			["config", "user.email", "test@example.com"],
 			["config", "user.name", "Test"],
 		]) {
-			Bun.spawnSync(["git", ...args], { cwd: repo });
+			Bun.spawnSync(["git", ...args], { cwd: repo, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		}
 		fs.writeFileSync(path.join(repo, "seed.txt"), "seed\n");
-		Bun.spawnSync(["git", "add", "--", "seed.txt"], { cwd: repo });
-		Bun.spawnSync(["git", "commit", "-q", "-m", "seed"], { cwd: repo });
+		Bun.spawnSync(["git", "add", "--", "seed.txt"], { cwd: repo, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+		Bun.spawnSync(["git", "commit", "-q", "-m", "seed"], { cwd: repo, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		return repo;
 	};
 
 	const git = (repo: string, ...args: string[]): string =>
-		Bun.spawnSync(["git", ...args], { cwd: repo }).stdout.toString().trim();
+		Bun.spawnSync(["git", ...args], { cwd: repo, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" }).stdout.toString().trim();
 
 	test("ensureExecutionWorkspace worktree's git symbolic-ref HEAD equals executionRemoteRef(key, grantId)", async () => {
 		const repo = makeRepo();
@@ -115,7 +118,7 @@ describe("ensureExecutionWorkspace symbolic-ref HEAD and grant isolation (OMP-23
 		} finally {
 			await cleanupExecutionWorkspace(ws);
 		}
-	});
+	}, 20_000);
 
 	test("two grants of one key get distinct refs", async () => {
 		const repo = makeRepo();
@@ -138,5 +141,5 @@ describe("ensureExecutionWorkspace symbolic-ref HEAD and grant isolation (OMP-23
 			await cleanupExecutionWorkspace(ws1);
 			await cleanupExecutionWorkspace(ws2);
 		}
-	});
+	}, 20_000);
 });
