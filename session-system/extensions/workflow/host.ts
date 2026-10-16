@@ -7,7 +7,6 @@
  * and the audit-receipt bridge consumer. A WorkflowBackend supplies storage.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { spawnSync } from "node:child_process";
 import { type Dirent, existsSync, readFileSync } from "node:fs";
 import { lstat, readdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -28,6 +27,7 @@ import {
 	type ReadonlySessionManager,
 	type Theme,
 } from "@oh-my-pi/pi-coding-agent";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { Ellipsis, matchesKey, truncateToWidth, type TUI, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { isRecord, prompt, setProjectDir } from "@oh-my-pi/pi-utils";
@@ -737,7 +737,9 @@ export function createWorkflowHost(cfg: HostConfig) {
 	const executionWorkspaceManager = cfg.executionWorkspaceManager ?? defaultExecutionWorkspaceManager;
 	const CACHE_FILE = join(homedir(), ".omp", "agent", backend.cacheFile);
 	const projectFilter = resolveProjectMarker(backend.markerFile);
-	const gitRooted = spawnSync("git", ["-C", process.cwd(), "rev-parse", "--show-toplevel"], { encoding: "utf8" }).status === 0;
+	// Native discovery (cheap fs walk, no git process). Discovery errors propagate:
+	// a failed probe must not read as "outside git" (global NOW fallback).
+	const gitRooted = vcs.gitInfo(process.cwd()) !== null;
 	const scopeLine = !gitRooted
 		? `SCOPE: not a git repo — /now unfiltered, filing lands on ${cfg.teamNoun}; git init + ${backend.markerFile} to scope this directory`
 		: projectFilter

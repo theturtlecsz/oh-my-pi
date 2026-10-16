@@ -58693,7 +58693,7 @@
       "python/omp-work/src/omp_work/v1/store.py": "ff5052efc3c75d11c4305b6cadc422ea2d600bb0c29bad5e57791cce0e3f279b",
       "python/omp-work/src/omp_work/v1/store_shared.py": "83598ac0c6a7b02955d6ddacfeb2d9fa77383a07f69347db60a01f93fa856440",
       "session-system/extensions/workflow/backend.ts": "a7bb413d887dab423f413c6c28997206801e47af36df248841da60e976daeb9d",
-      "session-system/extensions/workflow/host.ts": "eddf3833f67c71a974dd8c0a8e823cfd0c1efd17048d93daa66a305237d604de",
+      "session-system/extensions/workflow/host.ts": "bf70e6c7aa727d594a7004b1b5950244b1e8bb4e7b1c57bbe665c28a63e6f76e",
       "session-system/extensions/workflow/work.ts": "3d8681fa3f25b37a697b72740f5b88bae8fe5f9680d6325cd04ad9ca964f456d"
     }
   },
@@ -60381,5 +60381,5 @@
     }
   },
   "sealed": true,
-  "report_sha256": "fbb5594086f93a500f0ba62c15fe044dab35e6930ea20edf07f8c787def095c3"
+  "report_sha256": "d0286c3315bace9b80889a502b96d19c4b84eeb533b4681be81e103272fafe27"
 }
