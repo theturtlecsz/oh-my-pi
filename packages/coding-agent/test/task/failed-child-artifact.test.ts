@@ -19,6 +19,7 @@ import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import type { TaskParams } from "@oh-my-pi/pi-tui/tools/task";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { runGitFixture } from "../helpers/git-fixture";
 
 const AGENT: AgentDefinition = {
 	name: "worker",
@@ -44,7 +45,7 @@ describe("failed child evidence", () => {
 	it("hands the parent the finished child's exit status and readable artifact when the merge throws", async () => {
 		using tempDir = TempDir.createSync("@omp-failed-child-");
 		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [AGENT], projectAgentsDir: null });
-		const git = (...args: string[]) => Bun.spawnSync(["git", ...args], { cwd: tempDir.path(), stdout: "ignore" });
+		const git = (...args: string[]) => runGitFixture(tempDir.path(), args);
 		git("init", "-q");
 		await fs.writeFile(path.join(tempDir.path(), "README.md"), "seed\n");
 		git("add", "README.md");
