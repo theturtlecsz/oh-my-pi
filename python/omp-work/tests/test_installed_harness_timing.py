@@ -76,6 +76,18 @@ def _parsed(path: Path) -> list[dict[str, object]]:
     ]
 
 
+def _stdout_records(path: Path) -> list[dict[str, object]]:
+    """Records in a stdout log. A log the child has not created yet has none.
+
+    The reader thread creates ``child.rpc.jsonl`` after ``RpcProcess`` returns.
+    On a loaded host the first poll runs before that create, and ``read_text``
+    raises ``FileNotFoundError`` instead of letting the poll wait out its deadline.
+    """
+    if not path.exists():
+        return []
+    return _parsed(path)
+
+
 def _rpc_process(tmp_path: Path, source: str) -> RpcProcess:
     child = subprocess.Popen(
         [sys.executable, "-c", source],
@@ -291,6 +303,14 @@ def test_run_timeout_names_the_step(tmp_path: Path) -> None:
     assert "0.1s" in message
 
 
+def test_a_missing_stdout_log_is_no_records(tmp_path: Path) -> None:
+    """The poll must see no records, not FileNotFoundError, before the child creates the log."""
+    missing = tmp_path / "child.rpc.jsonl"
+    with pytest.raises(FileNotFoundError):
+        _parsed(missing)
+    assert _stdout_records(missing) == []
+
+
 def test_stdout_log_is_partial_safe_end_to_end(tmp_path: Path) -> None:
     """A real child that tears a JSONL write is still read only at record boundaries."""
     rpc = _rpc_process(tmp_path, _TORN_JSONL_CHILD)
@@ -298,8 +318,7 @@ def test_stdout_log_is_partial_safe_end_to_end(tmp_path: Path) -> None:
         deadline = time.monotonic() + 30
         seen: list[dict[str, object]] = []
         while time.monotonic() < deadline:
-            # The child may not have created the log yet on a loaded host.
-            seen = _parsed(rpc.stdout_log) if rpc.stdout_log.exists() else []
+            seen = _stdout_records(rpc.stdout_log)
             if len(seen) == 2:
                 break
             time.sleep(0.05)
