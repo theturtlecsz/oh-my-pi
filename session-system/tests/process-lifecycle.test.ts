@@ -1,4 +1,5 @@
 /** Bounded process ownership regressions; see docs/omp-640-process-lifecycle.md. */
+import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -8,6 +9,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { OwnedChildren } from "./fixtures/owned-children";
 
 const SCENARIO = process.env.OMP_640_LIFECYCLE_SCENARIO;
+const REPO_ROOT = path.resolve(import.meta.dir, "../..");
+const SESSION_PRELOAD = path.join(REPO_ROOT, "scripts/session-system-test-preload.ts");
+const REAL_LIFECYCLE_FILES = [
+	"session-system/tests/omp-262-plan-identity.test.ts",
+	"session-system/tests/update.test.ts",
+] as const;
 const owned = new OwnedChildren();
 const tempDirs: string[] = [];
 let previousChild: Subprocess<"ignore", "pipe", "pipe"> | undefined;
@@ -75,6 +82,176 @@ async function runNestedScenario(
 	});
 	const [exit, output] = await Promise.all([proc.exited, owned.output(proc)]);
 	return { exit, output: output.stdout + output.stderr, signal: proc.signalCode };
+}
+
+interface ProcStat {
+	state: string;
+	ppid: number;
+}
+
+/** /proc entries vanish mid-read; a missing entry is an exited process. */
+function readProcStat(pid: number): ProcStat | undefined {
+	try {
+		const text = fsSync.readFileSync(`/proc/${pid}/stat`, "utf8");
+		const end = text.lastIndexOf(")");
+		if (end < 0) return undefined;
+		const rest = text.slice(end + 2).split(" ");
+		const ppid = Number(rest[1]);
+		if (!rest[0] || !Number.isInteger(ppid)) return undefined;
+		return { state: rest[0], ppid };
+	} catch {
+		return undefined;
+	}
+}
+
+function descendantPids(rootPid: number): number[] {
+	let names: string[];
+	try {
+		names = fsSync.readdirSync("/proc");
+	} catch {
+		return [];
+	}
+	const children = new Map<number, number[]>();
+	for (const name of names) {
+		if (!/^[0-9]+$/.test(name)) continue;
+		const pid = Number(name);
+		const stat = readProcStat(pid);
+		if (!stat) continue;
+		const list = children.get(stat.ppid);
+		if (list) list.push(pid);
+		else children.set(stat.ppid, [pid]);
+	}
+	const out: number[] = [];
+	const stack = [...(children.get(rootPid) ?? [])];
+	const seen = new Set<number>();
+	while (stack.length > 0) {
+		const pid = stack.pop();
+		if (pid === undefined || seen.has(pid)) continue;
+		seen.add(pid);
+		out.push(pid);
+		stack.push(...(children.get(pid) ?? []));
+	}
+	return out;
+}
+
+function sessionRoots(scratch: string): string[] {
+	try {
+		return fsSync
+			.readdirSync(scratch)
+			.filter(name => name.startsWith("omp-session-test-"))
+			.map(name => path.join(scratch, name));
+	} catch {
+		return [];
+	}
+}
+
+function underScratch(scratch: string, target: string): boolean {
+	return target === scratch || target.startsWith(`${scratch}${path.sep}`);
+}
+
+interface FixtureChild {
+	kind: "git" | "python";
+	paths: string[];
+}
+
+/** Git and mapper children whose paths live in the preload's private root. */
+function fixtureChild(pid: number, scratch: string): FixtureChild | undefined {
+	const stat = readProcStat(pid);
+	if (!stat || stat.state === "Z") return undefined;
+	let args: string[];
+	try {
+		args = fsSync
+			.readFileSync(`/proc/${pid}/cmdline`)
+			.toString("utf8")
+			.split("\0")
+			.filter(arg => arg.length > 0);
+	} catch {
+		return undefined;
+	}
+	const command = args[0];
+	if (!command) return undefined;
+	const base = path.basename(command);
+	if (base === "python3" || base === "python") {
+		const paths = args.slice(1).filter(arg => underScratch(scratch, arg));
+		if (paths.length === 0) return undefined;
+		return { kind: "python", paths };
+	}
+	if (base !== "git" && !command.endsWith("/git")) return undefined;
+	const paths: string[] = [];
+	for (let index = 0; index < args.length; index++) {
+		const next = args[index + 1];
+		if (args[index] === "-C" && next && underScratch(scratch, next)) paths.push(next);
+	}
+	try {
+		const cwd = fsSync.readlinkSync(`/proc/${pid}/cwd`);
+		if (underScratch(scratch, cwd)) paths.push(cwd);
+	} catch {
+		// The process can exit between cmdline and cwd.
+	}
+	if (paths.length === 0) return undefined;
+	return { kind: "git", paths };
+}
+
+interface Lifetime {
+	git: number;
+	python: number;
+	sawRoot: boolean;
+	violations: string[];
+	seenPids: Set<number>;
+}
+
+function visibleOutput(text: string): string {
+	return text.replace(/\u001b\[[0-9;]*m/g, "");
+}
+
+function pathExists(target: string): boolean {
+	try {
+		fsSync.accessSync(target);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function sampleLifetime(runnerPid: number, scratch: string, lifetime: Lifetime): void {
+	const roots = sessionRoots(scratch);
+	if (roots.length > 0) lifetime.sawRoot = true;
+	for (const pid of descendantPids(runnerPid)) {
+		const child = fixtureChild(pid, scratch);
+		if (!child) continue;
+		const missing = child.paths.filter(target => !pathExists(target));
+		const still = readProcStat(pid);
+		if (!still || still.state === "Z") continue;
+		lifetime.seenPids.add(pid);
+		if (missing.length > 0 || roots.length === 0) {
+			if (lifetime.violations.length < 8) {
+				const gone = missing.length > 0 ? missing.join(", ") : "preload root";
+				lifetime.violations.push(`${child.kind} pid ${pid} alive while ${gone} is gone`);
+			}
+			continue;
+		}
+		if (child.kind === "git") lifetime.git++;
+		else lifetime.python++;
+	}
+}
+
+async function observeUntilExit(runnerPid: number, scratch: string, exited: Promise<unknown>): Promise<Lifetime> {
+	const lifetime: Lifetime = { git: 0, python: 0, sawRoot: false, violations: [], seenPids: new Set() };
+	let done = false;
+	void exited.then(
+		() => {
+			done = true;
+		},
+		() => {
+			done = true;
+		},
+	);
+	while (!done) {
+		sampleLifetime(runnerPid, scratch, lifetime);
+		await Bun.sleep(20);
+	}
+	sampleLifetime(runnerPid, scratch, lifetime);
+	return lifetime;
 }
 
 if (SCENARIO === undefined) {
@@ -171,6 +348,48 @@ if (SCENARIO === undefined) {
 				expect(await readyFile.text()).toBe("ready");
 			},
 			5_000,
+		);
+
+		// Reduced scenarios above use a synthetic body. This runs the repaired
+		// files under the real session preload and watches the private root those
+		// files actually use. The runner is an owned child: afterEach reaps it,
+		// then removes this scratch dir.
+		test.skipIf(process.platform !== "linux")(
+			"real files pass under the session preload while fixtures outlive their children",
+			async () => {
+				const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "omp-640-real-"));
+				tempDirs.push(scratch);
+				const proc = owned.spawn(
+					[process.execPath, "test", "--preload", SESSION_PRELOAD, "--timeout", "30000", ...REAL_LIFECYCLE_FILES],
+					{
+						cwd: REPO_ROOT,
+						env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch },
+						stdout: "pipe",
+						stderr: "pipe",
+						timeout: 120_000,
+						killSignal: "SIGKILL",
+					},
+				);
+				const lifetimePromise = observeUntilExit(proc.pid, scratch, proc.exited);
+				const [exitCode, pipes] = await Promise.all([proc.exited, owned.output(proc)]);
+				const lifetime = await lifetimePromise;
+				const outputText = visibleOutput(pipes.stdout + pipes.stderr);
+				expect(proc.signalCode).toBeNull();
+				expect(exitCode, outputText).toBe(0);
+				expect(outputText).toContain("omp-262-plan-identity.test.ts");
+				expect(outputText).toContain("update.test.ts");
+				expect(Number(/^\s*(\d+) pass$/m.exec(outputText)?.[1] ?? "0")).toBeGreaterThan(0);
+				expect(/^\s*(\d+) fail$/m.exec(outputText)?.[1]).toBe("0");
+				expect(outputText).not.toMatch(/killed \d+ dangling process/);
+				expect(lifetime.sawRoot).toBe(true);
+				expect(lifetime.git).toBeGreaterThan(0);
+				expect(lifetime.python).toBeGreaterThan(0);
+				expect(lifetime.violations, lifetime.violations.join("\n")).toEqual([]);
+				const lingering = [...lifetime.seenPids].filter(pid => readProcStat(pid) !== undefined);
+				expect(lingering).toEqual([]);
+				expect(sessionRoots(scratch)).toEqual([]);
+			},
+			150_000,
 		);
 	});
 } else if (SCENARIO === "runner-stall") {

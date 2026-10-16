@@ -35,6 +35,7 @@
 
 ### Fixed
 
+- Session tests reap every child they start, and let a timed-out body finish reading its fixture, before removing that fixture ([#640](https://github.com/can1357/oh-my-pi/issues/640)).
 - `omp -p` reports a blocked prompt on stderr and exits 1.
 - Fixed a daemon request sent right after a broker shutdown failing with 'Daemon broker connection closed'.
 - Startup summary no longer stalls on huge entries.

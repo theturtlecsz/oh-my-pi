@@ -1,8 +1,9 @@
 # OMP-640 process lifecycle evidence
 
-Scope: OMP-640-s01 supplies explicit child/pipe ownership and regression proof.
-Existing tests, production code and preload remain unchanged. Applying the
-fixture to existing test files and five full gate runs belong to other tasks.
+Scope: OMP-640-s01 supplies explicit child/pipe ownership and a reduced
+regression. OMP-640-s02 applies that boundary to the two leaking files.
+OMP-640-s03 runs those files under the real session preload and records five
+gate runs. Production code and the preload stay unchanged.
 
 ## Environment and commands
 
@@ -206,3 +207,56 @@ Causal reduction: each leaking case now ends with its owned children exited
 and readers settled before fixture deletion on success, assertion failure and
 operation deadline; the only remaining "killed N" output is for deliberate
 test-deadline scenarios inside the nested lifecycle runner.
+
+## OMP-640-s03: real files under the session preload
+
+The scenarios above are a reduced proof. `process-lifecycle.test.ts` now also
+starts one bounded child, reaped by the same owned-child hook that then
+removes the scratch directory:
+
+```sh
+bun test --preload scripts/session-system-test-preload.ts --timeout 30000 \
+  session-system/tests/omp-262-plan-identity.test.ts \
+  session-system/tests/update.test.ts
+```
+
+The child inherits a fresh scratch directory as `TMPDIR`, `TMP`, and `TEMP`.
+The real preload (`scripts/session-system-test-preload.ts`) creates its
+private root under that directory. While the child runs, the parent samples
+descendant `git` and `python3` processes whose paths are inside the scratch.
+Every live sample still had those paths and the preload root. After the child
+exits 0, those PIDs are gone and the preload root is gone. The output names
+both files, reports `0 fail`, and does not contain `killed N dangling process`.
+
+### Five gate runs
+
+Observed 2026-10-16 on Linux 6.17.4-2-pve, Bun `1.4.2 (744846f84)`, in
+`/home/ompbot/flood-repos/oh-my-pi-wt/OMP-640-s03` at `943655632ee5` before
+this commit. Each run used an empty `HOME`, a `PATH` without `uv`, `uvx`, or
+`bwrap`, preserved `BUN_INSTALL_CACHE_DIR`, and this command from the worktree
+root:
+
+```sh
+bun test session-system/tests --parallel=1 --timeout=30000
+```
+
+| run | exit | result | time | dangling process line |
+| --- | --- | --- | --- | --- |
+| 1 | 0 | 1021 pass, 1 skip, 0 fail | 125.47s | absent |
+| 2 | 0 | 1021 pass, 1 skip, 0 fail | 138.83s | absent |
+| 3 | 0 | 1021 pass, 1 skip, 0 fail | 113.74s | absent |
+| 4 | 0 | 1021 pass, 1 skip, 0 fail | 110.91s | absent |
+| 5 | 0 | 1021 pass, 1 skip, 0 fail | 113.66s | absent |
+
+`omp-262-plan-identity.test.ts` passed 8 checks and `update.test.ts` passed
+21 on every run. `process-lifecycle.test.ts` passed 10, including the
+real-file case.
+
+The cause recorded in s01 is unchanged. A test deadline kills the synchronous
+git child before `spawnSync` returns, and fixture removal can start before
+that body reads `plan.md`. Later `spawnSync` calls in the same timed-out test
+create new git PIDs that Bun kills immediately, because the deadline is still
+active, so those calls return `SIGTERM` instead of status 0. The next
+independent git init/config still exits 0. These five runs show that reaping
+the repaired files' children before fixture removal keeps the suite free of
+that diagnostic.
