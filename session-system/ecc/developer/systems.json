@@ -1,0 +1,428 @@
+[
+	{
+		"id": "ecc-wp3-common-coding-style",
+		"pack": "engineering",
+		"upstream": {
+			"repository": "https://github.com/affaan-m/ECC.git",
+			"commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+			"path": "rules/common/coding-style.md",
+			"sha256": "3c069a2460702e1715e6b21408287401f1faa8d343045c98534d59fbd22a0e56"
+		},
+		"target": {
+			"path": ".omp/rules/ecc-wp3-common-coding-style.md",
+			"scope": "project"
+		},
+		"adaptation": {
+			"kind": "rule-metadata",
+			"transformVersion": 1
+		},
+		"activation": {
+			"state": "inactive",
+			"mode": "rulebook",
+			"description": "Language-agnostic coding style: immutability, simplicity, naming, and project-fit conventions."
+		},
+		"dependencies": [],
+		"disposition": "supported-with-adaptation",
+		"reason": "Retain language-agnostic engineering guidance as native rulebook content within existing approved scope.",
+		"qualification": {
+			"mechanicalTests": ["session-system/tests/ecc-wp3-systems.test.ts"],
+			"behavioralTrial": null,
+			"qualifiedRelease": null
+		},
+		"rollback": {
+			"removeOwnedArtifactOnly": true
+		}
+	},
+	{
+		"id": "ecc-wp3-common-patterns",
+		"pack": "engineering",
+		"upstream": {
+			"repository": "https://github.com/affaan-m/ECC.git",
+			"commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+			"path": "rules/common/patterns.md",
+			"sha256": "8a32c0552c8b309e961ef3f68a56ae84b0b1d411c17f23675ec26b685dea5e9a"
+		},
+		"target": {
+			"path": ".omp/rules/ecc-wp3-common-patterns.md",
+			"scope": "project"
+		},
+		"adaptation": {
+			"kind": "rule-metadata",
+			"transformVersion": 1,
+			"overlay": "developer/overlays/common-patterns.json"
+		},
+		"activation": {
+			"state": "inactive",
+			"mode": "rulebook",
+			"description": "Language-agnostic patterns: repository boundaries, response envelopes, and reuse of existing project structure."
+		},
+		"dependencies": [],
+		"disposition": "supported-with-adaptation",
+		"reason": "Retain language-agnostic engineering guidance as native rulebook content within existing approved scope.",
+		"qualification": {
+			"mechanicalTests": ["session-system/tests/ecc-wp3-systems.test.ts"],
+			"behavioralTrial": null,
+			"qualifiedRelease": null
+		},
+		"rollback": {
+			"removeOwnedArtifactOnly": true
+		}
+	},
+	{
+		"id": "ecc-wp3-common-testing",
+		"pack": "engineering",
+		"upstream": {
+			"repository": "https://github.com/affaan-m/ECC.git",
+			"commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+			"path": "rules/common/testing.md",
+			"sha256": "09314a247342c12698deb308c2d0ffcf80b58341274bb8f9bba63fa03ce33323"
+		},
+		"target": {
+			"path": ".omp/rules/ecc-wp3-common-testing.md",
+			"scope": "project"
+		},
+		"adaptation": {
+			"kind": "rule-metadata",
+			"transformVersion": 1,
+			"overlay": "developer/overlays/common-testing.json"
+		},
+		"activation": {
+			"state": "inactive",
+			"mode": "rulebook",
+			"description": "Language-agnostic testing guidance: task-selected checks, AAA structure, and failure diagnosis."
+		},
+		"dependencies": [],
+		"disposition": "supported-with-adaptation",
+		"reason": "Retain language-agnostic engineering guidance as native rulebook content within existing approved scope.",
+		"qualification": {
+			"mechanicalTests": ["session-system/tests/ecc-wp3-systems.test.ts"],
+			"behavioralTrial": null,
+			"qualifiedRelease": null
+		},
+		"rollback": {
+			"removeOwnedArtifactOnly": true
+		}
+	},
+	{
+		"id": "ecc-wp3-common-security",
+		"pack": "engineering",
+		"upstream": {
+			"repository": "https://github.com/affaan-m/ECC.git",
+			"commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+			"path": "rules/common/security.md",
+			"sha256": "58f0acc56331b8d554dd036b8a1d5b2305a908e3960ff1e2d7e55223d5918bc3"
+		},
+		"target": {
+			"path": ".omp/rules/ecc-wp3-common-security.md",
+			"scope": "project"
+		},
+		"adaptation": {
+			"kind": "rule-metadata",
+			"transformVersion": 1,
+			"overlay": "developer/overlays/common-security.json"
+		},
+		"activation": {
+			"state": "inactive",
+			"mode": "rulebook",
+			"description": "Language-agnostic security guidance: trust-boundary validation, secret management, and optional audit."
+		},
+		"dependencies": [],
+		"disposition": "supported-with-adaptation",
+		"reason": "Retain language-agnostic engineering guidance as native rulebook content within existing approved scope.",
+		"qualification": {
+			"mechanicalTests": ["session-system/tests/ecc-wp3-systems.test.ts"],
+			"behavioralTrial": null,
+			"qualifiedRelease": null
+		},
+		"rollback": {
+			"removeOwnedArtifactOnly": true
+		}
+	},
+	{
+		"id": "ecc-wp3-rust-coding-style",
+		"pack": "engineering",
+		"upstream": {
+			"repository": "https://github.com/affaan-m/ECC.git",
+			"commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+			"path": "rules/rust/coding-style.md",
+			"sha256": "01c056bef1bf3b7ca7cfc516986c1d05bcd341c620d2a09ce75acdc2ed539f5f"
+		},
+		"target": {
+			"path": ".omp/rules/ecc-wp3-rust-coding-style.md",
+			"scope": "project"
+		},
+		"adaptation": {
+			"kind": "rule-metadata",
+			"transformVersion": 1,
+			"overlay": "developer/overlays/rust-coding-style.json"
+		},
+		"activation": {
+			"state": "inactive",
+			"mode": "rulebook",
+			"description": "Rust coding style: ownership, borrowing, error handling, iterators, and module layout.",
+			"globs": ["**/*.rs"]
+		},
+		"dependencies": ["ecc-wp3-common-coding-style", "ecc-wp3-rust-patterns", "ecc-wp3-rust-security"],
+		"disposition": "supported-with-adaptation",
+		"reason": "Retain language and safety guidance as native rulebook content within existing approved scope.",
+		"qualification": {
+			"mechanicalTests": ["session-system/tests/ecc-wp3-systems.test.ts"],
+			"behavioralTrial": null,
+			"qualifiedRelease": null
+		},
+		"rollback": {
+			"removeOwnedArtifactOnly": true
+		}
+	},
+	{
+		"id": "ecc-wp3-rust-patterns",
+		"pack": "engineering",
+		"upstream": {
+			"repository": "https://github.com/affaan-m/ECC.git",
+			"commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+			"path": "rules/rust/patterns.md",
+			"sha256": "08a09f7cf61991f4bdb69e388a9df546ea490c5c822aebcdd066e227cb06e16b"
+		},
+		"target": {
+			"path": ".omp/rules/ecc-wp3-rust-patterns.md",
+			"scope": "project"
+		},
+		"adaptation": {
+			"kind": "rule-metadata",
+			"transformVersion": 1,
+			"overlay": "developer/overlays/rust-patterns.json"
+		},
+		"activation": {
+			"state": "inactive",
+			"mode": "rulebook",
+			"description": "Rust patterns: trait repositories, services, newtypes, enum state machines, builders, and sealed traits.",
+			"globs": ["**/*.rs"]
+		},
+		"dependencies": ["ecc-wp3-common-patterns", "ecc-wp3-rust-coding-style", "ecc-wp3-rust-security"],
+		"disposition": "supported-with-adaptation",
+		"reason": "Retain language and safety guidance as native rulebook content within existing approved scope.",
+		"qualification": {
+			"mechanicalTests": ["session-system/tests/ecc-wp3-systems.test.ts"],
+			"behavioralTrial": null,
+			"qualifiedRelease": null
+		},
+		"rollback": {
+			"removeOwnedArtifactOnly": true
+		}
+	},
+	{
+		"id": "ecc-wp3-rust-testing",
+		"pack": "engineering",
+		"upstream": {
+			"repository": "https://github.com/affaan-m/ECC.git",
+			"commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+			"path": "rules/rust/testing.md",
+			"sha256": "54987d858918a433aea954c272c519d7ccb113834013fb79cc77ef7e6d571c8e"
+		},
+		"target": {
+			"path": ".omp/rules/ecc-wp3-rust-testing.md",
+			"scope": "project"
+		},
+		"adaptation": {
+			"kind": "rule-metadata",
+			"transformVersion": 1,
+			"overlay": "developer/overlays/rust-testing.json"
+		},
+		"activation": {
+			"state": "inactive",
+			"mode": "rulebook",
+			"description": "Rust testing: unit, integration, parameterized, async, and mocking patterns with the project runner.",
+			"globs": ["**/*.rs"]
+		},
+		"dependencies": ["ecc-wp3-common-testing", "ecc-wp3-rust-patterns"],
+		"disposition": "supported-with-adaptation",
+		"reason": "Retain language and safety guidance as native rulebook content within existing approved scope.",
+		"qualification": {
+			"mechanicalTests": ["session-system/tests/ecc-wp3-systems.test.ts"],
+			"behavioralTrial": null,
+			"qualifiedRelease": null
+		},
+		"rollback": {
+			"removeOwnedArtifactOnly": true
+		}
+	},
+	{
+		"id": "ecc-wp3-rust-security",
+		"pack": "engineering",
+		"upstream": {
+			"repository": "https://github.com/affaan-m/ECC.git",
+			"commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+			"path": "rules/rust/security.md",
+			"sha256": "09c5225869c09fc605f8495ae2c3728093e3b652dcc0ab55a9186946f5c67995"
+		},
+		"target": {
+			"path": ".omp/rules/ecc-wp3-rust-security.md",
+			"scope": "project"
+		},
+		"adaptation": {
+			"kind": "rule-metadata",
+			"transformVersion": 1,
+			"overlay": "developer/overlays/rust-security.json"
+		},
+		"activation": {
+			"state": "inactive",
+			"mode": "rulebook",
+			"description": "Rust security: secret handling, SQL parameter binding, input parsing, unsafe invariants, and dependency review.",
+			"globs": ["**/*.rs"]
+		},
+		"dependencies": ["ecc-wp3-common-security", "ecc-wp3-rust-coding-style"],
+		"disposition": "supported-with-adaptation",
+		"reason": "Retain language and safety guidance as native rulebook content within existing approved scope.",
+		"qualification": {
+			"mechanicalTests": ["session-system/tests/ecc-wp3-systems.test.ts"],
+			"behavioralTrial": null,
+			"qualifiedRelease": null
+		},
+		"rollback": {
+			"removeOwnedArtifactOnly": true
+		}
+	},
+	{
+		"id": "ecc-wp3-typescript-coding-style",
+		"pack": "engineering",
+		"upstream": {
+			"repository": "https://github.com/affaan-m/ECC.git",
+			"commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+			"path": "rules/typescript/coding-style.md",
+			"sha256": "cb6fbe555d700a65d466fc27377fbb66d6da0e2bcf4411656918f6a45402af1a"
+		},
+		"target": {
+			"path": ".omp/rules/ecc-wp3-typescript-coding-style.md",
+			"scope": "project"
+		},
+		"adaptation": {
+			"kind": "rule-metadata",
+			"transformVersion": 1,
+			"overlay": "developer/overlays/typescript-coding-style.json"
+		},
+		"activation": {
+			"state": "inactive",
+			"mode": "rulebook",
+			"description": "TypeScript coding style: explicit types, immutability, validation, and project tooling.",
+			"globs": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"]
+		},
+		"dependencies": ["ecc-wp3-common-coding-style"],
+		"disposition": "supported-with-adaptation",
+		"reason": "Retain language and safety guidance as native rulebook content within existing approved scope.",
+		"qualification": {
+			"mechanicalTests": ["session-system/tests/ecc-wp3-systems.test.ts"],
+			"behavioralTrial": null,
+			"qualifiedRelease": null
+		},
+		"rollback": {
+			"removeOwnedArtifactOnly": true
+		}
+	},
+	{
+		"id": "ecc-wp3-typescript-patterns",
+		"pack": "engineering",
+		"upstream": {
+			"repository": "https://github.com/affaan-m/ECC.git",
+			"commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+			"path": "rules/typescript/patterns.md",
+			"sha256": "20870f78aa32429fe13f35b415e9f6f8f7809e39c460cf8146d181b7306159fd"
+		},
+		"target": {
+			"path": ".omp/rules/ecc-wp3-typescript-patterns.md",
+			"scope": "project"
+		},
+		"adaptation": {
+			"kind": "rule-metadata",
+			"transformVersion": 1
+		},
+		"activation": {
+			"state": "inactive",
+			"mode": "rulebook",
+			"description": "TypeScript patterns: response envelopes, repository interfaces, and debounce utilities.",
+			"globs": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"]
+		},
+		"dependencies": ["ecc-wp3-common-patterns"],
+		"disposition": "supported-with-adaptation",
+		"reason": "Retain language and safety guidance as native rulebook content within existing approved scope.",
+		"qualification": {
+			"mechanicalTests": ["session-system/tests/ecc-wp3-systems.test.ts"],
+			"behavioralTrial": null,
+			"qualifiedRelease": null
+		},
+		"rollback": {
+			"removeOwnedArtifactOnly": true
+		}
+	},
+	{
+		"id": "ecc-wp3-typescript-testing",
+		"pack": "engineering",
+		"upstream": {
+			"repository": "https://github.com/affaan-m/ECC.git",
+			"commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+			"path": "rules/typescript/testing.md",
+			"sha256": "92e3d02b4fff30899bc1a2af043d74941adbf3b2c0e972d2fcd2c68c9c2ea70b"
+		},
+		"target": {
+			"path": ".omp/rules/ecc-wp3-typescript-testing.md",
+			"scope": "project"
+		},
+		"adaptation": {
+			"kind": "rule-metadata",
+			"transformVersion": 1,
+			"overlay": "developer/overlays/typescript-testing.json"
+		},
+		"activation": {
+			"state": "inactive",
+			"mode": "rulebook",
+			"description": "TypeScript testing: optional Playwright E2E for critical flows and shared test structure.",
+			"globs": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"]
+		},
+		"dependencies": ["ecc-wp3-common-testing"],
+		"disposition": "supported-with-adaptation",
+		"reason": "Retain language and safety guidance as native rulebook content within existing approved scope.",
+		"qualification": {
+			"mechanicalTests": ["session-system/tests/ecc-wp3-systems.test.ts"],
+			"behavioralTrial": null,
+			"qualifiedRelease": null
+		},
+		"rollback": {
+			"removeOwnedArtifactOnly": true
+		}
+	},
+	{
+		"id": "ecc-wp3-typescript-security",
+		"pack": "engineering",
+		"upstream": {
+			"repository": "https://github.com/affaan-m/ECC.git",
+			"commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+			"path": "rules/typescript/security.md",
+			"sha256": "86b14a5a56f4e61750ab30ca50bd264f52f90f5358303f3028d41030a4c50f18"
+		},
+		"target": {
+			"path": ".omp/rules/ecc-wp3-typescript-security.md",
+			"scope": "project"
+		},
+		"adaptation": {
+			"kind": "rule-metadata",
+			"transformVersion": 1,
+			"overlay": "developer/overlays/typescript-security.json"
+		},
+		"activation": {
+			"state": "inactive",
+			"mode": "rulebook",
+			"description": "TypeScript security: secret validation and shared trust-boundary security checks.",
+			"globs": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"]
+		},
+		"dependencies": ["ecc-wp3-common-security"],
+		"disposition": "supported-with-adaptation",
+		"reason": "Retain language and safety guidance as native rulebook content within existing approved scope.",
+		"qualification": {
+			"mechanicalTests": ["session-system/tests/ecc-wp3-systems.test.ts"],
+			"behavioralTrial": null,
+			"qualifiedRelease": null
+		},
+		"rollback": {
+			"removeOwnedArtifactOnly": true
+		}
+	}
+]
