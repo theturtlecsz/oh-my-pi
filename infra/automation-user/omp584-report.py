@@ -23,22 +23,57 @@ def integer(value: object) -> bool:
     return type(value) is int
 
 
+def cap_evidence(event: dict) -> dict:
+    """One saturated start as evidence: its identity, attempt and observation time."""
+    return {"id": event["id"], "attempt": event["attempt"], "at": event["at"]}
+
+
 def cap_proof(starts: list[dict]) -> dict:
-    proof = {"proven": False, "kind": None, "value": None, "evidence": starts}
+    """Name the limiting cap and its value, and count the starts that saw it saturated.
+
+    Positive uniform slots with any start at occupied_slots >= slots win, naming the slot count.
+    Otherwise each nonblank provider whose max_parallel is uniform over the starts carrying it is
+    proven independently when any of those starts reports load >= max_parallel. The evidence lists
+    only the saturated starts (id, attempt, at). No saturated start leaves the proof false. A cap
+    whose value disagrees between starts names no single value and cannot prove.
+    """
+    proof = {"proven": False, "kind": None, "value": None,
+             "start_count": len(starts), "saturated_count": 0, "evidence": []}
     if not starts:
         return proof
-    slots = starts[0]["slots"]
-    if slots >= 1 and all(event["slots"] == slots and event["occupied_slots"] >= slots for event in starts):
-        proof.update(proven=True, kind="slots", value=slots)
-    else:
-        providers = starts[0]["providers"]
-        if providers and all(name.strip() for name in providers) and all(
-            event["providers"].keys() == providers.keys()
-            and all(limits["load"] >= limits["max_parallel"] for limits in event["providers"].values())
-            for event in starts
-        ):
-            proof.update(proven=True, kind="providers",
-                         value={name: limits["max_parallel"] for name, limits in providers.items()})
+    slots = {event["slots"] for event in starts}
+    if len(slots) == 1 and (value := next(iter(slots))) >= 1:
+        saturated = [event for event in starts if event["occupied_slots"] >= value]
+        if saturated:
+            proof.update(proven=True, kind="slots", value=value,
+                         saturated_count=len(saturated),
+                         evidence=[cap_evidence(event) for event in saturated])
+            return proof
+    limits: dict[str, set] = {}
+    carried: dict[str, int] = {}
+    saturated_by: dict[str, list[dict]] = {}
+    for event in starts:
+        for name, observed in event["providers"].items():
+            if not name.strip():
+                continue
+            limits.setdefault(name, set()).add(observed["max_parallel"])
+            carried[name] = carried.get(name, 0) + 1
+            if observed["load"] >= observed["max_parallel"]:
+                saturated_by.setdefault(name, []).append(event)
+    value: dict[str, int] = {}
+    start_count: dict[str, int] = {}
+    saturated_count: dict[str, int] = {}
+    evidence: dict[str, list[dict]] = {}
+    for name, rows in saturated_by.items():
+        if len(limits[name]) != 1:
+            continue
+        value[name] = next(iter(limits[name]))
+        start_count[name] = carried[name]
+        saturated_count[name] = len(rows)
+        evidence[name] = [cap_evidence(event) for event in rows]
+    if value:
+        proof.update(proven=True, kind="providers", value=value,
+                     start_count=start_count, saturated_count=saturated_count, evidence=evidence)
     return proof
 
 
@@ -244,7 +279,8 @@ def report(flood_dir: Path, rollout_path: Path) -> tuple[dict, int]:
                                         "code_sha256": event["code_sha256"],
                                     })
                                     cap_events.append({"id": task_id, "attempt": event.get("attempt"),
-                                        "slots": event["slots"], "occupied_slots": event["occupied_slots"],
+                                        "at": event["at"], "slots": event["slots"],
+                                        "occupied_slots": event["occupied_slots"],
                                         "providers": event["providers"]})
                                 except Exception:
                                     has_malformed_start = True
