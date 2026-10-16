@@ -13,6 +13,9 @@ import {
 	type GhPrRunner,
 } from "../extensions/workflow/git";
 
+// SIGKILL so a child that ignores SIGTERM cannot keep spawnSync blocked.
+const SPAWN_TIMEOUT_MS = 10_000;
+
 const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "ss-git-reliability-"));
 afterAll(() => fs.rm(tempRoot, { recursive: true, force: true }));
 
@@ -48,7 +51,7 @@ describe("execution freeze preserves deletion and credential-scan contracts", ()
 		expect(result.paths).toEqual(["seed.txt"]);
 		expect(git(root, "diff-tree", "--name-status", "--no-commit-id", "-r", result.commitSha)).toBe("D\tseed.txt");
 		expect(git(root, "status", "--porcelain")).toBe("");
-	});
+	}, 20_000);
 
 	test("deleting a tracked path does not bypass scanning another file's added secret", async () => {
 		const root = await makeRepo();
@@ -61,7 +64,7 @@ describe("execution freeze preserves deletion and credential-scan contracts", ()
 		});
 		expect("refused" in result && result.reason).toContain("secret detected");
 		expect(git(root, "rev-parse", "HEAD")).toBe(baseline);
-	});
+	}, 20_000);
 
 	test("a binary replacement is still refused before it can become a candidate", async () => {
 		const root = await makeRepo();
@@ -74,7 +77,7 @@ describe("execution freeze preserves deletion and credential-scan contracts", ()
 		expect("refused" in result && result.reason).toContain("binary file");
 		expect(git(root, "rev-parse", "HEAD")).toBe(baseline);
 		expect(git(root, "diff", "--cached", "--name-only")).toBe("");
-	});
+	}, 20_000);
 
 	test("a dangling replacement symlink is unreadable, not a tracked deletion", async () => {
 		const root = await makeRepo();
@@ -87,7 +90,7 @@ describe("execution freeze preserves deletion and credential-scan contracts", ()
 		});
 		expect("refused" in result && result.reason).toContain("unreadable file for credential scan");
 		expect(git(root, "rev-parse", "HEAD")).toBe(baseline);
-	});
+	}, 20_000);
 });
 
 describe("workflow operation guards follow real Git operation lifetimes", () => {
@@ -115,7 +118,7 @@ describe("workflow operation guards follow real Git operation lifetimes", () => 
 				expect(runGit(root, ["rev-parse", "--verify", "REBASE_HEAD"]).ok).toBe(true);
 			}
 			expect(inProgressGitOp(root)).toBe(false);
-		});
+		}, 20_000);
 	}
 
 	for (const operation of ["merge", "cherry-pick", "revert"] as const) {
@@ -135,7 +138,7 @@ describe("workflow operation guards follow real Git operation lifetimes", () => 
 			expect(git(root, "rev-parse", "HEAD")).toBe(before);
 			expect(git(root, "status", "--porcelain")).toBe("");
 			expect(inProgressGitOp(root)).toBe(false);
-		});
+		}, 20_000);
 	}
 });
 
@@ -195,6 +198,8 @@ process.stdout.write(JSON.stringify(mergePullRequest(${JSON.stringify(fixture.ro
 	const result = Bun.spawnSync([process.execPath, "-e", script], {
 		cwd: fixture.root,
 		env: { ...process.env, PATH: `${fixture.shimDir}${path.delimiter}${process.env.PATH ?? ""}` },
+		timeout: SPAWN_TIMEOUT_MS,
+		killSignal: "SIGKILL",
 	});
 	if (result.exitCode !== 0) throw new Error(result.stderr.toString());
 	return JSON.parse(result.stdout.toString());
@@ -208,7 +213,7 @@ describe("delivery binds the merge mutation to the audited head", () => {
 		const confirmation = verifyMergeConfirmation(fixture.root, fixture.candidate, fixture.branch, "refs/heads/main", fixture.query);
 		expect(confirmation.confirmed).toBe(true);
 		expect(runGit(fixture.remote, ["merge-base", "--is-ancestor", fixture.candidate, "main"]).ok).toBe(true);
-	});
+	}, 20_000);
 
 	test("a branch update after precheck is rejected before unaudited bytes land on main", async () => {
 		const fixture = await makeMergeFixture();
@@ -225,7 +230,7 @@ describe("delivery binds the merge mutation to the audited head", () => {
 		expect(merged.detail).toContain("no longer matches expected commit");
 		expect(git(fixture.remote, "rev-parse", "main")).toBe(fixture.baseline);
 		expect(runGit(fixture.remote, ["merge-base", "--is-ancestor", unaudited, "main"]).ok).toBe(false);
-	});
+	}, 20_000);
 
 	test("a short head identifier refuses delivery before invoking the merge command", async () => {
 		const fixture = await makeMergeFixture();
@@ -233,5 +238,5 @@ describe("delivery binds the merge mutation to the audited head", () => {
 		expect(merged.ok).toBe(false);
 		expect(merged.detail).toContain("full commit SHA");
 		expect(git(fixture.remote, "rev-parse", "main")).toBe(fixture.baseline);
-	});
+	}, 20_000);
 });

@@ -5,6 +5,9 @@ import * as path from "node:path";
 import { WORK_CONTRACT_SHA256 } from "@oh-my-pi/pi-work-client";
 import { afterAll, expect, test } from "bun:test";
 
+// SIGKILL so a child that ignores SIGTERM cannot keep spawnSync blocked.
+const SPAWN_TIMEOUT_MS = 10_000;
+
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ss-mission-intake-"));
 const harness = path.join(import.meta.dir, "fixtures/mission-intake-harness.ts");
 
@@ -57,6 +60,8 @@ function run(): Record<string, unknown> {
 			OMP_WORK_BEARER: "test-token",
 			PI_CODING_AGENT_DIR: path.join(home, ".omp", "agent"),
 		},
+		timeout: SPAWN_TIMEOUT_MS,
+		killSignal: "SIGKILL",
 	});
 	expect(child.exitCode, child.stderr.toString()).toBe(0);
 	return JSON.parse(child.stdout.toString()) as Record<string, unknown>;
@@ -111,4 +116,4 @@ test("draft_mission posts the saved blueprint once and renders each route", () =
 	expect(retry[0]?.body.payload.mission_id).toBe(retry[1]?.body.payload.mission_id);
 	expect(retry[0]?.body.request_id).not.toBe(first?.body.request_id);
 	expect(out.retrySecond).toBe("proceeding");
-});
+}, 20_000);

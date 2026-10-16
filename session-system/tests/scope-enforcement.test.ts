@@ -9,6 +9,8 @@ interface HarnessOutput {
 	explicitText: string;
 }
 
+const SPAWN_TIMEOUT_MS = 10_000;
+
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ss-scope-"));
 const home = path.join(tempRoot, "home");
 const probe = path.join(tempRoot, "repo");
@@ -35,7 +37,7 @@ fs.writeFileSync(
 		setAt: Date.now(),
 	}),
 );
-Bun.spawnSync(["git", "init", "-q"], { cwd: probe });
+Bun.spawnSync(["git", "init", "-q"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
 
@@ -46,6 +48,8 @@ describe("unscoped repo write enforcement", () => {
 			// Pin XDG_CONFIG_HOME to the temp HOME: hosted CI images export it globally,
 			// and ompWorkConfigDir() prefers it over $HOME/.config (OMP-254).
 			env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), OMP_WORK_BEARER: "test-token", PI_CODING_AGENT_DIR: path.join(home, ".omp", "agent") },
+			timeout: SPAWN_TIMEOUT_MS,
+			killSignal: "SIGKILL",
 		});
 		expect(child.exitCode, child.stderr.toString()).toBe(0);
 		const output = JSON.parse(child.stdout.toString()) as HarnessOutput;
@@ -55,5 +59,5 @@ describe("unscoped repo write enforcement", () => {
 		expect(output.explicitText).toContain("CONFIRM REQUIRED");
 		expect(output.explicitText).toContain("project Chosen Project");
 		expect(output.explicitText).not.toContain("refused: unscoped git repo");
-	});
+	}, 20_000);
 });

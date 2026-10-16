@@ -17,6 +17,9 @@ import { createWorkflowHost } from "../../extensions/workflow/host";
 import { WORK_CONTRACT_SHA256 } from "@oh-my-pi/pi-work-client";
 import { grantRemoteRef } from "./grant-remote-ref";
 
+// SIGKILL so a child that ignores SIGTERM cannot keep spawnSync blocked.
+const SPAWN_TIMEOUT_MS = 10_000;
+
 const scenario = process.argv[3] as "single" | "dirty" | "foreign-lane" | "queue" | "contract-pause" | "start-only" | "recovery" | "recovery-new-session" | "tamper-a" | "tamper-b" | "tamper-c" | "tamper-d" | "blocked" | "freeze-probes" | "judge-freeze" | "judge-resume" | "already-delivered" | "already-unmet" | "zero-path-queue" | "stale-attempt" | "zero-change-remediation";
 const ownerProbe = process.argv[2];
 let probe = ownerProbe;
@@ -319,7 +322,7 @@ if (scenario === "dirty") {
 	out.normalWriteIsolated =
 		fs.existsSync(path.join(probe, "normal-tool-write.txt")) &&
 		!fs.existsSync(path.join(ownerProbe, "normal-tool-write.txt"));
-	out.executionBranch = Bun.spawnSync(["git", "branch", "--show-current"], { cwd: probe }).stdout.toString().trim();
+	out.executionBranch = Bun.spawnSync(["git", "branch", "--show-current"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" }).stdout.toString().trim();
 	out.modelTurnCount = modelTurnCount;
 	out.stop = await execute({ action: "stop_execution", work: workKeyArg || "OMP-1", body: "smoke isolation preservation" });
 	out.uiCalls = uiCalls;
@@ -488,8 +491,8 @@ if (scenario === "dirty") {
 
 	// Clean worktree before starting
 	fs.rmSync(path.join(probe, "src"), { recursive: true, force: true });
-	Bun.spawnSync(["git", "clean", "-fdx"], { cwd: probe });
-	Bun.spawnSync(["git", "reset", "--hard", "HEAD"], { cwd: probe });
+	Bun.spawnSync(["git", "clean", "-fdx"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "reset", "--hard", "HEAD"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 
 	// Copy real contract directory to probe so manifest and hashing match real contracts
 	fs.writeFileSync(path.join(probe, ".gitignore"), "__pycache__/\n*.pyc\n");
@@ -502,8 +505,8 @@ if (scenario === "dirty") {
 	fs.mkdirSync(path.join(probe, "packages/work-client/src"), { recursive: true });
 	fs.writeFileSync(path.join(probe, "packages/work-client/src/contract.ts"), "export const WORK_CONTRACT_SHA256 = \"baseline\";\n");
 	// Commit the baseline contract directory, gitignore, and client so preflight and initial stamp are clean
-	Bun.spawnSync(["git", "add", ".gitignore", "python", "packages"], { cwd: probe });
-	Bun.spawnSync(["git", "commit", "-m", "add contract dir and client"], { cwd: probe });
+	Bun.spawnSync(["git", "add", ".gitignore", "python", "packages"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "commit", "-m", "add contract dir and client"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 
 	await executeCmd.handler(workKeyArg || "OMP-1", cmdCtx);
 
@@ -549,6 +552,8 @@ if (scenario === "dirty") {
 		{
 			cwd: probe,
 			env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1", PYTHONPATH: path.join(probe, "python/omp-work/src") },
+			timeout: SPAWN_TIMEOUT_MS,
+			killSignal: "SIGKILL",
 		},
 	);
 	function cleanPycache(dir: string): void {
@@ -737,13 +742,13 @@ if (scenario === "dirty") {
 	// the baseline commit and completes autonomously.
 	await fakeSessionManager.moveTo(ownerProbe);
 	for (const args of [["fetch", "-q", "origin"], ["reset", "-q", "--hard", "origin/main"], ["clean", "-qfd", "--", "src/"]]) {
-		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe });
+		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
 	}
 	fs.mkdirSync(path.join(probe, "src"), { recursive: true });
 	fs.writeFileSync(path.join(probe, "src/already_delivered.ts"), "export const delivered = true;\n");
 	for (const args of [["add", "--", "src/already_delivered.ts"], ["commit", "-q", "-m", "deliver ahead of grant"], ["push", "-q", "origin", "main"]]) {
-		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe });
+		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
 	}
 	const executeCmd = extension.commands.get("execute");
@@ -763,13 +768,13 @@ if (scenario === "dirty") {
 } else if (scenario === "zero-change-remediation") {
 	await fakeSessionManager.moveTo(ownerProbe);
 	for (const args of [["fetch", "-q", "origin"], ["reset", "-q", "--hard", "origin/main"], ["clean", "-qfd", "--", "src/"]]) {
-		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe });
+		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
 	}
 	fs.mkdirSync(path.join(probe, "src"), { recursive: true });
 	fs.writeFileSync(path.join(probe, "src/zero_change.ts"), "export const val = 1;\n");
 	for (const args of [["add", "--", "src/zero_change.ts"], ["commit", "-q", "-m", "init zero change"], ["push", "-q", "origin", "main"]]) {
-		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe });
+		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
 	}
 	const executeCmd = extension.commands.get("execute");
@@ -796,7 +801,7 @@ if (scenario === "dirty") {
 	subprocessCount = 0; // next subprocess returns NEEDS_FIX
 	const review1 = await reviewUntilSettled("turn 1 audit review");
 	out.review1 = review1;
-	const commitBeforeRestamp = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
+	const commitBeforeRestamp = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" }).stdout.toString().trim();
 
 	// Turn 2: Re-stamp plan without file changes from remediating phase
 	const restampRes = await execute({ action: "stamp_execution_plan", plan_file: planFile, paths: ["src/zero_change.ts"] });
@@ -804,7 +809,7 @@ if (scenario === "dirty") {
 	subprocessCount = 1; // next subprocess returns PASS
 	const review2 = await reviewUntilSettled("turn 2 review after re-stamp");
 	out.review2 = review2;
-	const commitAfterReview = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
+	const commitAfterReview = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" }).stdout.toString().trim();
 	out.commitUnchanged = commitBeforeRestamp === commitAfterReview;
 
 	out.finalExecution = JSON.parse(await execute({ action: "get_execution" }));
@@ -813,7 +818,7 @@ if (scenario === "dirty") {
 } else if (scenario === "zero-path-queue") {
 	await fakeSessionManager.moveTo(ownerProbe);
 	for (const args of [["fetch", "-q", "origin"], ["reset", "-q", "--hard", "origin/main"], ["clean", "-qfd", "--", "src/"]]) {
-		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe });
+		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
 	}
 	const executeCmd = extension.commands.get("execute");
@@ -835,13 +840,13 @@ if (scenario === "dirty") {
 	// the audit gate is the arbiter, never bypassed.
 	await fakeSessionManager.moveTo(ownerProbe);
 	for (const args of [["fetch", "-q", "origin"], ["reset", "-q", "--hard", "origin/main"], ["clean", "-qfd", "--", "src/"]]) {
-		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe });
+		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
 	}
 	fs.mkdirSync(path.join(probe, "src"), { recursive: true });
 	fs.writeFileSync(path.join(probe, "src/incomplete_feature.ts"), "export const incomplete = true;\n");
 	for (const args of [["add", "--", "src/incomplete_feature.ts"], ["commit", "-q", "-m", "commit incomplete feature"], ["push", "-q", "origin", "main"]]) {
-		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe });
+		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
 	}
 	const executeCmd = extension.commands.get("execute");
@@ -864,7 +869,7 @@ if (scenario === "dirty") {
 	// review path supersedes it in-grant and completes autonomously.
 	await fakeSessionManager.moveTo(ownerProbe);
 	for (const args of [["fetch", "-q", "origin"], ["reset", "-q", "--hard", "origin/main"], ["clean", "-qfd", "--", "src/"]]) {
-		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe });
+		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
 	}
 	const executeCmd = extension.commands.get("execute");
@@ -920,7 +925,7 @@ if (scenario === "dirty") {
 	await executeCmd.handler(workKeyArg || "OMP-1", cmdCtx);
 	const bRef = grantRemoteRef(await execute({ action: "get_execution" }));
 	for (const args of [["fetch", "-q", "origin", aRef], ["push", "-q", "--force", "origin", `FETCH_HEAD:${bRef}`]]) {
-		const gitRun = Bun.spawnSync(["git", ...args], { cwd: ownerProbe });
+		const gitRun = Bun.spawnSync(["git", ...args], { cwd: ownerProbe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
 	}
 	planDiskPath = path.join(path.dirname(probe), "execute-plan.md");
@@ -939,7 +944,7 @@ if (scenario === "dirty") {
 	// never force-overwrites unknown history.
 	await fakeSessionManager.moveTo(ownerProbe);
 	for (const args of [["fetch", "-q", "origin"], ["reset", "-q", "--hard", "origin/main"], ["clean", "-qfd", "--", "src/"]]) {
-		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe });
+		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
 	}
 	// No stop_execution preclean: prior scenarios leave no active grant, so any
@@ -953,7 +958,7 @@ if (scenario === "dirty") {
 	const laneRef = grantRemoteRef(await execute({ action: "get_execution" }));
 	fs.writeFileSync(path.join(ownerProbe, "foreign.txt"), "foreign\n");
 	for (const args of [["add", "--", "foreign.txt"], ["commit", "-q", "-m", "foreign lane wedge"], ["push", "-q", "--force", "origin", `HEAD:${laneRef}`], ["reset", "-q", "--hard", "origin/main"]]) {
-		const gitRun = Bun.spawnSync(["git", ...args], { cwd: ownerProbe });
+		const gitRun = Bun.spawnSync(["git", ...args], { cwd: ownerProbe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
 	}
 	await execute({ action: "seal_execution_criteria", criteria: ["AC-1 deliver smoke feature"] });
@@ -973,7 +978,7 @@ if (scenario === "dirty") {
 		confirm: async () => true,
 		notify: (msg: string) => uiCalls.push(`freeze-notify:${msg}`),
 	};
-	const preHead = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
+	const preHead = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" }).stdout.toString().trim();
 
 	// 1. Unsealed pre-session / dirty files present in working tree
 	fs.mkdirSync(path.join(probe, "src"), { recursive: true });
@@ -982,7 +987,7 @@ if (scenario === "dirty") {
 		mode: "execution",
 		sealedPaths: ["src/sealed.txt"],
 	});
-	const headAfter1 = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
+	const headAfter1 = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" }).stdout.toString().trim();
 	fs.rmSync(path.join(probe, "src/unsealed.txt"), { force: true });
 
 	// 2. Oversized sealed file (>= 50MB)
@@ -994,7 +999,7 @@ if (scenario === "dirty") {
 		mode: "execution",
 		sealedPaths: ["src/big.bin"],
 	});
-	const headAfter2 = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
+	const headAfter2 = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" }).stdout.toString().trim();
 	fs.rmSync(path.join(probe, "src/big.bin"), { force: true });
 
 	// 3. Possible secret in staged diff
@@ -1003,7 +1008,7 @@ if (scenario === "dirty") {
 		mode: "execution",
 		sealedPaths: ["src/secret.txt"],
 	});
-	const headAfter3 = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
+	const headAfter3 = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" }).stdout.toString().trim();
 	fs.rmSync(path.join(probe, "src/secret.txt"), { force: true });
 
 	out.res1 = res1;
@@ -1016,7 +1021,7 @@ const shutdownWorkspace = probe;
 out.auditRepositoryChecks = auditRepositoryChecks;
 out.uiCalls ??= uiCalls;
 if (fs.existsSync(shutdownWorkspace)) {
-	out.executionBranch ??= Bun.spawnSync(["git", "branch", "--show-current"], { cwd: shutdownWorkspace }).stdout.toString().trim();
+	out.executionBranch ??= Bun.spawnSync(["git", "branch", "--show-current"], { cwd: shutdownWorkspace, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" }).stdout.toString().trim();
 }
 await runner.emit({ type: "session_shutdown" } as never);
 out.workspacePath = shutdownWorkspace;

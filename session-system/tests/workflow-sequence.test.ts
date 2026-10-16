@@ -6,6 +6,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 
+const SPAWN_TIMEOUT_MS = 10_000;
+
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ss-workflow-"));
 const harness = path.join(import.meta.dir, "fixtures/workflow-sequence-harness.ts");
 
@@ -27,20 +29,22 @@ function run(mode: "intake" | "plan" | "plan-now-change" | "summary" | "summary-
 		}),
 	);
 	const remote = path.join(root, "remote.git");
-	Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
-	Bun.spawnSync(["git", "init", "-q", "-b", "main"], { cwd: probe });
-	Bun.spawnSync(["git", "config", "user.email", "test@example.com"], { cwd: probe });
-	Bun.spawnSync(["git", "config", "user.name", "Test"], { cwd: probe });
+	Bun.spawnSync(["git", "init", "--bare", "-q", remote], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "init", "-q", "-b", "main"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "config", "user.email", "test@example.com"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "config", "user.name", "Test"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 	fs.writeFileSync(path.join(probe, "init.txt"), "init\n");
-	Bun.spawnSync(["git", "add", "init.txt"], { cwd: probe });
-	Bun.spawnSync(["git", "commit", "-q", "-m", "init"], { cwd: probe });
-	Bun.spawnSync(["git", "remote", "add", "origin", remote], { cwd: probe });
-	Bun.spawnSync(["git", "push", "-q", "-u", "origin", "main"], { cwd: probe });
+	Bun.spawnSync(["git", "add", "init.txt"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "commit", "-q", "-m", "init"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "remote", "add", "origin", remote], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "push", "-q", "-u", "origin", "main"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 	const child = Bun.spawnSync([process.execPath, harness, probe, mode], {
 		cwd: probe,
 		// Pin XDG_CONFIG_HOME to the temp HOME: hosted CI images export it globally,
 		// and ompWorkConfigDir() prefers it over $HOME/.config (OMP-254).
 		env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), OMP_WORK_BEARER: "test-token", PI_CODING_AGENT_DIR: path.join(home, ".omp", "agent") },
+		timeout: SPAWN_TIMEOUT_MS,
+		killSignal: "SIGKILL",
 	});
 	expect(child.exitCode, child.stderr.toString()).toBe(0);
 	return JSON.parse(child.stdout.toString()) as Record<string, unknown>;
@@ -87,7 +91,7 @@ describe("HOME-122 workflow sequence", () => {
 		expect(record(out.writes)).toMatchObject({ created: 7, addNow: 2, removeNow: 0, closed: 0 });
 		expect(out.nowSelected).toBe(true);
 		expect(out.stop, "intake selection must not masquerade as execution").toBeNull();
-	});
+	}, 20_000);
 
 	test("plan approval is fail-closed, deterministic, idempotent, and arms one handoff", () => {
 		const out = run("plan");
@@ -128,7 +132,7 @@ describe("HOME-122 workflow sequence", () => {
 		expect(out.handoff).toContain("handoff receipt recorded on HOME-1");
 		expect(out.statusAfterHandoff).not.toContain("⚠");
 		expect(out.stopAfterHandoff).toBeNull();
-	});
+	}, 20_000);
 
 	test("plan approval follows changed NOW", () => {
 		const out = run("plan-now-change");
@@ -142,7 +146,7 @@ describe("HOME-122 workflow sequence", () => {
 			reason: "Run /intake first, or choose an issue with /now.",
 		});
 		expect(list(out.planReceiptTargetsAfterClear), "no stamp lands after /now clear").toEqual(["id-2"]);
-	});
+	}, 20_000);
 
 	test("summary requires a current plan and literal owner invocation", () => {
 		const out = run("summary");
@@ -158,7 +162,7 @@ describe("HOME-122 workflow sequence", () => {
 		// literal /summary begins exactly one fresh ledger attempt per candidate.
 		expect(record(out.lifecycleAfterStart)).toEqual({ transcriptChanged: true });
 		expect(record(out.ownerSwitchLifecycle)).toEqual({ transcriptChanged: true });
-	});
+	}, 20_000);
 
 	test("subagent summary provenance cannot authorize the review", () => {
 		const out = run("summary-subagent");
@@ -170,7 +174,7 @@ describe("HOME-122 workflow sequence", () => {
 		// any switch) must leave the owner's shared transcript ref untouched.
 		expect(record(out.lifecycleAfterStart)).toEqual({ transcriptChanged: false });
 		expect(record(out.lifecycleAfterSwitch)).toEqual({ transcriptChanged: false });
-	});
+	}, 20_000);
 
 	test("refused close-attempt begin keeps review writes locked until a later /summary applies one", () => {
 		const out = run("summary-begin-refused");
@@ -185,7 +189,7 @@ describe("HOME-122 workflow sequence", () => {
 		// verification seals the audit manifest.
 		expect(out.beginCallsAfterSecond, "second /summary issued a second begin").toBe(2);
 		expect(out.secondVerify).toContain("audit manifest sealed");
-	});
+	}, 20_000);
 
 	test("a summary refusal survives a fresh session and clears after a successful retry (OMP-137)", () => {
 		const out = run("summary-refusal-durable");
@@ -197,7 +201,7 @@ describe("HOME-122 workflow sequence", () => {
 		// Successful retry resolves it: the next fresh session carries no refusal notice.
 		expect(out.beginCallsAfterRetry, "retry /summary issued a second begin").toBe(2);
 		expect(String(out.noticeAfterRetry)).not.toContain("was refused and is still unresolved");
-	});
+	}, 20_000);
 
 	test("an invalid staged rider batch refusal survives a fresh session and clears after a successful retry (OMP-149)", () => {
 		const out = run("summary-rider-refusal-durable");
@@ -210,7 +214,7 @@ describe("HOME-122 workflow sequence", () => {
 		// Removing the invalid batch permits a clean begin and resolves the refusal.
 		expect(out.beginCallsAfterRetry, "retry /summary issued its first begin").toBe(1);
 		expect(String(out.noticeAfterRetry)).not.toContain("was refused and is still unresolved");
-	});
+	}, 20_000);
 
 	test("the closeout continuation fires only from a live audited attempt (OMP-134)", () => {
 		const out = run("stop-continuation-states");
@@ -227,7 +231,7 @@ describe("HOME-122 workflow sequence", () => {
 		expect(String(fired.additionalContext)).toContain('kind:"closeout"');
 		expect(String(fired.additionalContext)).toContain("auditor_launch_settled");
 		expect(out.stopAfterFired).toBeNull();
-	});
+	}, 20_000);
 
 	test("the atomic same-session filing refuses authority fields pre-preview and lands one command (OMP-139)", () => {
 		const out = run("atomic-child");
@@ -257,7 +261,7 @@ describe("HOME-122 workflow sequence", () => {
 		expect(payload.owner_session_id).toBe("session-test");
 		expect(payload.finding).toBe("bug found in-session");
 		expect(payload.verification).toBe("fix proven in-session");
-	});
+	}, 20_000);
 
 	test("get_work and write previews retain complete descriptions", () => {
 		const out = run("descriptions");
@@ -276,12 +280,12 @@ describe("HOME-122 workflow sequence", () => {
 		const revision = record(revised.revision);
 		expect(revision.scope).toBe("Structured Scope");
 		expect(revision.acceptance_criteria).toEqual(["AC-1", "AC-2"]);
-	});
+	}, 20_000);
 
 	test("fresh sessions restore the backend focus without a local cache", () => {
 		const out = run("restore");
 		expect(out.now).toContain("HOME-1 First");
-	});
+	}, 20_000);
 
 	test("closed work never becomes or stays NOW (owner ruling 2026-08-25)", () => {
 		const out = run("now-canceled");
@@ -292,7 +296,7 @@ describe("HOME-122 workflow sequence", () => {
 		// The literal keyed /now command hits the shared setNow guard.
 		expect(String(out.nowCommandNotices)).toContain("can't be NOW");
 		expect(out.addNowWrites).toBe(0);
-	});
+	}, 20_000);
 
 	test("done refuses early, then closes reviewed NOW once and reaches commit step", () => {
 		const out = run("done");
@@ -314,7 +318,7 @@ describe("HOME-122 workflow sequence", () => {
 		expect(String(out.doneAuthorization), "the literal /done mints a fresh single-use authorization").toStartWith("done:");
 		expect(out.now).toBe("NOW unset");
 		expect(record(out.afterSecondDone)).toMatchObject({ closed: 1, removeNow: 1 });
-	});
+	}, 20_000);
 
 	test("done with staged cancel batch cancels target atomically and consumes batch file", () => {
 		const out = run("done-cancel");
@@ -326,7 +330,7 @@ describe("HOME-122 workflow sequence", () => {
 		expect(out.batchFileExists).toBe(false);
 		expect(list(out.consumedFiles).length).toBe(1);
 		expect(record(out.doneWrites)).toMatchObject({ closed: 1, canceled: 0 });
-	});
+	}, 20_000);
 
 	test("done declined leaves staged cancel batch file on disk with zero writes", () => {
 		const out = run("done-cancel-decline");
@@ -334,7 +338,7 @@ describe("HOME-122 workflow sequence", () => {
 		expect(out.batchFileExists).toBe(true);
 		expect(list(out.consumedFiles).length).toBe(0);
 		expect(record(out.doneWrites)).toMatchObject({ closed: 0, canceled: 0 });
-	});
+	}, 20_000);
 
 	test("a literal /skill:summary recovers from a refused freeze and re-authorizes", () => {
 		const out = run("summary-reauth");
@@ -346,7 +350,7 @@ describe("HOME-122 workflow sequence", () => {
 		// The /summary alias also re-authorizes; the service supersedes to keep
 		// exactly one live attempt.
 		expect(out.beginAfterRaw, "raw /summary re-authorizes").toBe(2);
-	});
+	}, 20_000);
 
 	test("summary pushes the frozen candidate before beginning and retries a recoverable failure", () => {
 		const out = run("summary-push-fail");
@@ -357,7 +361,7 @@ describe("HOME-122 workflow sequence", () => {
 		expect(out.beginAfterPushRetry, "the frozen candidate retries without another freeze").toBe(1);
 		expect(out.pushReceiptsAfterRetry).toBe(1);
 		expect(out.remoteCommit).toBe(out.candidateCommit);
-	});
+	}, 20_000);
 
 	test("summary refuses when finalized candidate commit diverges from git HEAD", () => {
 		const out = run("summary-stale-final");
@@ -383,11 +387,11 @@ describe("HOME-122 workflow sequence", () => {
 		expect(out.pushReceiptsAfterUnrelated, "unrelated candidate mints no push receipt").toBe(out.pushReceiptsBeforeDrift);
 		expect(out.headAfterUnrelated, "unrelated summary mutates no HEAD commit").toBe(out.commitOrphan);
 		expect(out.dirtyAfterUnrelated, "unrelated summary mutates no working tree").toBe("");
-	});
+	}, 20_000);
 	test("summary persists service-selected final candidate identity on reuse", () => {
 		const out = run("summary-final-reuse");
 		expect(out.carrierCandidateId).toBe("reused-final-candidate");
-	});
+	}, 20_000);
 	test("summary-sealed-snapshot finalizes approved merge SHA when HEAD advanced without rewinding remote", () => {
 		const out = run("summary-sealed-snapshot");
 		const approvedMerge = String(out.approvedMerge);
@@ -410,7 +414,7 @@ describe("HOME-122 workflow sequence", () => {
 		const confirms = list(out.confirms);
 		expect(confirms.some(c => c.includes(`Use approved snapshot ${approvedMerge.slice(0, 12)} as the candidate for HOME-1?`))).toBe(true);
 		expect(confirms.some(c => c.includes("feature.txt") && !c.includes("unrelated.txt"))).toBe(true);
-	});
+	}, 20_000);
 
 
 	test("the ledger-sealed audit task drives one exact-byte bounded launch (OMP-168)", () => {
@@ -438,7 +442,7 @@ describe("HOME-122 workflow sequence", () => {
 		expect(out.auditVerdict).toBe("PASS");
 		expect(out.attestCalls).toBeGreaterThanOrEqual(1);
 		expect(out.attestStatus).toBe("delivered");
-	});
+	}, 20_000);
 
 	test("footer splits the inline current issue from the lower summary", () => {
 		const out = run("footer");
@@ -456,7 +460,7 @@ describe("HOME-122 workflow sequence", () => {
 		expect(lower?.placement).toBe("footer");
 		expect(lower?.text).not.toContain("HOME-1");
 		expect(lower?.text).not.toContain("First");
-	});
+	}, 20_000);
 
 	test("center delivers a deterministic five-part readout directly without model turns or tool mutation", () => {
 		const out = run("center");
@@ -501,7 +505,7 @@ describe("HOME-122 workflow sequence", () => {
 		const withHandoff = record(out.deliveredWithHandoff);
 		const readout4 = String(record(withHandoff.details).readout);
 		expect(readout4).toContain("- `/summary` — ready for review");
-	});
+	}, 20_000);
 
 	test("center scopes queue, waiting, and activity by the .work-project marker", () => {
 		const out = run("center-scoped");
@@ -516,7 +520,7 @@ describe("HOME-122 workflow sequence", () => {
 		expect(readout).toContain("# FOCUS\nThe Bookends · HOME-1 First");
 		expect(readout).not.toContain("HOME-99"); // Elsewhere item is filtered out
 		expect(readout).toContain("# MOVED (9)");
-	});
+	}, 20_000);
 
 	test("center refuses a stale .work-project marker instead of widening scope", () => {
 		const out = run("center-stale");
@@ -525,7 +529,7 @@ describe("HOME-122 workflow sequence", () => {
 		expect(out.deliveredCount).toBe(0);
 		expect(out.prompts).toBe(0);
 		expect(list(out.tools)).toEqual(["read", "bash", "work"]);
-	});
+	}, 20_000);
 
 	test("triage questions enforce explicit single-line questions and validate stored description", () => {
 		const out = run("triage-questions");
@@ -542,7 +546,7 @@ describe("HOME-122 workflow sequence", () => {
 		expect(String(out.queuedDescription)).toContain("## Owner question\nUpdated decision question?");
 
 		expect(String(out.waitingOutput)).toContain("HOME-1 — Updated decision question?");
-	});
+	}, 20_000);
 
 	test("renderCenterReadout escapes hostile markdown in ledger fields and preserves exact five headings", () => {
 		const hostileSnapshot: CenterSnapshot = {
@@ -588,7 +592,7 @@ describe("HOME-122 workflow sequence", () => {
 		expect((String(out.closeoutRequestedGetWork).match(/NEXT REQUIRED ACTION:/g) || []).length).toBe(1);
 		expect(String(out.closeoutRequestedGetWork)).toContain("NEXT REQUIRED ACTION: owner /done closes this work");
 		expect(String(out.closeoutRequestedGetWork)).toContain("BLOCKED ACTIONS: run_audit, append_evidence");
-	});
+	}, 20_000);
 
 	test("audited attempt survives restart, resumes cleanly without audit duplication, and enables fresh-session /done (OMP-140)", () => {
 		const out = run("omp140-restart-flow");
@@ -613,13 +617,13 @@ describe("HOME-122 workflow sequence", () => {
 
 		// Fresh-session /done completes the work item directly
 		expect(out.doneState).toBe("DONE");
-	});
+	}, 20_000);
 
 	test("pending checkpoint delivery blocks /done and renders honest bookend guidance (OMP-140)", () => {
 		const out = run("omp140-failed-checkpoint");
 		const extras = list(out.extrasWithPending);
 		expect(extras.some(l => l.includes("CHECKPOINT DELIVERY PENDING (1): /done remains blocked until delivered or owner-waived."))).toBe(true);
-	});
+	}, 20_000);
 
 	test("terminal guidance persists across checkpoint deliveries and refusals (OMP-140)", () => {
 		const out = run("omp140-terminal-guidance");
@@ -657,7 +661,7 @@ describe("HOME-122 workflow sequence", () => {
 				l.includes("CLOSE ATTEMPT: budget_exhausted (auditor_budget_exhausted) — code changed since the reviewed snapshot — enter /plan, then /summary"),
 			),
 		).toBe(true);
-	});
+	}, 20_000);
 });
 
 describe("OMP-154 ledger reads and closeout recovery", () => {
@@ -681,13 +685,13 @@ describe("OMP-154 ledger reads and closeout recovery", () => {
 		expect(detail).toContain("STATUS: CLOSE ATTEMPT audit_ready");
 		expect(detail).toContain('NEXT REQUIRED ACTION: work action:"run_audit", work:"HOME-1"');
 		expect(detail).not.toContain("----- SEALED AUDITOR TASK BEGIN -----");
-	});
+	}, 20_000);
 
 	test("allows bounded ledger reads from a subagent while refusing writes", () => {
 		const out = run("ledger-reads-subagent");
 		expect(out.listing).toBe("HOME-1 | IN_PROGRESS | First");
 		expect(out.writeRefusal).toContain("owner-session");
-	});
+	}, 20_000);
 
 	test("queues an undelivered checkpoint before recording closeout and recovers on retry", () => {
 		const out = run("closeout-pending-recovery");
@@ -703,7 +707,7 @@ describe("OMP-154 ledger reads and closeout recovery", () => {
 		expect(out.attemptState).toBe("closeout_requested");
 		expect(out.newCheckpointDelivered).toBe(true);
 		expect(out.totalCloseoutReceipts).toBe(1);
-	});
+	}, 20_000);
 });
 
 describe("OMP-38 plan packet", () => {

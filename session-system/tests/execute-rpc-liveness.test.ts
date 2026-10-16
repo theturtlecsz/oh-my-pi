@@ -27,6 +27,9 @@ import {
 import * as gitModule from "../extensions/workflow/git";
 import { createWorkflowHost } from "../extensions/workflow/host";
 
+// SIGKILL so a child that ignores SIGTERM cannot keep spawnSync blocked.
+const SPAWN_TIMEOUT_MS = 10_000;
+
 interface BeginExecutionInput {
 	grantId: string;
 	remoteRef: string;
@@ -77,7 +80,7 @@ describe("execute RPC dispatcher liveness during stalled install (OMP-472)", () 
 	});
 
 	function git(cwd: string, ...args: string[]): string {
-		const res = Bun.spawnSync(["git", ...args], { cwd });
+		const res = Bun.spawnSync(["git", ...args], { cwd, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		if (res.exitCode !== 0) {
 			throw new Error(`git ${args.join(" ")} failed in ${cwd}: ${res.stderr.toString()}`);
 		}
@@ -412,5 +415,5 @@ describe("execute RPC dispatcher liveness during stalled install (OMP-472)", () 
 		expect(outboxEntry).toBeUndefined();
 
 		await dispatcher.drain();
-	});
+	}, 20_000);
 });

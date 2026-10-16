@@ -9,6 +9,9 @@ import { executionRemoteRef, pushCandidate, validateExecutionPath } from "../ext
 import { computeAuditTcb } from "../extensions/workflow/audit-tcb";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent";
 
+// SIGKILL so a child that ignores SIGTERM cannot keep spawnSync blocked.
+const SPAWN_TIMEOUT_MS = 10_000;
+
 if (process.env.OMP_WORK_POSTGRES_INTEGRATION !== "1") {
 	console.log("execute-cycle-smoke: skipped (set OMP_WORK_POSTGRES_INTEGRATION=1)");
 	process.exit(0);
@@ -51,7 +54,7 @@ let service: { kill(): void } | undefined;
 
 const cleanup = () => {
 	service?.kill();
-	Bun.spawnSync(["pg_ctl", "-D", pgData, "-m", "immediate", "stop"], { stdout: "ignore", stderr: "ignore" });
+	Bun.spawnSync(["pg_ctl", "-D", pgData, "-m", "immediate", "stop"], { stdout: "ignore", stderr: "ignore", timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 	fs.rmSync(root, { recursive: true, force: true });
 };
 
@@ -60,6 +63,8 @@ try {
 		const run = Bun.spawnSync(["uv", "run", "python", "-m", "omp_work", ...args], {
 			cwd: pythonDir,
 			env: { ...process.env, XDG_CONFIG_HOME: xdg, XDG_STATE_HOME: xdg, XDG_DATA_HOME: xdg, OMP_WORK_POSTGRES_PORT: String(pgPort) },
+			timeout: SPAWN_TIMEOUT_MS,
+			killSignal: "SIGKILL",
 		});
 		if (run.exitCode !== 0) throw new Error(`omp_work ${args.join(" ")} failed: ${run.stderr.toString()}`);
 		return run.stdout.toString();
@@ -70,17 +75,17 @@ try {
 	const pwfile = path.join(root, "pgpw");
 	fs.writeFileSync(pwfile, `${pgSecret}\n`, { mode: 0o600 });
 	try {
-		const initdb = Bun.spawnSync(["initdb", "-D", pgData, "-U", "postgres", "--pwfile", pwfile, "--auth-host=scram-sha-256", "--auth-local=trust"], { stderr: "pipe" });
+		const initdb = Bun.spawnSync(["initdb", "-D", pgData, "-U", "postgres", "--pwfile", pwfile, "--auth-host=scram-sha-256", "--auth-local=trust"], { stderr: "pipe", timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		if (initdb.exitCode !== 0) throw new Error(`initdb failed: ${initdb.stderr.toString()}`);
 	} finally {
 		fs.rmSync(pwfile, { force: true });
 	}
 
-	const run = Bun.spawnSync(["pg_ctl", "-D", pgData, "-w", "-l", path.join(root, "pg.log"), "-o", `-p ${pgPort} -k ${root} -c listen_addresses=127.0.0.1`, "start"], { stderr: "pipe" });
+	const run = Bun.spawnSync(["pg_ctl", "-D", pgData, "-w", "-l", path.join(root, "pg.log"), "-o", `-p ${pgPort} -k ${root} -c listen_addresses=127.0.0.1`, "start"], { stderr: "pipe", timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 	if (run.exitCode !== 0) throw new Error(`pg_ctl start failed: ${run.stderr.toString()}`);
 
 	for (let attempt = 0; attempt < 30; attempt++) {
-		if (Bun.spawnSync(["pg_isready", "-h", "127.0.0.1", "-p", String(pgPort)]).exitCode === 0) break;
+		if (Bun.spawnSync(["pg_isready", "-h", "127.0.0.1", "-p", String(pgPort)], { timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" }).exitCode === 0) break;
 		if (attempt === 29) throw new Error("postgres never became ready");
 		await Bun.sleep(500);
 	}
@@ -88,6 +93,8 @@ try {
 	const psqlAdmin = (sql: string, db = "postgres") => {
 		const res = Bun.spawnSync(["psql", "-h", "127.0.0.1", "-p", String(pgPort), "-U", "postgres", "-d", db, "-v", "ON_ERROR_STOP=1", "-c", sql], {
 			env: { ...process.env, PGPASSWORD: pgSecret },
+			timeout: SPAWN_TIMEOUT_MS,
+			killSignal: "SIGKILL",
 		});
 		if (res.exitCode !== 0) throw new Error(`psql admin failed: ${res.stderr.toString()}`);
 	};
@@ -108,6 +115,8 @@ try {
 		const res = Bun.spawnSync(["psql", "-h", "127.0.0.1", "-p", String(pgPort), "-U", "omp_work_migrator", "-d", "omp_work", "-v", "ON_ERROR_STOP=1"], {
 			env: { ...process.env, PGPASSWORD: migratorSecret },
 			stdin: Buffer.from(sqlContent),
+			timeout: SPAWN_TIMEOUT_MS,
+			killSignal: "SIGKILL",
 		});
 		if (res.exitCode !== 0) throw new Error(`migration ${f} failed: ${res.stderr.toString()}`);
 		psqlAdmin(`INSERT INTO omp_control.schema_migrations(ordinal, filename, sha256, contract_version, contract_sha256, postgres_major) VALUES (${ordinal}, '${f}', '${sha}', 'work.omp.dev/v1', '${WORK_CONTRACT_SHA256}', 18) ON CONFLICT (ordinal) DO NOTHING;`, "omp_work");
@@ -118,6 +127,8 @@ try {
 	const psql = (sql: string) => {
 		const res = Bun.spawnSync(["psql", "-h", "127.0.0.1", "-p", String(pgPort), "-U", "postgres", "-d", "omp_work", "-v", "ON_ERROR_STOP=1", "-c", sql], {
 			env: { ...process.env, PGPASSWORD: pgSecret },
+			timeout: SPAWN_TIMEOUT_MS,
+			killSignal: "SIGKILL",
 		});
 		if (res.exitCode !== 0) throw new Error(`psql failed: ${res.stderr.toString()}`);
 	};
@@ -129,7 +140,7 @@ try {
 	const probe = path.join(root, "repo");
 	fs.mkdirSync(probe, { recursive: true });
 	const git = (cwd: string, args: string[]) => {
-		const r = Bun.spawnSync(["git", ...args], { cwd });
+		const r = Bun.spawnSync(["git", ...args], { cwd, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		if (r.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr.toString()}`);
 		return r.stdout.toString().trim();
 	};
@@ -240,7 +251,8 @@ try {
 		ghShim,
 		`#!/usr/bin/env bun
 const args = process.argv.slice(2);
-const run = (gitArgs, options = {}) => Bun.spawnSync(["git", ...gitArgs], { cwd: process.cwd(), ...options });
+const SPAWN_TIMEOUT_MS = 10_000;
+const run = (gitArgs, options = {}) => Bun.spawnSync(["git", ...gitArgs], { cwd: process.cwd(), ...options, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 const text = result => result.stdout.toString().trim();
 const remoteSha = ref => text(run(["ls-remote", "origin", ref])).split(/\\s+/)[0] || "";
 if (args[0] === "api") {
@@ -278,6 +290,8 @@ if (args[0] === "api") {
 		const child = Bun.spawnSync([process.execPath, ...args], {
 			cwd: probe,
 			env: { ...process.env, HOME: home, XDG_CONFIG_HOME: xdg, PI_CODING_AGENT_DIR: path.join(home, ".omp", "agent"), PATH: `${smokeBin}:${process.env.PATH ?? ""}`, ...extraEnv },
+			timeout: SPAWN_TIMEOUT_MS,
+			killSignal: "SIGKILL",
 		});
 		if (child.exitCode !== 0) throw new Error(`harness scenario "${scenario}" failed:\n${child.stderr.toString()}`);
 		if (child.stderr.length > 0) console.error("HARNESS STDERR:", child.stderr.toString());
@@ -312,10 +326,10 @@ if (args[0] === "api") {
 	assert.equal(dirtyOut.workspaceExistsAfterShutdown, true, "stopped grant preserves recoverable workspace");
 	const dirtyWorktreeCleanup = Bun.spawnSync(
 		["git", "worktree", "remove", "--force", String(dirtyOut.workspacePath)],
-		{ cwd: probe },
+		{ cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" },
 	);
 	assert.equal(dirtyWorktreeCleanup.exitCode, 0, `dirty smoke worktree cleanup failed: ${dirtyWorktreeCleanup.stderr.toString()}`);
-	Bun.spawnSync(["git", "branch", "-D", String(dirtyOut.executionBranch)], { cwd: probe });
+	Bun.spawnSync(["git", "branch", "-D", String(dirtyOut.executionBranch)], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 
 	// Test Scenario 2: Full Single-Item Autonomous Execution Cycle via Host /execute
 	const singleOut = runHarness("single", item1.key);
@@ -326,6 +340,8 @@ if (args[0] === "api") {
 	// The grant and auditor manifest retain the canonical absolute primary repository.
 	const execAttemptRepoRes = Bun.spawnSync(["psql", "-h", "127.0.0.1", "-p", String(pgPort), "-U", "postgres", "-d", "omp_work", "-t", "-A", "-c", "SELECT repository FROM omp_work.close_attempts WHERE authorization_kind='execution'"], {
 		env: { ...process.env, PGPASSWORD: pgSecret },
+		timeout: SPAWN_TIMEOUT_MS,
+		killSignal: "SIGKILL",
 	});
 	const execAttemptRepos = execAttemptRepoRes.stdout.toString().trim().split("\n").filter(Boolean);
 	assert.ok(execAttemptRepos.length >= 1, "execution close attempts recorded");
@@ -1241,12 +1257,12 @@ if (args[0] === "api") {
 		fs.rmSync(path.join(probe, "python"), { recursive: true, force: true });
 		fs.rmSync(path.join(path.dirname(probe), ".smoke-session-branch.json"), { force: true });
 		fs.rmSync(path.join(path.dirname(probe), ".smoke-session-branch-fresh.json"), { force: true });
-		Bun.spawnSync(["git", "clean", "-fdx"], { cwd: probe });
-		Bun.spawnSync(["git", "checkout", "main"], { cwd: probe });
-		Bun.spawnSync(["git", "reset", "--hard", headCommit], { cwd: probe });
-		Bun.spawnSync(["git", "push", "--force", "origin", "HEAD:refs/heads/main"], { cwd: probe });
+		Bun.spawnSync(["git", "clean", "-fdx"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+		Bun.spawnSync(["git", "checkout", "main"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+		Bun.spawnSync(["git", "reset", "--hard", headCommit], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+		Bun.spawnSync(["git", "push", "--force", "origin", "HEAD:refs/heads/main"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		if (branchName) {
-			Bun.spawnSync(["git", "checkout", "-B", branchName], { cwd: probe });
+			Bun.spawnSync(["git", "checkout", "-B", branchName], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		}
 		const itemRes = await (await fetch(`${baseUrl}/v1/commands`, {
 			method: "POST",
@@ -1281,10 +1297,10 @@ if (args[0] === "api") {
 	};
 	// Test Scenario 7a: Post-PASS Queue Dirt Stops Grant with execution_worktree_not_clean
 	fs.rmSync(path.join(probe, "python"), { recursive: true, force: true });
-	Bun.spawnSync(["git", "clean", "-fdx"], { cwd: probe });
-	Bun.spawnSync(["git", "checkout", "main"], { cwd: probe });
-	Bun.spawnSync(["git", "reset", "--hard", headCommit], { cwd: probe });
-	Bun.spawnSync(["git", "push", "--force", "origin", "HEAD:refs/heads/main"], { cwd: probe });
+	Bun.spawnSync(["git", "clean", "-fdx"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "checkout", "main"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "reset", "--hard", headCommit], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "push", "--force", "origin", "HEAD:refs/heads/main"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 	const queueDirtBatch = await (await fetch(`${baseUrl}/v1/commands`, {
 		method: "POST",
 		headers,
@@ -1333,10 +1349,10 @@ if (args[0] === "api") {
 	assert.equal(queueDirtOut.finalExecution?.items[1]?.activated_at, null, "next item never activated");
 	const queueDirtCleanup = Bun.spawnSync(
 		["git", "worktree", "remove", "--force", String(queueDirtOut.workspacePath)],
-		{ cwd: probe },
+		{ cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" },
 	);
 	assert.equal(queueDirtCleanup.exitCode, 0, `queue-dirt worktree cleanup failed: ${queueDirtCleanup.stderr.toString()}`);
-	Bun.spawnSync(["git", "branch", "-D", String(queueDirtOut.executionBranch)], { cwd: probe });
+	Bun.spawnSync(["git", "branch", "-D", String(queueDirtOut.executionBranch)], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 	// 1. Happy Path Recovery
 	const happy = await createAndStartDisposableGrant("happy");
 	const happyOut1 = runHarness("recovery", happy.item.key);
@@ -1460,12 +1476,12 @@ if (args[0] === "api") {
 	await cancelGrant(recoveryDirt.exec?.grant?.grant_id, recoveryDirt.exec?.grant?.grant_version, recoveryDirt.exec?.grant?.judge_sha256);
 	const headCase = await createAndStartDisposableGrant("head");
 	fs.writeFileSync(path.join(probe, "drift-head.txt"), "head drift\n");
-	Bun.spawnSync(["git", "add", "drift-head.txt"], { cwd: probe });
-	Bun.spawnSync(["git", "commit", "-m", "drift head"], { cwd: probe });
+	Bun.spawnSync(["git", "add", "drift-head.txt"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "commit", "-m", "drift head"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 	const recoveryHead = runHarness("recovery", headCase.item.key);
 	assert.equal((recoveryHead.sentMessages as unknown[])?.length, 0, "owner HEAD recovery does not reinject the persisted message");
 	assert.equal((recoveryHead.simulatedControllerTurns as unknown[])?.length, 1, "owner HEAD drift stays outside execution recovery");
-	Bun.spawnSync(["git", "reset", "--hard", headCommit], { cwd: probe });
+	Bun.spawnSync(["git", "reset", "--hard", headCommit], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 	await cancelGrant(recoveryHead.exec?.grant?.grant_id, recoveryHead.exec?.grant?.grant_version, recoveryHead.exec?.grant?.judge_sha256);
 
 	// 4. Drift Probe: Changed revision sends zero turns
@@ -2024,7 +2040,7 @@ if (args[0] === "api") {
 	const pushOutcome = pushCandidate(probe, headCommit, headCommit, nonMainRef);
 	assert.equal(pushOutcome.status === "pushed" || pushOutcome.status === "remote_commit", true, "pushCandidate succeeds on non-main branch");
 	assert.equal(pushOutcome.remoteRef, nonMainRef, "pushCandidate targeted canonical execution ref");
-	const lsRemote = Bun.spawnSync(["git", "ls-remote", "origin", nonMainRef], { cwd: probe });
+	const lsRemote = Bun.spawnSync(["git", "ls-remote", "origin", nonMainRef], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 	assert.ok(lsRemote.stdout.toString().includes(headCommit), "remote origin holds commit at canonical execution ref");
 
 	const makeEvidenceNonMain = (pushReceiptId: string, remoteRef: string | null = nonMainRef, pushPayloadSha = "0".repeat(64)) => ({
@@ -2172,8 +2188,8 @@ if (args[0] === "api") {
 	const nonMainFinal = (await (await fetch(`${baseUrl}/v1/work-items/${nonMainCase.item.key}/workflow`, { headers })).json()) as { item: { state: string } };
 	assert.equal(nonMainFinal.item.state, "DONE", "non-main item is DONE");
 
-	Bun.spawnSync(["git", "checkout", "main"], { cwd: probe });
-	Bun.spawnSync(["git", "branch", "-D", "release/omp-180-smoke"], { cwd: probe });
+	Bun.spawnSync(["git", "checkout", "main"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "branch", "-D", "release/omp-180-smoke"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 
 	// Test Scenario 9: Fail-Closed Execution Freeze Failure Probes (AC-6)
 	const freezeOut = runHarness("freeze-probes", item1.key);
@@ -2188,10 +2204,10 @@ if (args[0] === "api") {
 	// Test Scenario 10: BLOCKED Audit Verdict Autonomous Remediation (OMP-184)
 	fs.rmSync(path.join(probe, "python"), { recursive: true, force: true });
 	fs.rmSync(path.join(path.dirname(probe), ".smoke-session-branch.json"), { force: true });
-	Bun.spawnSync(["git", "clean", "-fdx"], { cwd: probe });
-	Bun.spawnSync(["git", "checkout", "main"], { cwd: probe });
-	Bun.spawnSync(["git", "fetch", "origin"], { cwd: probe });
-	Bun.spawnSync(["git", "reset", "--hard", "origin/main"], { cwd: probe });
+	Bun.spawnSync(["git", "clean", "-fdx"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "checkout", "main"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "fetch", "origin"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "reset", "--hard", "origin/main"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 	const blockedItemRes = await (await fetch(`${baseUrl}/v1/commands`, {
 		method: "POST",
 		headers,
@@ -2426,10 +2442,10 @@ if (args[0] === "api") {
 	fs.rmSync(path.join(probe, "session-system"), { recursive: true, force: true });
 	fs.rmSync(path.join(probe, "packages"), { recursive: true, force: true });
 	fs.rmSync(path.join(path.dirname(probe), ".smoke-session-branch.json"), { force: true });
-	Bun.spawnSync(["git", "clean", "-fdx"], { cwd: probe });
-	Bun.spawnSync(["git", "checkout", "main"], { cwd: probe });
-	Bun.spawnSync(["git", "fetch", "origin"], { cwd: probe });
-	Bun.spawnSync(["git", "reset", "--hard", "origin/main"], { cwd: probe });
+	Bun.spawnSync(["git", "clean", "-fdx"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "checkout", "main"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "fetch", "origin"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "reset", "--hard", "origin/main"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 
 	const judgeItemRes = await (await fetch(`${baseUrl}/v1/commands`, {
 		method: "POST",
@@ -2484,9 +2500,9 @@ if (args[0] === "api") {
 	assert.equal(fs.existsSync(path.join(probe, "session-system/agents/auditor.md")), false, "owner checkout excludes candidate auditor.md");
 	assert.equal(fs.existsSync(path.join(probe, "packages/coding-agent/src/task/executor.ts")), false, "owner checkout excludes candidate executor.ts");
 	fs.rmSync(path.join(path.dirname(probe), ".smoke-session-branch.json"), { force: true });
-	Bun.spawnSync(["git", "clean", "-fdx"], { cwd: probe });
-	Bun.spawnSync(["git", "checkout", "main"], { cwd: probe });
-	Bun.spawnSync(["git", "reset", "--hard", headCommit], { cwd: probe });
+	Bun.spawnSync(["git", "clean", "-fdx"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "checkout", "main"], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+	Bun.spawnSync(["git", "reset", "--hard", headCommit], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 	const budgetCase = await createAndStartDisposableGrant("budget-rollover");
 	const budgetGrantId = budgetCase.startOut.exec?.grant?.grant_id;
 	let budgetGrantVer = budgetCase.startOut.exec?.grant?.grant_version;
@@ -2559,8 +2575,8 @@ if (args[0] === "api") {
 		lastAttemptStamp = stampRes;
 
 		fs.writeFileSync(path.join(probe, "src/budget.ts"), `export const budget = ${attemptNum};\n`);
-		Bun.spawnSync(["git", "add", "."], { cwd: probe });
-		Bun.spawnSync(["git", "commit", "-m", `budget attempt ${attemptNum}`], { cwd: probe });
+		Bun.spawnSync(["git", "add", "."], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
+		Bun.spawnSync(["git", "commit", "-m", `budget attempt ${attemptNum}`], { cwd: probe, timeout: SPAWN_TIMEOUT_MS, killSignal: "SIGKILL" });
 		const attemptCommit = git(probe, ["rev-parse", "HEAD"]);
 
 		const attemptCandId = crypto.randomUUID();
