@@ -69,6 +69,7 @@
 ### Removed
 
 - ECC database advisor is no longer installed; retirement preserves project customizations (OMP-612).
+- Session-system tests no longer share the fixed `<os.tmpdir()>/omp-local` root, so a hostile or leftover mode-000 root can no longer fail them: a root `bun test` preload gives each run its own private temp root, and CI reproduces the unwritable-root case for the session-system suite.
 
 ## [18.4.6] - 2026-10-01
 
