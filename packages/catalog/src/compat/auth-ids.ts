@@ -15,6 +15,7 @@ export type AuthProviderId =
 	| "bedrock-mantle"
 	| "cerebras"
 	| "charm-hyper"
+	| "claude-cli"
 	| "cline-pass"
 	| "cloudflare-ai-gateway"
 	| "commandcode"

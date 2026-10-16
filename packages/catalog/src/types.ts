@@ -50,6 +50,7 @@ export const RUNNER_APIS = [
 	"local-inference",
 	"web-search",
 	"typesafe",
+	"claude-cli",
 	"openrouter-decisions",
 	"openai-images",
 	"openrouter-images",

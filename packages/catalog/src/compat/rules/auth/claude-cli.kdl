@@ -1,0 +1,4 @@
+auth "claude-cli" {
+	name "Claude CLI"
+	allows-missing-api-key #true
+}

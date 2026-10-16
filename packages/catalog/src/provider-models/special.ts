@@ -410,6 +410,15 @@ export function webModelManagerOptions(): ModelManagerOptions<"web-search"> {
 	};
 }
 
+/** The bundled Claude CLI roster; the local `claude` binary is the only transport. */
+export function claudeCliModelManagerOptions(): ModelManagerOptions<"claude-cli"> {
+	return {
+		providerId: "claude-cli",
+		cacheProviderId: resolveModelCacheProviderId("claude-cli"),
+		staticModels: seedModels<"claude-cli">("claude-cli"),
+	};
+}
+
 /** Credentials and endpoint overrides for the TypeSafe catalog manager. */
 export interface TypeSafeModelManagerConfig {
 	apiKey?: string;
