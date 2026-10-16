@@ -408,6 +408,8 @@ def _run_research_compare_command(args: argparse.Namespace) -> int:
 
 
 def _run_research_command(args: argparse.Namespace) -> int:
+    if getattr(args, "research_command", None) == "mechanisms":
+        return _run_research_mechanisms_command(args)
     if getattr(args, "research_command", None) == "compare":
         return _run_research_compare_command(args)
 
@@ -484,6 +486,33 @@ def _run_research_command(args: argparse.Namespace) -> int:
         client.close()
     print(json.dumps(result))
     return 0
+
+
+def _run_research_mechanisms_command(args: argparse.Namespace) -> int:
+    if _research_db_flags_partial(args):
+        print("research: --config-dir, --state-dir, --data-dir, and --db-port "
+              "must all be set or all be omitted", file=sys.stderr)
+        return 2
+    from .research_mechanisms import run_study
+
+    try:
+        ops = _research_db_config(args)
+        client, actor_id = _research_client(Path(args.client_config or _default_client_config()))
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        print(f"research: {error}", file=sys.stderr)
+        return 2
+    try:
+        with TemporaryDirectory() as temporary:
+            report = run_study(client, ops, actor_id, args.key, args.repo_root, Path(temporary))
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(report, indent=2, default=str) + "\n", encoding="utf-8")
+        print(json.dumps({"output": str(args.output), "outcome": report["report"]["outcome"]}))
+        return 0 if report["report"]["ok"] else 1
+    except Exception as error:  # noqa: BLE001 - failure or refusal exits nonzero
+        print(f"research: {error}", file=sys.stderr)
+        return 1
+    finally:
+        client.close()
 
 
 def _run_qualification_count() -> int:
@@ -710,6 +739,16 @@ def main(argv: list[str] | None = None) -> int | None:
     compare_parser.add_argument("--state-dir", type=Path)
     compare_parser.add_argument("--data-dir", type=Path)
     compare_parser.add_argument("--db-port", type=int)
+
+    mechanisms = research_sub.add_parser("mechanisms", help="Opt-in frozen mechanism study; requires caller authority")
+    mechanisms.add_argument("--key", required=True)
+    mechanisms.add_argument("--repo-root", required=True, type=Path)
+    mechanisms.add_argument("--output", required=True, type=Path, metavar="JSON")
+    mechanisms.add_argument("--client-config", type=Path)
+    mechanisms.add_argument("--config-dir", type=Path)
+    mechanisms.add_argument("--state-dir", type=Path)
+    mechanisms.add_argument("--data-dir", type=Path)
+    mechanisms.add_argument("--db-port", type=int)
 
     qualification = subcommands.add_parser(
         "qualification",
