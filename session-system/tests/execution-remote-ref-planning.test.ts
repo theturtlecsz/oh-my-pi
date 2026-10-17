@@ -29,6 +29,15 @@ const CHILD_TEST_TIMEOUT_MS = 25_000;
 const PARENT_KILL_MS = 20_000;
 const PARENT_CASE_MS = 28_000;
 const READY_WAIT_MS = 8_000;
+// The delayed probe fails on purpose. Its own child deadline sits far below the
+// parent's bound, so the child (not the parent kill) ends the case and its
+// timed-out body resumes to touch the fixture — the continuation the parent
+// must outlive before it may remove that fixture.
+const DELAYED_CASE = "delayed-fixture-touch";
+const DELAYED_CHILD_TIMEOUT_MS = 1_500;
+// Generous headroom over the child deadline so parallel gate load cannot make
+// the parent kill the child before its own deadline resumes the continuation.
+const DELAYED_PARENT_KILL_MS = 12_000;
 
 const GRANT_ID = "00000000-0000-7000-8000-000000000237";
 const ANCHOR_KEY = "OMP-237";
@@ -53,6 +62,29 @@ async function stall(dir: string, phase: string): Promise<never> {
 	console.log(`stall:${phase}`);
 	await Bun.sleep(60_000);
 	throw new Error("stall did not end");
+}
+
+/**
+ * Fails on purpose (DELAYED_CASE). A bounded synchronous wait outlasts the case
+ * deadline, so Bun kills that dangling child, marks the case timed out, and the
+ * timed-out body resumes to touch `plan.md`. The parent must surface the timeout
+ * and this child's own stderr, reap the process and settle its pipes, and only
+ * then remove the fixture whose late touch proves the continuation ran.
+ */
+async function delayedFixtureTouch(directory: string): Promise<void> {
+	const planPath = path.join(directory, "plan.md");
+	await fs.promises.mkdir(path.join(directory, "src"), { recursive: true });
+	await fs.promises.writeFile(
+		planPath,
+		"## Approach\n1. Write the change\n\n## Verification\n1. Run the focused test\n",
+	);
+	await fs.promises.writeFile(path.join(directory, "ready"), DELAYED_CASE);
+	console.error("delayed:fixture-deferred");
+	Bun.spawnSync([process.execPath, "-e", "Bun.sleepSync(3_000)"], { timeout: DELAYED_CHILD_TIMEOUT_MS * 2 });
+	// Synchronous so the resumed continuation lands the touch before any process
+	// exit can race it: an async write loses to Bun tearing the runner down.
+	fs.appendFileSync(planPath, "late-touch\n");
+	console.error("delayed:plan-touched");
 }
 
 function installDiscoverAgentsMock(): void {
@@ -425,17 +457,22 @@ const caseName = process.env[CASE_ENV];
 if (caseName !== undefined) {
 	// Child mode: exactly one case, no cleanup hooks. The parent owns the fixture
 	// root and every child handle, and removes fixtures after reaping this process.
+	const delayed = caseName === DELAYED_CASE;
 	test(
 		`case ${caseName}`,
 		async () => {
 			const directory = process.env[ROOT_ENV];
 			if (!directory) throw new Error(`${ROOT_ENV} is required in child mode`);
+			if (delayed) {
+				await delayedFixtureTouch(directory);
+				return;
+			}
 			installDiscoverAgentsMock();
 			const run = CASES[caseName];
 			if (!run) throw new Error(`unknown case ${caseName}`);
 			await run(directory);
 		},
-		CHILD_TEST_TIMEOUT_MS,
+		delayed ? DELAYED_CHILD_TIMEOUT_MS : CHILD_TEST_TIMEOUT_MS,
 	);
 } else {
 	const repoRoot = path.resolve(import.meta.dir, "../..");
@@ -449,25 +486,27 @@ if (caseName !== undefined) {
 		await fs.promises.rm(fixtureRoot, { recursive: true, force: true });
 	});
 
-	async function spawnCase(name: string, stallPhase?: string) {
+	async function spawnCase(
+		name: string,
+		stallPhase?: string,
+		childTimeoutMs = CHILD_TEST_TIMEOUT_MS,
+		killMs = PARENT_KILL_MS,
+	) {
 		const directory = path.join(fixtureRoot, stallPhase ? `${name}-${stallPhase}` : name);
 		await fs.promises.mkdir(directory, { recursive: true });
-		const child = owned.spawn(
-			[process.execPath, "test", "--timeout", String(CHILD_TEST_TIMEOUT_MS), import.meta.path],
-			{
-				cwd: repoRoot,
-				env: {
-					...process.env,
-					[CASE_ENV]: name,
-					[ROOT_ENV]: directory,
-					...(stallPhase ? { [STALL_ENV]: stallPhase } : {}),
-				},
-				stdout: "pipe",
-				stderr: "pipe",
-				timeout: PARENT_KILL_MS,
-				killSignal: "SIGKILL",
+		const child = owned.spawn([process.execPath, "test", "--timeout", String(childTimeoutMs), import.meta.path], {
+			cwd: repoRoot,
+			env: {
+				...process.env,
+				[CASE_ENV]: name,
+				[ROOT_ENV]: directory,
+				...(stallPhase ? { [STALL_ENV]: stallPhase } : {}),
 			},
-		);
+			stdout: "pipe",
+			stderr: "pipe",
+			timeout: killMs,
+			killSignal: "SIGKILL",
+		});
 		return { child, directory };
 	}
 
@@ -529,5 +568,58 @@ if (caseName !== undefined) {
 				PARENT_CASE_MS,
 			);
 		}
+
+		test(
+			"delayed case reports its timeout, reaps before removal, and leaves a clean runner",
+			async () => {
+				// The expected probe failure stays inside this test: the child is SUPPOSED
+				// to fail, and the parent asserts that failure rather than inheriting it.
+				const { child, directory } = await spawnCase(
+					DELAYED_CASE,
+					undefined,
+					DELAYED_CHILD_TIMEOUT_MS,
+					DELAYED_PARENT_KILL_MS,
+				);
+				const output = owned.output(child);
+				const planPath = path.join(directory, "plan.md");
+				await waitForMarker(path.join(directory, "ready"));
+
+				// Bound the child's own deadline, not the parent kill, so its timed-out
+				// body resumes inside the child before that process exits.
+				const exit = await child.exited;
+				const report = `${(await output).stdout}\n${(await output).stderr}`;
+				expect(exit, report).not.toBe(0);
+				expect(child.signalCode, "child must end on its own deadline, not the parent kill").toBeNull();
+				// Runner reports the timeout and the child's OWN stderr markers.
+				expect(report).toMatch(/timed out after \d+ms/);
+				expect(report).toContain("delayed:fixture-deferred");
+				expect(report).toContain("delayed:plan-touched");
+				expect(report).toMatch(/\b0 pass\b/);
+				expect(report).toMatch(/\b1 fail\b/);
+				// The continuation settled inside the child: its late touch is on disk
+				// BEFORE the parent reaps or removes anything.
+				expect(await Bun.file(planPath).text()).toContain("late-touch");
+
+				// No live child or unhandled continuation survives the reap.
+				expect(child.exitCode).not.toBeNull();
+				expect(() => process.kill(child.pid!, 0)).toThrow();
+				await owned.reap();
+
+				// The parent owns removal, after reaping: the fixture is still here and
+				// its pipe is readable through the owned readers.
+				expect(fs.existsSync(directory)).toBe(true);
+				expect((await output).stderr).toContain("delayed:plan-touched");
+				await fs.promises.rm(directory, { recursive: true, force: true });
+
+				// A subsequent normal case still passes with fresh mocks and fixtures.
+				const next = await spawnCase("canonical-ref-seals-and-stamps");
+				const [nextExit, nextPipes] = await Promise.all([next.child.exited, owned.output(next.child)]);
+				const nextReport = `${nextPipes.stdout}\n${nextPipes.stderr}`;
+				expect(nextExit, nextReport).toBe(0);
+				expect(nextReport).toMatch(/\b1 pass\b/);
+				expect(nextReport).toMatch(/\b0 fail\b/);
+			},
+			PARENT_CASE_MS * 2,
+		);
 	});
 }
