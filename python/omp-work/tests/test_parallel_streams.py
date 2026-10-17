@@ -22,6 +22,8 @@ def isolated_ps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, An
     monkeypatch.setattr(ps, "DB", db_path)
     monkeypatch.setattr(ps, "POLICY", policy_path)
 
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
     ps.init_db()
     return {
         "active": active_dir,

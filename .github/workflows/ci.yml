@@ -761,6 +761,16 @@ jobs:
       timeout-minutes: 20
       steps:
          - uses: actions/checkout@v4
+         # scripts/session-system-tmp-isolation.test.ts runs the full
+         # session-system suite via test:scripts, including advisor trial
+         # cases that require historical commits and their HEAD ancestry.
+         - name: Fetch advisor trial case history
+           shell: bash
+           run: |
+              set -euo pipefail
+              if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+                git fetch --no-tags --unshallow origin "$GITHUB_SHA"
+              fi
          - uses: ./.github/actions/bun-install
          - uses: ./.github/actions/native-artifacts
            with:

@@ -532,8 +532,8 @@ def test_full_uniform_slots_prove_cap_and_take_precedence_over_providers(evidenc
     code, report = evidence.run()
     assert code == 0 and report["status"] == "ok"
     assert report["verdicts"] == {"plans": "met", "starts": "met"}
-    assert report["cap"] == dict(proven=True, kind="slots", value=2, evidence=[
-        dict(id="unfinished", attempt=i, slots=2, occupied_slots=2, providers=providers) for i in range(10)])
+    assert report["cap"] == dict(proven=True, kind="slots", value=2, start_count=10, saturated_count=10,
+        evidence=[dict(id="unfinished", attempt=i, at=AFTER) for i in range(10)])
 
 
 def test_all_uniform_providers_full_prove_cap_with_free_slots(evidence):
@@ -542,44 +542,58 @@ def test_all_uniform_providers_full_prove_cap_with_free_slots(evidence):
     code, report = evidence.run()
     assert code == 2 and report["status"] == "pending"
     assert report["verdicts"]["starts"] == "met"
-    assert report["cap"] == dict(proven=True, kind="providers", value={"alpha": 2, "beta": 10}, evidence=[
-        dict(id="unfinished", attempt=i, **(START_METRICS | {"providers": providers})) for i in range(10)])
+    assert report["cap"] == dict(proven=True, kind="providers", value={"alpha": 2, "beta": 10},
+        start_count={"alpha": 10, "beta": 10}, saturated_count={"alpha": 10, "beta": 10},
+        evidence={"alpha": [dict(id="unfinished", attempt=i, at=AFTER) for i in range(10)],
+                  "beta": [dict(id="unfinished", attempt=i, at=AFTER) for i in range(10)]})
 
 
-@pytest.mark.parametrize("fields,running", [
-    ({"providers": {"alpha": {"load": 2, "max_parallel": 2}, "beta": {"load": 0, "max_parallel": 10}}}, 2),
-    ({"slots": 8, "occupied_slots": 2}, 2),
-    ({}, 3),
+@pytest.mark.parametrize("fields,running,cap_kind", [
+    ({"providers": {"alpha": {"load": 2, "max_parallel": 2}, "beta": {"load": 0, "max_parallel": 10}}}, 2, "providers"),
+    ({"slots": 8, "occupied_slots": 2}, 2, None),
+    ({}, 3, None),
 ])
-def test_spare_capacity_cannot_excuse_baseline_even_with_config_cap(evidence, fields, running):
+def test_spare_capacity_cannot_excuse_baseline_even_with_config_cap(evidence, fields, running, cap_kind):
     for i in range(10):
         evidence.plan(f"p{i}")
     (evidence.directory / "flood.json").write_text('{"slots": 1}')
     evidence.starts(running=running, **fields)
     code, report = evidence.run()
-    assert code == 1 and report["status"] == "unmet" and report["error"] is None
-    assert report["median"] == running and report["cap"]["proven"] is False
-    assert report["verdicts"] == {"plans": "met", "starts": "unmet"}
+    assert report["error"] is None and report["median"] == running
+    assert report["cap"]["kind"] == cap_kind
+    assert report["verdicts"] == {"plans": "met", "starts": "met" if cap_kind else "unmet"}
+    assert (code, report["status"]) == ((0, "ok") if cap_kind else (1, "unmet"))
 
 
-@pytest.mark.parametrize("fields,change", [
-    ({"slots": 2, "occupied_slots": 3}, {"slots": 3}),
-    ({"slots": 2, "occupied_slots": 2}, {"occupied_slots": 1}),
-    ({"slots": 0, "occupied_slots": 0, "providers": {}}, {}),
-    ({"providers": {"": {"load": 2, "max_parallel": 2}}}, {}),
+@pytest.mark.parametrize("fields,change,cap", [
+    ({"slots": 2, "occupied_slots": 3}, {"slots": 3},
+     dict(proven=False, kind=None, value=None, start_count=10, saturated_count=0, evidence=[])),
+    ({"slots": 2, "occupied_slots": 2}, {"occupied_slots": 1},
+     dict(proven=True, kind="slots", value=2, start_count=10, saturated_count=9,
+          evidence=[dict(id="unfinished", attempt=i, at=AFTER) for i in range(9)])),
+    ({"slots": 0, "occupied_slots": 0, "providers": {}}, {},
+     dict(proven=False, kind=None, value=None, start_count=10, saturated_count=0, evidence=[])),
+    ({"providers": {"": {"load": 2, "max_parallel": 2}}}, {},
+     dict(proven=False, kind=None, value=None, start_count=10, saturated_count=0, evidence=[])),
     ({"providers": {"alpha": {"load": 2, "max_parallel": 2}}},
-     {"providers": {"beta": {"load": 2, "max_parallel": 2}}}),
+     {"providers": {"beta": {"load": 2, "max_parallel": 2}}},
+     dict(proven=True, kind="providers", value={"alpha": 2, "beta": 2},
+          start_count={"alpha": 9, "beta": 1}, saturated_count={"alpha": 9, "beta": 1},
+          evidence={"alpha": [dict(id="unfinished", attempt=i, at=AFTER) for i in range(9)],
+                    "beta": [dict(id="unfinished", attempt=9, at=AFTER)]})),
     ({"providers": {"alpha": {"load": 2, "max_parallel": 2}}},
-     {"providers": {"alpha": {"load": 1, "max_parallel": 2}}}),
+     {"providers": {"alpha": {"load": 1, "max_parallel": 2}}},
+     dict(proven=True, kind="providers", value={"alpha": 2},
+          start_count={"alpha": 10}, saturated_count={"alpha": 9},
+          evidence={"alpha": [dict(id="unfinished", attempt=i, at=AFTER) for i in range(9)]})),
 ])
-def test_cap_requires_uniform_capacity_and_every_event_saturated(evidence, fields, change):
+def test_cap_requires_a_uniform_value_and_counts_each_saturated_start(evidence, fields, change, cap):
     evidence.starts(running=2, **fields)
     evidence.tasks["unfinished"]["history"][-1].update(change)
     code, report = evidence.run()
     assert code == 2 and report["status"] == "pending"
-    assert report["cap"]["proven"] is False and report["cap"]["kind"] is None
-    assert report["cap"]["value"] is None and len(report["cap"]["evidence"]) == 10
-    assert report["verdicts"]["starts"] == "unmet"
+    assert report["cap"] == cap
+    assert report["verdicts"]["starts"] == ("met" if cap["proven"] else "unmet")
 
 
 def test_half_independent_plans_with_ten_good_starts_is_unmet(evidence):
@@ -682,3 +696,100 @@ def test_repeated_plan_attempt_uses_last_start_before_review(evidence):
     assert [plan["id"] for plan in report["plans"]] == ["qualifier", "rerun"]
     rerun = report["plans"][1]
     assert rerun["attempt"] == 1 and rerun["code_sha256"] == SHA and rerun["roots"] == 2
+
+
+def test_omp638_slots_saturated_at_some_starts_proves_with_counts(evidence):
+    evidence.starts(running=2, slots=8, occupied_slots=2)
+    for event in evidence.tasks["unfinished"]["history"][:3]:
+        event["occupied_slots"] = 8
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    assert report["verdicts"]["starts"] == "met"
+    assert report["cap"] == dict(proven=True, kind="slots", value=8, start_count=10, saturated_count=3,
+        evidence=[dict(id="unfinished", attempt=i, at=AFTER) for i in range(3)])
+
+
+def test_omp638_partial_provider_saturation_counts_only_those_starts(evidence):
+    def start(attempt, load):
+        providers = {"alpha": {"load": load, "max_parallel": 2}}
+        return dict(phase="implement-start", attempt=attempt, at=AFTER, code_sha256=SHA,
+                    running_implementers=2, slots=5, occupied_slots=1, providers=providers)
+
+    evidence.tasks["unfinished"] = {"history": [start(0, 2)] + [start(i, 0) for i in range(1, 10)]}
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    assert report["verdicts"]["starts"] == "met"
+    assert report["cap"] == dict(proven=True, kind="providers", value={"alpha": 2},
+        start_count={"alpha": 10}, saturated_count={"alpha": 1},
+        evidence={"alpha": [dict(id="unfinished", attempt=0, at=AFTER)]})
+
+
+def test_omp638_independent_provider_counts_are_per_provider(evidence):
+    def start(attempt, providers):
+        return dict(phase="implement-start", attempt=attempt, at=AFTER, code_sha256=SHA,
+                    running_implementers=2, slots=5, occupied_slots=1, providers=providers)
+
+    saturated = {"alpha": {"load": 3, "max_parallel": 3}}
+    saturated_pair = {"alpha": {"load": 3, "max_parallel": 3}, "beta": {"load": 2, "max_parallel": 2}}
+    history = [start(0, saturated), start(1, saturated_pair)] + [
+        start(i, {"alpha": {"load": 0, "max_parallel": 3}, "beta": {"load": 0, "max_parallel": 2}})
+        for i in range(2, 10)]
+    evidence.tasks["unfinished"] = {"history": history}
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    assert report["cap"] == dict(proven=True, kind="providers", value={"alpha": 3, "beta": 2},
+        start_count={"alpha": 10, "beta": 9}, saturated_count={"alpha": 2, "beta": 1},
+        evidence={"alpha": [dict(id="unfinished", attempt=i, at=AFTER) for i in range(2)],
+                  "beta": [dict(id="unfinished", attempt=1, at=AFTER)]})
+
+
+def test_omp638_slots_take_precedence_over_saturated_providers(evidence):
+    providers = {"alpha": {"load": 2, "max_parallel": 2}}
+    evidence.starts(running=2, slots=2, occupied_slots=2, providers=providers)
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    assert report["cap"] == dict(proven=True, kind="slots", value=2, start_count=10, saturated_count=10,
+        evidence=[dict(id="unfinished", attempt=i, at=AFTER) for i in range(10)])
+
+
+def test_omp638_nonuniform_provider_limits_name_no_value(evidence):
+    def start(attempt, max_parallel, load):
+        providers = {"alpha": {"load": load, "max_parallel": max_parallel}}
+        return dict(phase="implement-start", attempt=attempt, at=AFTER, code_sha256=SHA,
+                    running_implementers=2, slots=5, occupied_slots=1, providers=providers)
+
+    evidence.tasks["unfinished"] = {
+        "history": [start(0, 3, 3)] + [start(i, 2, 2) for i in range(1, 10)]}
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    assert report["cap"] == dict(proven=False, kind=None, value=None, start_count=10,
+        saturated_count=0, evidence=[])
+    assert report["verdicts"]["starts"] == "unmet"
+
+
+def test_omp638_no_saturated_start_at_median_leaves_cap_unproven_and_starts_unmet(evidence):
+    evidence.starts(running=3, slots=8, occupied_slots=2, providers={"alpha": {"load": 0, "max_parallel": 2}})
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    assert report["median"] == 3
+    assert report["cap"] == dict(proven=False, kind=None, value=None, start_count=10,
+        saturated_count=0, evidence=[])
+    assert report["verdicts"]["starts"] == "unmet"
+
+
+def test_omp638_median_above_baseline_meets_without_cap(evidence):
+    evidence.starts(count=10, running=4, slots=8, occupied_slots=2)
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "pending" and report["error"] is None
+    assert report["median"] == 4
+    assert report["cap"]["proven"] is False
+    assert report["verdicts"]["starts"] == "met"
+
+
+def test_omp638_malformed_start_beside_saturation_cannot_prove(evidence):
+    evidence.starts(running=2, slots=8, occupied_slots=8)
+    evidence.tasks["unfinished"]["history"][-1]["occupied_slots"] = True
+    code, report = evidence.run()
+    assert code == 2 and report["status"] == "failure" and "malformed" in report["error"]
+    assert report["cap"] == dict(proven=False, kind=None, value=None, start_count=0,
+        saturated_count=0, evidence=[])

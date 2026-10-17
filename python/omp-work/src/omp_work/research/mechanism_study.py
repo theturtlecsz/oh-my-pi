@@ -76,7 +76,7 @@ CAP_KEYS = (
     "width",
 )
 _INT_CAPS = frozenset({"selection_attempts", "width"})
-PASS_RULE = "all-pairs-positive.v1"
+PASS_RULE = "all-pairs-positive.v1"  # nosec B105 - admission criterion identifier, not a password
 
 
 def population_average(differences: Sequence[float]) -> float:

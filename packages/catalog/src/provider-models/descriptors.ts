@@ -78,6 +78,7 @@ import {
 	zhipuCodingPlanModelManagerOptions,
 } from "./openai-compat";
 import {
+	claudeCliModelManagerOptions,
 	cursorModelManagerOptions,
 	devinModelManagerOptions,
 	factoryDroidModelManagerOptions,
@@ -103,6 +104,7 @@ const MODEL_MANAGER_FACTORIES: Readonly<Partial<Record<KnownProvider, ModelManag
 	anthropic: config => anthropicModelManagerOptions(config),
 	cerebras: config => cerebrasModelManagerOptions(config),
 	"charm-hyper": config => charmHyperModelManagerOptions(config),
+	"claude-cli": () => claudeCliModelManagerOptions(),
 	"cloudflare-ai-gateway": config => cloudflareAiGatewayModelManagerOptions(config),
 	commandcode: config => commandCodeModelManagerOptions(config),
 	cursor: config => cursorModelManagerOptions(config),
