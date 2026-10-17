@@ -4,15 +4,20 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { $ } from "bun";
 
-// The test_ts_native "Fetch advisor trial case history" step. The `run: |`
+// Every "Fetch advisor trial case history" step must execute the same script. The `run: |`
 // body is indented 14 spaces in .github/workflows/ci.yml, same as the
 // installed qualification mode step.
 async function loadStepScript(): Promise<string> {
 	const ciYml = await Bun.file(path.join(import.meta.dir, "..", ".github", "workflows", "ci.yml")).text();
-	const match = ciYml.match(/name: Fetch advisor trial case history[\s\S]*?\n {11}run: \|\n([\s\S]*?)\n {9}- uses:/);
-	const body = match?.[1];
+	const matches = [
+		...ciYml.matchAll(/name: Fetch advisor trial case history[\s\S]*?\n {11}run: \|\n([\s\S]*?)\n {9}- uses:/g),
+	];
+	const body = matches[0]?.[1];
 	if (!body) {
 		throw new Error("Failed to extract Fetch advisor trial case history script from .github/workflows/ci.yml");
+	}
+	for (const match of matches) {
+		expect(match[1]).toBe(body);
 	}
 	return body
 		.split("\n")
@@ -93,7 +98,35 @@ async function runStep(cwd: string, githubSha: string): Promise<StepRunResult> {
 	return { exitCode, stdout, stderr };
 }
 
+interface WorkflowStep {
+	name?: string;
+	run?: string;
+}
+
+interface Workflow {
+	jobs: Record<string, { steps: WorkflowStep[] }>;
+}
+
 describe("CI advisor trial case history step", () => {
+	test("every job running advisor trial tests fetches identical history before its tests", async () => {
+		const ciYml = await Bun.file(path.join(import.meta.dir, "..", ".github", "workflows", "ci.yml")).text();
+		const workflow = Bun.YAML.parse(ciYml) as Workflow;
+		const script = await loadStepScript();
+		const jobs = Object.entries(workflow.jobs).filter(([, job]) =>
+			job.steps.some(step => /\bbun run (?:test:scripts|ci:test:ts:native)\b/.test(step.run ?? "")),
+		);
+		expect(jobs.map(([name]) => name)).toEqual(expect.arrayContaining(["test_workspace", "test_ts_native"]));
+		for (const [name, job] of jobs) {
+			const firstTest = job.steps.findIndex(step =>
+				/\bbun run (?:test:scripts|ci:test:ts:native)\b/.test(step.run ?? ""),
+			);
+			const fetch = job.steps.findIndex(step => step.name === "Fetch advisor trial case history");
+			expect(fetch, `${name} must fetch advisor history before tests`).toBeGreaterThanOrEqual(0);
+			expect(fetch, `${name} must fetch advisor history before tests`).toBeLessThan(firstTest);
+			expect(job.steps[fetch]!.run?.trimEnd(), name).toBe(script);
+		}
+	});
+
 	test("unshallows a depth-1 checkout so the case commit is an ancestor of HEAD", async () => {
 		const fixture = await makeFixture();
 		try {
