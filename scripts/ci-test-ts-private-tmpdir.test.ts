@@ -106,7 +106,11 @@ describe("buildChildEnv", () => {
 			before = { ...Bun.env };
 			buildChildEnv({ agentDir: "/dir", tmpDir: "/tmp" });
 			expect(Object.keys(Bun.env).sort()).toEqual(Object.keys(before).sort());
-			expect(Object.keys(before).filter(key => Bun.env[key] !== before[key]).sort()).toEqual([]);
+			expect(
+				Object.keys(before)
+					.filter(key => Bun.env[key] !== before[key])
+					.sort(),
+			).toEqual([]);
 			expect(Bun.env.TMPDIR).toBe(sentinels.TMPDIR);
 			expect(Bun.env.TMP).toBe(sentinels.TMP);
 			expect(Bun.env.TEMP).toBe(sentinels.TEMP);

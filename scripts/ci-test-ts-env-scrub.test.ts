@@ -31,21 +31,33 @@ describe("buildChildEnv secret-name scrubbing", () => {
 		];
 		const baseEnv = Object.fromEntries(names.map(name => [name, dummyValue]));
 		const env = buildChildEnv({ baseEnv });
-		expect(Object.keys(env).filter(key => names.includes(key)).sort()).toEqual([]);
+		expect(
+			Object.keys(env)
+				.filter(key => names.includes(key))
+				.sort(),
+		).toEqual([]);
 	});
 
 	it("preserves near-miss names and service tokens", () => {
 		const names = ["KEEP_ME", "PASSWORD_STORE_DIR", "SECRETS_DIR", "MY_SERVICE_TOKEN", "SECRET_SANTA_LIST"];
 		const baseEnv = Object.fromEntries(names.map(name => [name, dummyValue]));
 		const env = buildChildEnv({ baseEnv });
-		expect(Object.keys(env).filter(key => names.includes(key)).sort()).toEqual([...names].sort());
+		expect(
+			Object.keys(env)
+				.filter(key => names.includes(key))
+				.sort(),
+		).toEqual([...names].sort());
 	});
 
 	it("still removes existing GitHub AWS and provider credentials", () => {
 		const names = ["GITHUB_TOKEN", "AWS_SECRET_ACCESS_KEY", "ANTHROPIC_API_KEY"];
 		const baseEnv = Object.fromEntries(names.map(name => [name, dummyValue]));
 		const env = buildChildEnv({ baseEnv });
-		expect(Object.keys(env).filter(key => names.includes(key)).sort()).toEqual([]);
+		expect(
+			Object.keys(env)
+				.filter(key => names.includes(key))
+				.sort(),
+		).toEqual([]);
 	});
 });
 

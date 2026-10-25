@@ -284,11 +284,69 @@ export function parseEnvFile(filePath: string): Record<string, string> {
 	return result;
 }
 
-// By owner decision, this gate is broader than isBunTestRuntime(). Project .env still loads.
-const skipHomeEnv = Bun.env.NODE_ENV === "test" || Bun.env.PI_TEST_RUNTIME === "1";
-const homeEnv = skipHomeEnv ? {} : parseEnvFile(path.join(os.homedir(), ".env"));
-const piEnv = skipHomeEnv ? {} : parseEnvFile(path.join(getConfigRootDir(), ".env"));
-const agentEnv = skipHomeEnv ? {} : parseEnvFile(path.join(getAgentDir(), ".env"));
+export interface PasswdHomeOptions {
+	passwdPath?: string;
+	uid?: number;
+}
+
+export function getPasswdHomeDir(options: PasswdHomeOptions = {}): string | undefined {
+	const passwdPath = options.passwdPath ?? "/etc/passwd";
+	const uid = options.uid ?? process.getuid?.();
+	if (uid === undefined) return undefined;
+
+	let passwd: string;
+	try {
+		passwd = fs.readFileSync(passwdPath, "utf8");
+	} catch {
+		return undefined;
+	}
+	for (const line of passwd.split(/\r?\n/)) {
+		if (!line || line.startsWith("#")) continue;
+		const fields = line.split(":");
+		if (fields.length < 6 || fields[2] !== String(uid)) continue;
+		const home = fields[5];
+		return home && path.isAbsolute(home) ? home : undefined;
+	}
+	return undefined;
+}
+
+export interface HomeDotenvOptions {
+	testMode?: boolean;
+	realHomeRoot?: string;
+	passwdPath?: string;
+}
+
+export function readHomeDotenvFile(filePath: string, options: HomeDotenvOptions = {}): Record<string, string> {
+	const testMode = options.testMode ?? (Bun.env.NODE_ENV === "test" || Bun.env.PI_TEST_RUNTIME === "1");
+	if (!testMode) return parseEnvFile(filePath);
+
+	let realHomeRoot = options.realHomeRoot ?? getPasswdHomeDir({ passwdPath: options.passwdPath });
+	if (realHomeRoot === undefined) return {};
+	try {
+		realHomeRoot = fs.realpathSync(realHomeRoot);
+	} catch {
+		realHomeRoot = path.resolve(realHomeRoot);
+	}
+
+	let realFilePath: string;
+	try {
+		realFilePath = fs.realpathSync(filePath);
+	} catch {
+		return {};
+	}
+	const relativePath = path.relative(realHomeRoot, realFilePath);
+	const insideHome =
+		relativePath === "" ||
+		(relativePath !== ".." && !relativePath.startsWith(`..${path.sep}`) && !path.isAbsolute(relativePath));
+	return insideHome ? {} : parseEnvFile(filePath);
+}
+
+// Test mode skips these files only when their realpath is under the /etc/passwd home for the process uid.
+// It skips all of them when that home cannot be read.
+// Fixture HOME files still load. Project .env still loads.
+const homeEnv = readHomeDotenvFile(path.join(os.homedir(), ".env"));
+const piEnv = readHomeDotenvFile(path.join(getConfigRootDir(), ".env"));
+const agentEnv = readHomeDotenvFile(path.join(getAgentDir(), ".env"));
 const projectEnv = parseEnvFile(path.join(getProjectDir(), ".env"));
 
 for (const key of Object.keys(Bun.env)) {
