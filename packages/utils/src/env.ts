@@ -284,10 +284,11 @@ export function parseEnvFile(filePath: string): Record<string, string> {
 	return result;
 }
 
-// Eagerly parse the user's $HOME/.env and the current project's .env (from cwd)
-const homeEnv = parseEnvFile(path.join(os.homedir(), ".env"));
-const piEnv = parseEnvFile(path.join(getConfigRootDir(), ".env"));
-const agentEnv = parseEnvFile(path.join(getAgentDir(), ".env"));
+// By owner decision, this gate is broader than isBunTestRuntime(). Project .env still loads.
+const skipHomeEnv = Bun.env.NODE_ENV === "test" || Bun.env.PI_TEST_RUNTIME === "1";
+const homeEnv = skipHomeEnv ? {} : parseEnvFile(path.join(os.homedir(), ".env"));
+const piEnv = skipHomeEnv ? {} : parseEnvFile(path.join(getConfigRootDir(), ".env"));
+const agentEnv = skipHomeEnv ? {} : parseEnvFile(path.join(getAgentDir(), ".env"));
 const projectEnv = parseEnvFile(path.join(getProjectDir(), ".env"));
 
 for (const key of Object.keys(Bun.env)) {

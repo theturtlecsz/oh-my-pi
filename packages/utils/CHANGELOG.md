@@ -5,6 +5,7 @@
 ### Fixed
 
 - A relative TempDir prefix is rejected, so that directory is not created in the working directory.
+- Test processes (`NODE_ENV=test` or `PI_TEST_RUNTIME=1`) no longer load `~/.env`, `~/.omp/.env`, or the agent `.env`.
 
 ## [18.4.4] - 2026-09-29
 

@@ -361,6 +361,51 @@ describe("isBunTestRuntime", () => {
 	});
 });
 
+describe("home .env in test runtimes", () => {
+	const homeKeys = [
+		"HOME_DOTENV_PROBE_PASSWORD",
+		"HOME_DOTENV_PROBE_SECRET",
+		"HOME_DOTENV_PROBE_PRIVATE_KEY",
+		"HOME_DOTENV_PROBE_PASSKEY",
+		"HOME_DOTENV_PROBE_PLAIN",
+	];
+	const piHomeKey = "PIHOME_DOTENV_PROBE_PLAIN";
+	const agentKey = "AGENT_DOTENV_PROBE_PLAIN";
+	const allKeys = [...homeKeys, piHomeKey, agentKey].sort();
+	const rows: { name: string; env: Record<string, string>; expected: string[] }[] = [
+		{ name: "NODE_ENV=test skips all home dotenv files", env: { NODE_ENV: "test" }, expected: [] },
+		{ name: "PI_TEST_RUNTIME=1 skips all home dotenv files", env: { PI_TEST_RUNTIME: "1" }, expected: [] },
+		{ name: "unmarked runtime loads all seven home dotenv keys", env: {}, expected: allKeys },
+	];
+
+	for (const row of rows) {
+		it(row.name, async () => {
+			const tempHome = await fs.promises.mkdtemp(path.join(os.tmpdir(), "omp-m1g-home-"));
+			tempDirs.push(tempHome);
+			const cwd = await fs.promises.mkdtemp(path.join(os.tmpdir(), "omp-m1g-cwd-"));
+			tempDirs.push(cwd);
+			await Bun.write(
+				path.join(tempHome, ".env"),
+				homeKeys.map(key => `${key}=dummy-m1g-value`).join("\n"),
+			);
+			await Bun.write(path.join(tempHome, ".omp", ".env"), `${piHomeKey}=dummy-m1g-value\n`);
+			await Bun.write(path.join(tempHome, ".omp", "agent", ".env"), `${agentKey}=dummy-m1g-value\n`);
+
+			const proc = Bun.spawn([process.execPath, path.join(import.meta.dir, "fixtures", "home-env-keys-probe.ts")], {
+				cwd,
+				env: { PATH: process.env.PATH, HOME: tempHome, ...row.env },
+				stdout: "pipe",
+				stderr: "ignore",
+				timeout: 10_000,
+			});
+			const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+			if (exitCode !== 0) throw new Error("Home dotenv key probe failed");
+			const loadedKeys: string[] = JSON.parse(stdout);
+			expect(loadedKeys.sort()).toEqual(row.expected);
+		}, 15_000);
+	}
+});
+
 /**
  * Faithful model of Windows `process.env`: case-insensitive reads, but
  * enumeration (`ownKeys`) preserves the real key casing — exactly Node
