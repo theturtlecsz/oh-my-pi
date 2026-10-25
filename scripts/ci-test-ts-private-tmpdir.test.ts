@@ -98,13 +98,15 @@ describe("buildChildEnv", () => {
 			GITHUB_TOKEN: "sentinel-github-token",
 		};
 		const originals = new Map(Object.keys(sentinels).map(key => [key, Bun.env[key]]));
+		let before = { ...Bun.env };
 		try {
 			for (const [key, value] of Object.entries(sentinels)) {
 				Bun.env[key] = value;
 			}
-			const before = { ...Bun.env };
+			before = { ...Bun.env };
 			buildChildEnv({ agentDir: "/dir", tmpDir: "/tmp" });
-			expect({ ...Bun.env }).toEqual(before);
+			expect(Object.keys(Bun.env).sort()).toEqual(Object.keys(before).sort());
+			expect(Object.entries(before).every(([key, value]) => Bun.env[key] === value)).toBe(true);
 			expect(Bun.env.TMPDIR).toBe(sentinels.TMPDIR);
 			expect(Bun.env.TMP).toBe(sentinels.TMP);
 			expect(Bun.env.TEMP).toBe(sentinels.TEMP);
@@ -116,6 +118,16 @@ describe("buildChildEnv", () => {
 			expect(Bun.env.AWS_SECRET_ACCESS_KEY).toBe(sentinels.AWS_SECRET_ACCESS_KEY);
 			expect(Bun.env.GITHUB_TOKEN).toBe(sentinels.GITHUB_TOKEN);
 		} finally {
+			for (const key of Object.keys(Bun.env)) {
+				if (!Object.hasOwn(before, key)) {
+					delete Bun.env[key];
+				}
+			}
+			for (const [key, value] of Object.entries(before)) {
+				if (Bun.env[key] !== value) {
+					Bun.env[key] = value;
+				}
+			}
 			for (const [key, value] of originals) {
 				if (value === undefined) {
 					delete Bun.env[key];
