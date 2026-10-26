@@ -3,7 +3,7 @@
 use std::{
 	io,
 	os::fd::{AsRawFd, FromRawFd, OwnedFd},
-	sync::{Arc, Mutex, mpsc},
+	sync::{Arc, Mutex, OnceLock, TryLockError, atomic::{AtomicU8, Ordering}, mpsc},
 	time::{Duration, Instant},
 };
 
@@ -12,12 +12,91 @@ use tokio::runtime::{Builder, Runtime};
 
 const DEADLINE: Duration = Duration::from_secs(5);
 static INSTALLED: Mutex<bool> = Mutex::new(false);
-static THREADS: Mutex<Option<Threads>> = Mutex::new(None);
+static SHUTDOWN: OnceLock<Shutdown> = OnceLock::new();
+
+// Reserve 100 ms: 50 ms for worker result publication and 50 ms for caller
+// wakeup/return. This assumes ordinary OS scheduling, not a real-time kernel.
+const WORK_MARGIN: Duration = Duration::from_millis(100);
+const RETURN_MARGIN: Duration = Duration::from_millis(50);
+
+struct Shutdown {
+	state: Arc<ShutdownState>,
+}
+
+#[derive(Default)]
+struct ShutdownState {
+	deadline: OnceLock<Instant>,
+	result: OnceLock<Result<(), String>>,
+	timeout: OnceLock<String>,
+	phase: AtomicU8,
+}
+
+impl Shutdown {
+	fn prepare(threads: Threads, stop: impl FnOnce() + Send + 'static) -> io::Result<Self> {
+		let state = Arc::new(ShutdownState::default());
+		let worker = Arc::clone(&state);
+		// Prepare the helper during installation. Thread creation cannot consume
+		// shutdown's budget. A timed-out helper is detached until process exit.
+		std::thread::Builder::new().name("omp-tokio-shutdown".into()).spawn(move || {
+			let deadline = loop {
+				if let Some(deadline) = worker.deadline.get() { break *deadline; }
+				std::thread::sleep(Duration::from_millis(1));
+			};
+			worker.phase.store(1, Ordering::Release);
+			stop();
+			let result = if Instant::now() >= deadline {
+				Err("Tokio shutdown failed: napi runtime shutdown timed out".into())
+			} else {
+				worker.phase.store(2, Ordering::Release);
+				wait_threads(threads, deadline)
+			};
+			let _ = worker.result.set(result);
+		})?;
+		Ok(Self { state })
+	}
+
+	fn shutdown(&self, start: Instant) -> Result<(), String> {
+		let deadline = *self.state.deadline.get_or_init(|| start + DEADLINE - WORK_MARGIN);
+		loop {
+			// Timeout is terminal even if the detached worker later succeeds.
+			if let Some(error) = self.state.timeout.get() { return Err(error.clone()); }
+			if let Some(result) = self.state.result.get() { return result.clone(); }
+			let remaining = (deadline + WORK_MARGIN - RETURN_MARGIN).saturating_duration_since(Instant::now());
+			if remaining.is_zero() {
+				let error = self.state.timeout.get_or_init(|| {
+					let part = match self.state.phase.load(Ordering::Acquire) {
+						0 => "shutdown helper startup",
+						1 => "napi runtime shutdown",
+						_ => "thread registry / thread waits",
+					};
+					format!("Tokio shutdown failed: {part} timed out")
+				});
+				return Err(error.clone());
+			}
+			std::thread::sleep(remaining.min(Duration::from_millis(1)));
+		}
+	}
+}
 
 enum ThreadWait {
 	Pidfd(OwnedFd),
 	Proc,
 	Exited,
+}
+
+#[cfg(test)]
+static POLL_OVERRIDE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+#[cfg(test)]
+static PROC_OVERRIDE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+#[cfg(test)]
+fn probe_override(value: &std::sync::atomic::AtomicI32) -> Option<io::Result<bool>> {
+	match value.load(Ordering::SeqCst) {
+		0 => None,
+		1 => Some(Ok(false)),
+		2 => Some(Ok(true)),
+		errno => Some(Err(io::Error::from_raw_os_error(errno))),
+	}
 }
 
 struct Thread {
@@ -40,10 +119,12 @@ struct Threads {
 }
 
 fn poll_thread(fd: &OwnedFd, deadline: Instant) -> io::Result<bool> {
+	#[cfg(test)]
+	if let Some(result) = probe_override(&POLL_OVERRIDE) { return result; }
 	loop {
 		let mut pollfd = libc::pollfd { fd: fd.as_raw_fd(), events: libc::POLLIN, revents: 0 };
 		let remaining = deadline.saturating_duration_since(Instant::now());
-		let millis = remaining.as_nanos().div_ceil(1_000_000).min(i32::MAX as u128) as i32;
+		let millis = remaining.as_millis().min(i32::MAX as u128) as i32;
 		// SAFETY: pollfd points to one initialized descriptor for this call.
 		let result = unsafe { libc::poll(&raw mut pollfd, 1, millis) };
 		if result < 0 {
@@ -63,6 +144,8 @@ fn poll_thread(fd: &OwnedFd, deadline: Instant) -> io::Result<bool> {
 }
 
 fn proc_thread_exists(tid: libc::pid_t) -> io::Result<bool> {
+	#[cfg(test)]
+	if let Some(result) = probe_override(&PROC_OVERRIDE) { return result; }
 	match std::fs::metadata(format!("/proc/self/task/{tid}")) {
 		Ok(_) => Ok(true),
 		Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
@@ -88,7 +171,8 @@ impl Registry {
 					Ok(true) => {},
 					Ok(false) => return true,
 					Err(error) => {
-						errors.push(format!("tid {} prune poll failed: {error}", thread.tid));
+						let message = format!("tid {} prune poll failed: {error}", thread.tid);
+						if !errors.contains(&message) { errors.push(message); }
 						return true;
 					},
 				},
@@ -98,7 +182,8 @@ impl Registry {
 			match proc_thread_exists(thread.tid) {
 				Ok(exists) => exists,
 				Err(error) => {
-					errors.push(format!("tid {} prune proc check failed: {error}", thread.tid));
+					let message = format!("tid {} prune proc check failed: {error}", thread.tid);
+					if !errors.contains(&message) { errors.push(message); }
 					true
 				},
 			}
@@ -166,7 +251,17 @@ fn wait_threads(threads: Threads, deadline: Instant) -> Result<(), String> {
 		errors.push("thread start callbacks still retained at deadline".to_owned());
 	}
 	let records = {
-		let mut registry = threads.registry.lock().unwrap();
+		let mut registry = loop {
+			match threads.registry.try_lock() {
+				Ok(registry) => break registry,
+				Err(TryLockError::Poisoned(error)) => return Err(format!("Tokio shutdown failed: thread registry poisoned: {error}")),
+				Err(TryLockError::WouldBlock) => {
+					let remaining = deadline.saturating_duration_since(Instant::now());
+					if remaining.is_zero() { return Err("Tokio shutdown failed: thread registry lock timed out".into()); }
+					std::thread::sleep(remaining.min(Duration::from_millis(1)));
+				},
+			}
+		};
 		errors.append(&mut registry.errors);
 		std::mem::take(&mut registry.records)
 	};
@@ -189,6 +284,9 @@ fn wait_threads(threads: Threads, deadline: Instant) -> Result<(), String> {
 			Err(error) => errors.push(format!("tid {} wait failed: {error}", thread.tid)),
 		}
 	}
+	if errors.is_empty() && Instant::now() >= deadline {
+		errors.push("thread waits timed out".into());
+	}
 	// OwnedFd closes every pidfd on success and failure.
 	if errors.is_empty() { Ok(()) } else { Err(format!("Tokio shutdown failed: {}", errors.join(", "))) }
 }
@@ -197,7 +295,9 @@ pub(crate) fn install() -> napi::Result<()> {
 	let mut installed = INSTALLED.lock().map_err(|e| napi::Error::from_reason(e.to_string()))?;
 	if *installed { return Ok(()); }
 	let (runtime, threads) = build_runtime().map_err(|e| napi::Error::from_reason(format!("Tokio runtime build failed: {e}")))?;
-	*THREADS.lock().map_err(|e| napi::Error::from_reason(e.to_string()))? = Some(threads);
+	let shutdown = Shutdown::prepare(threads, napi::bindgen_prelude::shutdown_async_runtime)
+		.map_err(|e| napi::Error::from_reason(format!("Tokio shutdown helper failed: {e}")))?;
+	SHUTDOWN.set(shutdown).map_err(|_| napi::Error::from_reason("Tokio shutdown already installed"))?;
 	napi::bindgen_prelude::create_custom_tokio_runtime(runtime);
 	*installed = true;
 	Ok(())
@@ -205,17 +305,15 @@ pub(crate) fn install() -> napi::Result<()> {
 
 #[napi(js_name = "__ompShutdownTokioRuntime")]
 pub fn shutdown_tokio_runtime() -> napi::Result<()> {
-	let deadline = Instant::now() + DEADLINE;
-	let mut threads = THREADS.lock().map_err(|e| napi::Error::from_reason(e.to_string()))?;
-	let Some(threads) = threads.take() else { return Ok(()); };
-	napi::bindgen_prelude::shutdown_async_runtime();
-	wait_threads(threads, deadline).map_err(napi::Error::from_reason)
+	let start = Instant::now();
+	let Some(shutdown) = SHUTDOWN.get() else { return Ok(()); };
+	shutdown.shutdown(start).map_err(napi::Error::from_reason)
 }
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
 	use super::*;
-	use std::{collections::{BTreeMap, BTreeSet}, fs, process::Command};
+	use std::{collections::{BTreeMap, BTreeSet}, fs, io::Write, process::Command};
 
 	fn isolated(name: &str, test: impl FnOnce()) {
 		if std::env::var("OMP_SHUTDOWN_TEST").as_deref() == Ok(name) {
@@ -226,13 +324,25 @@ mod tests {
 			.args(["--exact", &format!("tokio_shutdown::tests::{name}"), "--nocapture"])
 			.env("OMP_SHUTDOWN_TEST", name)
 			.output().unwrap();
-		assert!(output.status.success(), "child failed: {}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+		io::stdout().write_all(&output.stdout).unwrap();
+		io::stderr().write_all(&output.stderr).unwrap();
+		assert!(output.status.success(), "child failed: {}", output.status);
+	}
+
+	fn measured_call<T>(call: impl FnOnce(Instant) -> T) -> T {
+		let start = Instant::now();
+		let result = call(start);
+		eprintln!("omp_shutdown_wall_us={}", start.elapsed().as_micros());
+		result
+	}
+
+	fn measured_shutdown(shutdown: &Shutdown) -> Result<(), String> {
+		measured_call(|start| shutdown.shutdown(start))
 	}
 
 	fn shutdown(runtime: Runtime, threads: Threads) {
-		let deadline = Instant::now() + DEADLINE;
-		runtime.shutdown_background();
-		wait_threads(threads, deadline).unwrap();
+		let shutdown = Shutdown::prepare(threads, move || runtime.shutdown_background()).unwrap();
+		measured_shutdown(&shutdown).unwrap();
 	}
 
 	fn workers() -> Vec<String> {
@@ -259,6 +369,143 @@ mod tests {
 				Err(error) => panic!("read fd target: {error}"),
 			}
 		}).collect()
+	}
+
+	fn synthetic_threads(wait: ThreadWait) -> Threads {
+		let (send, starts_closed) = mpsc::channel();
+		drop(send);
+		Threads {
+			registry: Arc::new(Mutex::new(Registry {
+				records: vec![Thread { tid: 123456, wait: Ok(wait) }],
+				..Registry::default()
+			})),
+			starts_closed,
+		}
+	}
+
+	fn test_fd() -> OwnedFd {
+		// A real owned fd lets tests observe retention and close independently
+		// of the kernel's pidfd availability. Poll readiness comes from the seam.
+		let raw = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC) };
+		assert!(raw >= 0);
+		unsafe { OwnedFd::from_raw_fd(raw) }
+	}
+
+	#[test]
+	fn shutdown_ready_present_retains_until_absent() {
+		isolated("shutdown_ready_present_retains_until_absent", || {
+			POLL_OVERRIDE.store(2, Ordering::SeqCst);
+			PROC_OVERRIDE.store(2, Ordering::SeqCst);
+			let fd = test_fd();
+			let raw = fd.as_raw_fd();
+			let threads = synthetic_threads(ThreadWait::Pidfd(fd));
+			let mut registry = threads.registry.lock().unwrap();
+			registry.prune();
+			assert_eq!(registry.records.len(), 1, "ready but present task lost tracking");
+			assert!(unsafe { libc::fcntl(raw, libc::F_GETFD) } >= 0, "retained pidfd closed");
+			PROC_OVERRIDE.store(1, Ordering::SeqCst);
+			registry.prune();
+			assert!(registry.records.is_empty(), "absent task stayed tracked");
+			assert_eq!(unsafe { libc::fcntl(raw, libc::F_GETFD) }, -1);
+			assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::EBADF));
+		});
+	}
+
+	#[test]
+	fn shutdown_presence_failure_is_sticky() {
+		isolated("shutdown_presence_failure_is_sticky", || {
+			POLL_OVERRIDE.store(2, Ordering::SeqCst);
+			PROC_OVERRIDE.store(2, Ordering::SeqCst);
+			let threads = synthetic_threads(ThreadWait::Pidfd(test_fd()));
+			let shutdown = Shutdown::prepare(threads, || {}).unwrap();
+			let start = Instant::now();
+			let error = measured_shutdown(&shutdown).unwrap_err();
+			assert!(start.elapsed() >= Duration::from_millis(4900));
+			assert!(start.elapsed() <= DEADLINE);
+			assert!(error.contains("tid 123456 still alive"), "{error}");
+			PROC_OVERRIDE.store(1, Ordering::SeqCst);
+			assert_eq!(measured_shutdown(&shutdown).unwrap_err(), error);
+		});
+	}
+
+	#[test]
+	fn shutdown_probe_errors_retain_and_fail_without_duplicates() {
+		isolated("shutdown_probe_errors_retain_and_fail_without_duplicates", || {
+			// Each row selects a distinct probe/record path. Errors must remain
+			// failures even if a later probe would report task disappearance.
+			for kind in 0..4 {
+				let wait = match kind {
+					0 | 1 => ThreadWait::Pidfd(test_fd()),
+					2 => ThreadWait::Exited,
+					_ => ThreadWait::Proc,
+				};
+				POLL_OVERRIDE.store(if kind == 0 { libc::EIO } else { 2 }, Ordering::SeqCst);
+				PROC_OVERRIDE.store(if kind == 0 { 1 } else { libc::EACCES }, Ordering::SeqCst);
+				let threads = synthetic_threads(wait);
+				let message = {
+					let mut registry = threads.registry.lock().unwrap();
+					for _ in 0..3 { registry.prune(); }
+					assert_eq!(registry.records.len(), 1, "probe error removed tracking, kind {kind}");
+					assert_eq!(registry.errors.len(), 1, "duplicate prune errors, kind {kind}");
+					registry.errors[0].clone()
+				};
+				let shutdown = Shutdown::prepare(threads, || {}).unwrap();
+				let error = measured_shutdown(&shutdown).unwrap_err();
+				assert_eq!(error.matches(&message).count(), 1, "{error}");
+				assert!(error.contains("tid 123456 wait failed:"), "{error}");
+
+				// Prune errors remain terminal when final probes recover.
+				let wait = match kind {
+					0 | 1 => ThreadWait::Pidfd(test_fd()),
+					2 => ThreadWait::Exited,
+					_ => ThreadWait::Proc,
+				};
+				let threads = synthetic_threads(wait);
+				threads.registry.lock().unwrap().prune();
+				POLL_OVERRIDE.store(2, Ordering::SeqCst);
+				PROC_OVERRIDE.store(1, Ordering::SeqCst);
+				let shutdown = Shutdown::prepare(threads, || {}).unwrap();
+				assert!(measured_shutdown(&shutdown).unwrap_err().contains(&message));
+			}
+		});
+	}
+
+	#[test]
+	fn shutdown_runtime_step_timeout_is_sticky() {
+		isolated("shutdown_runtime_step_timeout_is_sticky", || {
+			let (release, blocked) = mpsc::channel();
+			let (finished, done) = mpsc::channel();
+			let threads = synthetic_threads(ThreadWait::Exited);
+			let shutdown = Shutdown::prepare(threads, move || {
+				blocked.recv().unwrap();
+				finished.send(()).unwrap();
+			}).unwrap();
+			let start = Instant::now();
+			let error = measured_shutdown(&shutdown).unwrap_err();
+			assert!(start.elapsed() >= Duration::from_millis(4900));
+			assert!(start.elapsed() <= DEADLINE);
+			assert!(error.contains("napi runtime shutdown timed out"), "{error}");
+			release.send(()).unwrap();
+			done.recv_timeout(DEADLINE).unwrap();
+			assert_eq!(measured_shutdown(&shutdown).unwrap_err(), error);
+		});
+	}
+
+	#[test]
+	fn shutdown_registry_lock_is_bounded() {
+		isolated("shutdown_registry_lock_is_bounded", || {
+			let threads = synthetic_threads(ThreadWait::Exited);
+			let registry = Arc::clone(&threads.registry);
+			let held = registry.lock().unwrap();
+			let shutdown = Shutdown::prepare(threads, || {}).unwrap();
+			let start = Instant::now();
+			let error = measured_shutdown(&shutdown).unwrap_err();
+			assert!(start.elapsed() >= Duration::from_millis(4900));
+			assert!(start.elapsed() <= DEADLINE);
+			assert!(error.contains("thread registry lock timed out"), "{error}");
+			drop(held);
+			assert_eq!(measured_shutdown(&shutdown).unwrap_err(), error);
+		});
 	}
 
 	#[test]
@@ -315,6 +562,7 @@ mod tests {
 				assert!(registry.started > previous_starts, "blocking thread did not churn");
 				previous_starts = registry.started;
 				let current = fds().len();
+				// F3 bounds this 12-round workload, not arbitrary retention.
 				let limit = *bound.get_or_insert(current + 2);
 				assert!(current <= limit, "fd count grew across blocking churn: {current} > {limit}");
 			}
@@ -377,12 +625,12 @@ mod tests {
 				blocked.recv().unwrap();
 			});
 			let tid = receive.recv_timeout(DEADLINE).unwrap();
+			let shutdown = Shutdown::prepare(threads, move || runtime.shutdown_background()).unwrap();
 			let start = Instant::now();
-			runtime.shutdown_background();
-			let error = wait_threads(threads, start + DEADLINE).unwrap_err();
+			let error = measured_shutdown(&shutdown).unwrap_err();
 			assert!(error.contains(&format!("tid {tid} still alive")), "{error}");
 			assert!(start.elapsed() >= Duration::from_millis(4900));
-			assert!(start.elapsed() < Duration::from_secs(6));
+			assert!(start.elapsed() <= DEADLINE);
 			release.send(()).unwrap();
 		});
 	}
@@ -406,8 +654,8 @@ mod tests {
 		isolated("shutdown_second_call_is_noop", || {
 			install().unwrap();
 			napi::bindgen_prelude::within_runtime_if_available(|| ());
-			shutdown_tokio_runtime().unwrap();
-			shutdown_tokio_runtime().unwrap();
+			measured_call(|_| shutdown_tokio_runtime()).unwrap();
+			measured_call(|_| shutdown_tokio_runtime()).unwrap();
 			assert!(workers().is_empty());
 			napi::bindgen_prelude::shutdown_async_runtime();
 			assert!(workers().is_empty());
