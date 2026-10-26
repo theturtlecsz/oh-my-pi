@@ -15,12 +15,17 @@ static INSTALLED: Mutex<bool> = Mutex::new(false);
 static SHUTDOWN: OnceLock<Shutdown> = OnceLock::new();
 
 // Reserve 100 ms: 50 ms for worker result publication and 50 ms for caller
-// wakeup/return. This assumes ordinary OS scheduling, not a real-time kernel.
+// wakeup/return. Only the caller wait is bounded. The napi stop step remains
+// unbounded in the detached helper. This assumes ordinary OS scheduling,
+// not a real-time kernel.
 const WORK_MARGIN: Duration = Duration::from_millis(100);
 const RETURN_MARGIN: Duration = Duration::from_millis(50);
 
 struct Shutdown {
 	state: Arc<ShutdownState>,
+	request: mpsc::Sender<Instant>,
+	helper_tid: libc::pid_t,
+	tids: Arc<Mutex<Vec<libc::pid_t>>>,
 }
 
 #[derive(Default)]
@@ -35,13 +40,17 @@ impl Shutdown {
 	fn prepare(threads: Threads, stop: impl FnOnce() + Send + 'static) -> io::Result<Self> {
 		let state = Arc::new(ShutdownState::default());
 		let worker = Arc::clone(&state);
+		let tids = Arc::clone(&threads.tids);
+		let (request, requested) = mpsc::channel();
+		let (ready, started) = mpsc::sync_channel(0);
 		// Prepare the helper during installation. Thread creation cannot consume
 		// shutdown's budget. A timed-out helper is detached until process exit.
 		std::thread::Builder::new().name("omp-tokio-shutdown".into()).spawn(move || {
-			let deadline = loop {
-				if let Some(deadline) = worker.deadline.get() { break *deadline; }
-				std::thread::sleep(Duration::from_millis(1));
-			};
+			// SAFETY: gettid has no arguments. Publish before accepting requests.
+			let tid = unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t };
+			if ready.send(tid).is_err() { return; }
+			// Disconnection without a request must never invoke stop().
+			let Ok(deadline) = requested.recv() else { return; };
 			worker.phase.store(1, Ordering::Release);
 			stop();
 			let result = if Instant::now() >= deadline {
@@ -50,13 +59,20 @@ impl Shutdown {
 				worker.phase.store(2, Ordering::Release);
 				wait_threads(threads, deadline)
 			};
+			let result = result.map_err(|error| format!("{error}; omp-tokio-shutdown tid {tid}"));
 			let _ = worker.result.set(result);
 		})?;
-		Ok(Self { state })
+		let helper_tid = started.recv().map_err(io::Error::other)?;
+		Ok(Self { state, request, helper_tid, tids })
 	}
 
 	fn shutdown(&self, start: Instant) -> Result<(), String> {
-		let deadline = *self.state.deadline.get_or_init(|| start + DEADLINE - WORK_MARGIN);
+		let deadline = *self.state.deadline.get_or_init(|| {
+			let deadline = start + DEADLINE - WORK_MARGIN;
+			// OnceLock sends exactly one request, including concurrent callers.
+			let _ = self.request.send(deadline);
+			deadline
+		});
 		loop {
 			// Timeout is terminal even if the detached worker later succeeds.
 			if let Some(error) = self.state.timeout.get() { return Err(error.clone()); }
@@ -69,7 +85,20 @@ impl Shutdown {
 						1 => "napi runtime shutdown",
 						_ => "thread registry / thread waits",
 					};
-					format!("Tokio shutdown failed: {part} timed out")
+					let mut error = format!("Tokio shutdown failed: {part} timed out; omp-tokio-shutdown tid {}", self.helper_tid);
+					match self.tids.try_lock() {
+						Ok(tids) => {
+							for &tid in tids.iter() {
+								match proc_thread_exists(tid) {
+									Ok(true) => error.push_str(&format!("; tid {tid} still alive")),
+									Ok(false) => {},
+									Err(probe) => error.push_str(&format!("; tid {tid} proc check failed: {probe}")),
+								}
+							}
+						},
+						Err(_) => error.push_str("; live tid snapshot unavailable at deadline"),
+					}
+					error
 				});
 				return Err(error.clone());
 			}
@@ -112,6 +141,8 @@ struct Registry {
 }
 
 struct Threads {
+	// Separate from registry so deadline diagnostics never wait for its lock.
+	tids: Arc<Mutex<Vec<libc::pid_t>>>,
 	registry: Arc<Mutex<Registry>>,
 	// Disconnection proves no start callback can run later. Tokio retains the
 	// callback through the handles moved into successfully spawned OS threads.
@@ -197,6 +228,8 @@ fn build_runtime() -> io::Result<(Runtime, Threads)> {
 
 fn build_tracked_runtime(mut builder: Builder, force_fallback: bool) -> io::Result<(Runtime, Threads)> {
 	let registry = Arc::new(Mutex::new(Registry::default()));
+	let tids = Arc::new(Mutex::new(Vec::new()));
+	let started_tids = Arc::clone(&tids);
 	let starts = Arc::clone(&registry);
 	let stops = Arc::clone(&registry);
 	let (send, starts_closed) = mpsc::channel();
@@ -223,13 +256,16 @@ fn build_tracked_runtime(mut builder: Builder, force_fallback: bool) -> io::Resu
 				},
 			};
 			registry.records.push(Thread { tid, wait });
+			let mut tids = started_tids.lock().unwrap();
+			tids.clear();
+			tids.extend(registry.records.iter().map(|thread| thread.tid));
 		})
 		.on_thread_stop(move || {
 			// This thread is still alive. Only prune exits absent from /proc.
 			stops.lock().unwrap().prune();
 		})
 		.build()?;
-	Ok((runtime, Threads { registry, starts_closed }))
+	Ok((runtime, Threads { registry, tids, starts_closed }))
 }
 
 fn open_thread(tid: libc::pid_t, _force_fallback: bool) -> io::Result<OwnedFd> {
@@ -375,6 +411,7 @@ mod tests {
 		let (send, starts_closed) = mpsc::channel();
 		drop(send);
 		Threads {
+			tids: Arc::new(Mutex::new(vec![123456])),
 			registry: Arc::new(Mutex::new(Registry {
 				records: vec![Thread { tid: 123456, wait: Ok(wait) }],
 				..Registry::default()
@@ -423,6 +460,7 @@ mod tests {
 			assert!(start.elapsed() >= Duration::from_millis(4900));
 			assert!(start.elapsed() <= DEADLINE);
 			assert!(error.contains("tid 123456 still alive"), "{error}");
+			assert!(error.contains(&format!("omp-tokio-shutdown tid {}", shutdown.helper_tid)), "{error}");
 			PROC_OVERRIDE.store(1, Ordering::SeqCst);
 			assert_eq!(measured_shutdown(&shutdown).unwrap_err(), error);
 		});
@@ -488,6 +526,81 @@ mod tests {
 			release.send(()).unwrap();
 			done.recv_timeout(DEADLINE).unwrap();
 			assert_eq!(measured_shutdown(&shutdown).unwrap_err(), error);
+		});
+	}
+
+	#[test]
+	fn shutdown_timeout_names_live_tids_and_helper() {
+		isolated("shutdown_timeout_names_live_tids_and_helper", || {
+			let mut builder = Builder::new_multi_thread();
+			builder.worker_threads(1);
+			let (runtime, threads) = build_tracked_runtime(builder, false).unwrap();
+			let (started, receive) = mpsc::channel();
+			let (release_worker, blocked_worker) = mpsc::channel();
+			runtime.spawn(async move {
+				let tid = unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t };
+				started.send(tid).unwrap();
+				blocked_worker.recv().unwrap();
+			});
+			let tid = receive.recv_timeout(DEADLINE).unwrap();
+			let (release_stop, blocked_stop) = mpsc::channel();
+			let shutdown = Shutdown::prepare(threads, move || {
+				blocked_stop.recv().unwrap();
+				runtime.shutdown_background();
+			}).unwrap();
+			let start = Instant::now();
+			let error = measured_shutdown(&shutdown).unwrap_err();
+			let elapsed = start.elapsed();
+			assert!(elapsed >= Duration::from_millis(4900));
+			assert!(elapsed <= DEADLINE);
+			assert!(error.contains(&format!("omp-tokio-shutdown tid {}", shutdown.helper_tid)), "{error}");
+			assert!(error.contains(&format!("tid {tid} still alive")), "{error}");
+			assert!(error.contains("napi runtime shutdown timed out"), "{error}");
+			eprintln!("{error}");
+			release_worker.send(()).unwrap();
+			release_stop.send(()).unwrap();
+			assert!(wait_proc_thread(shutdown.helper_tid, Instant::now() + DEADLINE).unwrap());
+			assert_eq!(measured_shutdown(&shutdown).unwrap_err(), error);
+		});
+	}
+
+	#[test]
+	fn shutdown_helper_idle_no_wakeups() {
+		isolated("shutdown_helper_idle_no_wakeups", || {
+			let threads = synthetic_threads(ThreadWait::Exited);
+			let shutdown = Shutdown::prepare(threads, || {}).unwrap();
+			let tid = shutdown.helper_tid;
+			let switches = || {
+				let status = fs::read_to_string(format!("/proc/self/task/{tid}/status")).unwrap();
+				let count = |key: &str| -> u64 {
+					status.lines().find_map(|line| line.strip_prefix(key)).unwrap().trim().parse().unwrap()
+				};
+				(count("voluntary_ctxt_switches:"), count("nonvoluntary_ctxt_switches:"))
+			};
+			// Allow the startup rendezvous to finish before measuring the idle recv.
+			std::thread::sleep(Duration::from_millis(50));
+			let before = switches();
+			eprintln!("omp_helper_idle_tid={tid}");
+			std::thread::sleep(Duration::from_secs(10));
+			let after = switches();
+			let delta = (after.0 - before.0, after.1 - before.1);
+			eprintln!("omp_helper_idle_ctxt_delta={},{}", delta.0, delta.1);
+			assert_eq!(delta, (0, 0));
+			assert_eq!(shutdown.shutdown(Instant::now()), Ok(()));
+		});
+	}
+
+	#[test]
+	fn shutdown_drop_without_request_skips_stop() {
+		isolated("shutdown_drop_without_request_skips_stop", || {
+			let (stopped, receive) = mpsc::channel();
+			let shutdown = Shutdown::prepare(synthetic_threads(ThreadWait::Exited), move || {
+				stopped.send(()).unwrap();
+			}).unwrap();
+			let tid = shutdown.helper_tid;
+			drop(shutdown);
+			assert_eq!(receive.recv_timeout(DEADLINE), Err(mpsc::RecvTimeoutError::Disconnected));
+			assert!(wait_proc_thread(tid, Instant::now() + DEADLINE).unwrap());
 		});
 	}
 
