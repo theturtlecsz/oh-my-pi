@@ -163,7 +163,11 @@ fn wait_threads(threads: Threads, deadline: Instant) -> Result<(), String> {
 	};
 	for thread in &records {
 		let result = match &thread.wait {
-			Ok(ThreadWait::Pidfd(fd)) => poll_thread(fd, deadline),
+			Ok(ThreadWait::Pidfd(fd)) => poll_thread(fd, deadline).and_then(|ready| {
+				// pidfd readiness preceded /proc removal by 46-181 µs in r5 log
+				// 7d325181. Wait for both using the same shutdown deadline.
+				if ready { wait_proc_thread(thread.tid, deadline) } else { Ok(false) }
+			}),
 			Ok(ThreadWait::Proc) => wait_proc_thread(thread.tid, deadline),
 			Ok(ThreadWait::Exited) => Ok(true),
 			Err(error) => {
