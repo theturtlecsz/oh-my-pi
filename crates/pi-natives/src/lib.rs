@@ -324,6 +324,7 @@ fn install_native_crash_handler() {
 /// Install after dlopen initialization, before napi starts its async runtime.
 #[cfg(target_os = "linux")]
 #[napi(module_exports)]
+#[cfg_attr(test, allow(dead_code))]
 fn install_linux_tokio_runtime(_exports: napi::bindgen_prelude::Object) -> napi::Result<()> {
 	tokio_shutdown::install()
 }

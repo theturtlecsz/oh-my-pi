@@ -3,7 +3,7 @@
 use std::{
 	io,
 	os::fd::{AsRawFd, FromRawFd, OwnedFd},
-	sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}, mpsc},
+	sync::{Arc, Mutex, mpsc},
 	time::{Duration, Instant},
 };
 
@@ -14,81 +14,167 @@ const DEADLINE: Duration = Duration::from_secs(5);
 static INSTALLED: Mutex<bool> = Mutex::new(false);
 static THREADS: Mutex<Option<Threads>> = Mutex::new(None);
 
+enum ThreadWait {
+	Pidfd(OwnedFd),
+	Proc,
+	Exited,
+}
+
 struct Thread {
 	tid: libc::pid_t,
-	fd: io::Result<Option<OwnedFd>>,
+	wait: io::Result<ThreadWait>,
+}
+
+#[derive(Default)]
+struct Registry {
+	started: usize,
+	records: Vec<Thread>,
+	errors: Vec<String>,
 }
 
 struct Threads {
-	spawned: Arc<AtomicUsize>,
-	started: mpsc::Receiver<Thread>,
+	registry: Arc<Mutex<Registry>>,
+	// Disconnection proves no start callback can run later. Tokio retains the
+	// callback through the handles moved into successfully spawned OS threads.
+	starts_closed: mpsc::Receiver<()>,
+}
+
+fn poll_thread(fd: &OwnedFd, deadline: Instant) -> io::Result<bool> {
+	loop {
+		let mut pollfd = libc::pollfd { fd: fd.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+		let remaining = deadline.saturating_duration_since(Instant::now());
+		let millis = remaining.as_nanos().div_ceil(1_000_000).min(i32::MAX as u128) as i32;
+		// SAFETY: pollfd points to one initialized descriptor for this call.
+		let result = unsafe { libc::poll(&raw mut pollfd, 1, millis) };
+		if result < 0 {
+			let error = io::Error::last_os_error();
+			if error.raw_os_error() == Some(libc::EINTR) {
+				if Instant::now() >= deadline { return Ok(false); }
+				continue;
+			}
+			return Err(error);
+		}
+		if pollfd.revents & libc::POLLIN != 0 { return Ok(true); }
+		if pollfd.revents != 0 {
+			return Err(io::Error::other(format!("unexpected poll events {}", pollfd.revents)));
+		}
+		return Ok(false);
+	}
+}
+
+fn proc_thread_exists(tid: libc::pid_t) -> io::Result<bool> {
+	match std::fs::metadata(format!("/proc/self/task/{tid}")) {
+		Ok(_) => Ok(true),
+		Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+		Err(error) => Err(error),
+	}
+}
+
+fn wait_proc_thread(tid: libc::pid_t, deadline: Instant) -> io::Result<bool> {
+	loop {
+		if !proc_thread_exists(tid)? { return Ok(true); }
+		let remaining = deadline.saturating_duration_since(Instant::now());
+		if remaining.is_zero() { return Ok(false); }
+		std::thread::sleep(remaining.min(Duration::from_millis(1)));
+	}
+}
+
+impl Registry {
+	fn prune(&mut self) {
+		let errors = &mut self.errors;
+		self.records.retain(|thread| match &thread.wait {
+			Ok(ThreadWait::Pidfd(fd)) => match poll_thread(fd, Instant::now()) {
+				Ok(exited) => !exited,
+				Err(error) => {
+					errors.push(format!("tid {} prune poll failed: {error}", thread.tid));
+					true
+				},
+			},
+			Ok(ThreadWait::Proc) => proc_thread_exists(thread.tid).unwrap_or(true),
+			Ok(ThreadWait::Exited) => false,
+			Err(_) => true,
+		});
+	}
 }
 
 fn build_runtime() -> io::Result<(Runtime, Threads)> {
-	let spawned = Arc::new(AtomicUsize::new(0));
-	let count = Arc::clone(&spawned);
-	let (send, started) = mpsc::channel();
+	build_tracked_runtime(Builder::new_multi_thread(), false)
+}
+
+fn build_tracked_runtime(mut builder: Builder, force_fallback: bool) -> io::Result<(Runtime, Threads)> {
+	let registry = Arc::new(Mutex::new(Registry::default()));
+	let starts = Arc::clone(&registry);
+	let stops = Arc::clone(&registry);
+	let (send, starts_closed) = mpsc::channel();
 	// Preserve napi's defaults and enable_all(). B1 exempts only Tokio's static
 	// signal socketpair: signal::registry::globals_init, Tokio 1.53.1
 	// src/runtime/driver.rs:149-157. Disabling IO would break native consumers.
-	let runtime = Builder::new_multi_thread()
+	let runtime = builder
 		.enable_all()
-		.thread_name_fn(move || {
-			// Count before spawn so shutdown cannot miss a thread whose start hook
-			// has not run yet. Keep Tokio's default name, including blocking threads.
-			count.fetch_add(1, Ordering::SeqCst);
-			"tokio-rt-worker".to_owned()
-		})
+		.thread_name("tokio-rt-worker")
 		.on_thread_start(move || {
+			let _keep_sender = &send;
+			let mut registry = starts.lock().unwrap();
+			registry.started += 1;
+			registry.prune();
 			// SAFETY: gettid has no arguments. Open on this thread to prevent tid reuse.
 			let tid = unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t };
-			// PIDFD_THREAD is O_EXCL on Linux >= 6.9.
-			let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, tid, libc::O_EXCL) };
-			let fd = if raw >= 0 {
-				// SAFETY: syscall returned a new owned descriptor.
-				Ok(Some(unsafe { OwnedFd::from_raw_fd(raw as i32) }))
-			} else {
-				let error = io::Error::last_os_error();
-				if error.raw_os_error() == Some(libc::ESRCH) { Ok(None) } else { Err(error) }
+			let opened = open_thread(tid, force_fallback);
+			let wait = match opened {
+				Ok(fd) => Ok(ThreadWait::Pidfd(fd)),
+				Err(error) => match error.raw_os_error() {
+					Some(libc::EINVAL) | Some(libc::ENOSYS) => Ok(ThreadWait::Proc),
+					Some(libc::ESRCH) => Ok(ThreadWait::Exited),
+					_ => Err(error),
+				},
 			};
-			// A receiver dropped after timeout closes late descriptors here too.
-			let _ = send.send(Thread { tid, fd });
+			registry.records.push(Thread { tid, wait });
+		})
+		.on_thread_stop(move || {
+			// This thread is still alive. Only prune kernel-confirmed exits.
+			stops.lock().unwrap().prune();
 		})
 		.build()?;
-	Ok((runtime, Threads { spawned, started }))
+	Ok((runtime, Threads { registry, starts_closed }))
+}
+
+fn open_thread(tid: libc::pid_t, _force_fallback: bool) -> io::Result<OwnedFd> {
+	#[cfg(test)]
+	if _force_fallback { return Err(io::Error::from_raw_os_error(libc::EINVAL)); }
+	// PIDFD_THREAD is O_EXCL on Linux >= 6.9.
+	let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, tid, libc::O_EXCL) };
+	if raw < 0 { return Err(io::Error::last_os_error()); }
+	// SAFETY: syscall returned a new owned descriptor.
+	Ok(unsafe { OwnedFd::from_raw_fd(raw as i32) })
 }
 
 fn wait_threads(threads: Threads, deadline: Instant) -> Result<(), String> {
-	let mut records = Vec::new();
 	let mut errors = Vec::new();
-	// shutdown_background closes the pool before this snapshot. No new spawn
-	// can succeed afterwards. Receive each start once, within the same deadline.
-	let expected = threads.spawned.load(Ordering::SeqCst);
-	for _ in 0..expected {
-		match threads.started.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-			Ok(thread) => records.push(thread),
-			Err(error) => {
-				errors.push(format!("{} thread starts unaccounted for: {error}", expected - records.len()));
-				break;
-			},
-		}
+	// A count snapshot alone misses successfully spawned threads that have not
+	// entered on_thread_start. Wait for callback ownership to end first.
+	if threads.starts_closed.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+		!= Err(mpsc::RecvTimeoutError::Disconnected) {
+		errors.push("thread start callbacks still retained at deadline".to_owned());
 	}
+	let records = {
+		let mut registry = threads.registry.lock().unwrap();
+		errors.append(&mut registry.errors);
+		std::mem::take(&mut registry.records)
+	};
 	for thread in &records {
-		match &thread.fd {
-			Ok(Some(fd)) => {
-				let mut pollfd = libc::pollfd { fd: fd.as_raw_fd(), events: libc::POLLIN, revents: 0 };
-				let remaining = deadline.saturating_duration_since(Instant::now());
-				let millis = remaining.as_nanos().div_ceil(1_000_000).min(i32::MAX as u128) as i32;
-				// SAFETY: pollfd points to one initialized descriptor for this call.
-				let result = unsafe { libc::poll(&raw mut pollfd, 1, millis) };
-				if result < 0 {
-					errors.push(format!("tid {} poll failed: {}", thread.tid, io::Error::last_os_error()));
-				} else if pollfd.revents & libc::POLLIN == 0 {
-					errors.push(format!("tid {} still alive (poll events {})", thread.tid, pollfd.revents));
-				}
+		let result = match &thread.wait {
+			Ok(ThreadWait::Pidfd(fd)) => poll_thread(fd, deadline),
+			Ok(ThreadWait::Proc) => wait_proc_thread(thread.tid, deadline),
+			Ok(ThreadWait::Exited) => Ok(true),
+			Err(error) => {
+				errors.push(format!("tid {} pidfd_open failed: {error}", thread.tid));
+				continue;
 			},
-			Ok(None) => {}, // ESRCH: already exited.
-			Err(error) => errors.push(format!("tid {} pidfd_open failed: {error}", thread.tid)),
+		};
+		match result {
+			Ok(true) => {},
+			Ok(false) => errors.push(format!("tid {} still alive", thread.tid)),
+			Err(error) => errors.push(format!("tid {} wait failed: {error}", thread.tid)),
 		}
 	}
 	// OwnedFd closes every pidfd on success and failure.
@@ -161,6 +247,64 @@ mod tests {
 				Err(error) => panic!("read fd target: {error}"),
 			}
 		}).collect()
+	}
+
+	#[test]
+	fn shutdown_forced_pidfd_fallback() {
+		isolated("shutdown_forced_pidfd_fallback", || {
+			let (runtime, threads) = build_tracked_runtime(Builder::new_multi_thread(), true).unwrap();
+			runtime.block_on(runtime.spawn(async {})).unwrap();
+			{
+				let registry = threads.registry.lock().unwrap();
+				assert!(registry.started > 0);
+				assert_eq!(registry.records.len(), registry.started);
+				assert!(registry.records.iter().all(|thread| matches!(thread.wait, Ok(ThreadWait::Proc))),
+					"forced EINVAL must record every started worker for /proc waiting");
+			}
+			shutdown(runtime, threads);
+			assert!(workers().is_empty(), "fallback left Tokio workers: {:?}", workers());
+		});
+	}
+
+	#[test]
+	fn shutdown_blocking_churn_bounds_fds() {
+		isolated("shutdown_blocking_churn_bounds_fds", || {
+			let mut builder = Builder::new_multi_thread();
+			builder.worker_threads(2).thread_keep_alive(Duration::from_millis(10));
+			let (runtime, threads) = build_tracked_runtime(builder, false).unwrap();
+			let mut bound = None;
+			let mut previous_starts = 0;
+			for _ in 0..12 {
+				let tid = runtime.block_on(runtime.spawn_blocking(|| {
+					unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t }
+				})).unwrap();
+				let wait = {
+					let registry = threads.registry.lock().unwrap();
+					registry.records.iter().find(|thread| thread.tid == tid).map(|thread| {
+						match thread.wait.as_ref().unwrap() {
+							ThreadWait::Pidfd(fd) => ThreadWait::Pidfd(fd.try_clone().unwrap()),
+							ThreadWait::Proc => ThreadWait::Proc,
+							ThreadWait::Exited => ThreadWait::Exited,
+						}
+					})
+				};
+				// Wait outside the registry lock so the stop hook can finish.
+				// A missing record was already pruned after a confirmed exit.
+				match wait {
+					Some(ThreadWait::Pidfd(fd)) => assert!(poll_thread(&fd, Instant::now() + DEADLINE).unwrap()),
+					Some(ThreadWait::Proc) => assert!(wait_proc_thread(tid, Instant::now() + DEADLINE).unwrap()),
+					_ => {},
+				}
+				let registry = threads.registry.lock().unwrap();
+				assert!(registry.started > previous_starts, "blocking thread did not churn");
+				previous_starts = registry.started;
+				let current = fds().len();
+				let limit = *bound.get_or_insert(current + 2);
+				assert!(current <= limit, "fd count grew across blocking churn: {current} > {limit}");
+			}
+			shutdown(runtime, threads);
+			assert!(workers().is_empty());
+		});
 	}
 
 	#[test]
