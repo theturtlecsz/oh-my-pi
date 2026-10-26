@@ -14,12 +14,15 @@ const DEADLINE: Duration = Duration::from_secs(5);
 static INSTALLED: Mutex<bool> = Mutex::new(false);
 static SHUTDOWN: OnceLock<Shutdown> = OnceLock::new();
 
-// Reserve 100 ms: 50 ms for worker result publication and 50 ms for caller
-// wakeup/return. Only the caller wait is bounded. The napi stop step remains
-// unbounded in the detached helper. This assumes ordinary OS scheduling,
-// not a real-time kernel.
+// Reserve 100 ms: 50 ms for worker result publication, then caller reporting.
+// Reports stop at start + DEADLINE - REPORT_RESERVE and probe at most
+// REPORT_TID_CAP tids. Only the caller wait is bounded. The napi stop step
+// remains unbounded in the detached helper. This assumes ordinary OS scheduling
+// and prompt /proc operations, not a real-time kernel.
 const WORK_MARGIN: Duration = Duration::from_millis(100);
 const RETURN_MARGIN: Duration = Duration::from_millis(50);
+const REPORT_RESERVE: Duration = Duration::from_millis(10);
+const REPORT_TID_CAP: usize = 128;
 
 struct Shutdown {
 	state: Arc<ShutdownState>,
@@ -32,8 +35,14 @@ struct Shutdown {
 struct ShutdownState {
 	deadline: OnceLock<Instant>,
 	result: OnceLock<Result<(), String>>,
-	timeout: OnceLock<String>,
+	outcome: OnceLock<Result<(), String>>,
 	phase: AtomicU8,
+	#[cfg(test)]
+	helper_now: OnceLock<Instant>,
+	#[cfg(test)]
+	published: OnceLock<Arc<std::sync::Barrier>>,
+	#[cfg(test)]
+	caller_hook: OnceLock<Box<dyn Fn() + Send + Sync>>,
 }
 
 impl Shutdown {
@@ -53,14 +62,26 @@ impl Shutdown {
 			let Ok(deadline) = requested.recv() else { return; };
 			worker.phase.store(1, Ordering::Release);
 			stop();
-			let result = if Instant::now() >= deadline {
+			let now = Instant::now();
+			#[cfg(test)]
+			let now = worker.helper_now.get().copied().unwrap_or(now);
+			let result = if now >= deadline {
 				Err("Tokio shutdown failed: napi runtime shutdown timed out".into())
 			} else {
 				worker.phase.store(2, Ordering::Release);
 				wait_threads(threads, deadline)
 			};
-			let result = result.map_err(|error| format!("{error}; omp-tokio-shutdown tid {tid}"));
+			let result = result.map_err(|error| {
+				let phase = if worker.phase.load(Ordering::Acquire) == 1 {
+					"napi runtime shutdown"
+				} else {
+					"thread registry / thread waits"
+				};
+				format!("{error}; phase: {phase}; omp-tokio-shutdown tid {tid}")
+			});
 			let _ = worker.result.set(result);
+			#[cfg(test)]
+			if let Some(published) = worker.published.get() { published.wait(); }
 		})?;
 		let helper_tid = started.recv().map_err(io::Error::other)?;
 		Ok(Self { state, request, helper_tid, tids })
@@ -73,37 +94,58 @@ impl Shutdown {
 			let _ = self.request.send(deadline);
 			deadline
 		});
+		if let Some(result) = self.state.outcome.get() { return result.clone(); }
+		#[cfg(test)]
+		if let Some(hook) = self.state.caller_hook.get() { hook(); }
 		loop {
-			// Timeout is terminal even if the detached worker later succeeds.
-			if let Some(error) = self.state.timeout.get() { return Err(error.clone()); }
-			if let Some(result) = self.state.result.get() { return result.clone(); }
+			// Both terminal paths publish one immutable outcome for all callers.
+			if let Some(result) = self.state.outcome.get() { return result.clone(); }
+			if let Some(result) = self.state.result.get() {
+				return self.state.outcome.get_or_init(|| result.clone().map_err(|error| {
+					self.live_tid_report(error, deadline + WORK_MARGIN - REPORT_RESERVE)
+				})).clone();
+			}
 			let remaining = (deadline + WORK_MARGIN - RETURN_MARGIN).saturating_duration_since(Instant::now());
 			if remaining.is_zero() {
-				let error = self.state.timeout.get_or_init(|| {
+				return self.state.outcome.get_or_init(|| {
 					let part = match self.state.phase.load(Ordering::Acquire) {
 						0 => "shutdown helper startup",
 						1 => "napi runtime shutdown",
 						_ => "thread registry / thread waits",
 					};
-					let mut error = format!("Tokio shutdown failed: {part} timed out; omp-tokio-shutdown tid {}", self.helper_tid);
-					match self.tids.try_lock() {
-						Ok(tids) => {
-							for &tid in tids.iter() {
-								match proc_thread_exists(tid) {
-									Ok(true) => error.push_str(&format!("; tid {tid} still alive")),
-									Ok(false) => {},
-									Err(probe) => error.push_str(&format!("; tid {tid} proc check failed: {probe}")),
-								}
-							}
-						},
-						Err(_) => error.push_str("; live tid snapshot unavailable at deadline"),
-					}
-					error
-				});
-				return Err(error.clone());
+					let error = format!("Tokio shutdown failed: {part} timed out; omp-tokio-shutdown tid {}", self.helper_tid);
+					Err(self.live_tid_report(error, deadline + WORK_MARGIN - REPORT_RESERVE))
+				}).clone();
 			}
 			std::thread::sleep(remaining.min(Duration::from_millis(1)));
 		}
+	}
+
+	fn live_tid_report(&self, mut error: String, end: Instant) -> String {
+		let tids = match self.tids.try_lock() {
+			Ok(tids) => tids.clone(),
+			Err(_) => {
+				error.push_str("; live tid snapshot unavailable at deadline");
+				return error;
+			},
+		};
+		// The snapshot guard is dropped before any /proc operation.
+		for (probed, &tid) in tids.iter().enumerate() {
+			if probed >= REPORT_TID_CAP || Instant::now() >= end {
+				error.push_str(&format!("; live tid scan stopped after {probed} of {} tids", tids.len()));
+				break;
+			}
+			let present = proc_thread_exists(tid);
+			if error.contains(&format!("tid {tid} still alive"))
+				|| error.contains(&format!("tid {tid} proc check failed"))
+				|| error.contains(&format!("tid {tid} prune proc check failed")) { continue; }
+			match present {
+				Ok(true) => error.push_str(&format!("; tid {tid} still alive")),
+				Ok(false) => {},
+				Err(probe) => error.push_str(&format!("; tid {tid} proc check failed: {probe}")),
+			}
+		}
+		error
 	}
 }
 
@@ -117,6 +159,8 @@ enum ThreadWait {
 static POLL_OVERRIDE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 #[cfg(test)]
 static PROC_OVERRIDE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+#[cfg(test)]
+static PROC_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 #[cfg(test)]
 fn probe_override(value: &std::sync::atomic::AtomicI32) -> Option<io::Result<bool>> {
@@ -175,6 +219,8 @@ fn poll_thread(fd: &OwnedFd, deadline: Instant) -> io::Result<bool> {
 }
 
 fn proc_thread_exists(tid: libc::pid_t) -> io::Result<bool> {
+	#[cfg(test)]
+	PROC_CALLS.fetch_add(1, Ordering::SeqCst);
 	#[cfg(test)]
 	if let Some(result) = probe_override(&PROC_OVERRIDE) { return result; }
 	match std::fs::metadata(format!("/proc/self/task/{tid}")) {
@@ -426,6 +472,90 @@ mod tests {
 		let raw = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC) };
 		assert!(raw >= 0);
 		unsafe { OwnedFd::from_raw_fd(raw) }
+	}
+
+	#[test]
+	fn shutdown_early_helper_timeout_names_live_tids() {
+		isolated("shutdown_early_helper_timeout_names_live_tids", || {
+			let mut builder = Builder::new_multi_thread();
+			builder.worker_threads(1);
+			let (runtime, threads) = build_tracked_runtime(builder, false).unwrap();
+			let (started, receive) = mpsc::channel();
+			let (release, blocked) = mpsc::channel();
+			runtime.spawn(async move {
+				let tid = unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t };
+				started.send(tid).unwrap();
+				blocked.recv().unwrap();
+			});
+			let tid = receive.recv_timeout(DEADLINE).unwrap();
+			let shutdown = Shutdown::prepare(threads, move || runtime.shutdown_background()).unwrap();
+			let published = Arc::new(std::sync::Barrier::new(2));
+			shutdown.state.published.set(Arc::clone(&published)).unwrap();
+			shutdown.state.caller_hook.set(Box::new(move || { published.wait(); })).ok().unwrap();
+			let start = Instant::now();
+			// Advance only the helper clock. Publication releases the caller hook.
+			shutdown.state.helper_now.set(start + DEADLINE - WORK_MARGIN).unwrap();
+			let error = shutdown.shutdown(start).unwrap_err();
+			assert!(start.elapsed() < DEADLINE - RETURN_MARGIN);
+			assert!(error.contains(&format!("omp-tokio-shutdown tid {}", shutdown.helper_tid)), "{error}");
+			assert!(error.contains("napi runtime shutdown timed out"), "{error}");
+			assert!(error.contains(&format!("tid {tid} still alive")), "{error}");
+			eprintln!("{error}");
+			assert_eq!(shutdown.shutdown(Instant::now()).unwrap_err(), error);
+			release.send(()).unwrap();
+		});
+	}
+
+	#[test]
+	fn shutdown_live_tid_report_is_bounded() {
+		isolated("shutdown_live_tid_report_is_bounded", || {
+			PROC_OVERRIDE.store(2, Ordering::SeqCst);
+			let threads = synthetic_threads(ThreadWait::Exited);
+			*threads.tids.lock().unwrap() = (1..=(REPORT_TID_CAP + 1) as libc::pid_t).collect();
+			let shutdown = Shutdown::prepare(threads, || {}).unwrap();
+			PROC_CALLS.store(0, Ordering::SeqCst);
+			let error = shutdown.live_tid_report("failure".into(), Instant::now());
+			assert_eq!(PROC_CALLS.load(Ordering::SeqCst), 0);
+			assert_eq!(error, format!("failure; live tid scan stopped after 0 of {} tids", REPORT_TID_CAP + 1));
+			let error = shutdown.live_tid_report("failure".into(), Instant::now() + DEADLINE);
+			assert_eq!(PROC_CALLS.load(Ordering::SeqCst), REPORT_TID_CAP);
+			assert!(error.ends_with(&format!("; live tid scan stopped after {REPORT_TID_CAP} of {} tids", REPORT_TID_CAP + 1)), "{error}");
+			for tid in 1..=REPORT_TID_CAP {
+				assert!(error.contains(&format!("; tid {tid} still alive")), "{error}");
+			}
+			assert!(!error.contains(&format!("tid {} still alive", REPORT_TID_CAP + 1)), "{error}");
+			let held = shutdown.tids.lock().unwrap();
+			assert_eq!(shutdown.live_tid_report("failure".into(), Instant::now() + DEADLINE),
+				"failure; live tid snapshot unavailable at deadline");
+			drop(held);
+		});
+	}
+
+	#[test]
+	fn shutdown_concurrent_callers_share_failure() {
+		isolated("shutdown_concurrent_callers_share_failure", || {
+			let (release, blocked) = mpsc::channel();
+			let shutdown = Shutdown::prepare(synthetic_threads(ThreadWait::Exited), move || {
+				blocked.recv().unwrap();
+			}).unwrap();
+			let published = Arc::new(std::sync::Barrier::new(2));
+			shutdown.state.published.set(Arc::clone(&published)).unwrap();
+			let callers = std::sync::Barrier::new(2);
+			shutdown.state.caller_hook.set(Box::new(move || { callers.wait(); })).ok().unwrap();
+			// Both callers reach the polling loop before either can finalize.
+			let start = Instant::now() - DEADLINE;
+			let (first, second) = std::thread::scope(|scope| {
+				let first = scope.spawn(|| shutdown.shutdown(start));
+				let second = scope.spawn(|| shutdown.shutdown(start));
+				(first.join().unwrap(), second.join().unwrap())
+			});
+			assert!(first.is_err());
+			assert_eq!(first, second);
+			release.send(()).unwrap();
+			published.wait();
+			assert_ne!(shutdown.state.result.get().unwrap(), &first);
+			assert_eq!(shutdown.shutdown(Instant::now()), first);
+		});
 	}
 
 	#[test]
