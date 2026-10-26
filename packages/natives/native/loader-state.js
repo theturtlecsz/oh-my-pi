@@ -825,6 +825,26 @@ function installNativeTokioRuntime(bindings) {
 }
 
 
+const shutdownHook = Symbol.for("omp.natives.shutdownTokioRuntime");
+
+/** Register without importing pi-utils, which native consumers already depend on.
+ * @param {{ __ompShutdownTokioRuntime?: () => void }} bindings
+ */
+export function registerNativeTokioShutdown(bindings) {
+	const shutdown = bindings.__ompShutdownTokioRuntime;
+	globalThis[shutdownHook] = () => {
+		if (typeof shutdown !== "function") return "unavailable";
+		shutdown();
+		return "stopped";
+	};
+}
+
+/** @returns {"stopped" | "unavailable"} */
+export function shutdownNativeTokioRuntime() {
+	return globalThis[shutdownHook]?.() ?? "unavailable";
+}
+
+
 function buildHelpMessage(ctx) {
 	if (ctx.isCompiledBinary) {
 		const expectedPaths = ctx.addonFilenames.map(filename => `  ${path.join(ctx.versionedDir, filename)}`).join("\n");
@@ -949,6 +969,7 @@ export function loadNative() {
 			const bindings = require_(candidate);
 			validateLoadedBindings(ctx, bindings, candidate);
 			installNativeTokioRuntime(bindings);
+			registerNativeTokioShutdown(bindings);
 			loadedAddon = describeLoadedAddon(bindings, candidate, ctx);
 	        cleanupStaleNativeVersions({ nativesDir: ctx.nativesDir, currentVersion: ctx.packageVersion });
 			startupMarker("native:loadNative:done");

@@ -153,3 +153,6 @@ export function missingNativeExport(
 export function missingNativeExportMessage(symbolName: string, addon?: NativeAddonStatus | null): string;
 
 export function loadNative(): Record<string, unknown>;
+
+export declare function registerNativeTokioShutdown(bindings: { __ompShutdownTokioRuntime?: () => void }): void;
+export declare function shutdownNativeTokioRuntime(): "stopped" | "unavailable";

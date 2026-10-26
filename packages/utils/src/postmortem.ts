@@ -99,6 +99,16 @@ function nativeHardExit(fn: HardExitFn | undefined): HardExitFn | undefined {
  * are fallbacks so a poisoned or absent chain can never leave the process alive.
  */
 export function exitProcess(code: number): never {
+	// The native loader supplies this synchronous hook without a pi-utils import cycle.
+	try {
+		const shutdown = Reflect.get(globalThis, Symbol.for("omp.natives.shutdownTokioRuntime"));
+		if (typeof shutdown === "function") shutdown();
+	} catch (error) {
+		code = code === 0 ? 1 : code;
+		try {
+			fs.writeSync(2, `Native Tokio shutdown failed: ${error instanceof Error ? error.message : String(error)}\n`);
+		} catch {} // A closed stderr must not prevent the non-zero exit.
+	}
 	const reallyExit = nativeHardExit(typeof process.reallyExit === "function" ? process.reallyExit : undefined);
 	const exit = nativeHardExit(process.exit as HardExitFn);
 	if (reallyExit) process.reallyExit = reallyExit as typeof process.reallyExit;

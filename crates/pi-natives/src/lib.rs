@@ -70,6 +70,8 @@ pub mod task;
 pub(crate) mod testing;
 pub mod text;
 pub mod tokens;
+#[cfg(target_os = "linux")]
+mod tokio_shutdown;
 pub mod tty_writer;
 pub(crate) mod utils;
 pub mod vectors;
@@ -312,12 +314,18 @@ pub fn pi_natives_build_version() -> Option<String> {
 ///
 /// On Windows, the custom Tokio runtime is host-sized to prevent aborts under
 /// memory limits (see [`create_windows_napi_tokio_runtime`]). Non-Windows
-/// builds intentionally use napi-rs's default path. Linux source builds can
-/// deadlock if this module initializer or post-load setup performs its own
-/// thread probe, so we keep the probe and custom runtime Windows-only.
+/// builds use napi-rs defaults. Linux installs its tracked runtime from the
+/// module-exports hook, after the dynamic-loader initializer returns.
 #[module_init]
 fn install_native_crash_handler() {
 	crash_handler::install();
+}
+
+/// Install after dlopen initialization, before napi starts its async runtime.
+#[cfg(target_os = "linux")]
+#[napi(module_exports)]
+fn install_linux_tokio_runtime(_exports: napi::bindgen_prelude::Object) -> napi::Result<()> {
+	tokio_shutdown::install()
 }
 
 /// Guards [`omp_install_tokio_runtime`] so the runtime is built at most once
