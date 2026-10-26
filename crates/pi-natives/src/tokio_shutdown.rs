@@ -82,17 +82,26 @@ fn wait_proc_thread(tid: libc::pid_t, deadline: Instant) -> io::Result<bool> {
 impl Registry {
 	fn prune(&mut self) {
 		let errors = &mut self.errors;
-		self.records.retain(|thread| match &thread.wait {
-			Ok(ThreadWait::Pidfd(fd)) => match poll_thread(fd, Instant::now()) {
-				Ok(exited) => !exited,
+		self.records.retain(|thread| {
+			match &thread.wait {
+				Ok(ThreadWait::Pidfd(fd)) => match poll_thread(fd, Instant::now()) {
+					Ok(true) => {},
+					Ok(false) => return true,
+					Err(error) => {
+						errors.push(format!("tid {} prune poll failed: {error}", thread.tid));
+						return true;
+					},
+				},
+				Ok(ThreadWait::Proc | ThreadWait::Exited) => {},
+				Err(_) => return true,
+			}
+			match proc_thread_exists(thread.tid) {
+				Ok(exists) => exists,
 				Err(error) => {
-					errors.push(format!("tid {} prune poll failed: {error}", thread.tid));
+					errors.push(format!("tid {} prune proc check failed: {error}", thread.tid));
 					true
 				},
-			},
-			Ok(ThreadWait::Proc) => proc_thread_exists(thread.tid).unwrap_or(true),
-			Ok(ThreadWait::Exited) => false,
-			Err(_) => true,
+			}
 		});
 	}
 }
@@ -131,7 +140,7 @@ fn build_tracked_runtime(mut builder: Builder, force_fallback: bool) -> io::Resu
 			registry.records.push(Thread { tid, wait });
 		})
 		.on_thread_stop(move || {
-			// This thread is still alive. Only prune kernel-confirmed exits.
+			// This thread is still alive. Only prune exits absent from /proc.
 			stops.lock().unwrap().prune();
 		})
 		.build()?;
@@ -168,8 +177,7 @@ fn wait_threads(threads: Threads, deadline: Instant) -> Result<(), String> {
 				// 7d325181. Wait for both using the same shutdown deadline.
 				if ready { wait_proc_thread(thread.tid, deadline) } else { Ok(false) }
 			}),
-			Ok(ThreadWait::Proc) => wait_proc_thread(thread.tid, deadline),
-			Ok(ThreadWait::Exited) => Ok(true),
+			Ok(ThreadWait::Proc | ThreadWait::Exited) => wait_proc_thread(thread.tid, deadline),
 			Err(error) => {
 				errors.push(format!("tid {} pidfd_open failed: {error}", thread.tid));
 				continue;
@@ -295,8 +303,12 @@ mod tests {
 				// Wait outside the registry lock so the stop hook can finish.
 				// A missing record was already pruned after a confirmed exit.
 				match wait {
-					Some(ThreadWait::Pidfd(fd)) => assert!(poll_thread(&fd, Instant::now() + DEADLINE).unwrap()),
-					Some(ThreadWait::Proc) => assert!(wait_proc_thread(tid, Instant::now() + DEADLINE).unwrap()),
+					Some(ThreadWait::Pidfd(fd)) => {
+						let deadline = Instant::now() + DEADLINE;
+						assert!(poll_thread(&fd, deadline).unwrap());
+						assert!(wait_proc_thread(tid, deadline).unwrap());
+					},
+					Some(ThreadWait::Proc | ThreadWait::Exited) => assert!(wait_proc_thread(tid, Instant::now() + DEADLINE).unwrap()),
 					_ => {},
 				}
 				let registry = threads.registry.lock().unwrap();
