@@ -14,11 +14,16 @@ const DEADLINE: Duration = Duration::from_secs(5);
 static INSTALLED: Mutex<bool> = Mutex::new(false);
 static SHUTDOWN: OnceLock<Shutdown> = OnceLock::new();
 
-// Reserve 100 ms: 50 ms for worker result publication, then caller reporting.
-// Reports stop at start + DEADLINE - REPORT_RESERVE and probe at most
-// REPORT_TID_CAP tids. Only the caller wait is bounded. The napi stop step
-// remains unbounded in the detached helper. This assumes ordinary OS scheduling
-// and prompt /proc operations, not a real-time kernel.
+// Reserve 100 ms after the 4.90 s helper deadline: 50 ms for helper result
+// publication (to 4.95 s), 40 ms for caller live-tid reporting (to 4.99 s),
+// and 10 ms (REPORT_RESERVE) for the final probe and return. Reporting clones
+// the tid list under try_lock and starts at most REPORT_TID_CAP /proc metadata
+// probes before first_start + DEADLINE - REPORT_RESERVE. Only the caller wait
+// is bounded; the napi stop step remains unbounded in the detached helper.
+// Meeting the 5 s caller bound assumes ordinary OS scheduling, a fast tid-list
+// clone, and prompt /proc metadata calls, not a real-time kernel.
+// The cutoff stops new probes from starting. It does not preempt a running
+// /proc metadata call or the tid-list clone.
 const WORK_MARGIN: Duration = Duration::from_millis(100);
 const RETURN_MARGIN: Duration = Duration::from_millis(50);
 const REPORT_RESERVE: Duration = Duration::from_millis(10);
@@ -113,7 +118,7 @@ impl Shutdown {
 						1 => "napi runtime shutdown",
 						_ => "thread registry / thread waits",
 					};
-					let error = format!("Tokio shutdown failed: {part} timed out; omp-tokio-shutdown tid {}", self.helper_tid);
+					let error = format!("Tokio shutdown failed: {part} timed out; phase: {part}; omp-tokio-shutdown tid {}", self.helper_tid);
 					Err(self.live_tid_report(error, deadline + WORK_MARGIN - REPORT_RESERVE))
 				}).clone();
 			}
@@ -135,10 +140,10 @@ impl Shutdown {
 				error.push_str(&format!("; live tid scan stopped after {probed} of {} tids", tids.len()));
 				break;
 			}
-			let present = proc_thread_exists(tid);
 			if error.contains(&format!("tid {tid} still alive"))
 				|| error.contains(&format!("tid {tid} proc check failed"))
 				|| error.contains(&format!("tid {tid} prune proc check failed")) { continue; }
+			let present = proc_thread_exists(tid);
 			match present {
 				Ok(true) => error.push_str(&format!("; tid {tid} still alive")),
 				Ok(false) => {},
@@ -499,6 +504,7 @@ mod tests {
 			assert!(start.elapsed() < DEADLINE - RETURN_MARGIN);
 			assert!(error.contains(&format!("omp-tokio-shutdown tid {}", shutdown.helper_tid)), "{error}");
 			assert!(error.contains("napi runtime shutdown timed out"), "{error}");
+			assert!(error.contains("; phase: napi runtime shutdown;"), "{error}");
 			assert!(error.contains(&format!("tid {tid} still alive")), "{error}");
 			eprintln!("{error}");
 			assert_eq!(shutdown.shutdown(Instant::now()).unwrap_err(), error);
@@ -653,6 +659,7 @@ mod tests {
 			assert!(start.elapsed() >= Duration::from_millis(4900));
 			assert!(start.elapsed() <= DEADLINE);
 			assert!(error.contains("napi runtime shutdown timed out"), "{error}");
+			assert!(error.contains("; phase: napi runtime shutdown;"), "{error}");
 			release.send(()).unwrap();
 			done.recv_timeout(DEADLINE).unwrap();
 			assert_eq!(measured_shutdown(&shutdown).unwrap_err(), error);
@@ -686,6 +693,7 @@ mod tests {
 			assert!(error.contains(&format!("omp-tokio-shutdown tid {}", shutdown.helper_tid)), "{error}");
 			assert!(error.contains(&format!("tid {tid} still alive")), "{error}");
 			assert!(error.contains("napi runtime shutdown timed out"), "{error}");
+			assert!(error.contains("; phase: napi runtime shutdown;"), "{error}");
 			eprintln!("{error}");
 			release_worker.send(()).unwrap();
 			release_stop.send(()).unwrap();
