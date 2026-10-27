@@ -881,6 +881,7 @@ def test_launch_failure_does_not_stop_later_nodes_or_inherit_selectors(
         "PYTEST_PLUGINS": "nonexistent_plugin", "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
         "OMP_INSTALLED_ONLY": "1", "OMP584_FLOOD_SOURCE": "bad", "FLOOD_SOURCE": "bad",
         "OMP_ACCOUNTING_EXTRA": "keep", "OMP_WORK_POSTGRES_INTEGRATION": "0",
+        "OMP_INSTALLED_RELEASE": "bad", "OMP_INSTALLED_MANIFEST_SHA256": "bad",
         "EXPECTED_PATH": os.environ["PATH"], "EXPECTED_PYTHON": sys.executable,
     }.items():
         monkeypatch.setenv(key, value)
@@ -888,10 +889,27 @@ def test_launch_failure_does_not_stop_later_nodes_or_inherit_selectors(
     (launch_suite / "test_failure.py").write_text(textwrap.dedent('''
         import os
         import sys
+        import pytest
         from pathlib import Path
+
+        @pytest.fixture
+        def installed_fixture():
+            if not os.environ.get("OMP_INSTALLED_RELEASE") and not os.environ.get("OMP_INSTALLED_MANIFEST_SHA256"):
+                pytest.skip("installed fixture: release inputs absent")
+
+        @pytest.fixture
+        def flood_fixture():
+            if not os.environ.get("FLOOD_SOURCE") and not os.environ.get("OMP584_FLOOD_SOURCE"):
+                pytest.skip("flood fixture: source inputs absent")
 
         def test_failure():
             assert False, "deliberate failure"
+
+        def test_installed_skip(installed_fixture):
+            raise AssertionError("installed fixture must skip in setup")
+
+        def test_flood_skip(flood_fixture):
+            raise AssertionError("flood fixture must skip in setup")
 
         def test_later(tmp_path, pytestconfig):
             # Pytest itself creates these two runtime entries after launch.
@@ -912,12 +930,23 @@ def test_launch_failure_does_not_stop_later_nodes_or_inherit_selectors(
     assert sap.main(["--out", str(out)]) == 1
     receipt = read_only_receipt(out)
     assert receipt.complete and receipt.exitstatus == 1
-    calls = {node.split("::")[-1]: phases["call"].outcome for node, phases in receipt.nodes.items()}
+    expected = {f"test_failure.py::{name}" for name in ("test_failure", "test_installed_skip", "test_flood_skip", "test_later")}
+    assert set(receipt.selected) == set(receipt.collected) == expected
+    assert set(receipt.nodes) == expected
+    calls = {node.split("::")[-1]: phases["call"].outcome for node, phases in receipt.nodes.items() if "call" in phases}
     assert calls == {"test_failure": "failed", "test_later": "passed"}
+    assert receipt.nodes["test_failure.py::test_installed_skip"]["setup"] == sa.Phase(
+        "skipped", "installed fixture: release inputs absent")
+    assert receipt.nodes["test_failure.py::test_flood_skip"]["setup"] == sa.Phase(
+        "skipped", "flood fixture: source inputs absent")
     output = capfd.readouterr().out
-    assert printed_receipt(output)["exitstatus"] == 1
+    printed = printed_receipt(output)
+    assert printed["exitstatus"] == 1 and printed["nodes"] == receipt.to_json()["nodes"]
+    assert set(printed["selected"]) == expected
     summary = json.loads(next(line.removeprefix("summary: ") for line in output.splitlines() if line.startswith("summary: ")))
-    assert summary["phases"] == {"setup/passed": 2, "call/failed": 1, "call/passed": 1, "teardown/passed": 2}
+    assert summary["phases"] == {
+        "setup/passed": 2, "setup/skipped": 2, "call/failed": 1, "call/passed": 1, "teardown/passed": 4,
+    }
 
 
 @pytest.mark.parametrize("override", [False, True])
@@ -925,22 +954,34 @@ def test_launch_inherits_accounting_and_cli_overrides_only_out_and_run(
     launch_suite: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     capfd: pytest.CaptureFixture[str], override: bool,
 ) -> None:
-    (launch_suite / "test_inherited.py").write_text("def test_run():\n    pass\n")
+    (launch_suite / "test_inherited.py").write_text("def test_run():\n    pass\n\ndef test_second():\n    pass\n")
+    (launch_suite / "test_more.py").write_text("def test_third():\n    pass\n")
+    root = tmp_path / "root"
+    root.mkdir()
+    (tmp_path / "empty").mkdir()
+    (root / "package.json").write_text('{"name": "distinctive-fingerprint-input"}\n')
     inherited = tmp_path / "inherited"
     monkeypatch.setenv(sa.ENV_DIR, str(inherited))
     monkeypatch.setenv(sa.ENV_RUN, "inherited-run")
     monkeypatch.setenv(sa.ENV_CHECK, "inherited-check")
-    monkeypatch.setenv(sa.ENV_ROOT, str(tmp_path))
+    monkeypatch.setenv(sa.ENV_ROOT, str(root))
     out = tmp_path / "explicit" if override else inherited
     argv = ["--out", str(out), "--run", "explicit-run"] if override else []
     assert sap.main(argv) == 0
     receipt = read_only_receipt(out)
     assert receipt.complete and receipt.check == "inherited-check"
     assert receipt.run_id == ("explicit-run" if override else "inherited-run")
-    assert receipt.selected == ["suite/test_inherited.py::test_run"]
+    expected = {"test_inherited.py::test_run", "test_inherited.py::test_second", "test_more.py::test_third"}
+    assert set(receipt.selected) == set(receipt.collected) == expected
+    assert receipt.fingerprint == sa.fingerprint(root) != sa.fingerprint(tmp_path / "empty")
     if override:
         assert not inherited.exists()
-    assert printed_receipt(capfd.readouterr().out)["path"].startswith(str(out))
+    else:
+        assert list(inherited.glob(f"*{sa.RECEIPT_SUFFIX}")) == list(out.glob(f"*{sa.RECEIPT_SUFFIX}"))
+    printed = printed_receipt(capfd.readouterr().out)
+    assert printed["path"].startswith(str(out))
+    assert (printed["run_id"], printed["check"], printed["fingerprint"]) == (receipt.run_id, "inherited-check", receipt.fingerprint)
+    assert set(printed["selected"]) == set(printed["collected"]) == expected
 
 
 def test_standalone_defaults_emit_complete_receipt_before_disposal(

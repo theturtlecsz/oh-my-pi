@@ -91,6 +91,7 @@
 
 ### Fixed
 
+- omp584-report.py proves a limiting cap when any start saw it saturated, not every start, and records how many of the counted starts were saturated with each saturated start's id, attempt and time (OMP-638).
 - Integrated durable-lease test proves a lost response replays one work/job identity, a renewed run continues past its initial lease while the hard task deadline still bounds it, a lost lease stops the process within a predeclared bound and refuses the stale result, and a frozen stop holds ownership until one release resumes it ([#595](https://github.com/can1357/oh-my-pi/issues/595)).
 - The provenance fixture composes the OMP-584 patches onto the installed `planner-independence.md` form ([#629](https://github.com/can1357/oh-my-pi/issues/629)).
 - OMP-584 activation now waits two flood poll intervals (10 seconds when configuration is absent or invalid) for reload proof unless an explicit timeout is set ([#627](https://github.com/can1357/oh-my-pi/issues/627)).

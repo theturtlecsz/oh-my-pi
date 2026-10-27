@@ -1,0 +1,507 @@
+[
+  {
+    "event": "submitted",
+    "intake_bindings": [],
+    "intake_events": [],
+    "intake_head": 0,
+    "launch_bindings": [],
+    "sandbox_calls": 0,
+    "steps": [
+      [
+        "intake",
+        "submitted",
+        null,
+        null,
+        "submitted"
+      ]
+    ]
+  },
+  {
+    "event": "owner_confirmation",
+    "intake_bindings": [],
+    "intake_events": [
+      {
+        "event_type": "draft_mission_intake",
+        "outcome": "applied"
+      }
+    ],
+    "intake_head": 0,
+    "launch_bindings": [],
+    "sandbox_calls": 0,
+    "steps": [
+      [
+        "intake",
+        "dispatch",
+        null,
+        null,
+        "stage-dispatch"
+      ],
+      [
+        null,
+        "external_intent",
+        null,
+        null,
+        "external-intent"
+      ],
+      [
+        "intake",
+        "outcome",
+        "succeeded",
+        null,
+        "stage-outcome"
+      ],
+      [
+        "intake",
+        "advance",
+        null,
+        null,
+        "stage-order"
+      ]
+    ]
+  },
+  {
+    "event": "owner_confirmation",
+    "intake_bindings": [],
+    "intake_events": [],
+    "intake_head": 0,
+    "launch_bindings": [],
+    "sandbox_calls": 0,
+    "steps": [
+      [
+        "confirm",
+        "dispatch",
+        null,
+        null,
+        "stage-dispatch"
+      ],
+      [
+        "confirm",
+        "outcome",
+        "waiting",
+        null,
+        "stage-outcome"
+      ],
+      [
+        "confirm",
+        "pause",
+        null,
+        null,
+        "d23-owner-confirm"
+      ]
+    ]
+  },
+  {
+    "event": "owner_answered",
+    "intake_bindings": [],
+    "intake_events": [
+      {
+        "event_type": "answer_mission_draft",
+        "outcome": "applied"
+      }
+    ],
+    "intake_head": 0,
+    "launch_bindings": [],
+    "sandbox_calls": 0,
+    "steps": []
+  },
+  {
+    "event": "grant",
+    "intake_bindings": [],
+    "intake_events": [],
+    "intake_head": 0,
+    "launch_bindings": [],
+    "sandbox_calls": 0,
+    "steps": []
+  },
+  {
+    "event": "grant",
+    "intake_bindings": [],
+    "intake_events": [],
+    "intake_head": 0,
+    "launch_bindings": [],
+    "sandbox_calls": 0,
+    "steps": [
+      [
+        "confirm",
+        "dispatch",
+        null,
+        null,
+        "stage-dispatch"
+      ],
+      [
+        "confirm",
+        "outcome",
+        "succeeded",
+        null,
+        "stage-outcome"
+      ],
+      [
+        "confirm",
+        "advance",
+        null,
+        null,
+        "stage-order"
+      ]
+    ]
+  },
+  {
+    "event": "grant",
+    "intake_bindings": [
+      {
+        "assessment_id": "assessment:<uuid:3>",
+        "binding_id": "<uuid:1>",
+        "hold_code": null,
+        "revision": 0,
+        "run_id": "orchestrator:<uuid:2>",
+        "state": "admitted"
+      }
+    ],
+    "intake_events": [],
+    "intake_head": 0,
+    "launch_bindings": [],
+    "sandbox_calls": 0,
+    "steps": [
+      [
+        "plan",
+        "dispatch",
+        null,
+        null,
+        "stage-dispatch"
+      ],
+      [
+        "plan",
+        "outcome",
+        "succeeded",
+        null,
+        "stage-outcome"
+      ],
+      [
+        "plan",
+        "advance",
+        null,
+        null,
+        "stage-order"
+      ]
+    ]
+  },
+  {
+    "event": "grant",
+    "intake_bindings": [
+      {
+        "assessment_id": "assessment:<uuid:3>",
+        "binding_id": "<uuid:1>",
+        "hold_code": null,
+        "revision": 0,
+        "run_id": "orchestrator:<uuid:2>",
+        "state": "admitted"
+      }
+    ],
+    "intake_events": [],
+    "intake_head": 0,
+    "launch_bindings": [
+      {
+        "assessment_id": "assessment:<uuid:3>",
+        "candidate_id": "<uuid:8>",
+        "hold_code": null,
+        "intake_binding_id": "<uuid:1>",
+        "item_id": "<uuid:6>",
+        "launch_binding_id": "<uuid:4>",
+        "plan_receipt_id": "<uuid:5>",
+        "plan_sha256": "<hash:1>",
+        "revision": 0,
+        "run_id": "orchestrator:<uuid:2>",
+        "state": "bound",
+        "work_id": "<uuid:7>"
+      }
+    ],
+    "sandbox_calls": 0,
+    "steps": [
+      [
+        "grant",
+        "dispatch",
+        null,
+        null,
+        "stage-dispatch"
+      ],
+      [
+        null,
+        "external_intent",
+        null,
+        null,
+        "external-intent"
+      ],
+      [
+        "grant",
+        "outcome",
+        "succeeded",
+        null,
+        "stage-outcome"
+      ],
+      [
+        "grant",
+        "advance",
+        null,
+        null,
+        "stage-order"
+      ]
+    ]
+  },
+  {
+    "event": "plan_stamped",
+    "intake_bindings": [
+      {
+        "assessment_id": "assessment:<uuid:3>",
+        "binding_id": "<uuid:1>",
+        "hold_code": null,
+        "revision": 0,
+        "run_id": "orchestrator:<uuid:2>",
+        "state": "admitted"
+      }
+    ],
+    "intake_events": [],
+    "intake_head": 0,
+    "launch_bindings": [
+      {
+        "assessment_id": "assessment:<uuid:3>",
+        "candidate_id": "<uuid:8>",
+        "hold_code": null,
+        "intake_binding_id": "<uuid:1>",
+        "item_id": "<uuid:6>",
+        "launch_binding_id": "<uuid:4>",
+        "plan_receipt_id": "<uuid:5>",
+        "plan_sha256": "<hash:1>",
+        "revision": 0,
+        "run_id": "orchestrator:<uuid:2>",
+        "state": "bound",
+        "work_id": "<uuid:7>"
+      }
+    ],
+    "sandbox_calls": 0,
+    "steps": []
+  },
+  {
+    "event": "revision_advanced",
+    "intake_bindings": [
+      {
+        "assessment_id": "assessment:<uuid:3>",
+        "binding_id": "<uuid:1>",
+        "hold_code": "intake_revision_advanced",
+        "revision": 0,
+        "run_id": "orchestrator:<uuid:2>",
+        "state": "held"
+      }
+    ],
+    "intake_events": [],
+    "intake_head": 1,
+    "launch_bindings": [
+      {
+        "assessment_id": "assessment:<uuid:3>",
+        "candidate_id": "<uuid:8>",
+        "hold_code": "intake_revision_advanced",
+        "intake_binding_id": "<uuid:1>",
+        "item_id": "<uuid:6>",
+        "launch_binding_id": "<uuid:4>",
+        "plan_receipt_id": "<uuid:5>",
+        "plan_sha256": "<hash:1>",
+        "revision": 0,
+        "run_id": "orchestrator:<uuid:2>",
+        "state": "held",
+        "work_id": "<uuid:7>"
+      }
+    ],
+    "sandbox_calls": 0,
+    "steps": []
+  },
+  {
+    "event": "implement_stage_fenced",
+    "intake_bindings": [
+      {
+        "assessment_id": "assessment:<uuid:3>",
+        "binding_id": "<uuid:1>",
+        "hold_code": "intake_revision_advanced",
+        "revision": 0,
+        "run_id": "orchestrator:<uuid:2>",
+        "state": "held"
+      }
+    ],
+    "intake_events": [],
+    "intake_head": 1,
+    "launch_bindings": [
+      {
+        "assessment_id": "assessment:<uuid:3>",
+        "candidate_id": "<uuid:8>",
+        "hold_code": "intake_revision_advanced",
+        "intake_binding_id": "<uuid:1>",
+        "item_id": "<uuid:6>",
+        "launch_binding_id": "<uuid:4>",
+        "plan_receipt_id": "<uuid:5>",
+        "plan_sha256": "<hash:1>",
+        "revision": 0,
+        "run_id": "orchestrator:<uuid:2>",
+        "state": "held",
+        "work_id": "<uuid:7>"
+      }
+    ],
+    "sandbox_calls": 0,
+    "steps": [
+      [
+        "implement",
+        "dispatch",
+        null,
+        null,
+        "stage-dispatch"
+      ],
+      [
+        "implement",
+        "outcome",
+        "failed",
+        "intake_revision_advanced",
+        "stage-outcome"
+      ],
+      [
+        "implement",
+        "retry",
+        null,
+        "intake_revision_advanced",
+        "retry-policy"
+      ]
+    ]
+  },
+  {
+    "event": "new_pass",
+    "intake_bindings": [
+      {
+        "assessment_id": "assessment:<uuid:3>",
+        "binding_id": "<uuid:1>",
+        "hold_code": "intake_revision_advanced",
+        "revision": 0,
+        "run_id": "orchestrator:<uuid:2>",
+        "state": "held"
+      }
+    ],
+    "intake_events": [],
+    "intake_head": 1,
+    "launch_bindings": [
+      {
+        "assessment_id": "assessment:<uuid:3>",
+        "candidate_id": "<uuid:8>",
+        "hold_code": "intake_revision_advanced",
+        "intake_binding_id": "<uuid:1>",
+        "item_id": "<uuid:6>",
+        "launch_binding_id": "<uuid:4>",
+        "plan_receipt_id": "<uuid:5>",
+        "plan_sha256": "<hash:1>",
+        "revision": 0,
+        "run_id": "orchestrator:<uuid:2>",
+        "state": "held",
+        "work_id": "<uuid:7>"
+      }
+    ],
+    "sandbox_calls": 0,
+    "steps": []
+  },
+  {
+    "event": "implement_launch_refused",
+    "intake_bindings": [
+      {
+        "assessment_id": "assessment:<uuid:3>",
+        "binding_id": "<uuid:1>",
+        "hold_code": "intake_revision_advanced",
+        "revision": 0,
+        "run_id": "orchestrator:<uuid:2>",
+        "state": "held"
+      },
+      {
+        "assessment_id": "assessment:<uuid:10>",
+        "binding_id": "<uuid:9>",
+        "hold_code": null,
+        "revision": 1,
+        "run_id": "orchestrator:<uuid:2>",
+        "state": "admitted"
+      }
+    ],
+    "intake_events": [],
+    "intake_head": 1,
+    "launch_bindings": [
+      {
+        "assessment_id": "assessment:<uuid:3>",
+        "candidate_id": "<uuid:8>",
+        "hold_code": "intake_revision_advanced",
+        "intake_binding_id": "<uuid:1>",
+        "item_id": "<uuid:6>",
+        "launch_binding_id": "<uuid:4>",
+        "plan_receipt_id": "<uuid:5>",
+        "plan_sha256": "<hash:1>",
+        "revision": 0,
+        "run_id": "orchestrator:<uuid:2>",
+        "state": "held",
+        "work_id": "<uuid:7>"
+      }
+    ],
+    "sandbox_calls": 0,
+    "steps": [
+      [
+        "implement",
+        "dispatch",
+        null,
+        null,
+        "stage-dispatch"
+      ],
+      [
+        "implement",
+        "outcome",
+        "failed",
+        "launch_binding_held",
+        "stage-outcome"
+      ],
+      [
+        "implement",
+        "retry",
+        null,
+        "launch_binding_held",
+        "retry-policy"
+      ]
+    ]
+  },
+  {
+    "event": "obsolete_plan_refused",
+    "intake_bindings": [
+      {
+        "assessment_id": "assessment:<uuid:3>",
+        "binding_id": "<uuid:1>",
+        "hold_code": "intake_revision_advanced",
+        "revision": 0,
+        "run_id": "orchestrator:<uuid:2>",
+        "state": "held"
+      },
+      {
+        "assessment_id": "assessment:<uuid:10>",
+        "binding_id": "<uuid:9>",
+        "hold_code": null,
+        "revision": 1,
+        "run_id": "orchestrator:<uuid:2>",
+        "state": "admitted"
+      }
+    ],
+    "intake_events": [],
+    "intake_head": 1,
+    "launch_bindings": [
+      {
+        "assessment_id": "assessment:<uuid:3>",
+        "candidate_id": "<uuid:8>",
+        "hold_code": "intake_revision_advanced",
+        "intake_binding_id": "<uuid:1>",
+        "item_id": "<uuid:6>",
+        "launch_binding_id": "<uuid:4>",
+        "plan_receipt_id": "<uuid:5>",
+        "plan_sha256": "<hash:1>",
+        "revision": 0,
+        "run_id": "orchestrator:<uuid:2>",
+        "state": "held",
+        "work_id": "<uuid:7>"
+      }
+    ],
+    "sandbox_calls": 0,
+    "steps": []
+  }
+]

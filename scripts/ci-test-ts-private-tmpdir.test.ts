@@ -85,9 +85,61 @@ describe("buildChildEnv", () => {
 	});
 
 	it("does not mutate Bun.env", () => {
-		const origActions = Bun.env.GITHUB_ACTIONS;
-		buildChildEnv({ agentDir: "/dir", tmpDir: "/tmp" });
-		expect(Bun.env.GITHUB_ACTIONS).toBe(origActions);
+		const sentinels = {
+			TMPDIR: "sentinel-tmpdir",
+			TMP: "sentinel-tmp",
+			TEMP: "sentinel-temp",
+			PI_CODING_AGENT_DIR: "sentinel-agent-dir",
+			PI_TEST_RUNTIME: "sentinel-runtime",
+			BUN_JSC_useConcurrentGC: "sentinel-concurrent-gc",
+			BUN_JSC_numberOfGCMarkers: "sentinel-gc-markers",
+			GITHUB_ACTIONS: "sentinel-actions",
+			AWS_SECRET_ACCESS_KEY: "sentinel-aws-secret",
+			GITHUB_TOKEN: "sentinel-github-token",
+		};
+		const originals = new Map(Object.keys(sentinels).map(key => [key, Bun.env[key]]));
+		let before = { ...Bun.env };
+		try {
+			for (const [key, value] of Object.entries(sentinels)) {
+				Bun.env[key] = value;
+			}
+			before = { ...Bun.env };
+			buildChildEnv({ agentDir: "/dir", tmpDir: "/tmp" });
+			expect(Object.keys(Bun.env).sort()).toEqual(Object.keys(before).sort());
+			expect(
+				Object.keys(before)
+					.filter(key => Bun.env[key] !== before[key])
+					.sort(),
+			).toEqual([]);
+			expect(Bun.env.TMPDIR).toBe(sentinels.TMPDIR);
+			expect(Bun.env.TMP).toBe(sentinels.TMP);
+			expect(Bun.env.TEMP).toBe(sentinels.TEMP);
+			expect(Bun.env.PI_CODING_AGENT_DIR).toBe(sentinels.PI_CODING_AGENT_DIR);
+			expect(Bun.env.PI_TEST_RUNTIME).toBe(sentinels.PI_TEST_RUNTIME);
+			expect(Bun.env.BUN_JSC_useConcurrentGC).toBe(sentinels.BUN_JSC_useConcurrentGC);
+			expect(Bun.env.BUN_JSC_numberOfGCMarkers).toBe(sentinels.BUN_JSC_numberOfGCMarkers);
+			expect(Bun.env.GITHUB_ACTIONS).toBe(sentinels.GITHUB_ACTIONS);
+			expect(Bun.env.AWS_SECRET_ACCESS_KEY).toBe(sentinels.AWS_SECRET_ACCESS_KEY);
+			expect(Bun.env.GITHUB_TOKEN).toBe(sentinels.GITHUB_TOKEN);
+		} finally {
+			for (const key of Object.keys(Bun.env)) {
+				if (!Object.hasOwn(before, key)) {
+					delete Bun.env[key];
+				}
+			}
+			for (const [key, value] of Object.entries(before)) {
+				if (Bun.env[key] !== value) {
+					Bun.env[key] = value;
+				}
+			}
+			for (const [key, value] of originals) {
+				if (value === undefined) {
+					delete Bun.env[key];
+				} else {
+					Bun.env[key] = value;
+				}
+			}
+		}
 	});
 });
 

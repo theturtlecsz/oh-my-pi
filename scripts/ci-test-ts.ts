@@ -423,13 +423,10 @@ export async function commandsForGate(
 	return commandsForMode(mode, runWorkspaceTs);
 }
 
-// The omp-kata runner pods may inject cloud credentials (`AWS_*`) pod-wide via
-// `envFrom`, GitHub Actions injects `GITHUB_TOKEN`,
-// and a host may carry provider API keys. Any of these make env-sensitive code
-// non-deterministic in tests — e.g. leaked AWS creds make `amazon-bedrock` look
-// authenticated and win the provider startup fallback over `anthropic`. Run the
-// suites in a hermetic environment with all credential / cloud-config variables
-// stripped so resolution depends only on the test's own fixtures.
+// Scrub cloud configuration, known credentials, DATABASE_URL, bare PASSWORD/SECRET,
+// and names ending in _PASSWORD, _SECRET, _PRIVATE_KEY, _PASSKEY, _SECRET_KEY, or _API_KEY.
+// Match names case-insensitively. Preserve existing OAuth/bearer token rules without
+// adding a general _TOKEN suffix rule, so unrelated service tokens remain available.
 const SCRUBBED_ENV_PREFIXES = ["AWS_", "GOOGLE_CLOUD_"];
 const SCRUBBED_ENV_NAMES = new Set([
 	"GITHUB_TOKEN",
@@ -438,17 +435,23 @@ const SCRUBBED_ENV_NAMES = new Set([
 	"GOOGLE_APPLICATION_CREDENTIALS",
 	"ANTHROPIC_OAUTH_TOKEN",
 	"XAI_OAUTH_TOKEN",
+	"DATABASE_URL",
+	"PASSWORD",
+	"SECRET",
 ]);
 
 function isScrubbedEnvVar(key: string): boolean {
-	if (SCRUBBED_ENV_NAMES.has(key)) {
+	const normalizedKey = key.toUpperCase();
+	if (SCRUBBED_ENV_NAMES.has(normalizedKey)) {
 		return true;
 	}
-	if (SCRUBBED_ENV_PREFIXES.some(prefix => key.startsWith(prefix))) {
+	if (SCRUBBED_ENV_PREFIXES.some(prefix => normalizedKey.startsWith(prefix))) {
 		return true;
 	}
-	// Any provider credential, e.g. ANTHROPIC_API_KEY / XAI_OAUTH_TOKEN / bedrock bearer.
-	return /_(API_KEY|OAUTH_TOKEN)$/.test(key) || key.includes("BEARER_TOKEN");
+	return (
+		/_(API_KEY|OAUTH_TOKEN|PASSWORD|SECRET|PRIVATE_KEY|PASSKEY|SECRET_KEY)$/.test(normalizedKey) ||
+		normalizedKey.includes("BEARER_TOKEN")
+	);
 }
 
 async function runTestCommand(testCommand: TestCommand): Promise<ChunkOutcome | null> {
@@ -504,8 +507,9 @@ async function runTestCommand(testCommand: TestCommand): Promise<ChunkOutcome | 
 }
 
 // Child env shared by every spawned test process: the parent env with the
-// private test-runtime marker set, all CI credential / cloud-config variables
-// scrubbed (see SCRUBBED_ENV_* above), and GITHUB_ACTIONS cleared.
+// private test-runtime marker set, credentials, cloud configuration, and secret-like
+// names scrubbed (see SCRUBBED_ENV_* above), and GITHUB_ACTIONS cleared.
+// withTempAgentDir assigns a fresh private HOME under its temporary root.
 //
 // GC knobs (both needed — they gate different JSC mechanisms):
 // - `BUN_JSC_useConcurrentGC=0` stops the collector from marking concurrently
@@ -547,7 +551,7 @@ export function buildChildEnv(
 
 /**
  * Allocate a unique temporary agent directory, run `fn(agentDir, env)` with
- * PI_CODING_AGENT_DIR and a private TMPDIR/TMP/TEMP set, and guarantee the temporary root is removed in
+ * PI_CODING_AGENT_DIR, a private HOME, and TMPDIR/TMP/TEMP set, and guarantee the temporary root is removed in
  * `finally` on success, rejection, or error.
  */
 export async function withTempAgentDir<T>(
@@ -558,7 +562,9 @@ export async function withTempAgentDir<T>(
 	const tmpDir = await fs.mkdtemp(path.join(tmpBase, "omp-t-"));
 	try {
 		const agentDir = await fs.mkdtemp(path.join(tmpDir, "a-"));
+		const homeDir = await fs.mkdtemp(path.join(tmpDir, "h-"));
 		const env = buildChildEnv({ agentDir, baseEnv, tmpDir });
+		env.HOME = homeDir;
 		return await fn(agentDir, env);
 	} finally {
 		await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});

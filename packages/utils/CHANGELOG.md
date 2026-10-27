@@ -5,6 +5,9 @@
 ### Fixed
 
 - A relative TempDir prefix is rejected, so that directory is not created in the working directory.
+- Test processes (`NODE_ENV=test` or `PI_TEST_RUNTIME=1`) skip `~/.env`, `~/.omp/.env`, or the agent `.env`
+  only when their realpaths fall under the real home from `/etc/passwd` for the process uid, not HOME.
+  Test processes skip all three files when that entry cannot be read. Files under a fixture or temp HOME still load.
 
 ## [18.4.4] - 2026-09-29
 

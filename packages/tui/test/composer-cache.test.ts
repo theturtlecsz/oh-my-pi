@@ -133,6 +133,8 @@ describe("composer startup cache", () => {
 			env: {
 				...process.env,
 				HOME: home,
+				NODE_ENV: undefined,
+				PI_TEST_RUNTIME: undefined,
 				XDG_CACHE_HOME: undefined,
 				PI_CODING_AGENT_DIR: undefined,
 				OMP_PROFILE: undefined,

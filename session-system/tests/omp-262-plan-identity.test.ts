@@ -36,8 +36,20 @@ describe("OMP-262 planned candidate identity", () => {
 
 describe("stamp payload parity", () => {
 	const tempDirs: string[] = [];
+	const pendingRuns: Promise<unknown>[] = [];
+	// Below the case timeout, so a stalled continuation fails here instead of
+	// racing fixture deletion.
+	const CONTINUATION_SETTLE_MS = 2_000;
 
 	afterEach(async () => {
+		// createWorkflowHost runs `git rev-parse` through spawnSync, which a test
+		// deadline interrupts: Bun kills that child and starts teardown before the
+		// timed-out body resumes and reads plan.md. Let every continuation settle
+		// before deleting its fixture or restoring mocks.
+		const settled = Promise.allSettled(pendingRuns.splice(0));
+		const timer = Bun.sleep(CONTINUATION_SETTLE_MS).then(() => "stalled" as const);
+		const outcome = await Promise.race([settled, timer]);
+		if (outcome === "stalled") throw new Error("runExecution continuation did not settle before fixture removal");
 		vi.restoreAllMocks();
 		await Promise.all(tempDirs.splice(0).map(d => fs.rm(d, { recursive: true, force: true })));
 	});
@@ -124,7 +136,13 @@ describe("stamp payload parity", () => {
 		return { receipt: capturedReceipt, outcome };
 	}
 
-	async function runExecution(workId: string, revisionId: string, planBytes: string) {
+	function runExecution(workId: string, revisionId: string, planBytes: string) {
+		const run = runExecutionFixture(workId, revisionId, planBytes);
+		pendingRuns.push(run);
+		return run;
+	}
+
+	async function runExecutionFixture(workId: string, revisionId: string, planBytes: string) {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-262-exec-"));
 		tempDirs.push(tempDir);
 		// computeAuditTcb discovers the installed `auditor` agent from the

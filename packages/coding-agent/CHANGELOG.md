@@ -35,6 +35,8 @@
 
 ### Fixed
 
+- Workflow startup no longer shells out to `git rev-parse` to decide whether the working directory is a repo, so a stalled probe can no longer hang session startup.
+- Session tests reap every child they start, and let a timed-out body finish reading its fixture, before removing that fixture ([#640](https://github.com/can1357/oh-my-pi/issues/640)).
 - `omp -p` reports a blocked prompt on stderr and exits 1.
 - Fixed a daemon request sent right after a broker shutdown failing with 'Daemon broker connection closed'.
 - Startup summary no longer stalls on huge entries.
@@ -64,6 +66,7 @@
 - Video frame files and browser-recording frames are created in the system temp directory.
 - A security scan pinned to one OAuth account no longer lets background skill compression disable that account. If that account's login is rejected, the scan fails instead of continuing with a different account ([#628](https://github.com/can1357/oh-my-pi/issues/628)).
 - Documented the orchestrator control plane's atomic submission, dynamic fenced authority versus the hard task deadline, and lost lease versus frozen stop/release ([#595](https://github.com/can1357/oh-my-pi/issues/595)).
+- Session-system tests no longer share the fixed `<os.tmpdir()>/omp-local` root, so a hostile or leftover mode-000 root can no longer fail them: a root `bun test` preload gives each run its own private temp root, and CI reproduces the unwritable-root case for the session-system suite (OMP-637).
 
 ### Removed
 
